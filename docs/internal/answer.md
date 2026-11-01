@@ -10,17 +10,18 @@ The synopsis, the flags, the caller table and the outcome table stay on the page
 Two words answer two kinds of blocking dialog, and each presses one recorded key — never an
 option, never a typed answer.
 
-`trust` presses the one recorded key of a folder-trust dialog. Every check has to pass on two
-fresh reads of the pane, and the folder must be the lobby on three readings at once: the path
-the screen shows, the folder the pane itself reports working in, and the lobby's parent
-directory, where no name may sit that differs from the lobby's by whitespace alone. A row's
+`trust` presses the one recorded key of a folder-trust dialog. Every check has to pass on fresh
+reads of the pane, the last one taken immediately before the key, and the folder must be the
+lobby on three readings at once: the path the screen shows, the folder the pane itself reports
+working in, and the lobby's parent directory, where no name may sit that differs from the
+lobby's by whitespace alone. A row's
 trailing padding is stripped, so the screen's last byte alone is never proof. Anything else
 sends nothing.
 
 `question` dismisses a question, plan approval or confirmation dialog with that CLI's recorded
 let-me-type-or-cancel key — `escape` or `ctrl+c`, the closed set `src/profiles/question-answer.ts`
-parses. The two fresh reads must agree on the dialog kind and on the text the screen shows, and
-the record each read matched must agree with the other; a pane that changed between the reads is
+parses. The fresh reads must agree on the dialog kind and on the text the screen shows, and
+the record each read matched must agree with the others; a pane that changed between the reads is
 refused, never answered. The text is the dialog's whole block: a profile reads to the row that
 ends it, and a question still going when the version's supported rows run out is refused
 (`answer.incomplete`) rather than answered on the part of it that was visible. A permission
@@ -70,10 +71,18 @@ seat whose state holds no `launched` record cannot be checked against anything, 
 refuse it by identity before the pane is read at all (a launch from before the field existed,
 or one whose process the terminal host could not read when it stopped, has none). If the
 terminal host cannot read the process or it is `gone` or `replaced`, the command refuses
-before sending that input, or after the key before recording the seat ready. Refusals before
+before sending that input, or after the key before recording the seat ready. Every slow or
+host lookup — the CLI's printed version and the pane's folder readings — resolves before that
+final process check, and the final pane capture follows it: only pure checks stand between the
+capture and the key, so a process replaced or a screen switched to a permission, login or
+other prompt while a lookup runs is refused rather than keyed. Refusals before
 the recovery write — caller, policy, state, version, screen, label, folder and action, and both
-inspections — write nothing. The one refusal between the write and the key, this process check,
-puts the record back to exactly what it was (`waiting-owner`), written and read back under the
+inspections — write nothing. The refusal between the write and the key is the last reading
+taken whole — process, screen, label, folder, and the record's own version and action (and the
+question word's dialog kind and text) — so a switch, a replacement or a dialog that no longer
+reads the same is refused there as well (`answer.disagree` when the reading itself succeeds
+but names another record). That clean refusal puts the record back to exactly what it was
+(`waiting-owner`), written and read back under the
 same lock: a later `team answer` can still answer the seat, and only a crash in that window
 leaves the recovery for a retry to observe. After the key — a send that failed, the decision
 line that could not be delivered, an idle prompt that did not come, rules not delivered — a
@@ -179,7 +188,7 @@ terminal, judged before the file or the caller is read. The classes are the log 
 | --- | --- |
 | caller | `only the owner, or the orchestrator from its own seat, can answer`; the unplaced caller's reason; `--session is the owner's…`; `no pane is recorded for seat <name>…`; `the state records pane <pane> for seat <name>…` |
 | policy | `use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)` |
-| state | `another command holds it`; `it is not a live seat`; `its record is not an approved seat; left as it is (the owner cleans it: team remove <seat> --abandon)`; `herdr lists more than one agent of this name; left as it is`; `the owner has the pane open`; `it is not waiting at a trust dialog`; `it is not waiting at a question, plan approval or confirmation dialog`; `a trust answer was sent; complete it with team answer <seat> trust`; `a question was sent; complete it with team answer <seat> question`; `its recovery does not name a dialog this version answers`; `its recovery state could not be recorded`; the process refusal's own reason with `(it is still recorded as a recovery)` appended, when the rollback itself did not take |
+| state | `another command holds it`; `it is not a live seat`; `its record is not an approved seat; left as it is (the owner cleans it: team remove <seat> --abandon)`; `herdr lists more than one agent of this name; left as it is`; `the owner has the pane open`; `it is not waiting at a trust dialog`; `it is not waiting at a question, plan approval or confirmation dialog`; `a trust answer was sent; complete it with team answer <seat> trust`; `a question was sent; complete it with team answer <seat> question`; `its recovery does not name a dialog this version answers`; `its recovery state could not be recorded`; any last-reading refusal's own reason with `(it is still recorded as a recovery)` appended, when the rollback itself did not take |
 | version | `this version has no trust answer`; `this version has no question answer` |
 | screen | `the pane is not the trust dialog` |
 | label | `the trust choice is not the recorded one` |
@@ -192,7 +201,7 @@ terminal, judged before the file or the caller is read. The classes are the log 
 | login | `the pane is at a login prompt, which is never answered` |
 | not-a-question | `the pane is at a trust dialog; team answer <seat> trust answers it`; `the pane is not at a question, plan approval or confirmation dialog` |
 | incomplete | `the question runs past the rows this version reads; left as it is` |
-| disagree | `the two fresh reads of the pane do not agree on the dialog` |
+| disagree | `the two fresh reads of the pane do not agree on the dialog`; `the last reading of the pane no longer names the dialog`; `the last reading of the pane no longer names the trust dialog` |
 
 `action` is a well-formedness defence: it is reached only when a profile records a key byte the
 host does not send, or a question-answer record carries a key outside the closed set
@@ -210,7 +219,7 @@ host does not send, or a question-answer record carries a key outside the closed
 | 1 | `answer.caller` | the caller may not answer a dialog |
 | 1 | `answer.delivery` | the dialog was dismissed, but the decision line could not be delivered; the recovery stays recorded |
 | 1 | `answer.detached` | a run with no terminal |
-| 1 | `answer.disagree` | two fresh reads of the pane do not agree on the dialog |
+| 1 | `answer.disagree` | two fresh reads of the pane do not agree on the dialog, or the last reading before the key no longer names it |
 | 1 | `answer.file-owner` | `--file` is the owner's |
 | 1 | `answer.folder` | the dialog's folder is not the lobby's exact trust entry |
 | 1 | `answer.human` | the seat is a human's pane; no dialog key is pressed and no rules line is typed |
@@ -266,7 +275,8 @@ unplaced reason.
 | `refused question: login` | the pane is at a login prompt |
 | `refused question: not-a-question` | the pane is at a trust dialog, or at none of the three answerable dialogs |
 | `refused question: incomplete` | the question block runs past the rows this version reads |
-| `refused question: disagree` | the two fresh reads of the pane do not agree |
+| `refused trust: disagree` | the fresh reads of the pane, the last before the key included, do not name the same trust record |
+| `refused question: disagree` | the fresh reads of the pane, the last before the key included, do not agree |
 | `refused trust: idle` | the key was sent; the idle prompt did not come |
 | `refused question: idle` | the key was sent; the idle prompt did not come |
 | `refused trust: rule delivery` | the key was sent; the rules were not delivered |

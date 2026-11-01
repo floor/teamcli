@@ -1043,6 +1043,65 @@ describe('team answer', () => {
       expect(await retired).toBe(0);
       expect(host.typed).toEqual([]);
     });
+
+    test('the last host reads before the key are the process and the pane, and no lookup follows it', async () => {
+      const { root, home, host } = setupIdentitySeat();
+      await approve(root, home);
+      const calls: string[] = [];
+      const origVersion = host.version.bind(host);
+      host.version = (binary) => { calls.push('version'); return origVersion(binary); };
+      const origCwd = host.foregroundCwd.bind(host);
+      host.foregroundCwd = (session, pane) => { calls.push('foregroundCwd'); return origCwd(session, pane); };
+      const origList = host.list.bind(host);
+      host.list = (dir) => { calls.push('list'); return origList(dir); };
+      const origInfo = host.processInfo!.bind(host);
+      host.processInfo = (session, pane) => { calls.push('processInfo'); return origInfo(session, pane); };
+      const origPane = host.pane.bind(host);
+      host.pane = (session, pane) => { calls.push('pane'); return origPane(session, pane); };
+      const origKey = host.sendKey.bind(host);
+      host.sendKey = (session, pane, key) => { calls.push('sendKey'); return origKey(session, pane, key); };
+
+      const io = testIo(root, { kind: 'owner' });
+      expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
+      // The version is the slow lookup and the pane's folder readings are host lookups: all of
+      // them resolve before the final process read, the pane is captured after it, and only
+      // pure checks stand between that capture and the key.
+      const key = calls.indexOf('sendKey');
+      expect(key).toBeGreaterThan(0);
+      expect(calls.slice(key - 5, key + 1)).toEqual(['version', 'foregroundCwd', 'list', 'processInfo', 'pane', 'sendKey']);
+      expect(calls.slice(0, key).filter((call) => call === 'pane')).toHaveLength(3);
+      expect(calls.slice(0, key).filter((call) => call === 'version')).toHaveLength(3);
+    });
+
+    for (const change of ['permission', 'process'] as const) for (const versionAt of [2, 3]) {
+      test(`${change} switch during the version read ${versionAt}: no key, the record is put back`, async () => {
+        const { root, home, dir, host } = setupIdentitySeat();
+        await approve(root, home);
+        // A prompt or a process replacement that lands while the CLI's `--version` runs is seen
+        // by the reads after it: the process check follows the lookup, and the pane is captured
+        // after the check, so neither can be keyed from a state the run no longer sees.
+        const permission = readFileSync(new URL('./fixtures/cursor/2026.10.16/permission.txt', import.meta.url), 'utf8');
+        const origVersion = host.version.bind(host);
+        let versions = 0;
+        host.version = (binary) => {
+          versions += 1;
+          const printed = origVersion(binary);
+          if (versions >= versionAt) {
+            if (change === 'process') host.processInfo = () => ({ shell: 400, foreground: [500] });
+            else host.screen = permission;
+          }
+          return printed;
+        };
+        const io = testIo(root, { kind: 'owner' });
+        expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
+        expect(host.keys).toEqual([]);
+        expect(host.typed).toEqual([]);
+        expect(io.err).toBe(change === 'process' ? 'lead: the process in its pane is not the one team launched\n' : 'lead: the pane is not the trust dialog\n');
+        expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+        expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain(`refused trust: ${change === 'process' ? 'process' : 'screen'}`);
+        if (versionAt === 3) expect(versions).toBe(3);
+      });
+    }
   });
 
   describe('process identity checks on recovery path', () => {
