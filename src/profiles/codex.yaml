@@ -48,26 +48,17 @@ input:
 timeouts:
   idle: 90s
   exit: 30s
-# The folder-only layout, from the registered codex/0.157.0/trust-folder.txt capture: the
-# path is wrapped at column 51, continuing at indent 2. The versions are spelled as
-# `codex --version` prints them — `codex-cli 0.161.0`, measured 2026-11-01 in a scratch
-# session, and the 0.160.0 and 0.161.0 capture READMEs record the same form — because the
-# answer layer matches an exact record against that print byte for byte. Codex is eligible
-# only when the record also names `lobby_evidence`, a capture of the same dialog in the real
-# lobby; none is registered, so this record answers nothing yet.
-trust_answer:
-  - from: 'codex-cli 0.157.0'
-    to: 'codex-cli 0.157.0'
-    label: '1. Trust and continue'
-    action: '31'
-    capture: codex/0.157.0/trust-folder.txt
-    extract:
-      after: 'Folder access'
-      until_blank: true
-      join: true
-      indent: 2
-      wrap: 51
-      refuse_line: 'Trusting will apply to the repository root:'
+# No `trust_answer`: the folder trust dialog was captured at 0.157.0
+# (`codex/0.157.0/trust-folder.txt`, `trust-folder-163.txt`), but no capture answered it —
+# both READMEs record Escape quitting it back to the shell, nothing answered — and no capture
+# or note records `codex --version` at 0.157.0, so no version's own print is known. A record
+# that sends a key names one captured version, spelled as that CLI prints it, so there is
+# none: a Codex seat at the trust dialog is refused as a version with no trust answer rather
+# than pressed on a key or a version no run measured. Codex would also be eligible only when
+# a record named `lobby_evidence`, a capture of the same dialog in the real lobby; none is
+# registered. The layout the captures do show, kept for whoever records an answered one: the
+# 54-column pane wraps the path at column 51 and continues it at indent 2, and the 163-column
+# pane draws it on one row.
 # The dialog dismiss keys a 0.161.0 scratch capture recorded, each the key the dialog's own
 # footer names and the dialog left without an answer:
 # - `0.161.0/plan-approval.txt`: the footer's `enter select · esc back`; Escape returned to the

@@ -27,6 +27,19 @@ const agyTrust = readFileSync(new URL('./fixtures/antigravity/1.2.16/trust.txt',
 const codexFolder = readFileSync(new URL('./fixtures/codex/0.157.0/trust-folder.txt', import.meta.url), 'utf8');
 const codexWide = readFileSync(new URL('./fixtures/codex/0.157.0/trust-folder-163.txt', import.meta.url), 'utf8');
 const codexRepo = readFileSync(new URL('./fixtures/codex/0.157.0/trust.txt', import.meta.url), 'utf8');
+// The extractor a folder-trust record needs where the pane wraps the path. Codex ships no
+// trust answer (its 0.157.0 README says why), so the shape is kept here: its captures still
+// show it, and the loader still reads it.
+const codexExtract: TrustRecord['extract'] = {
+  after: 'Folder access',
+  before: null,
+  untilBlank: true,
+  join: true,
+  box: false,
+  refuseLine: 'Trusting will apply to the repository root:',
+  indent: 2,
+  wrap: 51,
+};
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-05T04:00:00.000Z');
 
@@ -147,7 +160,7 @@ function fake(home: string, root: string, screen: string, cli: 'cursor' | 'antig
       host.versions += 1;
       if (binary === 'cursor-agent') return '2026.10.01-14929f9';
       if (binary === 'agy') return '1.2.16';
-      if (binary === 'codex') return 'codex-cli 0.157.0';
+      if (binary === 'codex') return 'codex-cli 0.161.0';
       return '0.0.0';
     },
     agents() {
@@ -207,17 +220,15 @@ function withPath(screen: string, from: string, path: string): string {
 
 describe('what the captures show', () => {
   test('each extractor yields the one folder, and the repository layout yields none', () => {
-    const codex = profileFor('codex');
     const cursor = profileFor('cursor');
     const agy = profileFor('antigravity');
-    if (!codex || !cursor || !agy) throw new Error('profiles');
-    const codexRecord = codex.answers[0];
+    if (!cursor || !agy) throw new Error('profiles');
     const cursorRecord = cursor.answers[0];
     const agyRecord = agy.answers[0];
-    if (!codexRecord || !cursorRecord || !agyRecord) throw new Error('records');
-    expect(extractFolder(codexRecord.extract, codexFolder)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
-    expect(extractFolder(codexRecord.extract, codexWide)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
-    expect(extractFolder(codexRecord.extract, codexRepo)).toBeNull();
+    if (!cursorRecord || !agyRecord) throw new Error('records');
+    expect(extractFolder(codexExtract, codexFolder)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
+    expect(extractFolder(codexExtract, codexWide)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
+    expect(extractFolder(codexExtract, codexRepo)).toBeNull();
     expect(extractFolder(cursorRecord.extract, cursorTrust)).toBe('<untrusted-directory>');
     expect(extractFolder(agyRecord.extract, agyTrust)).toBe('<project-worktree>');
     expect(labelMatches(cursorRecord, cursorTrust)).toBe(true);
@@ -247,10 +258,7 @@ describe('what the captures show', () => {
   });
 
   test('a run of rows is joined only when it proves one wrapped path', () => {
-    const codex = profileFor('codex');
-    const codexRecord = codex?.answers[0];
-    if (!codexRecord) throw new Error('record');
-    const extract = codexRecord.extract;
+    const extract = codexExtract;
     // The reviewer's probe: two unrelated rows between the anchor and the blank that
     // together hold the two halves of a lobby path. They are at no indent and the first
     // fills no wrap column, so they are refused rather than joined.
@@ -266,13 +274,24 @@ describe('what the captures show', () => {
   });
 
   test('a record is enabled by its own capture, and Codex also by lobby evidence', () => {
-    const codex = profileFor('codex');
     const cursor = profileFor('cursor');
     const agy = profileFor('antigravity');
-    const codexRecord = codex?.answers[0];
     const cursorRecord = cursor?.answers[0];
     const agyRecord = agy?.answers[0];
-    if (!codexRecord || !cursorRecord || !agyRecord) throw new Error('records');
+    if (!cursorRecord || !agyRecord) throw new Error('records');
+    // A Codex record built here, because the shipped profile carries none: the rule under test
+    // is the CLI's, not the shipped data's.
+    const codexRecord: TrustRecord = {
+      from: 'codex-cli 0.161.0',
+      to: 'codex-cli 0.161.0',
+      label: '1. Trust and continue',
+      mark: null,
+      footer: null,
+      action: '31',
+      capture: 'codex/0.157.0/trust-folder.txt',
+      lobbyEvidence: null,
+      extract: codexExtract,
+    };
     expect(isEligible('codex', codexRecord)).toBe(false);
     expect(isEligible('cursor', cursorRecord)).toBe(true);
     expect(isEligible('antigravity', agyRecord)).toBe(true);
@@ -283,7 +302,7 @@ describe('what the captures show', () => {
     // Codex also needs lobby evidence, named the same way. lobby-constructed.txt is not a
     // capture — the README says it is not a screen — and the basename stands for Codex's
     // repository-layout capture, which was not taken in the lobby. Neither enables it, so
-    // the shipped record stays ineligible.
+    // such a record stays ineligible.
     expect(isEligible('codex', { ...codexRecord, lobbyEvidence: 'codex/0.157.0/lobby-constructed.txt' })).toBe(false);
     expect(isEligible('codex', { ...codexRecord, lobbyEvidence: 'trust.txt' })).toBe(false);
     // The mechanism itself: evidence naming a registered capture would enable the record.
@@ -317,19 +336,15 @@ describe('version matching', () => {
   });
 
   test('every shipped trust record is spelled as its CLI prints its version', () => {
-    // `codex --version` printed `codex-cli 0.161.0` in a scratch session on 2026-11-01, and the
-    // 0.160.0 and 0.161.0 capture READMEs record the same form; an exact record matches the
-    // printed text byte for byte, so 0.157.0's record carries the prefix too.
-    const codex = profileFor('codex')?.answers[0];
-    if (!codex) throw new Error('codex record');
-    expect(versionMatches(codex, 'codex-cli 0.157.0')).toBe(true);
-    expect(versionMatches(codex, '0.157.0')).toBe(false);
+    // A trust record sends a key, so each names one captured version, spelled as that CLI
+    // prints it. Codex ships none: its folder-trust captures record Escape and no answer, and
+    // no capture records `codex --version` at 0.157.0 (test/fixtures/codex/0.157.0/README.md).
+    expect(profileFor('codex')?.answers).toEqual([]);
     // The rest: cursor-agent prints its build string bare (the 2026.10.14 and 2026.10.16
     // READMEs record that print), and `agy --version` prints the bare version.
-    const spelled = ['codex', 'cursor', 'antigravity'].flatMap((cli) =>
+    const spelled = ['cursor', 'antigravity'].flatMap((cli) =>
       (profileFor(cli)?.answers ?? []).map((record) => `${cli} ${record.from} -> ${record.to}`));
     expect(spelled).toEqual([
-      'codex codex-cli 0.157.0 -> codex-cli 0.157.0',
       'cursor 2026.10.01-14929f9 -> 2026.10.01-14929f9',
       'cursor 2026.10.14-0f9edde -> 2026.10.14-0f9edde',
       'cursor 2026.10.16-e3cb207 -> 2026.10.16-e3cb207',
@@ -1324,7 +1339,7 @@ describe('team answer', () => {
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, codexRepo, 'cursor');
-    host.version = () => 'codex-cli 0.157.0';
+    host.version = () => 'codex-cli 0.161.0';
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
