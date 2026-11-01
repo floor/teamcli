@@ -593,3 +593,48 @@ test('a secret swapped between the check and the read is never used', async () =
   expect(facts.refusalNamesMode).toBe(true);
   expect(facts.reasonEchoesValue).toBe(false);
 });
+
+/** What the child run (test/webhook-fifo-run.ts) observed with FIFOs at the webhook paths. */
+type FifoFacts = {
+  mkfifo: boolean;
+  teamOk: boolean;
+  urlFifoRead: { refused: boolean; reason: string; elapsedMs: number; namesKind: boolean; echoesSecret: boolean };
+  secretFifoRead: { refused: boolean; reason: string; elapsedMs: number; namesKind: boolean; echoesSecret: boolean };
+  fanOut: { outcome: string; elapsedMs: number; refusedInPlainWords: boolean; echoesSecret: boolean; lines: string[] };
+};
+
+test('a FIFO secret or URL is refused at once, and fanOut returns', async () => {
+  const proc = Bun.spawn(['bun', join(import.meta.dir, 'webhook-fifo-run.ts')], {
+    cwd: new URL('..', import.meta.url).pathname,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  // A FIFO with no writer never answers a blocking open. Before the read became nonblocking,
+  // the child was still waiting inside openSync at this bound and was killed here.
+  const killer = setTimeout(() => proc.kill('SIGKILL'), 4_000);
+  const exit = await proc.exited;
+  clearTimeout(killer);
+  const out = await new Response(proc.stdout).text();
+  const err = await new Response(proc.stderr).text();
+  expect(exit, err || out).toBe(0);
+  const facts = JSON.parse(out) as FifoFacts;
+  expect(facts.mkfifo).toBe(true);
+  expect(facts.teamOk).toBe(true);
+  // Both paths refuse, in plain words that name the kind, within a short bound, and neither
+  // repeats the secret file's contents.
+  for (const read of [facts.urlFifoRead, facts.secretFifoRead]) {
+    expect(read.refused).toBe(true);
+    expect(read.reason).toContain('not a regular file');
+    expect(read.reason).toContain('FIFO');
+    expect(read.echoesSecret).toBe(false);
+    expect(read.elapsedMs).toBeLessThan(2000);
+  }
+  // fanOut calls the delivery callback synchronously, so the bus can only answer the publish
+  // once that callback has returned. The arrival is still published; the adapter's refusal
+  // keeps the drop in place.
+  expect(facts.fanOut.outcome).toBe('published');
+  expect(facts.fanOut.elapsedMs).toBeLessThan(2000);
+  expect(facts.fanOut.refusedInPlainWords).toBe(true);
+  expect(facts.fanOut.echoesSecret).toBe(false);
+  expect(facts.fanOut.lines.some((line) => line.includes('not posted'))).toBe(true);
+});

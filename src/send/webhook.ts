@@ -6,8 +6,10 @@
 // The secret file follows the drop files' stance: a regular file owned by the running user with
 // no group or other permission bits. Anything else is refused in plain words, naming the path
 // and — when the mode is the problem — the mode, never the value. Both files are opened once,
-// without following a link, and every check and the bytes themselves come from that one
-// descriptor: a path replaced between the check and the read cannot substitute another file.
+// without following a link and without waiting, and every check and the bytes themselves come
+// from that one descriptor: a path replaced between the check and the read cannot substitute
+// another file. The open is nonblocking so that a FIFO, which has no writer yet, is refused by
+// its type rather than waited on indefinitely, and the refusal names the kind.
 // Both files are read as one line and a value with a control character is refused too, because a
 // platform error about such a value repeats it verbatim. The URL file carries no secrecy, but it
 // is read the same careful way: a regular file, non-empty, an http(s) URL, and no userinfo
@@ -26,17 +28,34 @@ export const WEBHOOK_FILE_LIMIT = 4096;
  *  checks still hold the file to a regular one of the running user's, at 0600 or tighter. */
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
+/** `O_NONBLOCK` is POSIX too, and it matters before the descriptor's checks run: a FIFO has no
+ *  writer yet, so a blocking open waits for one instead of returning, and the type check that
+ *  would refuse it is never reached. Nonblocking, the open returns at once on anything a read
+ *  could otherwise wait on, and the descriptor's type decides. A platform without the flag gets
+ *  0, and the checks still hold. */
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
+
 /** What reading one webhook file found: the value, or a plain-words reason it cannot be used. */
 export type WebhookFileRead = { ok: true; value: string } | { ok: false; reason: string };
 
 /** Where the adapter would post, or why it cannot: `null` when the seat configures none. */
 export type WebhookRoute = { ok: true; url: string; secret: string } | { ok: false; reason: string };
 
+/** The plain words for what an opened path is, when it is not a regular file: the desk can say
+ *  why it refused, and the owner can tell a mistyped path from a deliberately rare shape. */
+function nonRegularKind(stats: Stats): string | null {
+  if (stats.isFIFO()) return 'a FIFO';
+  if (stats.isSocket()) return 'a socket';
+  if (stats.isDirectory()) return 'a directory';
+  if (stats.isCharacterDevice() || stats.isBlockDevice()) return 'a device';
+  return null;
+}
+
 /** A regular file's text, or a plain-words reason it cannot be read. The file is opened once,
- *  without following a link, and the type, the size, any `extra` check and the bytes themselves
- *  all come from that one descriptor: a path replaced after the open cannot swap the file that
- *  was checked for the one that is read. The text is not trimmed: the value's own bytes decide
- *  whether it is one line (`oneLine`). */
+ *  without following a link and without waiting on a special file, and the type, the size, any
+ *  `extra` check and the bytes themselves all come from that one descriptor: a path replaced
+ *  after the open cannot swap the file that was checked for the one that is read. The text is
+ *  not trimmed: the value's own bytes decide whether it is one line (`oneLine`). */
 function readRegularFile(
   path: string,
   what: string,
@@ -44,13 +63,16 @@ function readRegularFile(
 ): WebhookFileRead {
   let fd: number;
   try {
-    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
   } catch {
     return { ok: false, reason: `the ${what} file ${path} is missing or unreadable` };
   }
   try {
     const stats = fstatSync(fd);
-    if (!stats.isFile()) return { ok: false, reason: `the ${what} file ${path} is not a regular file` };
+    if (!stats.isFile()) {
+      const kind = nonRegularKind(stats);
+      return { ok: false, reason: `the ${what} file ${path} is not a regular file${kind === null ? '' : ` (it is ${kind})`}` };
+    }
     if (stats.size > WEBHOOK_FILE_LIMIT) {
       return { ok: false, reason: `the ${what} file ${path} is larger than ${WEBHOOK_FILE_LIMIT} bytes` };
     }
