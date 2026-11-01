@@ -121,13 +121,13 @@ type RecordOptions = {
   noAgent?: boolean;
 };
 
-/** The state and registry records a launch left: the worker ready on w2:p1, bound to A and to
+/** The state and registry records a launch left: the worker ready on pane1, bound to A and to
  *  the live conversation the pane runs. Each scene bends exactly one field. */
 function recordValid(options: RecordOptions = {}): void {
   const held: SeatState = {
     stage: 'ready',
     id: HANDLE,
-    pane: 'w2:p1',
+    pane: 'pane1',
     workspace: 'w2',
     launched: { shell: 100, cli: [200] },
     agent_session: SES_A,
@@ -152,7 +152,7 @@ function recordValid(options: RecordOptions = {}): void {
       team: teamIdOf(root),
       seat: WORKER,
       session: options.reachSession ?? SESSION,
-      pane: 'w2:p1',
+      pane: 'pane1',
       address: null,
       agent_session: SES_A,
     },
@@ -206,7 +206,7 @@ function makeWorld(
   const panes = new Map<string, PaneFixture>();
   const labels = new Map<string, string>();
   if (first !== null) {
-    panes.set('w2:p1', {
+    panes.set('pane1', {
       screen: first.screen,
       session: first.live ?? SES_A,
       workspace: 'w2',

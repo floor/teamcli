@@ -28,8 +28,8 @@ const agent = (name: string | null, pane: string): HerdrAgent => ({ name, agent:
 function sources(ancestors: Process[], over: Partial<CallerSources> = {}): CallerSources {
   return {
     ancestors: () => ancestors,
-    agents: () => [agent('claude-coordinator', 'w1:p1'), agent('codex-acme', 'w2:p1'), agent(null, 'w3:p1')],
-    paneRootPid: (pane) => ({ 'w1:p1': 100, 'w2:p1': 200, 'w3:p1': 300 })[pane] ?? null,
+    agents: () => [agent('claude-coordinator', 'pane1'), agent('codex-acme', 'pane2'), agent(null, 'pane3')],
+    paneRootPid: (pane) => ({ 'pane1': 100, 'pane2': 200, 'pane3': 300 })[pane] ?? null,
     env: {},
     stdinIsTTY: true,
     ...over,
@@ -43,14 +43,14 @@ describe('the caller is placed by its parent processes', () => {
   test('a seat\'s tool run under its managed Codex app-server is that seat, while herdr lists it', () => {
     // The app-server is started outside the pane, so no herdr server is among the parents.
     const underEndpoint: Process[] = [{ pid: 910, name: 'zsh' }, { pid: 900, name: 'codex' }, { pid: 1, name: 'launchd' }];
-    const served = (pid: number) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'w2:p1' } : null);
-    const env = { HERDR_PANE_ID: 'w2:p1' };
+    const served = (pid: number) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'pane2' } : null);
+    const env = { HERDR_PANE_ID: 'pane2' };
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'main'))
-      .toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'main' });
+      .toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
     // Another session, or a pane herdr lists under another name, places nobody.
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'other'))
       .toMatchObject({ kind: 'unplaced' });
-    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => ({ session: 'main', seat: 'codex-acme', pane: 'w1:p1' }) }), 'main'))
+    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => ({ session: 'main', seat: 'codex-acme', pane: 'pane1' }) }), 'main'))
       .toMatchObject({ kind: 'unplaced' });
     // A Codex process that is no recorded endpoint stays the detached refusal.
     expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => null }), 'main'))
@@ -62,7 +62,7 @@ describe('the caller is placed by its parent processes', () => {
   });
 
   test('a command run by an agent in a herdr pane is that seat', () => {
-    expect(placeCaller(sources(seat))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' });
+    expect(placeCaller(sources(seat))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2' });
   });
 
   test('a herdr pane without an agent is neither the owner nor a seat', () => {
@@ -74,11 +74,11 @@ describe('the caller is placed by its parent processes', () => {
     const shell: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
     const vouched = sources(shell, {
       agents: () => [],
-      env: { HERDR_PANE_ID: 'w9:p1' },
-      paneRootPid: (pane) => (pane === 'w9:p1' ? 900 : null),
+      env: { HERDR_PANE_ID: 'pane9' },
+      paneRootPid: (pane) => (pane === 'pane9' ? 900 : null),
     });
-    expect(placeCaller(vouched, 'main')).toEqual({ kind: 'pane', pane: 'w9:p1', session: 'main' });
-    expect(placeCaller(vouched)).toEqual({ kind: 'pane', pane: 'w9:p1' });
+    expect(placeCaller(vouched, 'main')).toEqual({ kind: 'pane', pane: 'pane9', session: 'main' });
+    expect(placeCaller(vouched)).toEqual({ kind: 'pane', pane: 'pane9' });
   });
 
   test('a hint without a vouched pid, or with no hint, stays the agentless refusal', () => {
@@ -86,12 +86,12 @@ describe('the caller is placed by its parent processes', () => {
     const unplaced = { kind: 'unplaced' as const, reason: 'it runs in a herdr pane without an agent' };
     expect(placeCaller(sources(shell, {
       agents: () => [],
-      env: { HERDR_PANE_ID: 'w9:p1' },
+      env: { HERDR_PANE_ID: 'pane9' },
       paneRootPid: () => null,
     }))).toEqual(unplaced);
     expect(placeCaller(sources(shell, {
       agents: () => [],
-      env: { HERDR_PANE_ID: 'w9:p1' },
+      env: { HERDR_PANE_ID: 'pane9' },
       paneRootPid: () => 1,
     }))).toEqual(unplaced);
     expect(placeCaller(sources(shell, { agents: () => [], env: {} }))).toEqual(unplaced);
@@ -101,13 +101,13 @@ describe('the caller is placed by its parent processes', () => {
     const shell: Process[] = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
     expect(placeCaller(sources(shell, {
       agents: () => null,
-      env: { HERDR_PANE_ID: 'w9:p1' },
+      env: { HERDR_PANE_ID: 'pane9' },
       paneRootPid: () => 900,
     }))).toEqual({ kind: 'unplaced', reason: 'it runs under herdr, and herdr doesn\'t answer' });
     const unnamed: Process[] = [{ pid: 300, name: 'claude' }, { pid: 10, name: 'herdr' }];
-    expect(placeCaller(sources(unnamed, { env: { HERDR_PANE_ID: 'w3:p1' } }))).toEqual({
+    expect(placeCaller(sources(unnamed, { env: { HERDR_PANE_ID: 'pane3' } }))).toEqual({
       kind: 'unplaced',
-      reason: 'it runs in pane w3:p1, whose agent has no herdr name',
+      reason: 'it runs in pane pane3, whose agent has no herdr name',
     });
   });
 
@@ -126,7 +126,7 @@ describe('the caller is placed by its parent processes', () => {
   });
 
   test('a pane named in HERDR_PANE_ID is not believed without its process', () => {
-    expect(placeCaller(sources(seat, { env: { HERDR_PANE_ID: 'w1:p1' } }))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' });
+    expect(placeCaller(sources(seat, { env: { HERDR_PANE_ID: 'pane1' } }))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2' });
   });
 
   test('AGENT_UNATTENDED only ever adds a refusal', () => {
@@ -164,82 +164,82 @@ describe('the classes read apart', () => {
     expect(mayLaunchSeats({ kind: 'owner' })).toBe(true);
     expect(mayLaunchSeats({ kind: 'owner-no-tty' })).toBe(false);
     expect(mayLaunchSeats({ kind: 'unplaced', reason: 'x' })).toBe(false);
-    expect(isOwner({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe(false);
-    expect(mayLaunchSeats({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe(false);
+    expect(isOwner({ kind: 'pane', pane: 'pane9', session: 'main' })).toBe(false);
+    expect(mayLaunchSeats({ kind: 'pane', pane: 'pane9', session: 'main' })).toBe(false);
   });
 
   test('the log bracket is owner for both; a refusal reads as main\'s unplaced line', () => {
     expect(callerLabel({ kind: 'owner' })).toBe('owner');
     expect(callerLabel({ kind: 'owner-no-tty' })).toBe('owner');
     expect(describeCaller({ kind: 'owner-no-tty' })).toBe('unplaced (it doesn\'t run on a terminal)');
-    expect(describeCaller({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe('it runs in pane main/w9:p1, which no grant lists');
-    expect(describeCaller({ kind: 'pane', pane: 'w9:p1' })).toBe('it runs in pane w9:p1');
-    expect(callerLabel({ kind: 'pane', pane: 'w9:p1', session: 'main' })).toBe('main/w9:p1');
+    expect(describeCaller({ kind: 'pane', pane: 'pane9', session: 'main' })).toBe('it runs in pane main/pane9, which no grant lists');
+    expect(describeCaller({ kind: 'pane', pane: 'pane9' })).toBe('it runs in pane pane9');
+    expect(callerLabel({ kind: 'pane', pane: 'pane9', session: 'main' })).toBe('main/pane9');
   });
 });
 
 describe('who may change a running team', () => {
   const team = { orchestrator: 'claude-coordinator', operator: 'claude-operator' };
-  const at = { session: 's', recordedPane: 'w1:p1' };
-  const other = { session: 's', recordedPane: 'w4:p1' };
+  const at = { session: 's', recordedPane: 'pane1' };
+  const other = { session: 's', recordedPane: 'pane4' };
   test('the owner, the coordinator and the operator', () => {
     expect(mayChangeTeam({ kind: 'owner' }, team, at)).toBe(true);
-    expect(mayChangeTeam({ kind: 'seat', name: 'claude-coordinator', pane: 'w1:p1', session: 's' }, team, at)).toBe(true);
-    expect(mayChangeTeam({ kind: 'seat', name: 'claude-operator', pane: 'w4:p1', session: 's' }, team, other)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'claude-coordinator', pane: 'pane1', session: 's' }, team, at)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'claude-operator', pane: 'pane4', session: 's' }, team, other)).toBe(true);
   });
   test('no other seat, and no unplaced caller', () => {
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 's' }, team, at)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 's' }, team, at)).toBe(false);
     expect(mayChangeTeam({ kind: 'unplaced', reason: 'x' }, team, at)).toBe(false);
-    expect(mayChangeTeam({ kind: 'pane', pane: 'w9:p1', session: 'main' }, team, at)).toBe(false);
-    expect(callerVerdict({ kind: 'pane', pane: 'w9:p1', session: 'main' }, 'claude-coordinator', at)).toEqual({ kind: 'refused' });
+    expect(mayChangeTeam({ kind: 'pane', pane: 'pane9', session: 'main' }, team, at)).toBe(false);
+    expect(callerVerdict({ kind: 'pane', pane: 'pane9', session: 'main' }, 'claude-coordinator', at)).toEqual({ kind: 'refused' });
   });
 });
 
 describe('a caller is judged against the session and the pane it was placed in', () => {
   test('placement records the session it was made in, and nothing when none was asked about', () => {
-    expect(placeCaller(sources(seat), 'b')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'b' });
-    expect(placeCaller(sources(seat))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' });
+    expect(placeCaller(sources(seat), 'b')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'b' });
+    expect(placeCaller(sources(seat))).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2' });
   });
 
   const team = { orchestrator: 'codex-acme', operator: 'codex-acme' };
-  const where = { session: 'a', recordedPane: 'w2:p1' };
+  const where = { session: 'a', recordedPane: 'pane2' };
 
   test('a seat of another session is not the coordinator of this one', () => {
     // Placed in session b under the coordinator's name: today's caller shape, still true.
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'b' }, team, where)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'b' }, team, where)).toBe(false);
     // The caller main's placement produced (no session at all) is refused once a standing is
     // asked for: nothing in it shows it stood in the session judged. The one this session's
     // placement produces is the same seat, allowed.
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, team, where)).toBe(false);
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, team, where)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2' }, team, where)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'a' }, team, where)).toBe(true);
   });
 
   test('a pane merely renamed is not the seat: the state records another pane', () => {
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'a' }, team, where)).toBe(false);
-    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'a' }, 'codex-acme', where)).toBe(false);
-    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, 'codex-acme', where)).toBe(true);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane9', session: 'a' }, team, where)).toBe(false);
+    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'pane9', session: 'a' }, 'codex-acme', where)).toBe(false);
+    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'a' }, 'codex-acme', where)).toBe(true);
   });
 
   test('a state that records no pane refuses the seat: the check fails closed', () => {
     const none = { session: 'a' };
     // The pane matches nothing, because nothing is recorded — a renamed shell and a hand-started
     // seat are the same shape here, so neither may pass.
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'a' }, team, none)).toBe(false);
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, team, none)).toBe(false);
-    const verdict = callerVerdict({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'a' }, 'codex-acme', none);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane9', session: 'a' }, team, none)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'a' }, team, none)).toBe(false);
+    const verdict = callerVerdict({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'a' }, 'codex-acme', none);
     expect(verdict).toEqual({ kind: 'no-pane', name: 'codex-acme' });
     expect(noPaneRefusal('codex-acme')).toBe(
       'no pane is recorded for seat codex-acme in this session: a lead stops that seat and runs `team up`',
     );
     // Another session is refused before the missing pane is even consulted.
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w9:p1', session: 'b' }, team, none)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane9', session: 'b' }, team, none)).toBe(false);
   });
 
   test('the placement is mandatory: a caller with no session is refused against a standing', () => {
     // The name alone proves no placement, so no caller is admitted by it: every judgement asks
     // for a standing, and a caller main's placement produced (no session) is refused.
-    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, team, where)).toBe(false);
-    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1' }, 'codex-acme', where)).toBe(false);
+    expect(mayChangeTeam({ kind: 'seat', name: 'codex-acme', pane: 'pane2' }, team, where)).toBe(false);
+    expect(callerStanding({ kind: 'seat', name: 'codex-acme', pane: 'pane2' }, 'codex-acme', where)).toBe(false);
   });
 
   const made: string[] = [];
@@ -252,12 +252,12 @@ describe('a caller is judged against the session and the pane it was placed in',
     const dir = mkdtempSync(join(tmpdir(), 'team-caller-'));
     made.push(dir);
     const state = join(dir, 'team.state.json');
-    writeFileSync(state, JSON.stringify({ format: 1, sessions: { a: { seats: { lead: { stage: 'ready', pane: 'w1:p1' } }, worktrees: {} } } }));
-    expect(recordedPaneOf(dir, 'a', 'lead')).toBe('w1:p1');
+    writeFileSync(state, JSON.stringify({ format: 1, sessions: { a: { seats: { lead: { stage: 'ready', pane: 'pane1' } }, worktrees: {} } } }));
+    expect(recordedPaneOf(dir, 'a', 'lead')).toBe('pane1');
     expect(recordedPaneOf(dir, 'a', 'worker')).toBeUndefined();
     expect(recordedPaneOf(dir, 'b', 'lead')).toBeUndefined();
-    const caller: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'a' };
-    expect(standingOf(dir, 'a', caller)).toEqual({ session: 'a', recordedPane: 'w1:p1', stage: 'ready' });
+    const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane1', session: 'a' };
+    expect(standingOf(dir, 'a', caller)).toEqual({ session: 'a', recordedPane: 'pane1', stage: 'ready' });
     expect(standingOf(dir, 'a', { kind: 'owner' })).toEqual({ session: 'a', recordedPane: undefined });
     // A state that can't be read records none: the caller check must never become a stack trace.
     writeFileSync(state, '{ not a state');

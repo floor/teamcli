@@ -270,7 +270,7 @@ describe('ensuring the endpoint', () => {
       const spawned: { config?: string[]; env?: Record<string, string> }[] = [];
       const asked: string[] = [];
       const answer = await ensureCodexEndpoint({
-        dir, session: SESSION, seat: SEAT, pane: 'w9:p1', config: ['-c', 'sandbox_mode="danger-full-access"'],
+        dir, session: SESSION, seat: SEAT, pane: 'pane1', config: ['-c', 'sandbox_mode="danger-full-access"'],
         deps: {
           spawn: (input) => { spawned.push({ config: input.config, env: input.env }); listening = true; return { pid: 9031 }; },
           herdrEnv: (session, pane) => { asked.push(`${session} ${pane}`); return { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: pane }; },
@@ -281,10 +281,10 @@ describe('ensuring the endpoint', () => {
         },
       });
       expect(answer).toEqual({ kind: 'up', url: `unix://${socketPath}`, started: true });
-      expect(asked).toEqual([`${SESSION} w9:p1`]);
+      expect(asked).toEqual([`${SESSION} pane1`]);
       expect(spawned).toEqual([{
         config: ['-c', 'sandbox_mode="danger-full-access"'],
-        env: { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: 'w9:p1' },
+        env: { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: 'pane1' },
       }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -298,7 +298,7 @@ describe('ensuring the endpoint', () => {
       const socketPath = join(rootOf(dir), `${BINDING}.sock`);
       let listening = false;
       const answer = await ensureCodexEndpoint({
-        dir, session: SESSION, seat: SEAT, pane: 'w9:p1',
+        dir, session: SESSION, seat: SEAT, pane: 'pane1',
         deps: {
           spawn: (input) => { expect(input.env).toBeUndefined(); listening = true; return { pid: 9032 }; },
           herdrEnv: () => null,
@@ -976,7 +976,7 @@ describe('whether a seat records an endpoint of its own', () => {
 describe('the seat a managed endpoint serves', () => {
   // With the TUI attached by --remote, a seat's tools run under its app-server: the walk up from
   // the seat's own `team` call meets that process, which places it only on the full proof.
-  function scene(extra: Partial<CodexEndpointRecord> = {}, pane: string | undefined = 'w5:p1') {
+  function scene(extra: Partial<CodexEndpointRecord> = {}, pane: string | undefined = 'pane2') {
     const dir = scratch();
     const record = ownedRecord(dir, extra);
     updateState(dir, (state) => {
@@ -996,7 +996,7 @@ describe('the seat a managed endpoint serves', () => {
     const { dir, record } = scene();
     try {
       const command = `codex app-server --listen ${record.url} -c sandbox_mode="danger-full-access"`;
-      expect(seatOfManagedEndpoint(700, proof(command))).toEqual({ dir, session: SESSION, seat: SEAT, pane: 'w5:p1' });
+      expect(seatOfManagedEndpoint(700, proof(command))).toEqual({ dir, session: SESSION, seat: SEAT, pane: 'pane2' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

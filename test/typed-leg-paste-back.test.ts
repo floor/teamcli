@@ -120,7 +120,7 @@ describe('a draft moved for a delivery', () => {
       const at = rows.findIndex((row) => row.startsWith('› Ask Codex'));
       rows.splice(at, 1, '› Fix the parser', '  before the release.');
       const cli = boxCli({ screen: rows.join('\n'), draft: '', working: true });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'codex');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'codex');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -133,7 +133,7 @@ describe('a draft moved for a delivery', () => {
       writeFileSync(side.copy, 'an earlier delivery left these words\n');
       const draft = 'Fix the parser';
       const cli = boxCli({ screen: claudeBox(draft), draft });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -148,7 +148,7 @@ describe('a draft the screen cannot copy faithfully', () => {
       const draft = 'Fix the parser\nbefore the release.';
       const screen = claudeBox(draft);
       const cli = boxCli({ screen, draft });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -162,7 +162,7 @@ describe('a draft the screen cannot copy faithfully', () => {
       // screen cannot tell from a line break the person made.
       const wrapped = 'Please check the staging deployment logs for the\nbilling service before handing the parser over.';
       const cli = boxCli({ screen: claudeBox(wrapped), draft: wrapped });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -177,7 +177,7 @@ describe('a draft pasted back', () => {
     const side = sidecar();
     try {
       const cli = boxCli({ screen: claudeBox(one), draft: one });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -193,7 +193,7 @@ describe('a draft pasted back', () => {
         draft: one,
         afterPaste: () => claudeBox('Fix the par'),
       });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -207,7 +207,7 @@ describe('a draft pasted back', () => {
       const permission = claudeCapture('permission-read-wide-ansi.txt');
       // The first read after the Enter shows the box empty; the next ones show the dialog.
       const cli = boxCli({ screen: claudeBox(one), draft: one, afterEnter: ['', permission] });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -228,7 +228,7 @@ describe('a delivered exit still owes the owner the text', () => {
         draft: one,
         lateClear: { reads: 1, screen: claudeBox(side.line) },
       });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -241,7 +241,7 @@ describe('a delivered exit still owes the owner the text', () => {
       // A redraw in progress reads unread through the leave check and the verify window; the
       // restore gives the box its own window rather than leaving the copy behind.
       const cli = boxCli({ screen: claudeBox(one), draft: one, unreadReads: 3 });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
@@ -252,7 +252,7 @@ describe('a delivered exit still owes the owner the text', () => {
     const side = sidecar();
     try {
       const cli = boxCli({ screen: claudeBox(one), draft: one, afterEnterBox: 'someone else is typing' });
-      const retired = await deliverTrigger(cli, 'w1:p1', side.line, 'claude-code');
+      const retired = await deliverTrigger(cli, 'pane1', side.line, 'claude-code');
       expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     } finally {
       side.cleanup();
