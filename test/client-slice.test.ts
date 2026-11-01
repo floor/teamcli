@@ -1196,3 +1196,23 @@ describe('the client send walk', () => {
     expect(frame.message.content).not.toContain('client:grok-bot@');
   });
 });
+
+// The placement rule refuses a client key under the OS temp folder, and a checkout can itself sit
+// under it. Every world here builds its home under the shared fixture root, never beside the
+// checkout, so the rule holds wherever the checkout is. This scene takes the one step a test can
+// take: it stands in a temp folder as the working directory — what a temp-located checkout looked
+// like to the old fixtures — and builds a world; before the fixture root, that world's key was
+// refused here.
+test('a world built from a temp working directory still places its client key', () => {
+  const cwd = process.cwd();
+  const tempCheckout = realpathSync(mkdtempSync(join(tmpdir(), 'client-temp-checkout-')));
+  try {
+    process.chdir(tempCheckout);
+    const f = fixture('temp-checkout');
+    expect(relative(tempCheckout, f.base).startsWith('..')).toBe(true);
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+  } finally {
+    process.chdir(cwd);
+    rmSync(tempCheckout, { recursive: true, force: true });
+  }
+});
