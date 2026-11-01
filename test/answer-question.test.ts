@@ -538,7 +538,9 @@ describe('team answer <seat> question', () => {
     // disagree and no key is pressed.
     const writes = wrappedQuestion(['1. Which name should be used for the', 'file we write?']);
     const names = wrappedQuestion(['1. Which name should be used for the', 'file we name?']);
-    const host = fake(home, 'lead', writes, { shipped: true });
+    // The pane's content is the 2026.10.01 capture's shape; the print is one the shipped
+    // profile carries a record for, so the refusal below is the readings' and not the version's.
+    const host = fake(home, 'lead', writes, { shipped: true, printed: '2026.10.16-e3cb207' });
     let reads = 0;
     host.pane = () => (reads++ === 0 ? writes : names);
     const run = io(root);
@@ -769,7 +771,9 @@ const CAPTURED = [
   // The printed version is each capture README's own `--version` string, byte for byte: the
   // answer layer matches what the CLI prints, not the folder's number.
   { cli: 'claude-code', printed: '2.1.302 (Claude Code)', question: 'claude-code/2.1.302/question.txt', idle: 'claude-code/2.1.302/idle.txt' },
-  { cli: 'cursor', printed: '2026.10.01-14929f9', question: 'cursor/2026.10.01/question.txt', idle: 'cursor/2026.10.01/idle.txt' },
+  // `2026.10.01-14929f9` saves no `cursor-agent --version` print, so the shipped profile ships no
+  // key record for that build: the reachability proof uses the print a capture saved.
+  { cli: 'cursor', printed: '2026.10.16-e3cb207', question: 'cursor/2026.10.16/question.txt', idle: 'cursor/2026.10.16/idle.txt' },
   { cli: 'gemini', printed: '0.64.0', question: 'gemini/0.64.0/question.txt', idle: 'gemini/0.64.0/idle.txt' },
   { cli: 'antigravity', printed: '1.4.2', question: 'antigravity/1.4.2/question.txt', idle: 'antigravity/1.4.2/idle.txt' },
 ] as const;
