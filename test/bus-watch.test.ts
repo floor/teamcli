@@ -553,6 +553,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       screen: { kind: 'idle' },
       model: null,
       attention: null,
+      dialogText: null,
       quiet: true,
       working: false,
       prompt: false,

@@ -137,6 +137,9 @@ export function observeSwap(
     : agent.status === 'idle' || agent.status === 'done');
   const working = agent.status === 'working' || screen.kind === 'working';
   const prompt = screen.kind === 'permission'
+    || screen.kind === 'plan approval'
+    || screen.kind === 'confirmation'
+    || screen.kind === 'login'
     || screen.kind === 'trust'
     || screen.kind === 'question'
     || screen.kind === 'exit question'

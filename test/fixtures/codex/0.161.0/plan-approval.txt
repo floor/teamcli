@@ -1,0 +1,23 @@
+
+
+  1. Confirm the exact line and its placement in
+     README.md.
+
+  2. Add that line while preserving existing
+     formatting.
+
+  3. Verify the diff contains only the intended
+     one-line addition.
+
+
+  Worked for 8s • 15:54
+
+
+  Implement this plan?
+
+
+› 1. Yes, implement this plan
+  2. Yes, clear context and implement
+  3. No, stay in Plan mode
+
+  enter select · esc back

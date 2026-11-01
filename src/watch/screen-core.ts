@@ -3,9 +3,9 @@
 // pattern, and it cannot move a stage or turn the floor off.
 import { allDimAfter, hasSgr, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
-import type { BlockStep, LinePattern, Rule, ScreenData, Wrap } from './screen-data.ts';
+import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
-export type { BlockStep, Composer, FallbackRule, LinePattern, Placeholder, PlaceholderStyle, Rule, ScreenData, Stage, Wrap } from './screen-data.ts';
+export type { BlockStep, Composer, FallbackRule, LinePattern, Placeholder, PlaceholderStyle, Rule, ScreenData, Stage, TextSpec, Wrap } from './screen-data.ts';
 export type { ScreenProfile, ComposerReading } from './screen-profile.ts';
 import type { ComposerReading } from './screen-profile.ts';
 
@@ -267,6 +267,9 @@ const SCREEN_KINDS: ReadonlySet<string> = new Set<Screen['kind']>([
   'permission',
   'trust',
   'question',
+  'plan approval',
+  'confirmation',
+  'login',
   'exit question',
   'vendor notice',
   'provider error',
@@ -338,7 +341,7 @@ function callComposer(composer: unknown, lines: string[]): Hit {
   }
 }
 
-type StageName = 'unknown' | 'trust' | 'permission' | 'exit_question' | 'question' | 'vendor_notice' | 'provider_error' | 'rate_limit' | 'working';
+type StageName = 'unknown' | 'trust' | 'plan_approval' | 'confirmation' | 'permission' | 'login' | 'exit_question' | 'question' | 'vendor_notice' | 'provider_error' | 'rate_limit' | 'working';
 
 /** The kind a stage reads as. A stage is named for the profile (vendor_notice); a screen kind is
  *  what the run prints (vendor notice). */
@@ -346,7 +349,9 @@ function kindOfStage(name: StageName): Screen['kind'] {
   if (name === 'vendor_notice') return 'vendor notice';
   if (name === 'provider_error') return 'provider error';
   if (name === 'rate_limit') return 'rate limit';
-  return name === 'exit_question' ? 'exit question' : name;
+  if (name === 'exit_question') return 'exit question';
+  if (name === 'plan_approval') return 'plan approval';
+  return name;
 }
 
 /** The reset time a rate-limit window names, from the phrase the seat printed, with the
@@ -404,10 +409,18 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     // The exit question reads before the ordinary question on purpose: its footer is one an
     // ordinary question carries, so the stage a stop may answer must win over the kind it must
     // never answer. The order is the core's; a profile cannot move it.
+    // The plan approval and the confirmation read before `permission` on purpose: both draw the
+    // generic numbered yes/no row a permission prompt draws, so a profile's permission rule
+    // would otherwise take them and the watch would name a screen nobody may answer as one
+    // nobody may ever answer. Trust stays above all three: an answerable reading must never be
+    // taken for the one dialog a trust answer acts on.
     const cautionStages: [StageName, ScreenData['trust']][] = [
       ['unknown', data.unknown],
       ['trust', data.trust],
+      ['plan_approval', data.plan_approval],
+      ['confirmation', data.confirmation],
       ['permission', data.permission],
+      ['login', data.login],
       ['exit_question', data.exit_question],
       ['question', data.question],
       ['vendor_notice', data.vendor_notice],
@@ -459,6 +472,165 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
   }
 }
 
+/** The spec a screen kind's question text is read with: its own entry, else `any`. Null for a
+ *  kind no dialog text belongs to and for a profile that names none. */
+function textSpecOf(text: ScreenData['questionText'], kind: Screen['kind']): TextSpec | null {
+  if (text === undefined) return null;
+  if (kind === 'question' || kind === 'plan approval' || kind === 'confirmation') {
+    return text[kind] ?? text.any;
+  }
+  return null;
+}
+
+/** One taken row: each strip removes what it matches, once, then the row is trimmed. A row that
+ *  leaves nothing is the frame's own and reads as a blank row does: the question walk passes it
+ *  when the profile names the block's end, and stops there when it names none. */
+function textRow(line: string, strip: readonly RegExp[]): string {
+  let text = line;
+  for (const pattern of strip) text = text.replace(pattern, '');
+  return text.trim();
+}
+
+/** A dialog's question text and whether its block was read to its end. `complete` is false when
+ *  the block did not reach the end marker the profile names: the text is then a cut reading, and
+ *  the answer layer refuses it instead of acting on part of the question. A spec that names no
+ *  end marker (`TextSpec.until`) cannot tell a cut from the dialog's own rows below, so it never
+ *  reports one. */
+export type QuestionReading = { text: string; complete: boolean };
+
+/**
+ * The question text a dialog shows, read from the rows the profile names, or null. `lines` is
+ * already the window the classifier reads, so the text comes from the same rows the kind did.
+ * The three anchors are exclusive — a profile sets one — and the walk takes at most `rows`
+ * rows that survive their strips: above the anchor (`before`), below it (`after`), or from the
+ * anchor row itself (`inline`).
+ *
+ * The live dialog is drawn at the bottom of the pane, and the transcript above it may quote an
+ * older dialog with the same anchor. The lowest anchored block with question text is the live
+ * one, however its walk stopped — at the profile's end marker, at the supported rows, or at the
+ * window's edge — and its own end is its completeness: a marker reaches the block's end, a row
+ * cap or a window edge returns it cut. A whole block quoted above the live one therefore never
+ * certifies the current question. A block anchored inside another block's span is that block
+ * read from a later row (a frame row repeated down the box) and is passed over, and a match that
+ * reads no text at all — a profile's frame row can carry the anchor pattern — is passed over too.
+ * The widget's own chrome rows (the screen stage's rows) are not question text: a walk that
+ * reaches one ends there, cut, and a walk that reads no question text at all before the chrome
+ * is no reading. The test is on the rows the walk reads, never on the anchor row — every
+ * supported Grok question anchor is a bare `┃` frame row, and the live question under it is
+ * read all the same.
+ *
+ * With an end marker named, a blank row (one the strips empty, frame included) is part of the
+ * block, not its end: the walk passes it and reads on to the marker, and only reaching the
+ * marker reports `complete: true`. Without one, a blank row still ends the walk, and it
+ * completes, because nothing proves the block goes on.
+ *
+ * Nothing is invented: a dialog whose text the strips empty reads null, and a reader never
+ * falls back to another row.
+ */
+export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['kind']): QuestionReading | null {
+  const spec = textSpecOf(data.questionText, kind);
+  if (spec === null) return null;
+  const plain = plainLines(lines);
+  const strip = spec.strip;
+  const marker = (at: number): boolean => {
+    const line = plain[at];
+    return line !== undefined && spec.until !== null && spec.until.test(line);
+  };
+  const inline = spec.inline !== null;
+  const step = spec.before !== null ? -1 : 1;
+  // The widget's own rows, as the profile declares them: the screen stage's line patterns for
+  // this kind, plus the pane chrome every stage shares. The patterns are written for the pane's
+  // rows, so each is tried on the raw row and on the stripped one.
+  const stage = kind === 'question' ? data.question : kind === 'plan approval' ? data.plan_approval : data.confirmation;
+  const chromePatterns: LinePattern[] = [
+    ...(data.chrome ?? []).map((match) => ({ match, except: [] })),
+    ...(stage?.rules ?? []).flatMap((rule) => [...(rule.all ?? []), ...(rule.any ?? [])]),
+  ];
+  const lineIsChrome = (pattern: LinePattern, line: string): boolean =>
+    pattern.match.test(line) && !pattern.except.some((except) => except.test(line));
+  const isChrome = (text: string, raw: string): boolean =>
+    chromePatterns.some((pattern) => lineIsChrome(pattern, raw) || lineIsChrome(pattern, text));
+  // From one anchor: the rows that survive their strips. The anchor row itself is taken in the
+  // inline reading and is never tested as its own end marker. The walk stops at the marker
+  // (`marker`), at the widget's own chrome (`chrome`), at the supported row count (`rows`), at a
+  // blank row that ends a markerless block (`blank`), or at the window's edge (`window`); `stop`
+  // is the row it stopped on. Rows keep the pane's order, so a `before` walk prepends the rows
+  // it climbs past.
+  type WalkEnd = 'marker' | 'chrome' | 'rows' | 'blank' | 'window';
+  const walk = (anchorAt: number): { taken: string[]; stop: number; end: WalkEnd } => {
+    const taken: string[] = [];
+    let index = inline ? anchorAt : anchorAt + step;
+    while (index >= 0 && index < plain.length) {
+      if (!(inline && index === anchorAt) && marker(index)) return { taken, stop: index, end: 'marker' };
+      const row = textRow(plain[index] as string, strip);
+      if (row === '') {
+        // A blank row is the block's own row when the profile names its end; without a marker
+        // no reading can tell it from the dialog's rows below, so it ends the walk.
+        if (spec.until !== null || taken.length === 0) {
+          index += step;
+          continue;
+        }
+        return { taken, stop: index, end: 'blank' };
+      }
+      // The widget's own chrome is not the question: the block ends there, exactly as at the
+      // profile's end marker, and because the marker was not reached the reading is cut. The
+      // inline anchor row is the dialog's own text, as it is for the marker above.
+      if (!(inline && index === anchorAt) && isChrome(row, plain[index] as string)) {
+        return { taken, stop: index, end: 'chrome' };
+      }
+      if (taken.length === spec.rows) return { taken, stop: index, end: 'rows' };
+      if (step < 0) taken.unshift(row);
+      else taken.push(row);
+      index += step;
+    }
+    // Running out of window is a cut reading, never the whole question; a spec with no marker
+    // declares no end and is as complete as it gets.
+    return { taken, stop: index, end: 'window' };
+  };
+  const pattern = spec.inline ?? spec.after ?? spec.before;
+  if (pattern === null) return null;
+  const anchors: number[] = [];
+  plain.forEach((line, at) => {
+    if (pattern.test(line)) anchors.push(at);
+  });
+  type Reading = { anchor: number; stop: number; taken: string[]; end: WalkEnd };
+  // The span a block covers, for spotting an anchor that sits inside it. A cap-cut block's span
+  // reaches to the end marker the walk did not get to read; a markerless block's is where its
+  // walk stopped.
+  const spanEnd = (reading: Reading): number => {
+    if (reading.end !== 'rows' || spec.until === null) return reading.stop;
+    for (let at = reading.anchor + step; at >= 0 && at < plain.length; at += step) {
+      if (marker(at)) return at;
+    }
+    return reading.stop;
+  };
+  // A profile's anchor can sit on rows inside its own block, not only on its first row (a frame
+  // row repeated down the box). A block anchored inside another block's span is the same block
+  // read from a later row, so the outer reading is the one that quotes the whole question.
+  const inside = (outer: Reading, at: number): boolean => {
+    const end = spanEnd(outer);
+    return step > 0 ? at > outer.anchor && at < end : at < outer.anchor && at > end;
+  };
+  const readings: Reading[] = [];
+  for (let at = anchors.length - 1; at >= 0; at -= 1) {
+    const anchor = anchors[at] as number;
+    const { taken, stop, end } = walk(anchor);
+    if (taken.length === 0) continue;
+    readings.push({ anchor, stop, taken, end });
+  }
+  // The live dialog is drawn at the bottom: the lowest reading no reading above it contains is
+  // the one on screen now. Every reading here holds question text — the walk stopped before the
+  // widget's chrome, so a chrome-only match never became one. Its own completeness is the
+  // reading — an older block above it never certifies the current question, and a window-cut
+  // live block is returned cut, never shadowed by a whole block quoted above it.
+  const live = readings
+    .filter((block) => !readings.some((other) => other !== block && inside(other, block.anchor)))
+    .reduce<Reading | null>((lowest, block) => (lowest === null || block.anchor > lowest.anchor ? block : lowest), null);
+  if (live !== null) return { text: live.taken.join(' '), complete: spec.until === null || live.end === 'marker' };
+  // No reading at all: the dialog's text could not be read, and null says so.
+  return null;
+}
+
 /**
  * The composer alone, for a turn that is still running. The dialog stages and
  * floor must not be overridden by composer readings returning idle or unsent.
@@ -483,7 +655,10 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
       const stages: [StageName, ScreenData['trust']][] = [
         ['unknown', data.unknown],
         ['trust', data.trust],
+        ['plan_approval', data.plan_approval],
+        ['confirmation', data.confirmation],
         ['permission', data.permission],
+        ['login', data.login],
         ['exit_question', data.exit_question],
         ['question', data.question],
         ['vendor_notice', data.vendor_notice],
