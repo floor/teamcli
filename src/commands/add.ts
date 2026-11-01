@@ -60,6 +60,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { nicknameChangeGate } from '../registry/names.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -744,6 +745,23 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       });
     } else for (const problem of placed) out.stderr(`team add: ${plainText(problem.message)}\n`);
     // exit: add.placed
+    return 1;
+  }
+  // A nickname this add brings is held to the entity's `names.unique` word before any effect:
+  // a seat added with a label naming someone, or a copy that carries one, is refused here rather
+  // than in the launch. A plain `team add` writes `label: <name>`, which is the seat's own name
+  // and not a nickname (src/registry/names.ts), so it has nothing to check.
+  const namesBefore = validateTeamFile(original);
+  const names = nicknameChangeGate({
+    home: sources.home ?? homedir(),
+    teamId: teamIdOf(root),
+    root,
+    before: namesBefore.ok ? namesBefore.team : null,
+    after: prepared.team,
+  });
+  if (!names.ok) {
+    refuse(io, json, 'add', { id: 'add.name-taken', message: names.message, repair: null });
+    // exit: add.name-taken
     return 1;
   }
   // The session this run addresses — `--session`, or the caller's own placement — reads its own
