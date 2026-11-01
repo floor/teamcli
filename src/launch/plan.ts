@@ -965,10 +965,13 @@ export function upPlan(input: UpInput): Step[] {
     // than probed past. Nothing is recorded when the policy is off or unreadable.
     // The collision is read from the CLI's own decoded words: a flag inside a trailing quoted
     // script is one the CLI will read, a quoted flag name is the flag, and the shell's words
-    // before it are not. A line this version cannot decode sets nothing it can prove.
-    const managedWords = cliWordList(profile.cli, command) ?? [];
-    const managedFlag = (flag: string): boolean =>
-      managedWords.some((word) => word === flag || word.startsWith(`${flag}=`));
+    // before it are not. A line this version cannot prove is asked 0.5.10's question of the
+    // whole line: a collision it plainly names still stops the managed endpoint, and one only a
+    // quoted flag name appears to name does not.
+    const managedWords = cliWordList(profile.cli, command);
+    const managedFlag = managedWords === null
+      ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(command)
+      : (flag: string): boolean => managedWords.some((word) => word === flag || word.startsWith(`${flag}=`));
     const managedCodex = profile.cli === 'codex'
       && codexDaemon === 'on'
       && input.stateDir !== undefined

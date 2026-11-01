@@ -76,7 +76,7 @@ import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../o
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { cliWordsOf, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -1253,9 +1253,13 @@ function modelIdWords(text: string): string[] {
 }
 
 /** The model id a launch line names with `--model`, where it names one. Read from the CLI's own
- *  words, so a flag inside a trailing quoted script counts. */
+ *  words, so a flag inside a trailing quoted script counts. A line this version cannot prove is
+ *  read as 0.5.10 read it — the raw text — so a model it plainly names is the id the banner is
+ *  compared with, and one only a quoted flag name appears to name is not. */
 function launchModelId(cli: string, launch: string): string | null {
-  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(cliWordsOf(cli, launch));
+  const words = cliWordList(cli, launch);
+  const text = words === null ? launch : words.join(' ');
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(text);
   return match?.[1] ?? null;
 }
 

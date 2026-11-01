@@ -14,12 +14,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
+import { readBackOf } from '../src/commands/restart.ts';
+import type { Seat } from '../src/file/types.ts';
 import { shellWords } from '../src/launch/shell-words.ts';
+import { setsSettings } from '../src/launch/cli-hook.ts';
+import { launchModelOf } from '../src/launch/model-guard.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import {
   cliWordList,
+  cliWordsOf,
   launchCommand,
   namedResumeTarget,
+  resumeCarry,
   withoutResume,
   withLaunchOverrides,
   withLaunchSession,
@@ -353,6 +359,113 @@ describe('a script whose words a shell changes at run time is unprovable, and ke
     const sessionId = launch.sessionId ?? '';
     expect(sessionId).not.toBe('');
     expect(cliArgv(launch.command, { env })).toContain(sessionId);
+  });
+});
+
+describe('an unprovable line proves no word, and every reader reads it as 0.5.10 read it', () => {
+  // Builder-3's round-6 probe: the outer shell expands the variable inside its double-quoted
+  // command argument into `' # ignored tail`, so the script its shell runs is `claude --model m ''`
+  // and every word after the variable — the quoted `--session-id` and its value — is inside a
+  // comment. The decoded source still appears to name the declared id, so a reader that decodes
+  // without the outer-word proof records an id the CLI never read.
+  const HIDDEN_ID = '/bin/sh -c "claude --model m \'$SYNTHETIC_TAIL\' \'--session-id\' \'declared-session\'"';
+  const LITERAL_ID = '/bin/sh -c "claude --model m \'\\$SYNTHETIC_TAIL\' \'--session-id\' \'declared-session\'"';
+  const TAIL = { SYNTHETIC_TAIL: "' # ignored tail" };
+
+  test('the declared id the shell comments away is not the id the launch records', () => {
+    expect(cliArgv(HIDDEN_ID, { env: TAIL })).toEqual(['--model', 'm']);
+    expect(cliWordList('claude-code', HIDDEN_ID)).toBeNull();
+    expect(cliWordsOf('claude-code', HIDDEN_ID)).toBe('');
+    const launch = withLaunchSession('claude-code', HIDDEN_ID);
+    expect(launch.command).toBe(HIDDEN_ID);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+    // The words the launch actually hands its CLI name no id at all.
+    expect(cliArgv(launch.command, { env: TAIL })).toEqual(['--model', 'm']);
+  });
+
+  test('the escaped outer dollar keeps the same shape provable: the declared id is recorded and arrives', () => {
+    expect(cliWordList('claude-code', LITERAL_ID)).toContain('declared-session');
+    const launch = withLaunchSession('claude-code', LITERAL_ID);
+    expect(launch.notice).toBeUndefined();
+    expect(launch.sessionId).toBe('declared-session');
+    expect(cliArgv(launch.command, { env: TAIL })).toContain('declared-session');
+  });
+
+  test('a resume the unprovable script appears to name is no resume the tool reasons about', () => {
+    const line = '/bin/sh -c "claude \'$SYNTHETIC_TAIL\' \'--resume\' \'synthetic-one\'"';
+    expect(namedResumeTarget('claude-code', line)).toBeNull();
+    expect(withResume('claude-code', line, 'synthetic-two')).toBeNull();
+    expect(resumeCarry('claude-code', line, 'synthetic-two')).toEqual({
+      kind: 'refuse',
+      why: 'its launch line has no measured resume form',
+    });
+  });
+
+  test('a quoted settings flag on an unprovable line is not the CLI setting: 0.5.10 did not see it either', () => {
+    // The flag name is quoted in the source, so 0.5.10's own `/(^|\s)--settings(=|\s|$)/` never
+    // matched it: the reader keeps that answer instead of inventing a setting from the decoded text.
+    const line = '/bin/sh -c "claude \'$SYNTHETIC_TAIL\' \'--settings\' \'/synthetic/hook.json\'"';
+    expect(setsSettings('claude-code', line)).toBe(false);
+    // The same words in a proved line are the setting the reader honours.
+    expect(setsSettings('claude-code', '/bin/sh -c "claude \'\\$SYNTHETIC_TAIL\' \'--settings\' \'/synthetic/hook.json\'"')).toBe(true);
+  });
+
+  test('a settings flag the line plainly sets is still seen, and the run adds no second one', () => {
+    const line = '/bin/sh -c "claude --settings /synthetic/hook.json \'$SYNTHETIC_TAIL\'"';
+    expect(cliWordList('claude-code', line)).toBeNull();
+    expect(setsSettings('claude-code', line)).toBe(true);
+    const command = launchCommand(claude, line, 'Rules for this session', HOOK);
+    expect(command.split('--settings')).toHaveLength(2);
+    expect(cliArgv(command, { env: TAIL })).toContain('/synthetic/hook.json');
+  });
+
+  test('a quoted model flag on an unprovable line is no model this run will judge: 0.5.10 did not see it either', () => {
+    const line = '/bin/sh -c "claude \'$SYNTHETIC_TAIL\' \'--model\' \'gpt-5.5\'"';
+    expect(launchModelOf({ cli: 'claude-code', launch: line })).toEqual({ kind: 'none' });
+    expect(launchModelOf({ cli: 'claude-code', launch: '/bin/sh -c "claude \'\\$SYNTHETIC_TAIL\' \'--model\' \'gpt-5.5\'"' })).toEqual({
+      kind: 'lab',
+      model: 'gpt-5.5',
+      lab: 'openai',
+    });
+  });
+
+  test('a model the line plainly names before its unprovable tail is still judged, as 0.5.10 judged it', () => {
+    // The model rule is never relaxed for a line this version cannot prove: the raw text names
+    // the model 0.5.10's own regex found, so the rule still sees it.
+    const line = '/bin/sh -c "claude --model gpt-5.5 \'$SYNTHETIC_TAIL\'"';
+    expect(cliWordList('claude-code', line)).toBeNull();
+    expect(launchModelOf({ cli: 'claude-code', launch: line })).toEqual({ kind: 'lab', model: 'gpt-5.5', lab: 'openai' });
+    // The model is really the CLI's: the unprovable tail does not take the flag away.
+    expect(cliArgv(line, { env: TAIL })[1]).toBe('gpt-5.5');
+  });
+
+  test('the option checks read a plain flag on an unprovable line, and no option is added twice', () => {
+    // 0.5.10 asked its raw-line questions of the whole text; the gate keeps that answer for a
+    // line it cannot prove, so the run never appends an option the line already carries.
+    const named = launchCommand(claude, '/bin/sh -c "claude --name synthetic-seat \'$SYNTHETIC_TAIL\'"', 'Rules.', HOOK, undefined, 'seat-display');
+    expect(named.split('--name')).toHaveLength(2);
+    const daemon = launchCommand(codex, '/bin/sh -c "codex --no-daemon \'$SYNTHETIC_TAIL\'"', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' });
+    expect(daemon.split('--no-daemon')).toHaveLength(2);
+  });
+
+  test('the restart read-back compares against the model the line plainly names, as 0.5.10 did', () => {
+    const seat = {
+      name: 'seat',
+      vendor: 'anthropic',
+      cli: 'claude-code',
+      model: 'synthetic-model',
+      version: '1.0',
+      launch: '/bin/sh -c "claude --model gpt-5.5 \'$SYNTHETIC_TAIL\'"',
+    } as Seat;
+    expect(readBackOf(seat, 'gpt-5.5 · API Usage Billing\n')).toEqual({ kind: 'match', model: 'gpt-5.5' });
+    // A quoted flag name is not an id to 0.5.10 either: the declaration's model is compared.
+    const quoted = { ...seat, launch: '/bin/sh -c "claude \'$SYNTHETIC_TAIL\' \'--model\' \'gpt-5.5\'"' } as Seat;
+    expect(readBackOf(quoted, 'gpt-5.5 · API Usage Billing\n')).toEqual({
+      kind: 'mismatch',
+      expected: 'synthetic-model',
+      shown: 'gpt-5.5',
+    });
   });
 });
 

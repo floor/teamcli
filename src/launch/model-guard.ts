@@ -13,7 +13,7 @@ import {
   modelRuleSentence,
   modelRuleUnknownSentence,
 } from '../policy/model-rule.ts';
-import { cliWordsOf, profileFor } from '../profiles/index.ts';
+import { cliWordList, profileFor } from '../profiles/index.ts';
 
 export { readEntityModelRule, type EntityModelRule };
 
@@ -29,15 +29,19 @@ export function launchModelOf(seat: Pick<Seat, 'cli' | 'launch'>): LaunchModel {
   const profile = profileFor(seat.cli);
   if (profile === null) return { kind: 'none' };
   // The CLI's own words: a model flag inside a trailing quoted script counts, and a shell's
-  // options before that script are not the CLI's.
-  const words = cliWordsOf(seat.cli, seat.launch);
-  const id = profile.modelIdOf(words);
+  // options before that script are not the CLI's. A line this version cannot prove is read the
+  // way 0.5.10 read every line — the raw text — so a model it plainly names is still judged by
+  // the rule, and one only a quoted flag name appears to name is not invented. The gate never
+  // relaxes the rule for a line it cannot prove.
+  const words = cliWordList(seat.cli, seat.launch);
+  const line = words === null ? seat.launch : words.join(' ');
+  const id = profile.modelIdOf(line);
   if (id === null) return { kind: 'none' };
   const lab = labOfModel(id);
   if (lab !== undefined) return { kind: 'lab', model: id, lab };
   // The id names no maker this version knows; the profile's own reading of a display word is
   // the only other word the line gives, and it is used only when it proves one.
-  const named = profile.modelOf(words);
+  const named = profile.modelOf(line);
   const namedLab = named === null ? undefined : labOfModel(named.model);
   if (named === null || namedLab === undefined) return { kind: 'unknown', model: id };
   return { kind: 'lab', model: named.model, lab: namedLab };

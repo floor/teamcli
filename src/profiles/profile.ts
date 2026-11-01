@@ -299,10 +299,17 @@ export function launchCommand(
 ): string {
   // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
   // inside a trailing quoted script counts exactly as one written on a plain line, and a quoted
-  // flag name is the flag. A line this version cannot read sets nothing it can prove.
-  const words = cliWordList(profile.cli, launch) ?? [];
+  // flag name is the flag. A line this version cannot prove is asked 0.5.10's questions of the
+  // whole line instead: a flag it plainly sets is still seen, and one only a quoted flag name
+  // appears to set is not.
+  const words = cliWordList(profile.cli, launch);
+  const sets = (flags: readonly string[], plain: RegExp): boolean =>
+    words === null ? plain.test(launch) : hasFlag(words, flags);
+  const hasNoDaemon = words === null
+    ? new Set(launch.trim().split(/\s+/)).has('--no-daemon')
+    : hasFlag(words, ['--no-daemon']);
   const options = unattendedOptions(profile, launch);
-  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !hasFlag(words, ['--no-daemon'])) {
+  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !hasNoDaemon) {
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
     else options.push('--no-daemon');
@@ -311,7 +318,7 @@ export function launchCommand(
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.
   if (displayName !== undefined && displayName !== '' && supportsSessionName(profile.cli)
-    && !hasFlag(words, ['--name', '-n'])) {
+    && !sets(['--name', '-n'], /(^|\s)(--name(=|\s|$)|-n(\s|$))/)) {
     options.push('--name', displayName);
   }
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
@@ -319,7 +326,7 @@ export function launchCommand(
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
   }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
-    && !hasFlag(words, ['--settings'])) {
+    && !sets(['--settings'], /(^|\s)--settings(=|\s|$)/)) {
     options.push('--settings', cliHook);
   }
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
@@ -913,15 +920,30 @@ function cliBodyOn(binary: string, command: string): CliBody | null {
   return null;
 }
 
+/** Whether the shell that parses this text hands a script word on unchanged: the word is one
+ *  quoted string in the source whose raw text keeps every character that shell reads inside it
+ *  ({@link outerWordKeepsText}). A word written `"…'$VAR'…"` does not: the shell that parses the
+ *  command line expands the variable before any inner shell ever sees the single quotes, so the
+ *  text decoded from the source is not the script the inner shell runs. A spliced single-quoted
+ *  word this tool wrote (`'\''`) is followed as that shell reads it and stays literal. */
+function scriptWordIsLiteral(text: string, word: ShellWord): boolean {
+  const layer = quotedWordOf(text, word);
+  if (layer === null) return false;
+  return outerWordKeepsText(text.slice(word.start + layer.openLen, word.end - 1), layer.quote);
+}
+
 /** The text of the innermost shell script that runs the CLI, read through the decoded words of
  *  every layer. Null when the line has no shell command string, or none this reader can follow to
- *  the CLI. Reading needs no source positions, so a line this tool has already written into — one
- *  whose inner quotes are spliced as `'\''` — still reads exactly as the CLI receives it. */
+ *  the CLI, and null when a script word is not literal on the line: a text the outer shell may
+ *  rewrite is not the script this line runs, whatever its decoded words say. Reading needs no
+ *  source positions, so a line this tool has already written into — one whose inner quotes are
+ *  spliced as `'\''` — still reads exactly as the CLI receives it. */
 function cliTextOf(binary: string, command: string): string | null {
   let text = command.trimEnd();
   for (let depth = 0; depth < 4; depth += 1) {
     const found = shellScriptWordOf(text);
     if (found === null) return null;
+    if (!scriptWordIsLiteral(text, found.word)) return null;
     if (startsWithCli(binary, found.word.text)) return found.word.text;
     if (found.trailing.length > 0) return null;
     text = found.word.text;
@@ -934,8 +956,11 @@ function cliTextOf(binary: string, command: string): string | null {
  *  command string. A shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the
  *  CLI's, and a word after the closing quote is a positional word of the script, not the CLI's
  *  either. A shell script that runs some other program, or one this reader cannot read through,
- *  names no word of this CLI at all. Null when the line, or the script that runs the CLI, cannot
- *  be read: no caller may treat an unread line as a word list. */
+ *  names no word of this CLI at all. A script word the shell that parses the line may rewrite —
+ *  an unescaped `$` or backtick inside the double quotes the word opens with — proves no word
+ *  either: the text decoded from the source is not the script the inner shell runs. Null when
+ *  the line, or the script that runs the CLI, cannot be proved: no caller may treat an unproved
+ *  line as a word list. */
 function cliWordListOf(binary: string, command: string): string[] | null {
   const trimmed = command.trimEnd();
   const lineWords = shellWords(trimmed);

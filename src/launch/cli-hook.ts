@@ -117,8 +117,12 @@ export function setsSettings(cliOrLaunch: string, launch?: string): boolean {
   if (launch === undefined) return /(^|\s)--settings(=|\s|$)/.test(cliOrLaunch);
   // The CLI's own decoded words: a quoted `--settings` is the flag, one inside a trailing quoted
   // script is the CLI's setting, and the shell's options before that script are not the CLI's to
-  // read. A line this version cannot decode sets nothing it can prove.
-  return cliWordList(cliOrLaunch, launch)?.some((word) => word === '--settings' || word.startsWith('--settings=')) ?? false;
+  // read. A line this version cannot prove is asked 0.5.10's question of the whole line: a
+  // settings flag it plainly sets is still seen — the run installs no second one — and one only
+  // a quoted flag name appears to set is not.
+  const words = cliWordList(cliOrLaunch, launch);
+  if (words === null) return setsSettings(launch);
+  return words.some((word) => word === '--settings' || word.startsWith('--settings='));
 }
 
 /** How a seat's CLI learns that a drop is waiting for it: the start-of-turn hook this module
