@@ -77,9 +77,15 @@ export type DaemonRootPresence = { state: 'pending'; why: string } | DaemonRootP
 export type DaemonRootState = {
   root: string;
   team: string | null;
-  send: 'serving' | 'already-running' | 'failed';
-  bus: 'serving' | 'failed';
+  /** `starting` is written while the daemon is still bringing this root's endpoint up, so a
+   *  reader can see the root registered before its first attempt finishes. */
+  send: 'starting' | 'serving' | 'already-running' | 'failed';
+  bus: 'starting' | 'serving' | 'failed';
   why: string | null;
+  /** When the endpoint was last marked failed. The age a reader prints is measured from this
+   *  instant; an answer clears it. */
+  sendFailedAt?: string | null;
+  busFailedAt?: string | null;
   /**
    * The route's hosted watch, present only when the daemon was started to carry one. A reader
    * may treat a stopped or failed phase as a check failure only when this field exists and
@@ -197,9 +203,13 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const entry = item as Record<string, unknown>;
     if (typeof entry.root !== 'string' || entry.root === '') return null;
     if (!(entry.team === null || typeof entry.team === 'string')) return null;
-    if (!['serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
-    if (!['serving', 'failed'].includes(entry.bus as string)) return null;
+    if (!['starting', 'serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
+    if (!['starting', 'serving', 'failed'].includes(entry.bus as string)) return null;
     if (!(entry.why === null || typeof entry.why === 'string')) return null;
+    for (const key of ['sendFailedAt', 'busFailedAt'] as const) {
+      const value = entry[key];
+      if (!(value === undefined || value === null || typeof value === 'string')) return null;
+    }
     const watch = watchOf(entry.watch);
     const presence = presenceOf(entry.presence);
     roots.push({
@@ -208,6 +218,8 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],
       why: entry.why as string | null,
+      ...(entry.sendFailedAt === undefined ? {} : { sendFailedAt: entry.sendFailedAt as string | null }),
+      ...(entry.busFailedAt === undefined ? {} : { busFailedAt: entry.busFailedAt as string | null }),
       ...(watch === null ? {} : { watch }),
       ...(presence === null ? {} : { presence }),
     });

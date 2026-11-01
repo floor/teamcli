@@ -21,7 +21,7 @@ import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import { daemonHealth } from '../daemon/health.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
-import { daemonNotes, daemonReading } from '../daemon/health_display.ts';
+import { daemonDifferences, daemonNotes, daemonReading } from '../daemon/health_display.ts';
 import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
@@ -605,6 +605,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       presenceChannelHealthy: presenceHealthy,
       ...(presenceSeats === undefined ? {} : { presenceSeats }),
     }),
+    // A daemon endpoint that failed is a difference, not only a note: it names the checkout,
+    // its reason and its age, and status exits non-zero for it.
+    ...(health !== null ? daemonDifferences(health, now) : []),
   ]);
 
   const visibleRows = all

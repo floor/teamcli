@@ -28,7 +28,7 @@ import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
-import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
+import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
 import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
@@ -451,6 +451,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
+    // A daemon endpoint that failed is a difference here too, with its checkout, reason and age;
+    // the note above names the daemon's reading, this row is what the check counts.
+    ...(sources.daemon !== undefined ? daemonDifferences(sources.daemon, sources.now()) : []),
   ]);
   const differences = comparison.differences;
   // A deprecated field the file still reads: the check is the one command that names it, with
