@@ -3,9 +3,12 @@
 // confirmation draw the same numbered yes/no row claude-code's permission rule matches, so each
 // is read before `permission`; a login screen is read after it, and only ever as a detection.
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { DIALOG_KINDS, readDialog } from '../src/watch/dialog.ts';
 import { classify, questionText, questionTextReading } from '../src/watch/screen.ts';
 import { loadScreen } from '../src/watch/screen-file.ts';
+
+const fixture = (path: string): string => readFileSync(new URL(`./fixtures/${path}`, import.meta.url), 'utf8');
 
 const profile = (screen: string): string => `
 format: 1
@@ -172,6 +175,224 @@ describe('a question block read to its end', () => {
     );
     expect(questionTextReading(open, 'Which name\nfirst row\nsecond row\n'))
       .toEqual({ text: 'first row', complete: true });
+  });
+});
+
+// The pane draws the live dialog at its bottom; the transcript above it may quote an older
+// question with the same header. The reader anchors on the live block — the anchor nearest the
+// bottom whose block reaches the profile's end marker — so the copy above it never wins.
+describe('the live dialog’s anchor, not a transcript copy above it', () => {
+  test('operator-3’s probe: codex reads the live question, never the older block above it', () => {
+    const current = fixture('codex/0.161.0/question.txt');
+    // The three blank transcript rows above the live dialog hold an older header, question and
+    // option; the live dialog and its own footer stay exactly as captured.
+    const retained = current.replace('\n\n\n\n', '\nQuestion 1/1 (1 unanswered)\nOld question from the transcript?\n1. Previous choice\n');
+    expect(readDialog('codex', current))
+      .toEqual({ dialog: 'question', text: 'What should the new README line say?', complete: true });
+    expect(readDialog('codex', retained))
+      .toEqual({ dialog: 'question', text: 'What should the new README line say?', complete: true });
+    // Changing only the live question changes the reading: the stale block never wins.
+    expect(readDialog('codex', retained.replace('What should the new README line say?', 'Which live question changed?')))
+      .toEqual({ dialog: 'question', text: 'Which live question changed?', complete: true });
+  });
+
+  type StaleScene = { cli: string; path: string; withStale: (captured: string) => string; live: string };
+  const scenes: StaleScene[] = [
+    {
+      cli: 'cursor',
+      path: 'cursor/2026.10.01/question.txt',
+      live: 'Which name should be used for the file?',
+      // The live question box stays where it is; a copy of the box, asking an older question,
+      // fills the blank transcript rows above it.
+      withStale: (captured) => captured.replace('\n\n\n ┌', [
+        '',
+        ' ┌─────────────────────────────────────────────────┐',
+        ' │ Question 1 of 1                                 │',
+        ' │ Old question from the transcript?               │',
+        ' │                                                 │',
+        ' │   › [ ] stale.txt                               │',
+        ' └─────────────────────────────────────────────────┘',
+        ' ┌',
+      ].join('\n')),
+    },
+    {
+      cli: 'claude-code',
+      path: 'claude-code/2.1.302/question.txt',
+      live: 'Which name do you want to use?',
+      // A stale block with the same `☐` header and a numbered option, drawn just above the live
+      // block's own [`☐ Name`] row.
+      withStale: (captured) => captured.replace('\n ☐ Name \n', [
+        '',
+        ' ☐ Name ',
+        '',
+        'Old question from the transcript?',
+        '',
+        '❯ 1. previous',
+        ' ☐ Name ',
+        '',
+      ].join('\n')),
+    },
+    {
+      cli: 'gemini',
+      path: 'gemini/0.64.0/question.txt',
+      live: 'Which profile target should we validate first?',
+      // A stale answer box with its own `Answer Questions` header and option, directly above the
+      // live box's opening rule.
+      withStale: (captured) => captured.replace('\n╭───────────────────────────────────────────────────╮\n│ Answer Questions', [
+        '',
+        '╭───────────────────────────────────────────────────╮',
+        '│ Answer Questions                                  │',
+        '│                                                   │',
+        '│ Old question from the transcript?                 │',
+        '│                                                   │',
+        '│ ● 1.  stale                                       │',
+        '╰───────────────────────────────────────────────────╯',
+        '╭───────────────────────────────────────────────────╮',
+        '│ Answer Questions',
+      ].join('\n')),
+    },
+    {
+      cli: 'grok',
+      path: 'grok/1.0.52/question.txt',
+      live: 'Which name do you choose?',
+      // A stale framed question above the live frame's own first row: the frame row `┃` is the
+      // anchor, and the copy carries its own option row.
+      withStale: (captured) => captured.replace('\n  ┃\n  ┃  Which name do you choose?', [
+        '',
+        '  ┃',
+        '  ┃  Old question from the transcript?',
+        '  ┃',
+        '  ┃  1 (○) stale  Use the stale one.',
+        '  ┃',
+        '  ┃  Which name do you choose?',
+      ].join('\n')),
+    },
+    {
+      cli: 'antigravity',
+      path: 'antigravity/1.4.2/question.txt',
+      live: 'Do you prefer alpha or beta?',
+      // An older `Question 1/1:` row with its own option, just above the live inline row.
+      withStale: (captured) => captured.replace('\nQuestion 1/1: Do you prefer alpha or beta?', [
+        '',
+        'Question 1/1: Old question from the transcript?',
+        '',
+        '> 1. old',
+        'Question 1/1: Do you prefer alpha or beta?',
+      ].join('\n')),
+    },
+  ];
+
+  for (const scene of scenes) {
+    test(`${scene.cli}: the live block nearer the bottom wins`, () => {
+      const captured = fixture(scene.path);
+      expect(readDialog(scene.cli, captured))
+        .toEqual({ dialog: 'question', text: scene.live, complete: true });
+      expect(readDialog(scene.cli, scene.withStale(captured)))
+        .toEqual({ dialog: 'question', text: scene.live, complete: true });
+    });
+  }
+});
+
+// A blank row inside a question box is part of the block: the pane wraps with its width, and a
+// paragraph below the blank belongs to the question. Only the profile's end marker proves the
+// block ended, so the walk passes blanks inside it and reads on to the marker.
+describe('an interior blank row is inside the block, not its end', () => {
+  type Scene = {
+    cli: string;
+    path: string;
+    withParagraphs: (captured: string, second: string) => string;
+    text: (second: string) => string;
+  };
+  const scenes: Scene[] = [
+    {
+      cli: 'codex',
+      path: 'codex/0.161.0/question.txt',
+      text: (second) => `What should the new README line say? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        '  What should the new README line say?\n',
+        `  What should the new README line say?\n  Use the first package.\n\n  Use the ${second} package.\n`,
+      ),
+    },
+    {
+      cli: 'cursor',
+      path: 'cursor/2026.10.01/question.txt',
+      text: (second) => `Which name should be used for the file? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        '│ 1. Which name should be used for the file?      │',
+        [
+          '│ 1. Which name should be used for the file?      │',
+          ' │ Use the first package.                          │',
+          ' │                                                 │',
+          ` │ Use the ${second} package.                       │`,
+        ].join('\n'),
+      ),
+    },
+    {
+      cli: 'claude-code',
+      path: 'claude-code/2.1.302/question.txt',
+      text: (second) => `Which name do you want to use? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        'Which name do you want to use?\n',
+        `Which name do you want to use?\nUse the first package.\n\nUse the ${second} package.\n`,
+      ),
+    },
+    {
+      cli: 'gemini',
+      path: 'gemini/0.64.0/question.txt',
+      text: (second) => `Which profile target should we validate first? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        '│ Which profile target should we validate first?    │',
+        [
+          '│ Which profile target should we validate first?    │',
+          '│ Use the first package.                            │',
+          '│                                                   │',
+          `│ Use the ${second} package.                        │`,
+        ].join('\n'),
+      ),
+    },
+    {
+      cli: 'grok',
+      path: 'grok/1.0.52/question.txt',
+      text: (second) => `Which name do you choose? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        '  ┃  Which name do you choose?\n',
+        `  ┃  Which name do you choose?\n  ┃  Use the first package.\n  ┃\n  ┃  Use the ${second} package.\n`,
+      ),
+    },
+    {
+      cli: 'antigravity',
+      path: 'antigravity/1.4.2/question.txt',
+      text: (second) => `Do you prefer alpha or beta? Use the first package. Use the ${second} package.`,
+      withParagraphs: (captured, second) => captured.replace(
+        'Question 1/1: Do you prefer alpha or beta?\n',
+        `Question 1/1: Do you prefer alpha or beta?\nUse the first package.\n\nUse the ${second} package.\n`,
+      ),
+    },
+  ];
+
+  for (const scene of scenes) {
+    test(`${scene.cli}: the paragraph after the interior blank row is read`, () => {
+      const captured = fixture(scene.path);
+      const first = readDialog(scene.cli, scene.withParagraphs(captured, 'first'));
+      const other = readDialog(scene.cli, scene.withParagraphs(captured, 'other'));
+      expect(first).toEqual({ dialog: 'question', text: scene.text('first'), complete: true });
+      expect(other).toEqual({ dialog: 'question', text: scene.text('other'), complete: true });
+      expect(other).not.toEqual(first);
+    });
+  }
+
+  test('a block whose end marker is not on the screen reads incomplete, never complete', () => {
+    const data = loadScreen(
+      profile(`  question:
+    - any: ['^Question 1/1']
+  question_text:
+    question:
+      after: '^Question [0-9]+/[0-9]+'
+      until: '^[0-9]+\\. '
+      rows: 2`),
+    );
+    expect(questionTextReading(data, 'Question 1/1\nWhich name?\n'))
+      .toEqual({ text: 'Which name?', complete: false });
   });
 });
 
