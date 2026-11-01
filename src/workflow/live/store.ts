@@ -53,7 +53,7 @@ import {
   type ResultOutcome,
   type RunIndex,
 } from './records.ts';
-import { evidenceConflict, foldLive, startEffectsOf, stepFault, type StepInput } from './replay.ts';
+import { evidenceConflict, foldLive, recheckLive, startEffectsOf, type StepInput } from './replay.ts';
 
 export type LiveStoreErrorCode =
   | 'workflow.store.index-corrupt'
@@ -854,17 +854,6 @@ class Transaction implements StoreTx {
     }
     const open = run.open;
     const definition = this.definitionOf(open);
-    const fault = stepFault({
-      definition,
-      runId,
-      target: open.target,
-      artifact: open.artifact,
-      state: run.live.state,
-      previousRevision: run.live.revision,
-      previousActivation: run.live.activation,
-      step,
-    });
-    if (fault !== undefined) throw new LiveStoreError('workflow.store.record-invalid', fault);
     if (step.evidence.length > 0) {
       const records = step.evidenceRecords;
       if (records === undefined) {
@@ -906,6 +895,17 @@ class Transaction implements StoreTx {
       ...(step.guard !== undefined ? { guard: step.guard } : {}),
       effects: step.effects,
     };
+    // The judgement the replay applies, applied before the write: the step's decision is
+    // re-derived from the folded run state and the evidence it records, so a step replay would
+    // later refuse is never persisted.
+    const checked = recheckLive({
+      definition,
+      definitionId: open.definition,
+      records: [...run.records, record],
+    });
+    if (!checked.ok) {
+      throw new LiveStoreError('workflow.store.record-invalid', checked.fail.why, run.path);
+    }
     appendJournal(run.path, record);
     return record;
   }
