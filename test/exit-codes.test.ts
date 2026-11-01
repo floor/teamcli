@@ -29,6 +29,7 @@ import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { FAULT_WHY, faultRequestPath, faultResultPath, writeFaultRequest } from '../src/daemon/fault.ts';
 import { daemonSocketPath } from '../src/daemon/paths.ts';
@@ -4361,6 +4362,28 @@ const daemonSnapshot: DaemonHealthSnapshot = {
   features: { broker: 'absent' },
 };
 
+/** The health reading the restored-daemon check needs: a daemon that answered its probe. */
+function answeringHealth(): DaemonHealth {
+  return {
+    daemon: 'teamcli',
+    socket: join('/synthetic', 'daemon.sock'),
+    state: 'running',
+    running: true,
+    pid: 42,
+    uid: 501,
+    since: '2026-10-20T10:00:00.000Z',
+    startedBy: 'service-manager',
+    version: 'test',
+    gitHead: null,
+    heartbeatAt: '2026-10-20T10:00:05.000Z',
+    features: { broker: 'absent' },
+    stuck: [],
+    roots: [],
+    probe: { state: 'answered', at: '2026-10-20T10:00:06.000Z' },
+    why: null,
+  };
+}
+
 function daemonSources(place: Place, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
   return {
     home: place.home,
@@ -4524,6 +4547,8 @@ scene('daemon.install-rolled-back', async (place) => {
           kept: true,
         }),
       }),
+      // The rollback is reported after the restored daemon answers, as the live command does.
+      health: async () => answeringHealth(),
     }),
     'the previous one was put back and started again',
   );

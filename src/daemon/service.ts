@@ -7,9 +7,11 @@
 // An install never finishes with no daemon and no message. A refresh stops the daemon the
 // manager already holds, then loads the new one, offering it again with a bounded, growing wait
 // while the manager refuses — a refusal while the earlier stop is still finishing is not a
-// verdict on the new unit. If the new one still cannot start, the earlier unit is put back and
-// the daemon its program names is started again; the failure and that rollback are reported
-// together, and the command exits non-zero.
+// verdict on the new unit. If the new one still cannot start, the earlier unit is put back —
+// with the earlier program when this install replaced that same entry in place — and the daemon
+// it names is started again; the failure and that rollback are reported together, and the
+// command exits non-zero. A load the manager accepted is registration, not proof that a program
+// runs, so the command confirms the restored daemon answers before it calls the rollback done.
 import { darwinServiceManager } from './service-darwin.ts';
 export type ServiceRunResult = { status: number | null; stdout: string; stderr: string };
 export type ServiceRunner = (command: string, args: string[]) => ServiceRunResult;
@@ -17,7 +19,9 @@ export type ServiceRunner = (command: string, args: string[]) => ServiceRunResul
 export type ServiceProgram = {
   /** The runtime that runs the CLI entry (the installed `team` launcher's interpreter). */
   execPath: string;
-  /** The CLI entry file itself. */
+  /** The CLI entry file itself. The adapter keeps a copy of the program a loaded unit was
+   *  accepted with, so a later refresh that replaces this same path in place can put the bytes
+   *  the earlier unit runs back before restoring that unit. */
   entry: string;
   /** The checkouts this one daemon process hosts. */
   roots: string[];
@@ -52,8 +56,11 @@ export type ServicePlan = {
  * - `refused`: nothing was started and no earlier definition was put back — the attempt failed
  *   before it offered a load, or the manager refused the only definition there was; the refusal
  *   line says so and the command exits non-zero.
- * - `restored`: the earlier unit was put back and the daemon its program names was started
- *   again, so the machine still has a daemon under the service manager.
+ * - `restored`: the earlier unit — and, when this install replaced that same entry in place, the
+ *   earlier program it names — was put back and its daemon offered to the service manager again;
+ *   the manager accepted the load. Acceptance is registration, not proof that a program runs:
+ *   the command confirms the daemon answers before reporting the rollback, and reports no daemon
+ *   when nothing answers.
  * - `lost`: nothing was started and the earlier unit could not be put back and started again;
  *   the refusal names that plainly and the command exits non-zero, so the failure is never quiet.
  *
@@ -83,9 +90,9 @@ export type ServiceManager = {
    * Writes and registers the unit. A refresh replaces a daemon the manager already holds: the
    * old job is stopped, and the new one is loaded, offered again with a bounded, growing wait
    * while the manager refuses. When the new one still cannot start, the earlier unit is put
-   * back and its daemon started again, so a failed refresh leaves a daemon running and a
-   * failure, never a silent empty machine: `outcome` says which of the answers the failure
-   * carries.
+   * back — with the earlier program when this install replaced that same entry in place — and
+   * its daemon started again, so a failed refresh leaves a daemon running and a failure, never
+   * a silent empty machine: `outcome` says which of the answers the failure carries.
    */
   install(home: string, program: ServiceProgram): ServiceInstallResult;
   uninstall(home: string): ServiceUninstallResult;

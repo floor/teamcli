@@ -3,16 +3,21 @@
 // touched. The scenes prove what a failed refresh must never leave: the old daemon is stopped,
 // the new load is offered again while the manager refuses (the earlier stop may still be
 // finishing), and a load that still fails puts the previous unit back and starts its daemon
-// again — or says plainly that no daemon was started. The command scenes prove the failure
-// exits non-zero under its own contract row, and that a failure leaving no daemon running names
-// the recorded rerun command (its roots and opt-ins) and where a kept unit is — the same command
-// in the JSON `repair` — so a rollback that fails is actionable, not just reported.
+// again — or says plainly that no daemon was started. Restoring the unit is not enough when the
+// refresh replaced the entry in place: the earlier program must come back with it, and a
+// rollback is called `restored` only after the daemon that started answers the health probe,
+// because a load the manager accepted is registration, not proof that a program runs. The
+// command scenes prove the failure exits non-zero under its own contract row, and that a failure
+// leaving no daemon running names the recorded rerun command (its roots and opt-ins) and where a
+// kept unit is — the same command in the JSON `repair` — so a rollback that fails is actionable,
+// not just reported.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { daemonLogPath } from '../src/daemon/paths.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type {
@@ -84,6 +89,45 @@ function refusedThenAccepted(count: number): ServiceRunResult[] {
   return [...Array.from({ length: count }, () => LOAD_REFUSED), OK];
 }
 
+/** The restored-daemon check's two answers: a daemon that answered the probe, and one that never
+ *  did. Injected, so no machine socket is opened and no wait is real. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+const SILENT: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'not-running',
+  running: false,
+  pid: null,
+  uid: null,
+  since: null,
+  startedBy: null,
+  version: null,
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'unanswered', at: '2026-11-01T00:00:01.000Z', reason: 'closed' },
+  why: null,
+};
+
 type Script = { load?: ServiceRunResult[]; stop?: ServiceRunResult[] };
 
 /**
@@ -134,12 +178,17 @@ function withEarlierUnit(home: string): string {
   return readFileSync(first.unitPath(home), 'utf8');
 }
 
-function sourcesOf(home: string, service: ServiceManager): DaemonCommandSources {
+function sourcesOf(
+  home: string,
+  service: ServiceManager,
+  extra: Partial<DaemonCommandSources> = {},
+): DaemonCommandSources {
   return {
     home,
     program: { execPath: NEW_PROGRAM.execPath, entry: NEW_PROGRAM.entry },
     version: 'test',
     service,
+    ...extra,
   };
 }
 
@@ -208,6 +257,46 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000]);
   });
 
+  test('an in-place refresh puts the earlier program back, so the unit it restores has something to run', () => {
+    const { home } = scratch();
+    // The entry the earlier unit runs, as a real file: an in-place upgrade overwrites this same
+    // path, which is how restoring the unit alone would leave the earlier definition naming
+    // bytes it was never accepted with.
+    const entry = join(home, 'cli.js');
+    writeFileSync(entry, 'old known-good bytes');
+    const earlierProgram: ServiceProgram = { execPath: '/runtime/bin/node', entry, roots: ['/repo'] };
+    const first = managerWith({}).manager;
+    expect(first.install(home, earlierProgram).ok).toBe(true);
+    const earlier = readFileSync(first.unitPath(home), 'utf8');
+
+    // Every load of the new bytes is refused; the rollback load starts a program that reads the
+    // entry path again, so the scene can ask whether that program could come up at all.
+    let loads = 0;
+    let running = true;
+    const runner: ServiceRunner = (_command, args) => {
+      if ((args[0] ?? '') === 'bootout') {
+        running = false;
+        return { ...OK };
+      }
+      loads += 1;
+      if (loads <= BOUNDED_OFFERS) return { ...LOAD_REFUSED };
+      running = readFileSync(entry, 'utf8') === 'old known-good bytes';
+      return { ...OK };
+    };
+    const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
+
+    writeFileSync(entry, 'new broken bytes');
+    const result = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.outcome).toBe('restored');
+    // The earlier unit is back, and the program it names is the one it was accepted with.
+    expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
+    expect(readFileSync(entry, 'utf8')).toBe('old known-good bytes');
+    expect(running).toBe(true);
+  });
+
   test('a rollback load that is refused too says no daemon was started, and leaves the earlier unit on disk', () => {
     const { home } = scratch();
     const earlier = withEarlierUnit(home);
@@ -260,7 +349,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home, manager } = refuseRefresh(refusedThenAccepted(BOUNDED_OFFERS));
     const io = testIo(root, { kind: 'owner' });
 
-    const code = await runDaemon(['install'], io, sourcesOf(home, manager));
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager, { health: async () => ANSWERING }));
 
     expect(code).toBe(1);
     expect(io.err).toContain(
@@ -280,12 +369,66 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home, manager } = refuseRefresh(refusedThenAccepted(BOUNDED_OFFERS));
     const io = testIo(root, { kind: 'owner' });
 
-    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager));
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager, { health: async () => ANSWERING }));
 
     expect(code).toBe(1);
     const document = JSON.parse(io.out) as { error: { id: string; message: string } };
     expect(document.error.id).toBe('daemon.install-rolled-back');
     expect(document.error.message).toContain('the previous one was put back and started again');
+  });
+
+  test('a restored load whose daemon never answers is reported as no daemon, with the rerun command', async () => {
+    const { root, home, manager } = refuseRefresh(refusedThenAccepted(BOUNDED_OFFERS));
+    const io = testIo(root, { kind: 'owner' });
+    const sleeps: number[] = [];
+    let probes = 0;
+
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager, {
+      health: async () => {
+        probes += 1;
+        return SILENT;
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    }));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { id: string; message: string; repair: string | null } };
+    // A load the manager accepted is registration, not proof that a program runs: with nothing
+    // answering, "restored" would be a false all-clear, and the honest answer is the one a lost
+    // rollback gives — no daemon, and the command that starts one.
+    expect(document.error.id).toBe('daemon.install-rollback-failed');
+    expect(document.error.message).toContain('did not answer');
+    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root}\``);
+    // The check is bounded: eight probes, with the growing waits between them and no more.
+    expect(probes).toBe(8);
+    expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000]);
+  });
+
+  test('a restored daemon that answers after the first probes is still a verified rollback', async () => {
+    const { root, home, manager } = refuseRefresh(refusedThenAccepted(BOUNDED_OFFERS));
+    const io = testIo(root, { kind: 'owner' });
+    const sleeps: number[] = [];
+    let probes = 0;
+
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager, {
+      health: async () => {
+        probes += 1;
+        return probes < 3 ? SILENT : ANSWERING;
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    }));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { id: string; repair: string | null } };
+    // The daemon needed a moment to bind and answer; that is still the earlier daemon running.
+    expect(document.error.id).toBe('daemon.install-rolled-back');
+    expect(document.error.repair).toBeNull();
+    expect(probes).toBe(3);
+    expect(sleeps).toEqual([100, 200]);
   });
 
   test('a rollback that cannot start a daemon exits 1 under daemon.install-rollback-failed', async () => {

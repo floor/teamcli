@@ -79,6 +79,9 @@ export type DaemonCommandSources = {
   start?: (input: Parameters<typeof startMachineDaemon>[0]) => Promise<StartMachineDaemonResult>;
   /** Injected for tests: the stop seam, as `broker` and `bus` take one. */
   stop?: (end: () => void) => () => void;
+  /** Injected for tests: the health reading that confirms a restored daemon answers, so a scene
+   *  never opens the machine socket. */
+  health?: typeof daemonHealth;
   /** Injected for tests: the program the service manager will run; `null` means it can't be found. */
   program?: { execPath: string; entry: string } | null;
   now?: () => Date;
@@ -514,6 +517,32 @@ function installAgain(roots: readonly string[], parsed: Parsed): string {
   return parts.join(' ');
 }
 
+/** How long the command waits for a restored daemon to answer: the first probe at once, then the
+ *  same bounded, growing waits the adapter gives a load. */
+const RESTORED_ANSWERS_WAIT_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_000];
+const RESTORED_ANSWERS_PROBES = RESTORED_ANSWERS_WAIT_MS.length + 1;
+
+/**
+ * Confirms a restored daemon answers, through the same health reading `team status` uses. A load
+ * the service manager accepted is registration, not proof that a program runs: after an in-place
+ * refresh the restored unit may name bytes that cannot start, and the manager would still say
+ * the load was taken. Bounded — eight probes over about 4.5 seconds — so a daemon that never
+ * answers is reported as none rather than waited on.
+ */
+async function restoredDaemonAnswers(home: string, sources: DaemonCommandSources): Promise<boolean> {
+  const health = sources.health ?? daemonHealth;
+  const sleep = sources.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  for (let probe = 0; probe < RESTORED_ANSWERS_PROBES; probe += 1) {
+    if (probe > 0) {
+      const wait = RESTORED_ANSWERS_WAIT_MS[probe - 1];
+      if (wait !== undefined) await sleep(wait);
+    }
+    const reading = await health(home, { timeoutMs: 500 });
+    if (reading.state === 'running' && reading.probe.state === 'answered') return true;
+  }
+  return false;
+}
+
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const home = sources.home ?? homedir();
@@ -709,11 +738,20 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   const installed = manager.install(home, fullProgram);
   if (!installed.ok) {
     appendDaemonLog(home, `install: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
-    // A rollback that left a daemon running is reported as the failure it is, and a rollback
-    // that could not start one says so: either way the line names what happened and exits 1,
-    // so an install never ends with no daemon and no message.
-    if (installed.outcome === 'restored') {
-      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: installed.why, repair: null });
+    // A rollback is reported as one only after the daemon it started answers: a load the service
+    // manager accepted is registration, not proof that a program runs. A rollback that started
+    // nothing answering takes the same answer a lost rollback gives: no daemon, with the rerun
+    // command. Either way the line names what happened and exits 1, so an install never ends
+    // with no daemon and no message.
+    let outcome = installed.outcome;
+    let why = installed.why;
+    if (outcome === 'restored' && !(await restoredDaemonAnswers(home, sources))) {
+      appendDaemonLog(home, 'install: the restored daemon did not answer the health probe', sources.now?.() ?? new Date());
+      outcome = 'lost';
+      why = `${installed.why}, but the restored daemon did not answer; no daemon is running`;
+    }
+    if (outcome === 'restored') {
+      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: why, repair: null });
       // exit: daemon.install-rolled-back
       return 1;
     }
@@ -722,21 +760,21 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     const again = installAgain(named.roots, parsed);
     const repair = `the owner runs \`${again}\``;
     const keptAt = installed.kept ? `; the previous unit is kept at ${plan.unitPath}` : '';
-    if (installed.outcome === 'lost') {
+    if (outcome === 'lost') {
       refuse(io, parsed.json, 'daemon', {
         id: 'daemon.install-rollback-failed',
-        message: installed.why,
+        message: why,
         repair,
-        plain: `${installed.why}; ${repair} to start a daemon again${keptAt}`,
+        plain: `${why}; ${repair} to start a daemon again${keptAt}`,
       });
       // exit: daemon.install-rollback-failed
       return 1;
     }
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.install-failed',
-      message: installed.why,
+      message: why,
       repair,
-      plain: `${installed.why}; ${repair} to try again${keptAt}`,
+      plain: `${why}; ${repair} to try again${keptAt}`,
     });
     // exit: daemon.install-failed
     return 1;

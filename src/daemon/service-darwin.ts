@@ -2,10 +2,19 @@
 // the neutral `team daemon install` interface above it prints none of them to the user. The
 // adapter writes a user service unit that starts the daemon at login and restarts it when it
 // exits non-zero. A clean exit (the daemon stopped) is not restarted.
+//
+// A refresh must leave a daemon able to run, not only a unit that names one. When the new
+// program and the earlier one live at the same entry path (the in-place upgrade), the earlier
+// unit put back alone would name the replaced bytes: a load the manager accepts, and nothing
+// that can run. So the program the unit was accepted with is kept beside a record binding it to
+// that exact unit text, and a rollback puts those bytes back before the earlier unit is offered
+// again. The copy is best effort: without a record the unit is still restored and the command
+// asks the daemon directly whether it answers.
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DAEMON_LABEL, daemonLogPath } from './paths.ts';
+import { DAEMON_LABEL, daemonLogPath, machineConfigDir } from './paths.ts';
 import type {
   ServiceInstallFailure,
   ServiceInstallResult,
@@ -38,6 +47,41 @@ const LOAD_RETRY_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_00
 function realSleep(ms: number): void {
   const cell = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(cell, 0, 0, ms);
+}
+
+/** The two files a rollback reads: the earlier program itself, and the record binding it to the
+ *  exact earlier unit text. Both live in the machine folder every daemon file lives in. */
+const RETAINED_PROGRAM = 'daemon-previous-entry';
+const RETAINED_RECORD = 'daemon-previous.json';
+
+/** What the record says: which program, for which unit text, with which bytes and mode. */
+type RetainedProgram = {
+  format: 1;
+  unit_sha256: string;
+  entry: string;
+  entry_sha256: string;
+  entry_mode: number;
+};
+
+function sha256(bytes: Buffer | string): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** Writes beside `path` and renames, so no reader ever sees a half-written file. */
+function writeAtomically(path: string, bytes: Buffer | string, mode: number): void {
+  const temporary = `${path}.${String(process.pid)}.tmp`;
+  try {
+    writeFileSync(temporary, bytes, { mode });
+    chmodSync(temporary, mode);
+    renameSync(temporary, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Nothing of ours is there to take.
+    }
+    throw error;
+  }
 }
 
 function escapeXml(text: string): string {
@@ -132,6 +176,79 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     kept: boolean,
   ): ServiceInstallResult => ({ ok: false, why: what, detail, outcome, kept });
 
+  const retainedProgramPath = (home: string): string => join(machineConfigDir(home), RETAINED_PROGRAM);
+  const retainedRecordPath = (home: string): string => join(machineConfigDir(home), RETAINED_RECORD);
+
+  /**
+   * Keeps the program the unit was just accepted with, and a record binding it to that exact
+   * unit text, in the machine folder (`<home>/.config/team`): `daemon-previous-entry` is the
+   * copy of the program itself, and `daemon-previous.json` says which unit text it belongs to.
+   * Best effort — an entry that cannot be read removes the record, so a stale program is never
+   * put back, and the install itself is unaffected either way.
+   */
+  const retainProgram = (home: string, entry: string, text: string): void => {
+    const copy = retainedProgramPath(home);
+    const record = retainedRecordPath(home);
+    try {
+      const bytes = readFileSync(entry);
+      const mode = statSync(entry).mode & 0o777;
+      mkdirSync(machineConfigDir(home), { recursive: true, mode: 0o700 });
+      writeAtomically(copy, bytes, mode);
+      const binding: RetainedProgram = {
+        format: 1,
+        unit_sha256: sha256(text),
+        entry,
+        entry_sha256: sha256(bytes),
+        entry_mode: mode,
+      };
+      writeAtomically(record, `${JSON.stringify(binding, null, 2)}\n`, 0o600);
+    } catch {
+      // The record goes first: no rollback may restore bytes this install could not vouch for.
+      try {
+        unlinkSync(record);
+      } catch {
+        // Nothing was recorded.
+      }
+      try {
+        unlinkSync(copy);
+      } catch {
+        // Nothing was copied.
+      }
+    }
+  };
+
+  /**
+   * The entry bytes the earlier unit was accepted with, put back when this install replaced that
+   * same path in place — the in-place upgrade, where the unit alone would name the new, broken
+   * bytes. Only a record bound to the exact earlier unit text authorises a restore, and the
+   * kept bytes must hash to the recorded value; anything else leaves the entry alone. Returns
+   * the path the bytes came from, so the log line can say where, or null when nothing went back.
+   */
+  const restoreProgram = (home: string, priorText: string): string | null => {
+    const copy = retainedProgramPath(home);
+    let binding: RetainedProgram;
+    try {
+      const raw: unknown = JSON.parse(readFileSync(retainedRecordPath(home), 'utf8'));
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+      const item = raw as Record<string, unknown>;
+      if (item.format !== 1) return null;
+      if (typeof item.unit_sha256 !== 'string' || typeof item.entry !== 'string') return null;
+      if (typeof item.entry_sha256 !== 'string' || typeof item.entry_mode !== 'number') return null;
+      binding = item as RetainedProgram;
+    } catch {
+      return null;
+    }
+    if (binding.unit_sha256 !== sha256(priorText)) return null;
+    try {
+      const bytes = readFileSync(copy);
+      if (sha256(bytes) !== binding.entry_sha256) return null;
+      writeAtomically(binding.entry, bytes, binding.entry_mode & 0o777);
+      return copy;
+    } catch {
+      return null;
+    }
+  };
+
   /**
    * The earlier definition goes back and its daemon is started again, so a refresh the service
    * manager refuses leaves a running daemon and a reported failure, never a machine with no
@@ -140,6 +257,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
    * wait out a stop that is still finishing.
    */
   const restore = (
+    home: string,
     path: string,
     prior: { text: string; mode: number } | null,
     failDetail: string,
@@ -166,7 +284,10 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       );
     }
     // The earlier unit goes back before the manager is asked to load it: the file is the
-    // definition a load reads, and it names the daemon this install was replacing.
+    // definition a load reads, and it names the daemon this install was replacing. The unit
+    // alone is not enough when this install replaced that same entry in place, so the program
+    // the earlier unit was accepted with is put back first — otherwise the manager takes a
+    // load of a unit whose program is the broken bytes.
     try {
       writeFileSync(path, prior.text, { mode: prior.mode });
       chmodSync(path, prior.mode);
@@ -178,19 +299,23 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         false,
       );
     }
+    const from = restoreProgram(home, prior.text);
+    const where = from === null
+      ? 'the earlier program was left in place'
+      : `the earlier program was put back from ${from}`;
     run('launchctl', ['bootout', service]);
     const back = loadWithRetry(path);
     if (back.status === 0) {
       return refused(
         'the system service manager refused to start the new daemon; the previous one was put back and started again',
-        `${failDetail}; the earlier unit was put back and its daemon started`,
+        `${failDetail}; the earlier unit was put back and its daemon started; ${where}`,
         'restored',
         true,
       );
     }
     return refused(
       'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
-      `${failDetail}; the earlier unit was put back, and ${loadDetail(back)}`,
+      `${failDetail}; the earlier unit was put back, and ${loadDetail(back)}; ${where}`,
       'lost',
       true,
     );
@@ -225,10 +350,11 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // Whether the rename put the new definition at `path`, replacing any earlier one: a failure
       // after that point leaves no earlier unit for the command to point the owner at.
       let placed = false;
+      const text = unitText(home, programOf(program), program.path);
       try {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
         temporary = `${path}.${String(process.pid)}.tmp`;
-        writeFileSync(temporary, unitText(home, programOf(program), program.path), { mode: 0o600 });
+        writeFileSync(temporary, text, { mode: 0o600 });
         chmodSync(temporary, 0o600);
         renameSync(temporary, path);
         temporary = null;
@@ -257,13 +383,21 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // may still be finishing, and a refusal the install never retries past is the empty
       // machine this install must never leave.
       const first = run('launchctl', ['bootstrap', domain, path]);
-      if (first.status === 0) return { ok: true, unitPath: path };
+      if (first.status === 0) {
+        // The unit the manager just took is the one a later refresh restores, so the program it
+        // runs is kept now, while those bytes are the ones in place.
+        retainProgram(home, program.entry, text);
+        return { ok: true, unitPath: path };
+      }
       run('launchctl', ['bootout', service]);
       const loaded = loadWithRetry(path);
-      if (loaded.status === 0) return { ok: true, unitPath: path };
+      if (loaded.status === 0) {
+        retainProgram(home, program.entry, text);
+        return { ok: true, unitPath: path };
+      }
       // The new unit did not start after every bounded retry: the earlier definition is put
       // back and its daemon started, so a failure is reported and a daemon still runs.
-      return restore(path, prior, loadDetail(loaded));
+      return restore(home, path, prior, loadDetail(loaded));
     },
 
     uninstall(home): ServiceUninstallResult {
