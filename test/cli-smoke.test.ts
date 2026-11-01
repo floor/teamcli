@@ -61,6 +61,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   pause: 'writes pause state for one or more teams',
+  peek: "reads a live pane's screen through the terminal host, which the cold smoke run has no pane to produce, and prints no --json schema",
   resume: 'clears pause state for one or more teams',
   raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',

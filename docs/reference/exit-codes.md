@@ -243,7 +243,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
 | `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
-| `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the system service manager starts the daemon | `team daemon install` |
+| `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe | `team daemon install` |
 | `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
@@ -256,14 +256,17 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-route` | `daemon` | 1 | the route id does not name this checkout's own canonical route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch` | `daemon` | 1 | the daemon record carries no hosted watch for this checkout's route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch-state` | `daemon` | 1 | the route's hosted watch was not started as required, is standing down, or has stopped | `team daemon fault-watch --root <folder> --route <id>` |
-| `daemon.install-failed` | `daemon` | 1 | the system service manager refused to write or start the unit | `team daemon install` |
-| `daemon.install-rollback-failed` | `daemon` | 1 | the system service manager refused the new unit and the previous one could not be started again, so no daemon was started | `team daemon install` |
-| `daemon.install-rolled-back` | `daemon` | 1 | the system service manager refused to start the new unit; the previous unit was put back and its daemon started again | `team daemon install` |
+| `daemon.install-failed` | `daemon` | 1 | the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back | `team daemon install` |
+| `daemon.install-rollback-failed` | `daemon` | 1 | the system's service manager refused the new unit or its daemon did not answer the health probe, and the previous one could not be started again, so no daemon was started | `team daemon install` |
+| `daemon.install-rolled-back` | `daemon` | 1 | the new unit failed or its daemon did not answer the health probe; the previous unit was put back, and its daemon started again and answered | `team daemon install` |
 | `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
-| `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system service manager starts it | `team daemon run` |
+| `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system's service manager starts it | `team daemon run` |
+| `daemon.service-managed.pid` | `daemon` | 1 | the system's service manager's record of the job does not name this process | `team daemon run --started-by service-manager` |
+| `daemon.service-managed.program` | `daemon` | 1 | the record and the unit do not run this executable with these words | `team daemon run --started-by service-manager` |
+| `daemon.service-managed.unit` | `daemon` | 1 | no unit file of this daemon's own can be read: another label, another owner, a group- or world-writable file, or no readable unit on this platform | `team daemon run --started-by service-manager` |
 | `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
-| `daemon.uninstall-failed` | `daemon` | 1 | the system service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.uninstall-failed` | `daemon` | 1 | the system's service manager refused to stop or remove the unit | `team daemon uninstall` |
 | `daemon.fault-root` | `daemon` | 2 | a checkout named on fault-watch cannot be read, so no request was written | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-usage` | `daemon` | 2 | the invocation cannot be read, or the route id is not one a hosted watch records | `team daemon fault-watch --route nope` |
 | `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |

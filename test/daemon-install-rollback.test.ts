@@ -1,16 +1,19 @@
 // Synthetic scenes for the install's refresh safety net: an injected runner stands in for the
-// system service manager, so nothing here runs a platform command and no machine daemon is
+// system's service manager, so nothing here runs a platform command and no machine daemon is
 // touched. The scenes prove what a failed refresh must never leave: the old daemon is stopped,
 // the new load is offered again while the manager refuses (the earlier stop may still be
 // finishing), and a load that still fails puts the previous unit back and starts its daemon
-// again — or says plainly that no daemon was started. Restoring the unit is not enough when the
-// refresh replaced the entry in place: the earlier program must come back with it, and a
-// rollback is called `restored` only after the daemon that started answers the health probe,
-// because a load the manager accepted is registration, not proof that a program runs. The
-// command scenes prove the failure exits non-zero under its own contract row, and that a failure
-// leaving no daemon running names the recorded rerun command (its roots and opt-ins) and where a
-// kept unit is — the same command in the JSON `repair` — so a rollback that fails is actionable,
-// not just reported.
+// again — or says plainly that no daemon was started. The unit a refresh restores runs the
+// retained copy it was installed with, which the refresh never writes, so restoring the unit
+// text is enough — and the copy the refresh added is removed with it, exactly what install
+// changed. A rollback is called `restored` only after the daemon that started answers the health
+// probe, because a load the manager accepted is registration, not proof that a program runs. A
+// load the manager accepts whose daemon never answers is taken back out by the adapter's own
+// undo — the earlier unit restored for a refresh, the new unit removed for a fresh install — so
+// an install reports success only after the daemon it started answers. The command scenes prove the failure
+// exits non-zero under its own contract row, and that a failure leaving no daemon running names
+// the recorded rerun command (its roots and opt-ins) and where a kept unit is — the same command
+// in the JSON `repair` — so a rollback that fails is actionable, not just reported.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,7 +30,7 @@ import type {
   ServiceRunResult,
   ServiceRunner,
 } from '../src/daemon/service.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -72,8 +75,27 @@ afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
 
-const PRIOR_PROGRAM: ServiceProgram = { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] };
-const NEW_PROGRAM: ServiceProgram = { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] };
+const EXEC = '/runtime/bin/node';
+
+/** A program on disk: an entry and the sibling module it imports, in a folder of their own. The
+ *  adapter keeps the entry's own folder as the whole program, so this folder is the program. */
+function programFiles(home: string, name: string, entryBytes = 'import "./module.js";\n'): string {
+  const folder = join(home, 'app', name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'module.js'), 'export const ok = true;\n');
+  writeFileSync(join(folder, 'cli.js'), entryBytes);
+  return join(folder, 'cli.js');
+}
+
+function program(home: string, name: string): ServiceProgram {
+  return { execPath: EXEC, entry: programFiles(home, name), roots: ['/repo'] };
+}
+
+/** The run words a written unit carries, read back as a scene sees them. */
+function unitWords(text: string): string[] {
+  return [...(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1] ?? '')
+    .matchAll(/<string>([\s\S]*?)<\/string>/g)].map((one) => one[1] ?? '');
+}
 
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 /** The manager's answer for a load it will not take — a status 5 refusal, the answer that stopped
@@ -166,6 +188,8 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
     kind: 'system-service-manager',
     unitPath: path,
     plan: (home) => ({ unitPath: path(home), program: ['team'] }),
+    job: () => thisProcessJobRecord(),
+    unit: (home) => thisProcessUnitRecord(path(home)),
     install: () => failure,
     uninstall: () => ({ ok: false, why: 'an uninstall is not part of this scene', detail: null }),
   };
@@ -174,7 +198,7 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
 /** The earlier unit this refresh replaces: one successful install, read back byte for byte. */
 function withEarlierUnit(home: string): string {
   const first = managerWith({}).manager;
-  expect(first.install(home, PRIOR_PROGRAM).ok).toBe(true);
+  expect(first.install(home, program(home, 'v1')).ok).toBe(true);
   return readFileSync(first.unitPath(home), 'utf8');
 }
 
@@ -183,9 +207,11 @@ function sourcesOf(
   service: ServiceManager,
   extra: Partial<DaemonCommandSources> = {},
 ): DaemonCommandSources {
+  // The program this install would run: a sibling version folder of the earlier one.
+  if (!existsSync(join(home, 'app', 'v2', 'cli.js'))) programFiles(home, 'v2');
   return {
     home,
-    program: { execPath: NEW_PROGRAM.execPath, entry: NEW_PROGRAM.entry },
+    program: { execPath: EXEC, entry: join(home, 'app', 'v2', 'cli.js') },
     version: 'test',
     service,
     ...extra,
@@ -198,7 +224,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     const sleeps: number[] = [];
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED, OK] }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap']);
@@ -213,7 +239,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     // The stop is still in flight for the next two offers; the third is accepted.
     const { manager, calls } = managerWith({ load: refusedThenAccepted(3) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap', 'bootstrap', 'bootstrap']);
@@ -225,7 +251,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     const sleeps: number[] = [];
     const { manager } = managerWith({ load: refusedThenAccepted(5) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(sleeps).toEqual([100, 200, 400, 800]);
@@ -239,7 +265,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     const sleeps: number[] = [];
     const { manager } = managerWith({ load: refusedThenAccepted(BOUNDED_OFFERS) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -247,7 +273,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     // The earlier definition is the one in place, and it is the one running.
     expect(result.kept).toBe(true);
     expect(result.why).toBe(
-      'the system service manager refused to start the new daemon; the previous one was put back and started again',
+      'the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
     );
     // The refusal names no platform facility, and the earlier definition is the one on disk, so
     // the unit the manager starts again is the one that was running before the refresh.
@@ -257,22 +283,22 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000]);
   });
 
-  test('an in-place refresh puts the earlier program back, so the unit it restores has something to run', () => {
+  test('a refresh never writes the program an earlier unit runs, so restoring the unit is restoring its program', () => {
     const { home } = scratch();
-    // The entry the earlier unit runs, as a real file: an in-place upgrade overwrites this same
-    // path, which is how restoring the unit alone would leave the earlier definition naming
-    // bytes it was never accepted with.
-    const entry = join(home, 'cli.js');
-    writeFileSync(entry, 'old known-good bytes');
-    const earlierProgram: ServiceProgram = { execPath: '/runtime/bin/node', entry, roots: ['/repo'] };
+    // The package folder the earlier unit was installed from; a later upgrade rewrites this
+    // very file. The unit does not run it: it runs the copy the install kept.
+    const entry = programFiles(home, 'v1', 'old known-good bytes');
     const first = managerWith({}).manager;
-    expect(first.install(home, earlierProgram).ok).toBe(true);
+    expect(first.install(home, { execPath: EXEC, entry, roots: ['/repo'] }).ok).toBe(true);
     const earlier = readFileSync(first.unitPath(home), 'utf8');
+    const retained = unitWords(earlier)[1];
+    expect(retained).toBeDefined();
+    expect(readFileSync(retained ?? '', 'utf8')).toBe('old known-good bytes');
 
-    // Every load of the new bytes is refused; the rollback load starts a program that reads the
-    // entry path again, so the scene can ask whether that program could come up at all.
+    // Every load of the new bytes is refused; the rollback load starts the earlier unit's copy,
+    // so the scene can ask whether that program could come up at all.
     let loads = 0;
-    let running = true;
+    let running = false;
     const runner: ServiceRunner = (_command, args) => {
       if ((args[0] ?? '') === 'bootout') {
         running = false;
@@ -280,20 +306,23 @@ describe('a load that fails every time puts the previous unit back', () => {
       }
       loads += 1;
       if (loads <= BOUNDED_OFFERS) return { ...LOAD_REFUSED };
-      running = readFileSync(entry, 'utf8') === 'old known-good bytes';
+      running = readFileSync(retained ?? '/nonexistent', 'utf8') === 'old known-good bytes';
       return { ...OK };
     };
     const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
 
+    // The package is upgraded in place; the copy the earlier unit names is untouched.
     writeFileSync(entry, 'new broken bytes');
-    const result = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('restored');
-    // The earlier unit is back, and the program it names is the one it was accepted with.
+    // The earlier unit is back, and the program it names is the one it was accepted with —
+    // still on disk at its own path, whatever happened to the package the copy came from.
     expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
-    expect(readFileSync(entry, 'utf8')).toBe('old known-good bytes');
+    expect(readFileSync(retained ?? '', 'utf8')).toBe('old known-good bytes');
+    expect(readFileSync(entry, 'utf8')).toBe('new broken bytes');
     expect(running).toBe(true);
   });
 
@@ -302,7 +331,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     const earlier = withEarlierUnit(home);
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED] });
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -310,7 +339,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     // Nothing runs, but the earlier definition is still there for the command to name.
     expect(result.kept).toBe(true);
     expect(result.why).toBe(
-      'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
     );
     expect(result.why).not.toMatch(/launchctl|launchd|\.plist|launch agents/i);
     expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
@@ -322,14 +351,14 @@ describe('a load that fails every time puts the previous unit back', () => {
     const { home } = scratch();
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED] });
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('refused');
     // The definition it wrote was taken back out, so there is no kept unit to name.
     expect(result.kept).toBe(false);
-    expect(result.why).toBe('the system service manager refused to start the daemon');
+    expect(result.why).toBe('the system\'s service manager refused to start the daemon');
     expect(existsSync(manager.unitPath(home))).toBe(false);
     // The offers are bounded: the first, then the nine of the retry, and no more.
     expect(calls.filter((call) => call === 'bootstrap')).toHaveLength(BOUNDED_OFFERS);
@@ -353,7 +382,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     expect(io.err).toContain(
-      'team daemon: the system service manager refused to start the new daemon; the previous one was put back and started again',
+      'team daemon: the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
     );
     expect(io.err).not.toContain('launchctl');
     // The rollback left a daemon running, so there is no recovery command to give.
@@ -496,7 +525,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home } = scratch();
     const manager = fakeManager({
       ok: false,
-      why: 'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
+      why: 'the system\'s service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
       detail: null,
       outcome: 'lost',
       kept: false,
@@ -515,7 +544,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home } = scratch('my repo');
     const manager = fakeManager({
       ok: false,
-      why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      why: 'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
       detail: null,
       outcome: 'lost',
       kept: false,
@@ -526,6 +555,62 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     expect(io.err).toContain(`--root '${root}'`);
+  });
+});
+
+describe('an install whose new daemon does not answer is taken back out', () => {
+  test('a refresh whose new daemon never answers restores the earlier unit and reports the rollback', async () => {
+    const { root, home } = scratch();
+    const earlier = withEarlierUnit(home);
+    const { manager, calls } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    // The manager accepts the new load, so only the health probe can tell the install failed.
+    // The earlier daemon is put back by the adapter's own undo, and it answers; the probe that
+    // sees an answer can only be the restored daemon's, because it runs after the undo.
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager, {
+      health: async () => (calls.includes('bootout') ? ANSWERING : SILENT),
+      sleep: async () => {},
+    }));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { id: string; message: string } };
+    expect(document.error.id).toBe('daemon.install-rolled-back');
+    expect(document.error.message).toContain('did not answer');
+    // The earlier definition is the one on disk again, and its daemon was the one loaded last.
+    expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
+    expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap']);
+  });
+
+  test('a fresh install whose new daemon never answers removes its unit and names the rerun', async () => {
+    const { root, home } = scratch();
+    const { manager, calls } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager, {
+      health: async () => SILENT,
+      sleep: async () => {},
+    }));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('the daemon the new unit started did not answer the health probe');
+    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to try again`);
+    // Its own definition was taken back out, so there is no kept unit to name.
+    expect(io.err).not.toContain('is kept at');
+    expect(existsSync(manager.unitPath(home))).toBe(false);
+    // The job the manager accepted was stopped again before the unit was removed.
+    expect(calls).toEqual(['bootstrap', 'bootout']);
+  });
+
+  test('an install is reported only after the new daemon answers', async () => {
+    const { root, home } = scratch();
+    const { manager } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager, { health: async () => ANSWERING }));
+
+    expect(code).toBe(0);
+    expect(io.out).toContain('team daemon: installed');
   });
 });
 
@@ -541,7 +626,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(calls).toEqual([]);
     expect(io.out).toContain('would install');
     expect(io.out).toContain('the previous daemon, if the service manager holds one, is stopped before the new one is offered');
-    expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses');
+    expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses');
     expect(io.out).toContain('if it still cannot start, the previous unit is put back and its daemon started again');
     expect(io.out).toContain('nothing was written');
     expect(io.out).not.toContain('launchd');
@@ -559,7 +644,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(document.dry_run).toBe(true);
     expect(document.steps).toEqual([
       'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
-      'the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses',
+      'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
       'if it still cannot start, the previous unit is put back and its daemon started again',
     ]);
   });
