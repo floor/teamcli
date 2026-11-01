@@ -415,18 +415,22 @@ export function supportsSessionResume(cli: string): boolean {
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. The line is
- *  read as a shell reads it, through the same proved read every other reader asks
- *  ({@link cliWordListOf}): a quoted flag name is the flag and a quoted value is the value. A
- *  line that runs some other program leaves the script's words to the program the script names,
- *  exactly as a session selection there is not the line's. */
+ *  read as its CLI reads it, through the same proved words every other reader asks
+ *  ({@link cliWordListOf}): a quoted flag name is the flag and a quoted value is the value, and
+ *  an id inside a quoted script is read exactly where the launch puts one. The words are asked
+ *  for by every shipped profile's binary: a plain line answers the same words for all of them,
+ *  and a script line answers only for the profile whose binary the proved chain runs, so a line
+ *  that runs some other program, or one this reader cannot prove, names no id. */
 export function launchSessionId(command: string): string | undefined {
   const trimmed = command.trimEnd();
-  const words = shellWords(trimmed);
-  if (words === null) return undefined;
-  const program = words[programWordAt(words)];
-  if (program === undefined) return undefined;
-  const own = cliWordListOf(program.text.split('/').pop() ?? program.text, trimmed);
-  return own === null ? undefined : sessionIdIn(own);
+  for (const cli of NAMES) {
+    const binary = SHIPPED[cli]?.profile.binary;
+    if (binary === undefined) continue;
+    const own = cliWordListOf(binary, trimmed);
+    const id = own === null ? undefined : sessionIdIn(own);
+    if (id !== undefined) return id;
+  }
+  return undefined;
 }
 
 /**

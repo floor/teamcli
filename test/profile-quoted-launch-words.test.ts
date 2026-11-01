@@ -683,6 +683,56 @@ describe('a plain line that swallows its tail takes no session id, and one that 
   });
 });
 
+// The read-back side of the same contract: an id the CLI receives is an id the line records. The
+// seven proved shapes below are the ones this lane mints on, and the declared flags are the ones
+// a line writes itself, plain and quoted. The stub's argv is the measurement: the id is in it.
+describe('the session id a launch line carries is the id that reaches its CLI', () => {
+  const MINTED_SHAPES = [
+    'claude --model m',
+    '/bin/sh -c "claude --model m"',
+    "/bin/sh -c 'claude --model m'",
+    '/bin/sh -lc "claude --model m"',
+    '/bin/sh -ec "claude --model m"',
+    '/bin/sh -c "exec claude --model m"',
+    '/bin/sh -c "command claude --model m"',
+    `/bin/sh -c "sh -ec 'exec claude --model m'"`,
+  ] as const;
+
+  test('every minted id is the id launchSessionId reads back, on every proved shape', () => {
+    for (const line of MINTED_SHAPES) {
+      const launched = withLaunchSession('claude-code', line);
+      expect(`${line}: ${launched.notice ?? 'none'}`).toBe(`${line}: none`);
+      expect(launched.sessionId).toBeDefined();
+      expect(`${line}: ${launchSessionId(launched.command) ?? 'none'}`).toBe(`${line}: ${launched.sessionId}`);
+      const argv = cliArgv(launched.command);
+      expect(argv[argv.indexOf('--session-id') + 1]).toBe(launched.sessionId!);
+    }
+  });
+
+  test('a declared id is read however its flag and value are written', () => {
+    const id = '01234567-89ab-4cde-8fab-0123456789ab';
+    const quoteSingle = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`;
+    const shapes = [
+      `claude --session-id ${id}`,
+      ...['--session-id', '"--session-id"', "'--session-id'"].map(
+        (flag) => `/bin/sh -ec ${quoteSingle(`claude ${flag} ${id}`)}`,
+      ),
+    ];
+    for (const line of shapes) {
+      expect(`${line}: ${launchSessionId(line) ?? 'none'}`).toBe(`${line}: ${id}`);
+      expect(withLaunchSession('claude-code', line)).toEqual({ command: line, sessionId: id });
+      expect(cliArgv(line)).toEqual(['--session-id', id]);
+    }
+  });
+
+  test('a declared id on an unprovable line is not read: the shell never hands it over', () => {
+    const line = '/bin/sh -c "claude --session-id declared-1 $TAIL"';
+    expect(cliWordList('claude-code', line)).toBeNull();
+    expect(launchSessionId(line)).toBeUndefined();
+    expect(withLaunchSession('claude-code', line).sessionId).toBeUndefined();
+  });
+});
+
 describe('a resume inside a quoted script goes in and comes back out exactly', () => {
   test('the id is appended inside the quotes, and stripping it restores the line', () => {
     const double = '/bin/sh -c "claude --model m"';
