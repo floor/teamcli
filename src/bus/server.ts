@@ -701,8 +701,14 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
     // flight instead of starting a second one over the same records.
     const reconcileState = createReconcileState();
+    // Aborted by close. A pass in flight stops between slices and before its next append, and
+    // every start path refuses once it is aborted, so the closing bus writes no event after
+    // close resolves. The records it did not reach are not lost: no cursor advanced past them,
+    // and the next bus process's first pass finds them again.
+    const closing = new AbortController();
     let reconcileRun: Promise<SignedEventRecord[]> | null = null;
     const runReconcile = (): Promise<SignedEventRecord[]> => {
+      if (closing.signal.aborted) return Promise.resolve([]);
       if (reconcileRun !== null) return reconcileRun;
       const run = reconcilePassAsync({
         project: input.team.project,
@@ -715,6 +721,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
         state: reconcileState,
+        signal: closing.signal,
       }).then(
         (res) => (res.ok ? res.raised : []),
         (error: unknown) => {
@@ -764,16 +771,32 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         : undefined;
     timer?.unref?.();
 
+    let closingPromise: Promise<void> | null = null;
     const handle: BusHandle = {
       reconcileNow: runReconcile,
-      close: () =>
-        new Promise<void>((done) => {
+      close: () => {
+        if (closingPromise !== null) return closingPromise;
+        // Cancel before waiting: the pass in flight stops at its next boundary, and every later
+        // start answers empty. Close resolves only after the pass has stopped, so no record is
+        // appended after it — the endpoint it owns is released with its last write behind it.
+        closing.abort();
+        closingPromise = (async () => {
+          const running = reconcileRun;
+          if (running !== null) {
+            try {
+              await running;
+            } catch {
+              // The pass answers its own failures; close has nothing to add.
+            }
+          }
           if (timer !== undefined) clearInterval(timer);
           subscribers.clear();
           for (const socket of sockets) socket.destroy();
           clearBusMarker(input.root);
-          server.close(() => done());
-        }),
+          await new Promise<void>((done) => server.close(() => done()));
+        })();
+        return closingPromise;
+      },
     };
     return { kind: 'serving', cleared, handle };
   }

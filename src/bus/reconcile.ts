@@ -79,6 +79,10 @@ export type ReconcileOptions = {
   /** How long `reconcilePassAsync` keeps retrying a deferred append while the lock is held. Past
    *  it the pass returns; the cursors it did not advance make the next pass try again. */
   appendRetryMs?: number;
+  /** Aborting stops the pass before its next append and between slices. The bus aborts it when
+   *  it closes, so a closing bus writes no event after `close` resolves; every cursor the pass
+   *  did not advance past a record leaves that record for the next pass, in another process. */
+  signal?: AbortSignal;
 };
 
 export type ReconcileResult =
@@ -91,7 +95,14 @@ export type ReconcileResult =
       /** Whether this pass had to verify the whole retained log. */
       full: boolean;
     }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; cancelled?: true };
+
+/** A pass stopped by its caller's abort signal. It is not a failure: every append it made
+ *  landed, and every record it did not reach is still in the log's future because no cursor
+ *  advanced past it. */
+function cancelledResult(): ReconcileResult {
+  return { ok: false, cancelled: true, reason: 'the pass was cancelled' };
+}
 
 /** What one pass did, and what it could reuse. Reset at the start of every pass except
  *  `passes`, which counts them; `yields` counts the turns `reconcilePassAsync` gave the loop. */
@@ -404,7 +415,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // The async driver asks for non-blocking appends: a held lock becomes a deferred record that
   // the driver retries with its own wait, never a pause here that freezes the event loop.
   const defersBusy = options.appendWaitMs !== undefined && options.appendWaitMs <= 0;
+  const aborted = (): boolean => options.signal?.aborted === true;
   const raise = (input: EventAppendInput): boolean => {
+    // A cancelled pass appends nothing more: its caller is closing, and a record written after
+    // that would outlive the bus's own lifetime.
+    if (aborted()) return false;
     const key = `${input.kind}\0${input.record_id}`;
     if (seen.has(key)) return true;
     const res = appendEvent(project, root, home, input, {
@@ -850,6 +865,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             ...(source.seat !== undefined ? { seat: source.seat, subject: source.seat } : {}),
             reconciled: true,
           };
+          if (aborted()) return cancelledResult();
           const res = appendConfigChanged(project, root, home, change, {
             ...(options.appendWaitMs !== undefined ? { lockWaitMs: options.appendWaitMs } : {}),
           });
@@ -936,6 +952,12 @@ async function retryDeferredAppends(
   if (pending.length === 0) return;
   const deadline = performance.now() + (options.appendRetryMs ?? DEFAULT_APPEND_RETRY_MS);
   for (;;) {
+    // A cancelled pass stops retrying before its next attempt; the record stays for the next
+    // pass, since no cursor advanced past it.
+    if (options.signal?.aborted === true) {
+      state.deferred = [];
+      return;
+    }
     const busy: DeferredAppend[] = [];
     for (const item of pending) {
       const outcome = tryDeferredAppend(options, item);
@@ -961,7 +983,8 @@ async function retryDeferredAppends(
  *
  * Appends are non-blocking here too: a record whose event lock is held is deferred and retried
  * on this driver's own async wait, so a contending writer slows the pass without stopping the
- * loop. The pass result carries the records that eventually landed.
+ * loop. The pass result carries the records that eventually landed. An aborted pass stops
+ * between slices and before its next append, and answers as cancelled rather than as a failure.
  */
 export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
   const state = options.state ?? createReconcileState();
@@ -969,6 +992,9 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
   const steps = reconcileSteps({ ...options, state, appendWaitMs: 0 });
   let since = performance.now();
   for (;;) {
+    // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
+    // stops the pass before it reads or appends anything else.
+    if (options.signal?.aborted === true) return cancelledResult();
     const next = steps.next();
     if (next.done) {
       const result = next.value;

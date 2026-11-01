@@ -20,9 +20,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { appendEvent, eventLogPath, EVENT_DOMAIN } from '../src/bus/log.ts';
+import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
+import { startBus } from '../src/bus/server.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
@@ -378,6 +380,43 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     expect(ticks).toBeGreaterThan(0);
     expect(elapsed).toBeLessThan(3_000);
     expect(raisedKeys(pass)).toContain('seat.working:seat:worker-1:ready:2026-11-01T02:00:00.000Z');
+  }, 15_000);
+});
+
+describe('closing the bus cancels the pass it started', () => {
+  test('close resolves after the pass stopped, and nothing is appended after it', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    const started = await startBus({ root, team: parsed.team, home, stderr: () => {}, reconcileIntervalMs: 0 });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const dir = dropsDir(root);
+    for (let n = 0; n < 200; n += 1) {
+      dropMessage(dir, `close-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+    }
+    function appended(): number {
+      const read = readEvents('acme', root, home);
+      if (!read.ok) throw new Error(read.reason);
+      return read.events.length;
+    }
+    // Start the pass and close in the same turn: the pass is in flight, suspended at a slice
+    // boundary, when close runs.
+    const run = started.handle.reconcileNow();
+    let atClose = -1;
+    let raised: number = -1;
+    try {
+      await started.handle.close();
+      atClose = appended();
+      raised = (await run).length;
+    } finally {
+      await run;
+    }
+    // Close means the bus is done writing: the pass it cancelled appended nothing after close
+    // resolved. The records it did not reach were not lost — no cursor advanced past them — but
+    // nothing in this process writes them once the endpoint is released.
+    expect(atClose).toBeGreaterThanOrEqual(0);
+    expect(appended()).toBe(atClose);
+    expect(raised).toBeLessThanOrEqual(atClose);
   }, 15_000);
 });
 
