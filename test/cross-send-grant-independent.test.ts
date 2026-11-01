@@ -8,7 +8,7 @@ const fixtureRoot = fileURLToPath(new URL('../../cross-send-independent-fixtures
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
 afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
-type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string; from: string; to: string }[]; expectedPair?: { from: string; to: string }; grantFiles?: string[] };
+type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string; from: string; to: string; expires: string }[]; expectedPair?: { from: string; to: string }; grantFiles?: string[] };
 type PairInput = { words: string[]; entities: string[]; expectedPair: { from: string; to: string } };
 function scene(name: string, pair?: PairInput): Result {
   const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-')));
@@ -82,28 +82,24 @@ test('the exact printed repair arguments recreate a valid record and permit the 
   expect(result.paneWrites).toBe(0);
 });
 
-function checkedPair(input: PairInput, admitted: boolean) {
+// A wildcard principal can issue any pair. These scenes pin argument parsing and the
+// exact signed pair; listed-entity admission stays on the separate scoped branch.
+function checkedPair(input: PairInput) {
   const result = scene('general-pair', input);
-  expect(result.code, result.out + result.err).toBe(admitted ? 0 : 1);
+  expect(result.code, result.out + result.err).toBe(0);
   expect(result.records).toEqual([]);
   expect(result.paneWrites).toBe(0);
-  if (admitted) {
-    expect(result.verified).toEqual([{ name: 'independent-pair', ...result.expectedPair, expires: expect.any(String) }]);
-    expect(result.grantFiles).toHaveLength(1);
-  } else {
-    expect(JSON.parse(result.out).error.id).toBe('team.general-refused');
-    expect(result.verified).toEqual([]);
-    expect(result.grantFiles).toEqual([]);
-  }
+  expect(result.verified).toEqual([{ name: 'independent-pair', ...result.expectedPair!, expires: expect.any(String) }]);
+  expect(result.grantFiles).toHaveLength(1);
 }
 const inside = { from: 'architect@design', to: 'coordinator@product' };
 const outside = { from: 'orchestrator@foreign', to: 'orchestrator@foreign' };
 for (const side of ['from', 'to'] as const) {
   const other = side === 'from' ? 'to' : 'from';
   for (const style of ['space', 'equals', 'space-equals', 'equals-space']) {
-    for (const disposition of ['outside-last', 'outside-covered', 'inside-last']) {
-      const covered = disposition === 'outside-covered';
-      const lastInside = disposition === 'inside-last';
+    for (const disposition of ['foreign-side-final', 'foreign-pair-final', 'local-side-final']) {
+      const covered = disposition === 'foreign-pair-final';
+      const lastInside = disposition === 'local-side-final';
       const ordered = lastInside ? [outside[side], inside[side]] : [inside[side], outside[side]];
       const words = [`--${other}`, covered ? outside[other] : inside[other]];
       for (let index = 0; index < ordered.length; index++) {
@@ -111,20 +107,30 @@ for (const side of ['from', 'to'] as const) {
         words.push(...(equals ? [`--${side}=${ordered[index]}`] : [`--${side}`, ordered[index]!]));
       }
       test(`repeated --${side} ${style} ${disposition} signs only the final pair`, () => {
-        checkedPair({ words, entities: [covered ? 'foreign' : 'studio'], expectedPair: { ...inside, [side]: ordered[1]!, [other]: covered ? outside[other] : inside[other] } }, disposition !== 'outside-last');
+        checkedPair({ words, entities: ['*'], expectedPair: { ...inside, [side]: ordered[1]!, [other]: covered ? outside[other] : inside[other] } });
       });
     }
   }
   for (const padding of ['leading', 'trailing']) {
-    for (const disposition of ['outside-refused', 'outside-covered', 'inside-covered']) {
-      const local = disposition === 'inside-covered';
-      const covered = disposition === 'outside-covered';
+    for (const disposition of ['foreign-side', 'foreign-pair', 'local-side']) {
+      const local = disposition === 'local-side';
+      const covered = disposition === 'foreign-pair';
       const target = local ? (side === 'from' ? '$INSIDE_FROM' : '$INSIDE_TO') : '$OUTSIDE';
       const padded = padding === 'leading' ? `  ${target}` : `${target}  `;
       const fixed = covered ? outside[other] : inside[other];
       test(`padded --${side} agent id ${padding} ${disposition} signs a trimmed pair`, () => {
-        checkedPair({ words: [`--${side}`, padded, `--${other}`, fixed], entities: [covered ? 'foreign' : 'studio'], expectedPair: { ...inside, [side]: target, [other]: fixed } }, disposition !== 'outside-refused');
+        checkedPair({ words: [`--${side}`, padded, `--${other}`, fixed], entities: ['*'], expectedPair: { ...inside, [side]: target, [other]: fixed } });
       });
     }
   }
 }
+
+test('a listed-entity general grant is refused before issuing any send grant', () => {
+  const result = scene('general-pair', {
+    words: ['--from', inside.from, '--to', inside.to], entities: ['studio'], expectedPair: inside,
+  });
+  refused(result, 'team.general-target');
+  expect(JSON.parse(result.out).error.message).toContain('scoped general grants arrive in 0.5.11');
+  expect(result.verified).toEqual([]);
+  expect(result.grantFiles).toEqual([]);
+});
