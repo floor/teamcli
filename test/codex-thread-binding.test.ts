@@ -25,6 +25,7 @@
 // 18. An endpoint replaced under the same incarnation during the read is refused.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../src/daemon/presence/codex-source.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -54,12 +55,14 @@ function world(): {
   dir: string;
   socketPath: string;
 } {
-  // The state folder sits under a short base so the owned endpoint path this build computes
-  // (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path limit.
-  const base = mkdtempSync('/private/tmp/teamcli-thread-');
-  const root = join(base, 'team-root');
+  // The host's own temp directory, never a fixed one, with short relative names (`s` for the
+  // state folder, `tk` and `w` for the fixture's session and seat) so the owned endpoint path this
+  // build computes (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path
+  // limit under the longer temp parents as well.
+  const base = mkdtempSync(join(tmpdir(), 'tc-'));
+  const root = join(base, 'root');
   const home = join(base, 'home');
-  const dir = join(base, 'state');
+  const dir = join(base, 's');
   mkdirSync(root, { recursive: true });
   mkdirSync(dir, { recursive: true });
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
@@ -69,10 +72,10 @@ function world(): {
 /** The endpoint path this build's managed launch gives the scene's seat under the binding. */
 function ownedSocket(
   w: ReturnType<typeof world>,
-  seat = 'worker',
+  seat = 'w',
   binding = BINDING,
 ): { url: string; path: string } {
-  const socket = codexEndpointSocket(w.dir, 'teamcli', seat, binding);
+  const socket = codexEndpointSocket(w.dir, 'tk', seat, binding);
   if (socket === null) throw new Error('the fixture state folder is too long for an owned endpoint path');
   return socket;
 }
@@ -110,7 +113,7 @@ function registerWorker(
   opts: { agentSession?: string; seatHandle?: string } = {},
 ): string {
   return registerAgent(home, {
-    name: 'worker',
+    name: 'w',
     signing: { model: 'GPT Sol', version: '6.1', role: 'implementer' },
     lab: 'openai',
     cli: 'codex',
@@ -118,8 +121,8 @@ function registerWorker(
     launch: 'codex -m gpt-6.1-sol',
     reach: {
       team: teamIdOf(root),
-      seat: 'worker',
-      session: 'teamcli',
+      seat: 'w',
+      session: 'tk',
       pane: 'pane-new',
       address: null,
       ...(opts.agentSession === undefined ? {} : { agent_session: opts.agentSession }),
@@ -134,8 +137,8 @@ function registerWorker(
 
 function writeState(dir: string, seat: SeatState): void {
   updateState(dir, (state) => {
-    const session = (state.sessions.teamcli ??= emptySession());
-    session.seats.worker = seat;
+    const session = (state.sessions.tk ??= emptySession());
+    session.seats.w = seat;
   });
 }
 
@@ -150,8 +153,8 @@ function bind(
     home: w.home,
     root: w.root,
     dir: w.dir,
-    session: 'teamcli',
-    seat: { name: 'worker', cli: 'codex' },
+    session: 'tk',
+    seat: { name: 'w', cli: 'codex' },
     state,
     read,
   });
@@ -163,10 +166,10 @@ function deliveryOf(w: ReturnType<typeof world>) {
     home: w.home,
     dir: w.dir,
     root: w.root,
-    session: 'teamcli',
-    seat: 'worker',
+    session: 'tk',
+    seat: 'w',
     declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
-    state: readState(w.dir).sessions.teamcli?.seats.worker,
+    state: readState(w.dir).sessions.tk?.seats.w,
   });
 }
 
@@ -243,32 +246,32 @@ describe('bindCodexSeatThread', () => {
       home: w.home,
       root: w.root,
       dir: w.dir,
-      session: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      session: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state,
       read: (endpointUrl) => readLoadedCodexThreads({ endpoint: endpointUrl }),
     });
 
     expect(bound).toEqual({ kind: 'bound', id: THREAD });
-    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    const after = readState(w.dir).sessions.tk?.seats.w;
     expect(after?.agent_session).toBe(THREAD);
-    const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' });
+    const record = findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' });
     expect(record?.id).toBe(agentId);
     expect(record?.reach.agent_session).toBe(THREAD);
     // The two records agree: the reader the native route and the class share binds the seat.
     expect(recordedSeatSession({
       home: w.home,
       root: w.root,
-      herdrSession: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      herdrSession: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state: after,
     }).kind).toBe('bound');
     const delivery = seatDeliveryClass({
       home: w.home,
       dir: w.dir,
       root: w.root,
-      session: 'teamcli',
-      seat: 'worker',
+      session: 'tk',
+      seat: 'w',
       declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
       state: after,
     });
@@ -288,16 +291,16 @@ describe('bindCodexSeatThread', () => {
       home: w.home,
       root: w.root,
       dir: w.dir,
-      session: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      session: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state,
       read: (endpointUrl) => readLoadedCodexThreads({ endpoint: endpointUrl }),
     });
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('holds 2 threads');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
   });
 
   test('a state naming a thread its endpoint does not hold is not rebound', async () => {
@@ -312,15 +315,15 @@ describe('bindCodexSeatThread', () => {
       home: w.home,
       root: w.root,
       dir: w.dir,
-      session: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      session: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state,
       read: (endpointUrl) => readLoadedCodexThreads({ endpoint: endpointUrl }),
     });
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('does not hold');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBe(OLD_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBe(OLD_THREAD);
   });
 
   test('a state naming a thread the endpoint holds repairs a record that lost it', async () => {
@@ -330,26 +333,26 @@ describe('bindCodexSeatThread', () => {
     registerWorker(w.home, w.root);
     const state = { ...seatRecord(BINDING, socket.path), agent_session: THREAD };
     writeState(w.dir, state);
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBeUndefined();
 
     const bound = await bindCodexSeatThread({
       home: w.home,
       root: w.root,
       dir: w.dir,
-      session: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      session: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state,
       read: (endpointUrl) => readLoadedCodexThreads({ endpoint: endpointUrl }),
     });
 
     expect(bound).toEqual({ kind: 'bound', id: THREAD });
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(THREAD);
     expect(recordedSeatSession({
       home: w.home,
       root: w.root,
-      herdrSession: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
-      state: readState(w.dir).sessions.teamcli?.seats.worker,
+      herdrSession: 'tk',
+      seat: { name: 'w', cli: 'codex' },
+      state: readState(w.dir).sessions.tk?.seats.w,
     }).kind).toBe('bound');
   });
 
@@ -367,14 +370,14 @@ describe('bindCodexSeatThread', () => {
     // so it is refused and left as it was, and the state never gains the thread.
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another agent for this seat');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 
   test('an endpoint recorded inside another seat\'s run folder is not read or bound', async () => {
     const w = world();
-    const foreign = ownedSocket(w, 'other');
+    const foreign = ownedSocket(w, 'o');
     await endpoint(foreign.path, { ids: [THREAD] });
     registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
     const state = seatRecord(BINDING, foreign.path);
@@ -386,8 +389,8 @@ describe('bindCodexSeatThread', () => {
     // socket: nothing proves this seat's launch gave it, so the thread is not read.
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('not the one its launch owns');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 
@@ -398,18 +401,18 @@ describe('bindCodexSeatThread', () => {
     registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
     const state = seatRecord(BINDING, socket.path);
     updateState(w.dir, (file) => {
-      const session = (file.sessions.teamcli ??= emptySession());
-      session.seats.worker = state;
+      const session = (file.sessions.tk ??= emptySession());
+      session.seats.w = state;
       // A second live seat records the very same endpoint.
-      session.seats.other = { ...seatRecord(BINDING, socket.path), id: 'seat_111111111111', pane: 'pane-other' };
+      session.seats.o = { ...seatRecord(BINDING, socket.path), id: 'seat_111111111111', pane: 'pane-other' };
     });
 
     const bound = await bind(w, state);
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another seat records the same Codex endpoint');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OLD_THREAD);
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 
@@ -420,7 +423,7 @@ describe('bindCodexSeatThread', () => {
     const w = world();
     const socket = ownedSocket(w);
     const nextBinding = 'prs_999999999999';
-    const nextSocket = ownedSocket(w, 'worker', nextBinding);
+    const nextSocket = ownedSocket(w, 'w', nextBinding);
     await endpoint(socket.path, { ids: [OLD_THREAD] });
     const agentId = registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
     const state = { ...seatRecord(BINDING, socket.path), agent_session: OLD_THREAD };
@@ -428,7 +431,7 @@ describe('bindCodexSeatThread', () => {
 
     const bound = await bind(w, state, async () => {
       updateState(w.dir, (file) => {
-        const held = file.sessions.teamcli!.seats.worker!;
+        const held = file.sessions.tk!.seats.w!;
         held.presence_binding = nextBinding;
         held.codex_endpoint = {
           url: nextSocket.url,
@@ -447,15 +450,15 @@ describe('bindCodexSeatThread', () => {
     // successor's conversation and the registry naming the predecessor's.
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('relaunched');
-    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    const after = readState(w.dir).sessions.tk?.seats.w;
     expect(after?.presence_binding).toBe(nextBinding);
     expect(after?.agent_session).toBe(THREAD);
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(THREAD);
     expect(recordedSeatSession({
       home: w.home,
       root: w.root,
-      herdrSession: 'teamcli',
-      seat: { name: 'worker', cli: 'codex' },
+      herdrSession: 'tk',
+      seat: { name: 'w', cli: 'codex' },
       state: after,
     }).kind).toBe('bound');
   });
@@ -466,7 +469,7 @@ describe('bindCodexSeatThread', () => {
     const w = world();
     const socket = ownedSocket(w);
     const nextBinding = 'prs_999999999999';
-    const nextSocket = ownedSocket(w, 'worker', nextBinding);
+    const nextSocket = ownedSocket(w, 'w', nextBinding);
     await endpoint(socket.path, { ids: [THREAD] });
     const agentId = registerWorker(w.home, w.root);
     const state = seatRecord(BINDING, socket.path);
@@ -474,7 +477,7 @@ describe('bindCodexSeatThread', () => {
 
     const bound = await bind(w, state, async () => {
       updateState(w.dir, (file) => {
-        const held = file.sessions.teamcli!.seats.worker!;
+        const held = file.sessions.tk!.seats.w!;
         held.presence_binding = nextBinding;
         held.codex_endpoint = {
           url: nextSocket.url,
@@ -491,10 +494,10 @@ describe('bindCodexSeatThread', () => {
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('relaunched');
-    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    const after = readState(w.dir).sessions.tk?.seats.w;
     expect(after?.presence_binding).toBe(nextBinding);
     expect(after?.agent_session).toBe(OTHER_THREAD);
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OTHER_THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OTHER_THREAD);
     expect(deliveryOf(w).class).toBe('between-turns');
   });
 
@@ -516,8 +519,8 @@ describe('bindCodexSeatThread', () => {
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('names another thread');
-    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OTHER_THREAD);
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBe(OTHER_THREAD);
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 
@@ -527,7 +530,7 @@ describe('bindCodexSeatThread', () => {
   test('an endpoint replaced under the same incarnation during the read is refused', async () => {
     const w = world();
     const socket = ownedSocket(w);
-    const replaced = ownedSocket(w, 'worker', 'prs_000000000000');
+    const replaced = ownedSocket(w, 'w', 'prs_000000000000');
     await endpoint(socket.path, { ids: [THREAD] });
     registerWorker(w.home, w.root);
     const state = seatRecord(BINDING, socket.path);
@@ -535,7 +538,7 @@ describe('bindCodexSeatThread', () => {
 
     const bound = await bind(w, state, async () => {
       updateState(w.dir, (file) => {
-        const held = file.sessions.teamcli!.seats.worker!;
+        const held = file.sessions.tk!.seats.w!;
         held.codex_endpoint = { ...held.codex_endpoint!, url: replaced.url };
       });
       return { kind: 'read', ids: [THREAD] };
@@ -543,10 +546,10 @@ describe('bindCodexSeatThread', () => {
 
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('endpoint changed');
-    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    const after = readState(w.dir).sessions.tk?.seats.w;
     expect(after?.agent_session).toBeUndefined();
     expect(after?.codex_endpoint?.url).toBe(replaced.url);
-    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBeUndefined();
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 });
