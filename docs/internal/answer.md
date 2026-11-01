@@ -51,9 +51,11 @@ its whole run, so a launch of the same seat cannot act beside it.
 The `question` word additionally reads the team file of the folder this run was started in,
 before anything is pressed: the decision line travels the ordinary send path, and that path
 loads its team from the run's folder. The landing must be this seat's team and the session must
-be the team's own; otherwise the run refuses as a configuration error before any key. This is
-what keeps a dismissal from sending the line to another team's — or another session's — seat of
-the same name after this pane's dialog is already gone.
+be the team's own; otherwise the run refuses as a configuration error before any key. The two
+teams are compared whole — roster, session and all — because one folder can hold a second team
+file beside the default the send path reads, and a file for another team or another session is
+refused, never sent through. This is what keeps a dismissal from sending the line to another
+team's — or another session's — seat of the same name after this pane's dialog is already gone.
 
 On success it writes the word's own recovery into the seat's state — `trust-sent-recovery` or
 `question-sent-recovery` — and reads it back **before** sending the key: a crash between the
@@ -81,9 +83,13 @@ rules line, and writes the seat `ready`. A profile whose rules mode is `option` 
 returns at the mode test, and no rules line is typed into a pane on any path.
 
 A retry of the same word never presses a second key. `question-sent-recovery` is delivery-only:
-the retry puts the decision line through the send path if it is still owed, then finishes the
-seat. `trust-sent-recovery` finishes the seat through the same ready check as a first answer.
-The other word refuses the recovery and names the word that completes it.
+the retry puts the decision line through the send path while the record says it is owed — a
+first-run delivery failure leaves that record untouched — then finishes the seat. Once the send
+path has taken the line, the record is marked `delivered` and read back, so a retry after a
+readiness-only failure only finishes the seat and never sends the line a second time; a marker
+that cannot be written once the line is out leaves the recovery recorded and says so.
+`trust-sent-recovery` finishes the seat through the same ready check as a first answer. The
+other word refuses the recovery and names the word that completes it.
 
 ## Who may run it
 
@@ -120,7 +126,7 @@ stdout too — stderr stays empty in both cases.
 | answered (trust) | 0 | `team <project>, session "<session>"`, then `<seat>: answered trust (<folder>)` | — |
 | answered (question) | 0 | `team <project>, session "<session>"`, then `<seat>: answered question (<dialog>)` | — |
 | refused | 1 | — | `<seat>: <reason>` |
-| recovery | 1 | — | `<seat>: trust sent; recovery required`, `<seat>: question sent; recovery required`, or `<seat>: the key could not be sent; recovery required` |
+| recovery | 1 | — | `<seat>: trust sent; recovery required`, `<seat>: question sent; recovery required`, `<seat>: the key could not be sent; recovery required`, or `<seat>: the decision line was delivered, but its record could not be marked; recovery required` |
 | delivery | 1 | — | `<seat>: the dialog was dismissed, but the decision line could not be delivered; recovery required`, or on a retry `<seat>: the decision line could not be delivered; recovery required` |
 | usage | 2 | — | `team answer: <message>` and the usage |
 | configuration | 2 | — | `team answer: <message>` |
@@ -147,7 +153,9 @@ the argument parser's own message. The configuration message is the file's probl
 <n>: <problem>`, joined with `; `), `the team file cannot be read`, or one of the send-path
 sentences: `the decision line is sent from <cwd>, which holds no readable team file`, `the
 decision line is sent with the team file of <cwd>, which is not this seat's team`, `the
-decision line is sent in the team's own session (<session>), and this run answered in
+decision line is sent with the team file of <cwd>, which is not the team this answer read`,
+`the decision line is sent in session <session>, and this answer read session <session>`, and
+`the decision line is sent in the team's own session (<session>), and this run answered in
 <session>`.
 
 ### Refusals
@@ -256,6 +264,8 @@ unplaced reason.
 | `question answered` | the dialog was dismissed, the decision line was delivered, and the seat is ready |
 | `question answered; delivery required` | the dialog was dismissed, but the decision line could not be delivered; the recovery stays recorded |
 | `question sent; delivery required` | a delivery-only retry could not deliver the line; the recovery stays recorded |
+| `question answered; delivery unrecorded` | the decision line was delivered, but the delivered marker could not be written or read back on the first answer |
+| `question sent; delivery unrecorded` | the decision line was delivered, but the delivered marker could not be written or read back on a delivery-only retry |
 
 ## Examples, moved here whole
 

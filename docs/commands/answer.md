@@ -49,10 +49,12 @@ let-me-type-or-cancel key — `escape` or `ctrl+c` — and a record outside that
 rather than sending. After the dismissal the seat receives one line in its own conversation,
 put there by the ordinary send path with that path's own admission, delivery order and record,
 and never a keystroke at a choice: `decide within your rules or ask your orchestrator with team
-send`. The line is sent from this run's folder, so that folder must hold this seat's team file,
-in the team's own session; otherwise the run refuses before any key. When the line cannot be
-delivered, the dialog stays dismissed and the recovery stays recorded: a retry delivers the line
-and never presses a second key.
+send`. The line is sent from this run's folder, so that folder must hold this seat's team file —
+compared whole, so a second file for another team or session is refused — in the team's own
+session; otherwise the run refuses before any key. When the line cannot be delivered, the dialog
+stays dismissed and the recovery stays recorded: a retry delivers the line and never presses a
+second key. Once the line is out the record says so, and a retry after a readiness-only failure
+finishes the seat without sending it again.
 
 ## Output and exit codes
 
@@ -61,7 +63,7 @@ and never presses a second key.
 | answered (trust) | `team <project>, session "<session>"` on stdout, then `<seat>: answered trust (<folder>)` | 0 |
 | answered (question) | `team <project>, session "<session>"` on stdout, then `<seat>: answered question (<dialog>)` | 0 |
 | refused | `<seat>: <reason>` on stderr | 1 |
-| recovery | `<seat>: trust sent; recovery required`, `<seat>: question sent; recovery required` or `<seat>: the key could not be sent; recovery required` on stderr | 1 |
+| recovery | `<seat>: trust sent; recovery required`, `<seat>: question sent; recovery required`, `<seat>: the key could not be sent; recovery required` or `<seat>: the decision line was delivered, but its record could not be marked; recovery required` on stderr | 1 |
 | delivery | `<seat>: the dialog was dismissed, but the decision line could not be delivered; recovery required`, or on a retry `<seat>: the decision line could not be delivered; recovery required`, on stderr | 1 |
 | usage | `team answer: <message>` and the usage, on stderr | 2 |
 | configuration | `team answer: <message>` on stderr | 2 |
