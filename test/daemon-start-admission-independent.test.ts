@@ -1,10 +1,11 @@
-// Every manager operation is an in-process fake over owned JSON fixtures. No real adapter.
+// Start admission uses JSON-backed fake managers. Runtime-copy scenes use the adapter factory
+// behind an inert registration runner; every path and every effect belongs to the fixture.
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { DAEMON_LABEL } from '../src/daemon/paths.ts';
 import type { ServiceManager, ServiceProgram, ServiceInstallFailure } from '../src/daemon/service.ts';
@@ -12,6 +13,7 @@ import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { Caller } from '../src/caller.ts';
 import * as output from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
+import { inertRuntimeManager, runtimeWords } from './adapters/daemon-runtime-independent.ts';
 const NOW = new Date('2026-11-01T18:20:00Z');
 const bases: string[] = [];
 assert.equal(homedir(), fs.realpathSync(process.env.HOME!));
@@ -206,4 +208,143 @@ test('a dry install plans without calling the fake install or health functions',
   expect(await runDaemon(['install', '--root', w.root, '--dry-run', '--json'], io, { home: w.home, service: adapter.manager,
     program: { execPath: process.execPath, entry: w.entry }, health: async () => { throw new Error('dry run probed health'); } })).toBe(0);
   expect(adapter.trace).toEqual([]); expect(fs.existsSync(w.unitPath)).toBe(false); expect(JSON.parse(io.out).dry_run).toBe(true);
+});
+
+// A tiny complete package: the entry needs a sibling, the sibling needs the manifest and the
+// relay package. Running it is a bounded, one-shot fixture check, never a machine daemon.
+function runtimePackage(w: World, name = 'package') {
+  const root = join(w.base, name), dist = join(root, 'dist');
+  fs.mkdirSync(dist, { recursive: true }); fs.mkdirSync(join(root, 'packages/relay'), { recursive: true });
+  const files: Record<string, string> = {
+    'dist/entry.mjs': 'import { value } from "./sibling.mjs"; console.log(value);\n',
+    'dist/sibling.mjs': 'import { readFileSync } from "node:fs"; import { suffix } from "../packages/relay/value.mjs"; export const value=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8")).marker+suffix;\n',
+    'packages/relay/value.mjs': 'export const suffix="-relay";\n',
+    'package.json': '{"type":"module","marker":"prior-program"}\n',
+  };
+  for (const [path, bytes] of Object.entries(files)) ownedFile(join(root, path), bytes);
+  const program: ServiceProgram = { execPath: process.execPath, entry: join(dist, 'entry.mjs'), roots: [w.root], runtime: { root, include: ['dist', 'packages/relay', 'package.json'] } };
+  return { root, files, program };
+}
+function retainedFolder(w: World, entry: string): string {
+  const folder = dirname(dirname(entry));
+  expect(dirname(folder)).toBe(join(w.home, '.config/team/daemon-runtime')); expect(basename(folder)).toMatch(/^[0-9a-f]{64}$/);
+  return folder;
+}
+function runFixture(w: World, words: string[] | null) {
+  if (!words?.[0] || !words[1]) return { ok: false, text: '' };
+  const result = spawnSync(words[0], [words[1]], { cwd: w.root, env: { HOME: w.home }, encoding: 'utf8', timeout: 2_000 });
+  return { ok: result.status === 0, text: result.stdout.trim() };
+}
+async function runtimeInstall(w: World, adapter: ReturnType<typeof inertRuntimeManager>, program: ServiceProgram, json: boolean) {
+  const io = testIo(w.root, { kind: 'owner' }); io.env = { HOME: w.home };
+  const probes: { entry: string | null; ok: boolean; text: string }[] = [];
+  const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
+    home: w.home, service: adapter.manager, program, now: () => NOW, sleep: async () => {},
+    health: async () => { const result = runFixture(w, adapter.active()); probes.push({ entry: adapter.active()?.[1] ?? null, ...result }); return health(w, result.ok ? 'answer' : 'silent'); },
+  });
+  return { code, io, probes };
+}
+
+for (const json of [false, true]) test('runtime delta: broken package sibling leaves the restored program answering, json=' + json, async () => {
+  const w = world(), pkg = runtimePackage(w), adapter = inertRuntimeManager(w.home);
+  const prior = adapter.manager.install(w.home, pkg.program); expect(prior.ok).toBe(true);
+  const unitPath = adapter.manager.unitPath(w.home), oldText = fs.readFileSync(unitPath, 'utf8'), oldWords = runtimeWords(oldText), oldFolder = retainedFolder(w, oldWords[1]!);
+  expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
+  for (const [path, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(oldFolder, path), 'utf8')).toBe(bytes);
+  fs.writeFileSync(join(pkg.root, 'dist/sibling.mjs'), 'throw new Error("synthetic broken sibling");\n');
+  // Same entry bytes: replacing only the imported sibling is enough to break the package.
+  expect(fs.readFileSync(pkg.program.entry, 'utf8')).toBe(pkg.files['dist/entry.mjs']!);
+  expect(runFixture(w, [process.execPath, pkg.program.entry]).ok).toBe(false);
+  const newFolder = retainedFolder(w, adapter.manager.plan(w.home, pkg.program).program[1]!); expect(newFolder).not.toBe(oldFolder);
+  const result = await runtimeInstall(w, adapter, pkg.program, json);
+  expect(result.code, result.io.out + result.io.err).toBe(1);
+  if (json) expect(JSON.parse(result.io.out).error.id).toBe('daemon.install-rolled-back');
+  else { expect(result.io.err).toContain('previous'); expect(result.io.out).not.toContain('installed for'); }
+  expect(result.probes).toHaveLength(9); expect(result.probes.slice(0, 8).every(p => !p.ok && p.entry === join(newFolder, 'dist/entry.mjs'))).toBe(true);
+  expect(result.probes[8]).toEqual({ entry: oldWords[1]!, ok: true, text: 'prior-program-relay' });
+  expect(fs.readFileSync(unitPath, 'utf8')).toBe(oldText); expect(adapter.active()).toEqual(oldWords);
+  expect(fs.existsSync(newFolder)).toBe(false); expect(fs.existsSync(oldFolder)).toBe(true);
+  for (const [path, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(oldFolder, path), 'utf8')).toBe(bytes);
+  expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
+});
+
+function seedCopy(folder: string, files: Record<string, string>, folderMode = 0o700, nestedMode = 0o700) {
+  const mask = process.umask(0);
+  try {
+    fs.mkdirSync(folder, { recursive: true, mode: folderMode });
+    for (const [path, text] of Object.entries(files)) { fs.mkdirSync(dirname(join(folder, path)), { recursive: true, mode: nestedMode }); ownedFile(join(folder, path), text); }
+  } finally { process.umask(mask); }
+}
+function observeUnitWrites<T>(path: string, perform: () => T) {
+  const writes: string[] = [], write = fs.writeFileSync, rename = fs.renameSync;
+  const writeTap = spyOn(fs, 'writeFileSync').mockImplementation(((...args: unknown[]) => {
+    if (String(args[0]) === path || String(args[0]).startsWith(`${path}.`)) writes.push('write');
+    return Reflect.apply(write, fs, args);
+  }) as typeof fs.writeFileSync);
+  const renameTap = spyOn(fs, 'renameSync').mockImplementation(((...args: unknown[]) => {
+    if (String(args[1]) === path) writes.push('replace');
+    return Reflect.apply(rename, fs, args);
+  }) as typeof fs.renameSync);
+  try { return { result: perform(), writes }; } finally { renameTap.mockRestore(); writeTap.mockRestore(); }
+}
+test('runtime delta: valid preseeded copy is accepted and the unit-write observer sees the control', () => {
+  const w = world(), pkg = runtimePackage(w), adapter = inertRuntimeManager(w.home);
+  const entry = adapter.manager.plan(w.home, pkg.program).program[1]!, target = retainedFolder(w, entry);
+  seedCopy(target, pkg.files);
+  const observed = observeUnitWrites(adapter.manager.unitPath(w.home), () => adapter.manager.install(w.home, pkg.program));
+  expect(observed.result.ok).toBe(true); expect(observed.writes).toEqual(['write', 'replace']);
+  expect(runtimeWords(fs.readFileSync(adapter.manager.unitPath(w.home), 'utf8'))[1]).toBe(entry);
+  expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
+});
+type RuntimeFault = 'tampered' | 'foreign' | 'non-0700' | 'extra-file' | 'writable-member' | 'non-0700-child';
+for (const prior of [false, true]) for (const fault of ['tampered', 'foreign', 'non-0700', 'extra-file', 'writable-member', 'non-0700-child'] as const) {
+  test(`runtime delta: ${fault} at the computed name refuses before unit write; prior=${prior}`, () => {
+    const w = world(), adapter = inertRuntimeManager(w.home), pkg = runtimePackage(w), unitPath = adapter.manager.unitPath(w.home);
+    let oldText: string | null = null;
+    if (prior) {
+      const old = runtimePackage(w, 'old'); fs.writeFileSync(join(old.root, 'package.json'), '{"type":"module","marker":"earlier"}\n');
+      expect(adapter.manager.install(w.home, old.program).ok).toBe(true); oldText = fs.readFileSync(unitPath, 'utf8');
+    }
+    const entry = adapter.manager.plan(w.home, pkg.program).program[1]!, target = retainedFolder(w, entry);
+    seedCopy(target, pkg.files, fault === 'non-0700' ? 0o750 : 0o700, fault === 'non-0700-child' ? 0o750 : 0o700);
+    expect(fs.statSync(target).mode & 0o777).toBe(fault === 'non-0700' ? 0o750 : 0o700);
+    if (fault === 'tampered') fs.writeFileSync(entry, '// synthetic changed content\n');
+    if (fault === 'extra-file') ownedFile(join(target, 'extra.mjs'), '// synthetic surplus member\n');
+    if (fault === 'writable-member') { fs.unlinkSync(entry); ownedFile(entry, pkg.files['dist/entry.mjs']!, 0o620); expect(fs.statSync(entry).mode & 0o777).toBe(0o620); }
+    const beforeCalls = adapter.calls.length, active = adapter.active(); let foreignReads = 0;
+    const original = fs.lstatSync;
+    const injected = ((...args: unknown[]) => {
+      const value = Reflect.apply(original, fs, args) as fs.Stats | fs.BigIntStats;
+      if (String(args[0]) !== target) return value;
+      foreignReads++;
+      return new Proxy(value, { get(obj, key) { return key === 'uid' ? typeof obj.uid === 'bigint' ? obj.uid + 1n : obj.uid + 1 : Reflect.get(obj, key); } });
+    }) as typeof fs.lstatSync;
+    const ownerTap = fault === 'foreign' ? spyOn(fs, 'lstatSync').mockImplementation(injected) : null;
+    let observed: ReturnType<typeof observeUnitWrites<ReturnType<ServiceManager['install']>>>;
+    try { observed = observeUnitWrites(unitPath, () => adapter.manager.install(w.home, pkg.program)); } finally { ownerTap?.mockRestore(); }
+    const installed = observed.result; expect(observed.writes).toEqual([]);
+    expect(installed.ok).toBe(false); if (installed.ok) throw new Error('unverified runtime accepted');
+    expect(installed.outcome).toBe('refused'); expect(installed.kept).toBe(prior); expect(installed.why).toContain('could not be kept whole');
+    const detail: Record<RuntimeFault, string> = { tampered: 'does not match the hash', foreign: "not this user's", 'non-0700': 'not owner-only', 'extra-file': 'does not match the hash', 'writable-member': 'writable by the group or the world', 'non-0700-child': 'not owner-only' };
+    expect(installed.detail).toContain(detail[fault]); if (fault === 'foreign') expect(foreignReads).toBeGreaterThan(0);
+    expect(adapter.calls).toHaveLength(beforeCalls); expect(adapter.active()).toEqual(active);
+    if (oldText !== null) expect(fs.readFileSync(unitPath, 'utf8')).toBe(oldText); else expect(fs.existsSync(unitPath)).toBe(false);
+    expect(fs.existsSync(target)).toBe(true);
+  });
+}
+
+for (const json of [false, true]) test('runtime delta: health undo retains a copy the earlier unit also names, json=' + json, async () => {
+  const w = world(), pkg = runtimePackage(w), adapter = inertRuntimeManager(w.home);
+  expect(adapter.manager.install(w.home, pkg.program).ok).toBe(true);
+  const path = adapter.manager.unitPath(w.home), text = fs.readFileSync(path, 'utf8'), words = runtimeWords(text), folder = retainedFolder(w, words[1]!);
+  let probes = 0; const io = testIo(w.root, { kind: 'owner' });
+  const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
+    home: w.home, service: adapter.manager, program: pkg.program, sleep: async () => {}, now: () => NOW,
+    health: async () => { probes++; expect(fs.existsSync(folder)).toBe(true); return health(w, probes <= 8 ? 'silent' : runFixture(w, adapter.active()).ok ? 'answer' : 'silent'); },
+  });
+  expect(code, io.out + io.err).toBe(1); expect(probes).toBe(9);
+  if (json) expect(JSON.parse(io.out).error.id).toBe('daemon.install-rolled-back');
+  expect(fs.readFileSync(path, 'utf8')).toBe(text); expect(adapter.active()).toEqual(words); expect(fs.existsSync(folder)).toBe(true);
+  for (const [relative, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(folder, relative), 'utf8')).toBe(bytes);
+  expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
 });
