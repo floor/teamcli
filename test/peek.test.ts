@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DEFAULT_LINES, MAX_LINES, runPeek, type PeekSources } from '../src/commands/peek.ts';
 import { currentTeam } from '../src/file/current.ts';
-import { maskSecretsLine } from '../src/file/secrets.ts';
+import { KEY_PREFIXES, maskSecretsLine } from '../src/file/secrets.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { herdrStatusSource, type StatusSource } from '../src/watch/status-events.ts';
 import { testIo, type TestIo } from './helpers.ts';
@@ -266,6 +266,26 @@ describe('team peek', () => {
     expect(log.match(/refused peek\.no-screen: seat worker-1/g)).toHaveLength(3);
   });
 
+  test('a state record that does not read fails closed as no screen, and its error is not printed', async () => {
+    // The team file loaded, so this is after the point where every attempt is logged. A record
+    // that is not JSON and one that is not format 1 both mean no recorded pane can be named.
+    for (const broken of ['{"not":"a team state"', '{"format":2}']) {
+      const where = place();
+      checkFixture(where);
+      writeFileSync(join(where.root, '.agents', 'team.state.json'), broken);
+      const seen: Seen = {};
+      const io = owner(where);
+      expect(await peek(where, ['worker-1'], io, screen('secret screen text', seen))).toBe(2);
+      expect(io.out).toBe('');
+      expect(io.err).toBe('team peek: no screen is readable for seat "worker-1"\n');
+      expect(io.err).not.toContain('team.state.json');
+      expect(seen.pane).toBeUndefined();
+      expect(logOf(where).match(/refused peek\.no-screen: seat worker-1/g)).toHaveLength(1);
+      expect(logOf(where)).not.toContain('not valid JSON');
+      expect(logOf(where)).not.toContain('secret screen text');
+    }
+  });
+
   test('the owner reads the file\'s load failure; anyone else gets the one sentence and no log', async () => {
     const bare = place(false);
     const ownerIo = owner(bare);
@@ -322,6 +342,68 @@ describe('a screen is masked before it is printed', () => {
     expect(maskSecretsLine('-----BEGIN OPENSSH PRIVATE KEY-----')).toBe('[masked]');
     expect(maskSecretsLine('clone https://alice:hunter2@example.test/repo.git')).toBe('clone https://[masked]@example.test/repo.git');
     expect(maskSecretsLine('value Zx9Kq2LmN4pR7sT1uV3wY6aB8cD0eF2gH5jK9mN')).toBe('value [masked]');
+  });
+
+  test('every userinfo URL on a line is masked, not only the first', () => {
+    // A line can carry two remotes; the second one is no less a credential than the first.
+    expect(maskSecretsLine('fetch https://alice:first-secret@one.test/a https://bob:second-secret@two.test/b'))
+      .toBe('fetch https://[masked]@one.test/a https://[masked]@two.test/b');
+  });
+
+  test('userinfo with only a user is masked, not only user and password', () => {
+    // A token in the user slot is userinfo all the same.
+    expect(maskSecretsLine('clone https://ghp_abcdefghijklmnop@example.test/repo.git'))
+      .toBe('clone https://[masked]@example.test/repo.git');
+    expect(maskSecretsLine('visit https://alice@example.test/page'))
+      .toBe('visit https://[masked]@example.test/page');
+  });
+
+  test('a token of every key prefix is masked in every wrapper', () => {
+    // The body is 16 characters: enough after every prefix, and too plain and too short for the
+    // randomness rule, so only the prefix shape can mask these lines.
+    const body = 'abcdefghijklmnop';
+    const wrappers: { where: string; line: (token: string) => string }[] = [
+      { where: 'bare at the start and end', line: (token) => token },
+      { where: 'backtick', line: (token) => `key \`${token}\`` },
+      { where: 'parenthesis', line: (token) => `key (${token})` },
+      { where: 'bracket', line: (token) => `key [${token}]` },
+      { where: 'brace', line: (token) => `key {${token}}` },
+      { where: 'double quote', line: (token) => `key "${token}"` },
+      { where: 'single quote', line: (token) => `key '${token}'` },
+      { where: 'colon', line: (token) => `key:${token}` },
+      { where: 'equals', line: (token) => `key=${token}` },
+      { where: 'comma', line: (token) => `before,${token},after` },
+      { where: 'line start', line: (token) => `${token} after` },
+      { where: 'line end', line: (token) => `before ${token}` },
+    ];
+    for (const prefix of KEY_PREFIXES) {
+      const token = `${prefix}${body}`;
+      for (const wrapper of wrappers) {
+        const line = wrapper.line(token);
+        expect({ prefix, where: wrapper.where, masked: maskSecretsLine(line) })
+          .toEqual({ prefix, where: wrapper.where, masked: line.replace(token, '[masked]') });
+      }
+    }
+  });
+
+  test('several secrets on one line are all masked', () => {
+    const one = `ghp_${'a'.repeat(20)}`;
+    const two = `glpat-${'b'.repeat(20)}`;
+    const three = `npm_${'c'.repeat(20)}`;
+    const line = `a \`${one}\` b (${two}) c https://u:p@one.test/x https://v:q@two.test/y ${three}`;
+    const masked = 'a `[masked]` b ([masked]) c https://[masked]@one.test/x https://[masked]@two.test/y [masked]';
+    expect(maskSecretsLine(line)).toBe(masked);
+  });
+
+  test('masking a masked line changes nothing more', () => {
+    // The masker re-scans what it produced: no known prefix or userinfo URL may survive a pass.
+    const once = maskSecretsLine('a `ghp_aaaaaaaaaaaaaaaaaaaa` https://u:p@one.test/x');
+    expect(maskSecretsLine(once)).toBe(once);
+  });
+
+  test('a prefix shape inside a longer word is not a token', () => {
+    // `risk-` contains `sk-`, but a token starts where a non-token character precedes it.
+    expect(maskSecretsLine('risk-assessment-strategy-document')).toBe('risk-assessment-strategy-document');
   });
 
   test('a peek masks its printed screen and still logs no text', async () => {

@@ -106,7 +106,16 @@ export async function runPeek(argv: string[], io: Io, sources: PeekSources = rea
   if (seat === undefined) return refuseUnknown(out, dir, tag, name, at);
   if (seat.human === true) return refuseOwnerPane(out, dir, tag, name, at);
 
-  const recorded = readState(dir).sessions[team.session]?.seats[seat.name]?.pane;
+  // The team file loaded, but its state record may not read (a hand-edited or half-written
+  // file). Without a recorded pane there is no screen this command may name, so that fails
+  // closed exactly as a seat with no record does; the error's own text is never printed or
+  // logged, because it names a file, and the attempt is logged by its exit id.
+  let recorded: string | undefined;
+  try {
+    recorded = readState(dir).sessions[team.session]?.seats[seat.name]?.pane;
+  } catch {
+    return refuseNoScreen(out, dir, tag, name, at);
+  }
   const source = sources.source ?? herdrStatusSource({ session: team.session });
   if (recorded === undefined || source.screenText === undefined) return refuseNoScreen(out, dir, tag, name, at);
   const reading: StatusWaitSeat = { name: seat.name, pane: recorded, cli: seat.cli, session: team.session };
