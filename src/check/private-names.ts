@@ -483,6 +483,20 @@ function labelPath(path: string): string {
   return path.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
+/** The message of a raw commit object, after its header block: the first empty line ends the
+ *  headers (a continuation line always carries a leading space), and every byte after it is the
+ *  message, NUL bytes included. */
+function messageAfterHeaders(object: string): string | null {
+  let start = 0;
+  while (start < object.length) {
+    const end = object.indexOf('\n', start);
+    if (end === -1) return null;
+    if (end === start) return object.slice(end + 1);
+    start = end + 1;
+  }
+  return null;
+}
+
 /**
  * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
  * every commit message on `base..HEAD`. Removed lines are not read; a line that stays unchanged
@@ -559,12 +573,15 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   });
   if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
   for (const sha of commits.stdout.split('\n').filter(Boolean)) {
-    const body = spawnSync('git', ['-C', root, 'log', '-1', '--format=%B', sha], {
+    const body = spawnSync('git', ['-C', root, 'cat-file', 'commit', sha], {
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
     });
     if (body.error !== undefined || body.status !== 0) return { problem: `cannot read a commit message since ${base}` };
-    const message = body.stdout.replace(/\n$/, '');
+    // `git log --format=%B` stops at a NUL byte in the message; the commit object holds the bytes
+    // after it, and `git cat-file` prints the object whole, so the message is read from there.
+    const message = messageAfterHeaders(body.stdout);
+    if (message === null) return { problem: `cannot read a commit message since ${base}` };
     for (const [index, text] of message.split('\n').entries()) {
       lines.push(text);
       where.push(`commit:${sha}:${String(index + 1)}`);

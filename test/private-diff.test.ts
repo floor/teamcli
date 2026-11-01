@@ -72,6 +72,30 @@ function commit(dir: string, message: string): string {
   return git(dir, ['rev-parse', 'HEAD']).trim();
 }
 
+/** A commit object written literally, so its message can hold a NUL byte that `git commit`
+ *  refuses; the object, and so the message, is stored as written. */
+function literalCommit(dir: string, parent: string, message: string): string {
+  const tree = git(dir, ['rev-parse', `${parent}^{tree}`]).trim();
+  const object = [
+    `tree ${tree}`,
+    `parent ${parent}`,
+    'author Synthetic <synthetic@example.test> 1700000000 +0000',
+    'committer Synthetic <synthetic@example.test> 1700000000 +0000',
+    '',
+    message,
+  ].join('\n');
+  const written = spawnSync('git', ['hash-object', '--literally', '-t', 'commit', '-w', '--stdin'], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: env(dir),
+    input: object,
+  });
+  if (written.status !== 0) throw new Error(`git hash-object: ${written.stderr}`);
+  const sha = written.stdout.trim();
+  git(dir, ['update-ref', 'HEAD', sha]);
+  return sha;
+}
+
 function listFile(contents: string): string {
   const path = join(temp(), 'private.txt');
   writeFileSync(path, contents, { mode: 0o600 });
@@ -123,6 +147,15 @@ describe('the diff check command', () => {
     const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`commit:${head}:3`);
+    expect(result.stderr).not.toContain(SECRET);
+  });
+
+  test('a NUL in a raw commit message does not hide the line after it', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    const head = literalCommit(base.dir, base.sha, `subject\n\u0000tail ${SECRET}`);
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`commit:${head}:2`);
     expect(result.stderr).not.toContain(SECRET);
   });
 

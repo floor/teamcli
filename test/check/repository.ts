@@ -11,6 +11,9 @@ export interface Repository {
   git(...args: string[]): string;
   /** An empty commit with this message, kept byte for byte when `verbatim`; returns its hash. */
   commit(message: string, email?: string, verbatim?: boolean): string;
+  /** A commit object written literally, so its message can hold a NUL byte that `git commit`
+   *  refuses; stored without a ref, and its hash returned. */
+  literal(message: string, parent: string): string;
   remove(): void;
 }
 
@@ -51,6 +54,18 @@ export function createRepository(): Repository {
       const cleanup = verbatim ? ['--cleanup=verbatim'] : [];
       git(['commit', '--quiet', '--allow-empty', '--no-gpg-sign', ...cleanup, '-F', '-'], email, message);
       return git(['rev-parse', 'HEAD']);
+    },
+    literal(message, parent) {
+      const tree = git(['rev-parse', `${parent}^{tree}`]);
+      const object = [
+        `tree ${tree}`,
+        `parent ${parent}`,
+        `author Test <${AGENT_EMAIL}> 1700000000 +0000`,
+        `committer Test <${AGENT_EMAIL}> 1700000000 +0000`,
+        '',
+        message,
+      ].join('\n');
+      return git(['hash-object', '--literally', '-t', 'commit', '-w', '--stdin'], AGENT_EMAIL, object);
     },
     remove: () => rmSync(path, { recursive: true, force: true }),
   };
