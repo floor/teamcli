@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
@@ -21,7 +22,7 @@ import type { HostedRoute } from '../src/daemon/routes.ts';
 import type { PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { POLICY_CATALOGUE } from '../src/policy/types.ts';
 import { resolvePolicy } from '../src/policy/resolve.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -90,6 +91,27 @@ function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}):
   };
 }
 
+/** The health reading an install scene injects: the daemon the command just installed answers its
+ *  probe, so the scene never opens the machine socket and reaches the success line. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+
 async function waitUntil(check: () => boolean, ms = 3000): Promise<void> {
   const deadline = Date.now() + ms;
   for (;;) {
@@ -111,6 +133,11 @@ function fakeService(): ServiceManager & { calls: string[]; programs: ServicePro
       programs.push(program);
       return { unitPath: join(_home, 'unit.plist'), program: [program.execPath, program.entry, 'daemon', 'run'] };
     },
+    // The record the start admission reads: this test process, started by the manager from its
+    // own unit. A scene that replays the unit's start is admitted by the same checks as the live
+    // daemon; no scene reads these from a real manager.
+    job: () => thisProcessJobRecord(),
+    unit: (home) => thisProcessUnitRecord(join(home, 'unit.plist')),
     install: (_home, program) => {
       calls.push('install');
       programs.push(program);
@@ -415,7 +442,7 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     } };
     for (const argv of [['install'], ['install', '--presence'], ['install', '--watch'], ['install', '--presence', '--watch']]) {
       const io = testIo(world.root, owner);
-      expect(await runDaemon(argv, io, sourcesOf(world.home, { service }))).toBe(0);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, { service, health: async () => ANSWERING }))).toBe(0);
     }
     const [plain, presenceOnly, watchOnly, both] = installed;
     expect(plain).toMatchObject({ roots: [world.root] });
@@ -461,7 +488,7 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
     const install = async (argv: string[]) => {
       const io = testIo(world.root, owner);
-      expect(await runDaemon(argv, io, sourcesOf(world.home, { service: manager }))).toBe(0);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, { service: manager, health: async () => ANSWERING }))).toBe(0);
       return { path: manager.unitPath(world.home), unit: readFileSync(manager.unitPath(world.home), 'utf8') };
     };
     const plain = await install(['install']);
@@ -504,14 +531,16 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     const admitted = await runDaemon(
       ['run', '--presence', '--watch', '--started-by', 'service-manager'],
       unit,
-      sourcesOf(world.home, { start }),
+      // Admission reads the manager's record of the job and the unit it runs; the fake answers
+      // with this test process and the daemon's own words, which is the record the live start has.
+      sourcesOf(world.home, { start, service: fakeService() }),
     );
     expect(admitted).toBe(0);
     expect(seen[0]).toMatchObject({ startedBy: 'service-manager', presenceHosting: true, watchHosting: true });
 
     const manual = testIo(world.root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--presence', '--watch'], manual, sourcesOf(world.home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain("only the owner or the system's service manager runs the machine daemon");
     expect(seen.length).toBe(1);
   });
 });

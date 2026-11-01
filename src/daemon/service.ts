@@ -1,8 +1,8 @@
 // The neutral system-service interface behind `team daemon install` and `team daemon uninstall`.
-// Every user-facing line says "system service manager" and nothing about one platform's own
-// facility; the platform's names, files and commands live only in an adapter beside this file.
-// A test injects a fake manager; the live adapter is chosen by `systemServiceManager()` and is
-// the only place that runs the platform's registration command.
+// Every user-facing line says "the system's service manager" and nothing about one platform's
+// own facility; the platform's names, files and commands live only in an adapter beside this
+// file. A test injects a fake manager; the live adapter is chosen by `systemServiceManager()` and
+// is the only place that runs the platform's registration command.
 //
 // An install never finishes with no daemon and no message. A refresh stops the daemon the
 // manager already holds, then loads the new one, offering it again with a bounded, growing wait
@@ -11,7 +11,15 @@
 // with the earlier program when this install replaced that same entry in place — and the daemon
 // it names is started again; the failure and that rollback are reported together, and the
 // command exits non-zero. A load the manager accepted is registration, not proof that a program
-// runs, so the command confirms the restored daemon answers before it calls the rollback done.
+// runs, so the command confirms the restored daemon answers before it calls the rollback done;
+// the same confirmation gates a successful install.
+//
+// The daemon's own start is admitted from the manager's record of the job it started and the
+// unit file that job runs — pid, program, label, owner, mode and the unit's own words — never
+// from a process walk, which cannot tell a service-managed child from an orphan reparented to
+// the top. The record proves the service manager started this process from a unit the user
+// owns; a process of that same user can register a job under a label that is not loaded, so this
+// is an identity check against mistakes, not a boundary against that user's deliberate attempt.
 import { darwinServiceManager } from './service-darwin.ts';
 export type ServiceRunResult = { status: number | null; stdout: string; stderr: string };
 export type ServiceRunner = (command: string, args: string[]) => ServiceRunResult;
@@ -43,6 +51,36 @@ export type ServicePlan = {
   unitPath: string;
   /** The program the service manager runs, as argv. */
   program: string[];
+};
+
+/**
+ * The manager's own record of the running job under the daemon's label: the process it started
+ * and the program it runs. Null or a null field refuses a start closed — the record is the
+ * identity, so a record that cannot be read is never replaced by a guess.
+ */
+export type ServiceJobRecord = {
+  /** The pid the manager records for the job, or null when it records none (not running). */
+  pid: number | null;
+  /** The executable the manager records for the job, or null when it records none. */
+  program: string | null;
+};
+
+/**
+ * What the unit file the job was started from says. The daemon reads the file it was started
+ * from, never a label from its surroundings: a copied unit under another label is not this
+ * daemon's own, and a unit another user can write is not the owner's.
+ */
+export type ServiceUnitRecord = {
+  /** The unit file the job was started from. */
+  path: string;
+  /** The unit's Label, or null when the file carries none. */
+  label: string | null;
+  /** The uid that owns the unit file, or null when it cannot be read. */
+  ownerUid: number | null;
+  /** The unit's permission bits (0o777), or null when they cannot be read. */
+  mode: number | null;
+  /** The unit's run words (ProgramArguments), or null when the file carries none. */
+  programArguments: string[] | null;
 };
 
 /**
@@ -78,6 +116,16 @@ export type ServiceInstallSuccess = {
    *  its run command: the new definition is written without either, and the command says so in
    *  plain words. An install never writes a key or a grant into a definition. */
   droppedAuthorization?: boolean;
+  /**
+   * Puts the machine back after a load the manager accepted but whose daemon does not answer:
+   * the earlier unit is restored (with the earlier program when this install replaced that same
+   * entry in place) and started again, or, for a fresh install, the unit this install wrote is
+   * stopped and removed. The command calls it only after the new daemon fails its health probe,
+   * and confirms the restored daemon answers before reporting the rollback. An undo only ever
+   * answers a failure: it is called after the new daemon did not answer, never instead of a
+   * successful install.
+   */
+  undo?: () => ServiceInstallFailure;
 };
 
 export type ServiceInstallResult = ServiceInstallSuccess | ServiceInstallFailure;
@@ -90,6 +138,17 @@ export type ServiceManager = {
   readonly kind: 'system-service-manager';
   unitPath(home: string): string;
   plan(home: string, program: ServiceProgram): ServicePlan;
+  /**
+   * The manager's own record of the job under the daemon's label: the pid it started and the
+   * program it runs. Null when no job is loaded or the record cannot be read — a start refuses
+   * closed rather than falling back to a process walk.
+   */
+  job(home: string): ServiceJobRecord | null;
+  /**
+   * What the unit file the job was started from says: its label, owner, permission bits and run
+   * words. Null when the file is not a regular readable file.
+   */
+  unit(home: string): ServiceUnitRecord | null;
   /**
    * Writes and registers the unit. A refresh replaces a daemon the manager already holds: the
    * old job is stopped, and the new one is loaded, offered again with a bounded, growing wait

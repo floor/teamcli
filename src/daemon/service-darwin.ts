@@ -12,18 +12,20 @@
 // asks the daemon directly whether it answers.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DAEMON_LABEL, daemonLogPath, machineConfigDir } from './paths.ts';
 import type {
   ServiceInstallFailure,
   ServiceInstallResult,
+  ServiceJobRecord,
   ServiceManager,
   ServiceManagerOptions,
   ServicePlan,
   ServiceProgram,
   ServiceRunResult,
   ServiceRunner,
+  ServiceUnitRecord,
   ServiceUninstallResult,
 } from './service.ts';
 
@@ -91,6 +93,28 @@ function escapeXml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function unescapeXml(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/** The first `<key>key</key><string>…</string>` value in a plist text, or null. */
+function plistString(text: string, key: string): string | null {
+  const found = new RegExp(`<key>${key}</key>\\s*<string>([\\s\\S]*?)</string>`).exec(text);
+  return found === null ? null : unescapeXml(found[1] ?? '');
+}
+
+/** The `<string>` entries of a plist text's named array, or null when it carries none. */
+function plistStrings(text: string, key: string): string[] | null {
+  const found = new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`).exec(text);
+  if (found === null) return null;
+  return [...(found[1] ?? '').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((one) => unescapeXml(one[1] ?? ''));
 }
 
 function programOf(program: ServiceProgram): string[] {
@@ -177,12 +201,73 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const loadDetail = (result: ServiceRunResult): string =>
     `the load exited ${String(result.status)}: ${result.stderr.trim().split('\n').slice(-1)[0] ?? ''}`;
 
+  /**
+   * The manager's own record of the job under the daemon's label. The printed job record names
+   * the pid, the program and the arguments; the plist-form list is the fallback when the
+   * printed record cannot be read. Both texts are parsed here and nowhere else. Null means the
+   * manager kept no record this command can read — the start admission refuses closed.
+   *
+   * The shape was supplied by the owner's read of the manager (2026-11-01): the printed record
+   * carries `pid = <n>`, `program = <executable>`, `state = running` and an `arguments = { … }`
+   * block with one string per line; the list form is a plist dict with Label, PID, Program,
+   * ProgramArguments. This seat could not run the manager's commands itself, so the parser is
+   * tolerant of both forms and its exact output is not claimed as measured here.
+   */
+  const jobRecord = (): ServiceJobRecord | null => {
+    const printed = run('launchctl', ['print', service]);
+    if (printed.status === 0) {
+      const pid = /^\s*pid = (\d+)\s*$/m.exec(printed.stdout)?.[1];
+      // A record with no program line still carries the job's own first argument; either is
+      // the executable the job was started from, and the admission compares it by real path.
+      const program = /^\s*program = (.+?)\s*$/m.exec(printed.stdout)?.[1]
+        ?? /^\s*arguments = \{\s*\n\s*([^\n]+?)\s*$/m.exec(printed.stdout)?.[1];
+      return { pid: pid === undefined ? null : Number(pid), program: program ?? null };
+    }
+    const listed = run('launchctl', ['list', DAEMON_LABEL]);
+    if (listed.status !== 0) return null;
+    const pid = /^\s*"PID"\s*=\s*(\d+)\s*;/m.exec(listed.stdout)?.[1];
+    const quoted = /^\s*"Program"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;/m.exec(listed.stdout)?.[1];
+    return {
+      pid: pid === undefined ? null : Number(pid),
+      program: quoted === undefined ? null : quoted.replace(/\\(.)/g, '$1'),
+    };
+  };
+
+  /**
+   * The unit file's own words. A symlink or any other non-regular file is refused, so the
+   * record describes the file the job was started from and not a name pointing elsewhere.
+   * Unreadable is null: the caller refuses closed.
+   */
+  const unitRecord = (home: string): ServiceUnitRecord | null => {
+    const path = unitPath(home);
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(path);
+    } catch {
+      return null;
+    }
+    if (!stats.isFile()) return null;
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch {
+      return null;
+    }
+    return {
+      path,
+      label: plistString(text, 'Label'),
+      ownerUid: stats.uid,
+      mode: stats.mode & 0o777,
+      programArguments: plistStrings(text, 'ProgramArguments'),
+    };
+  };
+
   const refused = (
     what: string,
     detail: string,
     outcome: ServiceInstallFailure['outcome'],
     kept: boolean,
-  ): ServiceInstallResult => ({ ok: false, why: what, detail, outcome, kept });
+  ): ServiceInstallFailure => ({ ok: false, why: what, detail, outcome, kept });
 
   const retainedProgramPath = (home: string): string => join(machineConfigDir(home), RETAINED_PROGRAM);
   const retainedRecordPath = (home: string): string => join(machineConfigDir(home), RETAINED_RECORD);
@@ -258,6 +343,37 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   };
 
   /**
+   * The retained program and its record as they stand before an install overwrites them. A
+   * load the manager accepts still may start nothing that answers, and the rollback that
+   * follows needs the bytes the earlier unit was accepted with — the success path's
+   * `retainProgram` replaces the record that bound them. Read at install time, before any
+   * write, and put back before an earlier unit is offered again.
+   */
+  const retainedSnapshot = (home: string): { copy: Buffer; record: Buffer } | null => {
+    try {
+      return {
+        copy: readFileSync(retainedProgramPath(home)),
+        record: readFileSync(retainedRecordPath(home)),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  /** Puts the earlier retained snapshot back. Best effort: without it the earlier unit is
+   *  still restored, and the command asks the daemon whether it answers. */
+  const restoreRetained = (home: string, snapshot: { copy: Buffer; record: Buffer } | null): void => {
+    if (snapshot === null) return;
+    try {
+      writeAtomically(retainedProgramPath(home), snapshot.copy, 0o600);
+      writeAtomically(retainedRecordPath(home), snapshot.record, 0o600);
+    } catch {
+      // A partially written record no longer matches its unit text, and `restoreProgram`
+      // refuses it on the hash check; nothing is put back from bytes we cannot vouch for.
+    }
+  };
+
+  /**
    * The earlier definition goes back and its daemon is started again, so a refresh the service
    * manager refuses leaves a running daemon and a reported failure, never a machine with no
    * daemon and no message. The failed load may have left the label claimed, so it is cleared
@@ -278,14 +394,14 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         if (existsSync(path)) unlinkSync(path);
       } catch (error) {
         return refused(
-          'the system service manager refused to start the daemon and the service definition could not be removed',
+          'the system\'s service manager refused to start the daemon and the service definition could not be removed',
           `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
           'refused',
           false,
         );
       }
       return refused(
-        'the system service manager refused to start the daemon',
+        'the system\'s service manager refused to start the daemon',
         `${failDetail}; no earlier unit was installed, so no daemon is running`,
         'refused',
         false,
@@ -301,7 +417,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       chmodSync(path, prior.mode);
     } catch (error) {
       return refused(
-        'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
+        'the system\'s service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
         `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
         'lost',
         false,
@@ -315,15 +431,82 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     const back = loadWithRetry(path);
     if (back.status === 0) {
       return refused(
-        'the system service manager refused to start the new daemon; the previous one was put back and started again',
+        'the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
         `${failDetail}; the earlier unit was put back and its daemon started; ${where}`,
         'restored',
         true,
       );
     }
     return refused(
-      'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
       `${failDetail}; the earlier unit was put back, and ${loadDetail(back)}; ${where}`,
+      'lost',
+      true,
+    );
+  };
+
+  /**
+   * Takes back a unit the manager accepted, after the daemon it started did not answer the
+   * command's health probe. The job is stopped first, so a restarting one stops competing for
+   * the machine socket. With an earlier definition, that definition and the program it was
+   * accepted with are put back and offered again (the same bounded retries as a refused load);
+   * a fresh install has no earlier definition, so the unit this install wrote is stopped and
+   * removed. `restored` still only means "the earlier load was accepted": the command confirms
+   * its daemon answers before reporting a rollback.
+   */
+  const rollback = (
+    home: string,
+    path: string,
+    prior: { text: string; mode: number } | null,
+    retained: { copy: Buffer; record: Buffer } | null,
+  ): ServiceInstallFailure => {
+    run('launchctl', ['bootout', service]);
+    if (prior === null) {
+      try {
+        if (existsSync(path)) unlinkSync(path);
+      } catch (error) {
+        return refused(
+          'the daemon the new unit started did not answer, and the service definition could not be removed',
+          `the daemon did not answer the health probe; ${error instanceof Error ? error.message : String(error)}`,
+          'refused',
+          false,
+        );
+      }
+      return refused(
+        'the daemon the new unit started did not answer the health probe',
+        'the daemon did not answer the health probe; no earlier unit was installed, so no daemon is running',
+        'refused',
+        false,
+      );
+    }
+    try {
+      writeFileSync(path, prior.text, { mode: prior.mode });
+      chmodSync(path, prior.mode);
+    } catch (error) {
+      return refused(
+        'the daemon the new unit started did not answer, and the earlier service definition could not be put back; no daemon was started',
+        `the daemon did not answer the health probe; ${error instanceof Error ? error.message : String(error)}`,
+        'lost',
+        false,
+      );
+    }
+    restoreRetained(home, retained);
+    const from = restoreProgram(home, prior.text);
+    const where = from === null
+      ? 'the earlier program was left in place'
+      : `the earlier program was put back from ${from}`;
+    const back = loadWithRetry(path);
+    if (back.status === 0) {
+      return refused(
+        'the daemon the new unit started did not answer; the previous one was put back and started again',
+        `the daemon did not answer the health probe; the earlier unit was put back and its daemon started; ${where}`,
+        'restored',
+        true,
+      );
+    }
+    return refused(
+      'the daemon the new unit started did not answer, and the previous one could not be started again; no daemon was started',
+      `the daemon did not answer the health probe; the earlier unit was put back, and ${loadDetail(back)}; ${where}`,
       'lost',
       true,
     );
@@ -333,6 +516,8 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     kind: 'system-service-manager',
     unitPath,
     plan: (home, program): ServicePlan => ({ unitPath: unitPath(home), program: programOf(program) }),
+    job: () => jobRecord(),
+    unit: (home) => unitRecord(home),
 
     install(home, program): ServiceInstallResult {
       const path = unitPath(home);
@@ -354,6 +539,10 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
           };
         }
       }
+      // Read before anything writes: a rollback after a load the manager accepted needs the
+      // bytes the earlier unit was accepted with, and the success path below retains the new
+      // program over the record that bound them.
+      const retainedBefore = prior === null ? null : retainedSnapshot(home);
       // A definition written by a version that persisted the install's authorization is
       // rewritten without it; the command says so, so the removal is never silent.
       const droppedAuthorization = prior !== null && namesAuthorization(prior.text);
@@ -393,18 +582,19 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // offered again with a bounded, growing wait while the manager refuses — the earlier stop
       // may still be finishing, and a refusal the install never retries past is the empty
       // machine this install must never leave.
+      const undo = (): ServiceInstallFailure => rollback(home, path, prior, retainedBefore);
       const first = run('launchctl', ['bootstrap', domain, path]);
       if (first.status === 0) {
         // The unit the manager just took is the one a later refresh restores, so the program it
         // runs is kept now, while those bytes are the ones in place.
         retainProgram(home, program.entry, text);
-        return { ok: true, unitPath: path, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
+        return { ok: true, unitPath: path, undo, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
       }
       run('launchctl', ['bootout', service]);
       const loaded = loadWithRetry(path);
       if (loaded.status === 0) {
         retainProgram(home, program.entry, text);
-        return { ok: true, unitPath: path, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
+        return { ok: true, unitPath: path, undo, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
       }
       // The new unit did not start after every bounded retry: the earlier definition is put
       // back and its daemon started, so a failure is reported and a daemon still runs.
@@ -423,7 +613,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       if (present && booted.status !== 0) {
         return {
           ok: false,
-          why: 'the system service manager did not confirm the daemon stopped',
+          why: 'the system\'s service manager did not confirm the daemon stopped',
           detail: `bootout exited ${String(booted.status)}: ${booted.stderr.trim().split('\n').slice(-1)[0] ?? ''}`,
         };
       }

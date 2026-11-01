@@ -5,7 +5,7 @@ import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
-import { daemonHealth } from '../src/daemon/health.ts';
+import { daemonHealth, type DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type HostedWatchExtras } from '../src/daemon/host.ts';
 import { busListening, startBus, type StartBusInput, type StartBusResult } from '../src/bus/server.ts';
 import type { BrokerWorkSource } from '../src/idle_work.ts';
@@ -18,7 +18,7 @@ import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
 import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -733,7 +733,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [] });
     expect(installed.ok).toBe(false);
     if (installed.ok) return;
-    expect(installed.why).toBe('the system service manager refused to start the daemon');
+    expect(installed.why).toBe('the system\'s service manager refused to start the daemon');
     expect(installed.why).not.toContain('launchctl');
     expect(installed.why).not.toContain('launchd');
   });
@@ -784,7 +784,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const removed = refuses.uninstall(home);
     expect(removed.ok).toBe(false);
     if (removed.ok) return;
-    expect(removed.why).toBe('the system service manager did not confirm the daemon stopped');
+    expect(removed.why).toBe('the system\'s service manager did not confirm the daemon stopped');
     expect(removed.why).not.toContain('launchctl');
     expect(removed.why).not.toContain('launchd');
     // The unit is the recovery state: it is untouched so the owner can retry the uninstall.
@@ -815,6 +815,10 @@ function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
       programs.push(program);
       return { unitPath: join(home, 'unit.plist'), program: [program.execPath, program.entry, 'daemon', 'run'] };
     },
+    // This fake's record describes the test process, so a scene that replays the unit's start
+    // is admitted by the same three checks the live daemon passes.
+    job: () => thisProcessJobRecord(),
+    unit: (home) => thisProcessUnitRecord(join(home, 'unit.plist')),
     install: (home, program) => {
       calls.push('install');
       programs.push(program);
@@ -839,6 +843,27 @@ const snapshot: DaemonHealthSnapshot = {
   features: { broker: 'absent' },
 };
 
+/** The health reading an install scene injects: the daemon the command just installed answers its
+ *  probe, so the scene never opens the machine socket and reaches the success line. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+
 const owner = { kind: 'owner' } as const;
 
 function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
@@ -846,6 +871,9 @@ function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}):
     home,
     program: { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js' },
     version: 'test',
+    // An install reports success only after the daemon it started answers; this reading stands
+    // for that answer unless a scene injects its own.
+    health: async () => ANSWERING,
     ...overrides,
   };
 }
@@ -874,7 +902,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(code).toBe(0);
     expect(service.calls).toEqual([]);
     expect(io.out).toContain('would install');
-    expect(io.out).toContain('system service manager');
+    expect(io.out).toContain("the system's service manager");
     expect(io.out).not.toContain('launchd');
   });
 
@@ -931,7 +959,7 @@ describe('team daemon status, install, uninstall and run', () => {
       })),
     ).toBe(1);
     expect(started).toEqual([]);
-    expect(run.err).toContain('only the owner or the system service manager');
+    expect(run.err).toContain('only the owner or the system\'s service manager');
   });
 
   test('run only accepts the three startedBy sources', async () => {
@@ -1044,13 +1072,13 @@ describe('team daemon status, install, uninstall and run', () => {
     // The unit is the one admitted no-terminal start, and it carries --watch only when it was
     // installed with it; the run side accepts the same pair.
     const unitCaller = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(['run', '--watch', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--watch', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start, service: fakeService() }))).toBe(0);
     expect(seen[0]?.watchHosting).toBe(true);
     expect(seen[0]?.startedBy).toBe('service-manager');
 
     const manual = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--watch'], manual, sourcesOf(home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain('only the owner or the system\'s service manager runs the machine daemon');
     expect(seen.length).toBe(1);
   });
 
@@ -1064,13 +1092,13 @@ describe('team daemon status, install, uninstall and run', () => {
     // The unit is the one admitted no-terminal start, and it carries --presence only when it was
     // installed with it; the run side accepts the same pair.
     const unitCaller = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(['run', '--presence', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--presence', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start, service: fakeService() }))).toBe(0);
     expect(seen[0]?.presenceHosting).toBe(true);
     expect(seen[0]?.startedBy).toBe('service-manager');
 
     const manual = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--presence'], manual, sourcesOf(home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain('only the owner or the system\'s service manager runs the machine daemon');
     expect(seen.length).toBe(1);
   });
 
@@ -1327,12 +1355,13 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(argv).toContain('--started-by');
 
     // The login start, end to end: the unit's own argv through the command surface and the real
-    // machine daemon. The run is admitted as the no-terminal owner because the source is the
-    // service manager, and one process binds the machine socket and hosts this root's existing
-    // send and bus in it, with the broker not hosted.
+    // machine daemon. A synthetic manager keeps this process's own record, so the replay of the
+    // unit's words is admitted; one process binds the machine socket and hosts this root's
+    // existing send and bus in it, with the broker not hosted.
     let release: (() => void) | undefined;
     const io = testIo(root, { kind: 'owner-no-tty' });
     const running = runDaemon(argv.slice(3), io, sourcesOf(home, {
+      service: fakeService(),
       stop: (end) => {
         release = end;
         return () => {};
