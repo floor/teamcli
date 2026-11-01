@@ -14,11 +14,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { CANONICAL_RECORD_VERSION } from './canonical-record.ts';
 import { TEAM_FILE } from './load.ts';
-import { canonicalTeam, resolveTeamConfigSource } from './team-config.ts';
-import type { Problem } from './types.ts';
+import { canonicalTeam, readTeamConfig, resolveTeamConfigSource, type ReadTeamConfigOptions } from './team-config.ts';
+import type { LoadResult, Problem } from './types.ts';
 import { validateTeamFile } from './validate.ts';
 import { writeTeamFile } from './write.ts';
-import { readStoredTeamConfig, sha256, writeStoredTeamConfig, type StoredTeamConfig } from '../registry/team-config-store.ts';
+import { readStoredTeamConfig, sha256, TeamConfigStoreError, writeStoredTeamConfig, type StoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 
 export type TeamTextOptions = {
@@ -71,6 +71,33 @@ export function teamTextTarget(path: string, options: TeamTextOptions = {}): Tea
  *  `the team file` otherwise, so a refusal never names a file that is not read. */
 export function teamPlace(path: string, options: TeamTextOptions = {}, onFile = 'the team file'): string {
   return teamTextTarget(path, options).kind === 'registry' ? "the registry's record" : onFile;
+}
+
+/** The team a launched pointer names, read as the team it is. A pointer records the file a
+ *  session was launched from; when that file is a root's own `.agents/team.yaml` and the
+ *  registry holds that root's team, the registry's record is the team — the source every edit
+ *  writes, so the read never serves a copy the registry has moved past (a seat stopped with
+ *  `remove --keep`, for one). Any other file is read as the file it names, as `--file` is. */
+export function readLaunchedTeam(file: string, options: ReadTeamConfigOptions = {}): LoadResult {
+  let target: TeamTextTarget;
+  try {
+    target = teamTextTarget(file, {
+      ...(options.source !== undefined ? { source: options.source } : {}),
+      ...(options.home !== undefined ? { home: options.home } : {}),
+      ...(options.env !== undefined ? { env: options.env } : {}),
+    });
+  } catch (error) {
+    if (!(error instanceof TeamConfigStoreError)) throw error;
+    return {
+      ok: false,
+      path: file,
+      errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }],
+    };
+  }
+  const { file: _named, ...rest } = options;
+  return target.kind === 'registry'
+    ? readTeamConfig(target.root, rest)
+    : readTeamConfig(dirname(file), { ...rest, file });
 }
 
 /** The team's text as an editing command reads it: the registry's record, or the file. Throws as
