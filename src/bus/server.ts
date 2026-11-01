@@ -56,6 +56,7 @@ import {
 } from './log.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
+import { makeWebhookDelivery } from './webhook.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 
 /** The serving bus's process marker, beside its socket. */
@@ -164,6 +165,9 @@ export type StartBusInput = {
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
+  /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
+   *  each seat's configured adapter row, and a caller may inject its own for a scene. */
+  deliver?: (record: SignedEventRecord) => void;
 };
 
 export type BusHandle = {
@@ -671,7 +675,12 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     const sockets = new Set<Socket>();
     const subscribers = new Set<LiveSubscriber>();
 
+    // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
+    // awaits, so a pass or a publish is never failed by a routine.
+    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr });
+
     const fanOut = (record: SignedEventRecord): void => {
+      deliver(record);
       for (const sub of subscribers) {
         if (!matchesSubscriber(record, sub.seat, sub.kinds, routingTeam, input.additiveRouting, resolveSeat)) continue;
         if (sub.queue.length >= sub.bufferLimit) {

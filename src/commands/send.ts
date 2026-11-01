@@ -43,6 +43,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
+import { webhookRouteOf } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
@@ -515,7 +516,7 @@ function deliveryWordsOf(input: {
   root: string;
   session: string;
   seat: string;
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
   home?: string;
 }): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
@@ -1283,7 +1284,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // A grant is the one rule the message's own header carries a record of: the dry run names
     // it too, so a preview says which owner-signed record admits a pair no rule reaches.
     const granted = admission.ok && admission.rule.startsWith('an owner-signed grant naming send') ? `; admitted by: ${admission.rule}` : '';
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}; nothing was written${granted}`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}${dryWebhookClause(declared, human)}; nothing was written${granted}`, report);
   }
   // The display words every transport opens the message with: the receiving team's
   // `message-display` template, the sender's nickname (its seat name when the file writes none),
@@ -2153,6 +2154,16 @@ function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number, cli?: string)
   return walk
     .slice(at + 1)
     .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
+}
+
+/** The dry run's webhook clause: the seat's adapter as an eligible, waking route, or the reason
+ *  a configured one cannot post right now. Empty for a seat that configures none and for a
+ *  human's pane, which nothing wakes. */
+function dryWebhookClause(declared: Seat | undefined, human: boolean): string {
+  if (human || declared?.webhook === undefined) return '';
+  const route = webhookRouteOf(declared.webhook);
+  if (route === null) return '';
+  return route.ok ? '; woken through its webhook adapter' : `; its webhook adapter cannot deliver: ${route.reason}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -4527,10 +4538,23 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | n
   return socketAddressOf(to.address, host.processInfo(to.session, pane), sockets);
 }
 
+/** The receiving seat's webhook row, read from its team file: an `Aim` carries the address, not
+ *  the row, and this path is the one class read that has no team file in hand. A file that cannot
+ *  be read proves no adapter — the conservative reading, never a guess. */
+function declaredWebhookAt(to: Aim, home: string | undefined): Seat['webhook'] | undefined {
+  try {
+    const loaded = readTeamConfig(to.root, home === undefined ? {} : { home });
+    if (!loaded.ok) return undefined;
+    return loaded.team.seats.find((seat) => seat.name === to.seat)?.webhook;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The class the receiving seat reads under once the walk proved its socket unusable: the socket
  *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
- *  it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps the
- *  class the launch line the registry carries implies. */
+ *  it — its webhook adapter, its runtime queue, its next turn, or nothing. A record that cannot
+ *  be read keeps the class the launch line the registry carries implies. */
 function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
@@ -4538,12 +4562,13 @@ function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
   } catch {
     record = undefined;
   }
+  const webhook = declaredWebhookAt(to, home);
   const read = seatDeliveryClass({
     dir: to.dir,
     root: to.root,
     session: to.session,
     seat: to.seat,
-    declared: { cli: to.cli, launch: record?.launch_line ?? '' },
+    declared: { cli: to.cli, launch: record?.launch_line ?? '', ...(webhook === undefined ? {} : { webhook }) },
     ...(record === undefined ? {} : { state: record }),
     ...(home === undefined ? {} : { home }),
   });
@@ -4554,6 +4579,7 @@ function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
     socket: false,
     endpoint: read.evidence.endpoint,
     ...(read.evidence.human ? { human: true } : {}),
+    ...(read.evidence.webhook ? { webhook: true } : {}),
   });
 }
 

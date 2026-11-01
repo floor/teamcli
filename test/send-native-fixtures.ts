@@ -24,7 +24,14 @@ export type World = { root: string; dir: string; sockets: string; home: string; 
 /** One more file line, launched as a Claude Code seat: the role word a scene wants to give it,
  *  the launch line when the scene needs one other than plain `claude`, and the label the file
  *  writes on it when a scene reads the greeting's label fallback. */
-export type ExtraSeat = { name: string; role: string; launch?: string; label?: string };
+export type ExtraSeat = {
+  name: string;
+  role: string;
+  launch?: string;
+  label?: string;
+  /** The seat's webhook adapter, when the scene configures one: two absolute paths. */
+  webhook?: { urlFile: string; secretFile: string };
+};
 
 /** Launch-line overrides for the three standard seats, for scenes that spy on the wrapper a
  *  seat's line names. Unset seats keep their plain CLI line. */
@@ -40,7 +47,14 @@ function teamFile(root: string, lobby: string, order: readonly string[] | null, 
     model: Test
     version: "1"
     launch: ${seat.launch ?? 'claude'}
-${seat.label === undefined ? '' : `    label: ${JSON.stringify(seat.label)}\n`}`,
+${seat.label === undefined ? '' : `    label: ${JSON.stringify(seat.label)}\n`}${
+        seat.webhook === undefined
+          ? ''
+          : `    webhook:
+      url_file: ${JSON.stringify(seat.webhook.urlFile)}
+      secret_file: ${JSON.stringify(seat.webhook.secretFile)}
+`
+      }`,
     )
     .join('');
   return `format: 1
