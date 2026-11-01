@@ -15,6 +15,7 @@ import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
+import { runGrant } from '../src/commands/grant.ts';
 import { runInit } from '../src/commands/init.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
@@ -186,6 +187,32 @@ test('a wildcard grant still admits a config set on this folder\'s team, and the
 
 test('a wildcard grant still admits down --abandon', () => {
   admitted(door('down', ['--abandon'], wildcard));
+});
+
+// The send-grant form, met by this narrow door at the merge: `team grant --send` reads its pair
+// from --from and --to (src/commands/grant.ts), so the door reads those two options as values the
+// command consumes (VALUED.grant), never as flags. The wildcard grant admits the line as the
+// `grant` op, the command's own parser plans the record with the pair, and a grant that lists
+// entities is still refused before it is read. Admission here is the wildcard's; this change
+// teaches the door the two valued options and widens no admission.
+test("team grant --send's --from and --to are values, and the wildcard admits the line", async () => {
+  const words = ['--send', '--from', 'lead@alpha', '--to', 'lead@beta', '--expires', '2027-06-01T00:00:00Z', '--dry-run'];
+  const scene = io();
+  const result = door('grant', words, wildcard, scene);
+  admitted(result);
+  if (result.kind !== 'admitted') return;
+  // The pair reaches the command exactly as written: the door took only --general and --key off.
+  expect(result.argv).toEqual(words);
+  const code = await runGrant(result.argv, result.io, { home });
+  expect(code, `${scene.out}${scene.err}`).toBe(0);
+  expect(scene.out).toContain('would write the send grant');
+  expect(scene.out).toContain('from lead@alpha to lead@beta');
+  // The narrow door's rule still stands for this line: entities listed, refused.
+  scopedRefusal(door('grant', words, alphaGrant));
+  // And an op list without `grant` is still not admitted.
+  const opRefusal = door('grant', words, grantOf(['*'], ['send']));
+  expect(opRefusal.kind).toBe('refused');
+  if (opRefusal.kind === 'refused') expect(opRefusal.why).toContain('does not cover grant');
 });
 
 // The listed-ops grant the orchestrator's scenes name: entities `*`, these ops only.

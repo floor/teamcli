@@ -77,7 +77,9 @@ function ensureTeam(input: RegistryTeam): string | null {
  *  label stands first, so a new seat never takes a name a retired seat left on the record; and a
  *  word the field could not hold — a space, an accent, the reserved `lead`, a name another seat
  *  already carries — never reaches the roster, so a label edit cannot take away an address that
- *  works. So a mark that moved between launches does not linger on a line that no longer holds it. */
+ *  works. A name equal to the seat's own name is not written: the seat name is already the
+ *  address, so the roster carries a second name only when there is one to carry. So a mark that
+ *  moved between launches does not linger on a line that no longer holds it. */
 function rosterMarker(team: TeamFile): (line: { agent: string; seat: string; role: string }) => RosterEntry {
   const leadSeat = team.orchestrator;
   const assistantSeat = team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
@@ -86,7 +88,7 @@ function rosterMarker(team: TeamFile): (line: { agent: string; seat: string; rol
     const nickname = nicknames.get(line.seat);
     return {
       ...line,
-      ...(nickname !== undefined && nickname !== null ? { nickname } : {}),
+      ...(nickname !== undefined && nickname !== null && nickname !== line.seat ? { nickname } : {}),
       ...(line.seat === leadSeat ? { leads: true } : {}),
       ...(line.seat === assistantSeat ? { assistant: true } : {}),
     };
