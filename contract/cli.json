@@ -327,6 +327,7 @@
       ],
       "hidden": false,
       "literals": [
+        "question",
         "trust"
       ],
       "name": "answer",
@@ -339,7 +340,8 @@
       ],
       "subcommands": [],
       "usage": [
-        "team answer <seat> trust [--session <name>] [--file <path>] [--json]"
+        "team answer <seat> trust [--session <name>] [--file <path>] [--json]",
+        "team answer <seat> question [--session <name>] [--file <path>] [--json]"
       ],
       "who": {
         "gate": "pane-authority",

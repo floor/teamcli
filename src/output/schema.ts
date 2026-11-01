@@ -2165,8 +2165,9 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
 };
 
 /** Published `--json` output schema for `team answer` (`schema/answer.schema.json`): the action
- *  surface of the one trust dialog answered. A refused or incomplete answer, and a run whose
- *  invocation or team file cannot be read, writes the `team.error` envelope instead. */
+ *  surface of the one dialog answered — the trust word's folder, or the question word's dialog
+ *  kind. A refused or incomplete answer, and a run whose invocation or team file cannot be
+ *  read, writes the `team.error` envelope instead. */
 export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.answer',
   fileName: 'answer.schema.json',
@@ -2176,7 +2177,8 @@ export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   properties: {
     seat: { type: 'string', minLength: 1 },
     pane: { type: ['string', 'null'] },
-    dialog: { type: 'string', const: 'trust' },
+    dialog: { type: 'string', enum: ['trust', 'question'] },
+    dialog_kind: { type: 'string', enum: ['question', 'plan approval', 'confirmation'] },
     state: { type: 'string', const: 'ready' },
     folder: { type: 'string', minLength: 1 },
   },
