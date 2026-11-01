@@ -1,6 +1,7 @@
 // The seat's webhook delivery adapter: every accepted signed message for a seat that configures
 // one is POSTed to its routine. The drop folder record is the backup, never a fallback that gets
-// consumed — this module reads it not at all and writes nothing, so a 2xx that arrives after the
+// consumed — this module never consumes or changes it: the inbox body shape reads the record the
+// arrival names for the message it carries, and writes nothing, so a 2xx that arrives after the
 // seat's pull simply delivers twice, and a refusal leaves the message where it was.
 //
 // The hand-off is `fanOut` in `src/bus/server.ts` (builder-4's file): the returned function is
@@ -12,8 +13,10 @@
 // The request shape and the way the secret authenticates live in `webhookRequest`, one function,
 // until the routine's own contract is forwarded. Everything else here reads files and counts
 // answers.
+import { join } from 'node:path';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
-import { webhookRouteOf } from '../send/webhook.ts';
+import type { SignedRecord } from '../send/record.ts';
+import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import type { SignedEventRecord } from './log.ts';
 
 /** How hard one record is tried before the drop waits for the seat's own pull: three attempts in
@@ -34,21 +37,98 @@ export const WEBHOOK_POLICY: WebhookPolicy = {
  *  not be read (so nothing was posted). */
 export type WebhookOutcome = 'delivered' | 'failed' | 'refused';
 
+/** What one routine is sent: the body shape, and how the secret travels. A row that names
+ *  neither header nor body posts the form every earlier row had. */
+export type WebhookShape =
+  | { header?: string; body: 'event' }
+  | { header?: string; body: 'inbox'; message: SignedRecord };
+
 /**
  * The one place the routine's contract lives: the body it is sent and the way the secret
- * authenticates it. Until the routine's own contract is forwarded this is a placeholder — a JSON
- * envelope carrying the signed record and a bearer header — pinned only by the tests. Replacing
- * this function replaces the scheme everywhere, and no caller reads the secret otherwise.
+ * authenticates it. Two bodies: the bus envelope, every row's default, and the seat-inbox record
+ * shape the front's own webhook pushed. The secret is `Authorization: Bearer <secret>` unless the
+ * row names a header, which then carries the secret file's line verbatim. No caller reads the
+ * secret otherwise.
  */
-export function webhookRequest(record: SignedEventRecord, url: string, secret: string): { url: string; init: RequestInit } {
+export function webhookRequest(
+  record: SignedEventRecord,
+  url: string,
+  secret: string,
+  shape: WebhookShape = { body: 'event' },
+): { url: string; init: RequestInit } {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (shape.header === undefined) headers.authorization = `Bearer ${secret}`;
+  else headers[shape.header] = secret;
   return {
     url,
     init: {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ v: 1, event: record }),
+      headers,
+      body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message)) : JSON.stringify({ v: 1, event: record }),
     },
   };
+}
+
+/**
+ * The seat-inbox record shape the front's webhook pushed, flattened from the signed message the
+ * arrival names. The bridge's signed-inbox identity fields — a key id, a wire version, a
+ * per-record nonce — have no TeamCLI counterpart and are absent rather than invented; `signature`
+ * is the record's own hex message signature, not a bridge signature.
+ */
+function inboxBody(message: SignedRecord): Record<string, unknown> {
+  const payload = message.payload;
+  return {
+    id: payload.id,
+    from: payload.from,
+    kind: payload.kind,
+    created_at: payload.at,
+    body: payload.body,
+    signature: message.signature,
+  };
+}
+
+/** The name a record id may be as a drop file: the alphabet the drop folder itself uses. */
+const DROP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** The message record's reader, loaded the first time a row asks for the record shape. The
+ *  default body never loads it: the record module's import graph reaches the launch profiles,
+ *  which read data files from beside the module, and the adapter is also run on its own where a
+ *  data file does not follow — a plain-runtime bundle, a test's scratch build. The runtime caches
+ *  the module, so only the first record-shaped delivery pays for it. */
+async function messageReader(): Promise<typeof import('../send/record.ts') | null> {
+  try {
+    return await import('../send/record.ts');
+  } catch {
+    return null;
+  }
+}
+
+/** The shape one delivery posts, or why the inbox shape cannot be built right now: its body is
+ *  the signed record the arrival names, read from the seat's drop folder. The read consumes and
+ *  changes nothing, so the backup the seat's own pull reads stays exactly where it was. */
+async function shapeOf(
+  route: Extract<WebhookRoute, { ok: true }>,
+  record: SignedEventRecord,
+  root: string | undefined,
+): Promise<{ ok: true; value: WebhookShape } | { ok: false; reason: string }> {
+  const header = route.header === undefined ? {} : { header: route.header };
+  if (route.body !== 'inbox') return { ok: true, value: { body: 'event', ...header } };
+  const payload = record.payload;
+  if (root === undefined) {
+    return { ok: false, reason: 'the inbox body shape reads the message record, and this adapter was built without the project root' };
+  }
+  const to = payload.to;
+  if (to === undefined || to === '') return { ok: false, reason: 'the arrival names no seat' };
+  const id = payload.record_id;
+  if (!DROP_NAME.test(id)) return { ok: false, reason: "the arrival's record id cannot name a drop file" };
+  const reader = await messageReader();
+  if (reader === null) {
+    return { ok: false, reason: 'the inbox body shape could not load the message record reader' };
+  }
+  const read = reader.readRecord(join(root, '.agents', 'send-drops', payload.session, to, id), id);
+  if (!read.ok) return { ok: false, reason: `the message record ${id} could not be read: ${read.reason}` };
+  if (read.record === null) return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
+  return { ok: true, value: { body: 'inbox', ...header, message: read.record } };
 }
 
 /** The seats that configure an adapter, by seat name, as the bus's team file names them. The bus
@@ -66,6 +146,8 @@ export type WebhookDeliveryInput = {
   seat: string;
   webhook: SeatWebhook;
   record: SignedEventRecord;
+  /** The project root: the inbox body shape reads the record the arrival names beneath it. */
+  root?: string;
   policy?: Partial<WebhookPolicy>;
   /** Where refusals and final failures are said; absent, they are contained and dropped. */
   report?: (text: string) => void;
@@ -122,11 +204,16 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
     );
     return 'refused';
   }
+  const shape = await shapeOf(route, input.record, input.root);
+  if (!shape.ok) {
+    say(input.report, `webhook: ${input.seat}: not posted: ${shape.reason}; the drop file stays in place`);
+    return 'refused';
+  }
   const policy: WebhookPolicy = { ...WEBHOOK_POLICY, ...input.policy };
   const attempts = Math.max(1, policy.attempts);
   const fetchFn = input.fetch ?? fetch;
   const sleep = input.sleep ?? defaultSleep;
-  const request = webhookRequest(input.record, route.url, route.secret);
+  const request = webhookRequest(input.record, route.url, route.secret, shape.value);
   // The request is built before the first attempt, so a value the platform refuses (an invalid
   // header, say) fails once in fixed words; its own error, which repeats the value, is never
   // printed.
@@ -160,6 +247,8 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
 export type WebhookFactoryInput = {
   /** The team file the bus was started with: its webhook rows are the routes. */
   team: TeamFile;
+  /** The project root, so an inbox-body row can read the record its arrival names. */
+  root?: string;
   /** Where the bus says a refusal or a final failure. Absent, the adapter stays silent. */
   stderr?: (text: string) => void;
   policy?: Partial<WebhookPolicy>;
@@ -187,6 +276,7 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): (record: Signed
         seat: to,
         webhook,
         record,
+        ...(input.root === undefined ? {} : { root: input.root }),
         ...(input.policy === undefined ? {} : { policy: input.policy }),
         ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
         ...(input.sleep === undefined ? {} : { sleep: input.sleep }),
