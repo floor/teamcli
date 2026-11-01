@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.10] - 2026-10-31
+## [0.5.10] - 2026-11-01
 
 0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is
 folded in here: the owner seat and grants, the registry, quiet starts, the general grant on
