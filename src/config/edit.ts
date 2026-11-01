@@ -17,7 +17,7 @@ import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts
 import { charterGate } from '../charter/check.ts';
 import { approvalDifferences } from '../approve/approval.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
-import { labelPersona, nicknameProblem } from '../file/sections/seats.ts';
+import { labelPersona, nicknameProblem, SEAT_NAME } from '../file/sections/seats.ts';
 import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -337,9 +337,11 @@ function nameFieldOf(path: RecordPath): { seat: string; field: 'label' | 'nickna
  * its persona names, and a set on its nickname rewrites the persona part of a written label. So
  * the two cannot be left apart by a config write (the driver's finding: a renamed seat kept
  * sending under its old name), and the roster line the next message header reads is re-marked
- * from the same record (src/registry/sync.ts). A name the field cannot hold — the reserved
- * `lead`, another seat's name or nickname — leaves the other field as it is: the label still wins
- * in display (src/send/names.ts), and `team check` names the drift a hand edit can leave.
+ * from the same record (src/registry/sync.ts). A name the field cannot hold — a space or an
+ * accent (the nickname alphabet), the reserved `lead`, another seat's name or nickname — leaves
+ * the nickname field as it is: the label is still the workspace title, the field is still the
+ * address, and `team check` names the drift (src/check/team.ts:nicknameDriftNotes). Writing a
+ * label never refuses on the word before its dot; nothing is slugged or rewritten.
  * Returns the text to write, whether its comments were kept, and what moved.
  */
 function syncSeatNames(
@@ -362,6 +364,10 @@ function syncSeatNames(
   if (named.field === 'label') {
     const persona = labelPersona({ label: label ?? '', labelWritten: label !== null });
     if (persona === null || persona === nickname) return none;
+    // A persona the nickname field could not hold is not projected: "Jane Doe" and "Inès" are
+    // ordinary display labels, and refusing the label edit for a name it cannot carry would make
+    // them unwritable. Nothing is slugged — the field keeps the name it had.
+    if (!SEAT_NAME.test(persona)) return none;
     const parsed = validateTeamFile(text);
     if (!parsed.ok) return none;
     if (nicknameProblem(parsed.team.seats, persona, seatName) !== null) return none;
@@ -370,9 +376,11 @@ function syncSeatNames(
   } else {
     // An unset leaves the label's persona: the label still names the seat, and its word stands.
     if (nickname === undefined || label === null) return none;
+    // A written label with no middle dot is the persona whole (labelPersona), so the set replaces
+    // it: leaving the old word in front of the new nickname would keep launch and header on the
+    // old name until someone edited the label too.
     const at = label.indexOf('·');
-    if (at < 0) return none;
-    const rest = label.slice(at + 1).trim();
+    const rest = at < 0 ? '' : label.slice(at + 1).trim();
     const nextLabel = rest === '' ? nickname : `${nickname} · ${rest}`;
     if (nextLabel === label) return none;
     field = 'label';
