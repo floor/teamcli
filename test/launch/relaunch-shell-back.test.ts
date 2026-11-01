@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import type { Step } from '../../src/launch/plan.ts';
@@ -9,13 +13,14 @@ import type { Step } from '../../src/launch/plan.ts';
 // foreground process of its own, and it is not the CLI that printed the error.
 const SES = 'ses_a1b2c3d4e5f6';
 const MISSING = `claude --resume ${SES}`;
-const SCREEN = `${MISSING}\nNo conversation found with session ID: ${SES}\n❯ `;
+const screenOf = (command: string): string => `${command}\nNo conversation found with session ID: ${SES}\n❯ `;
 
 type Front = 'cli' | 'shell' | 'wrapper' | 'unread' | 'noread';
 
-function hostOf(input: { front: Front }): { host: Host; runs: string[]; typed: string[] } {
+function hostOf(input: { front: Front; command?: string }): { host: Host; runs: string[]; typed: string[] } {
   const runs: string[] = [];
   const typed: string[] = [];
+  const command = input.command ?? MISSING;
   const host: Host = {
     startServer: () => true,
     sessionUp: () => true,
@@ -28,7 +33,7 @@ function hostOf(input: { front: Front }): { host: Host; runs: string[]; typed: s
     kill: () => true,
     agentPanes: () => ['p1'],
     classify: () => 'unknown',
-    paneText: () => SCREEN,
+    paneText: () => screenOf(command),
     // Herdr reads its shell back in the scene that says so.
     shellBack: () => input.front === 'unread',
     // The pids in front say nothing on their own: a wrapper's own interpreter is one of them and
@@ -55,17 +60,17 @@ function hostOf(input: { front: Front }): { host: Host; runs: string[]; typed: s
   return { host, runs, typed };
 }
 
-function steps(): Step[] {
+function steps(command = MISSING): Step[] {
   return [
     {
       kind: 'run',
       argv: [],
-      do: { do: 'launch', seat: 'worker', label: 'worker', command: MISSING, pane: 'p1', cli: 'claude-code', cwd: '.' },
+      do: { do: 'launch', seat: 'worker', label: 'worker', command, pane: 'p1', cli: 'claude-code', cwd: '.' },
     },
     {
       kind: 'wait',
       text: 'until worker shows its idle prompt',
-      do: { do: 'idle', seat: 'worker', label: 'worker', cli: 'claude-code', seconds: 5, command: MISSING, pane: 'p1', repairLine: '`team remove worker --keep` then `team add worker`' },
+      do: { do: 'idle', seat: 'worker', label: 'worker', cli: 'claude-code', seconds: 5, command, pane: 'p1', repairLine: '`team remove worker --keep` then `team add worker`' },
     },
   ];
 }
@@ -113,5 +118,35 @@ describe('the runtime relaunch types only once the CLI is gone', () => {
     expect(runs.length).toBe(1);
     expect(runs[0]).toContain(`--resume ${SES}`);
     expect(typed).toEqual([]);
+  });
+
+  test('a resume inside a quoted script is stripped from the fresh line, and the CLI is handed none', async () => {
+    // The runtime fallback relaunches the same line without its resume. Inside a quoted script the
+    // resume is followed by the closing quote, so the line must be stripped there; the CLI the
+    // fresh line runs is handed every other word and no --resume, read from a stub's argv.
+    const command = `/bin/sh -c "claude --model claude-opus-5-5 --resume ${SES}"`;
+    const { host, runs, typed } = hostOf({ front: 'shell', command });
+    await executePlan(steps(command), 'acme', host);
+    expect(runs.length).toBe(2);
+    expect(runs[1]).not.toContain('--resume');
+    expect(runs[1]?.startsWith('/bin/sh -c "claude --model claude-opus-5-5 --session-id ')).toBe(true);
+    expect(runs[1]?.endsWith('"')).toBe(true);
+    expect(typed).toEqual([]);
+
+    const dir = mkdtempSync(join(tmpdir(), 'relaunch-argv-'));
+    try {
+      const bin = join(dir, 'bin');
+      mkdirSync(bin, { recursive: true });
+      const argvFile = join(dir, 'argv.txt');
+      writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+      execFileSync('/bin/sh', ['-c', runs[1] ?? ''], {
+        env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: dir },
+      });
+      const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+      expect(argv).not.toContain('--resume');
+      expect(argv).toContain('--session-id');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

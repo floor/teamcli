@@ -1607,11 +1607,22 @@ export function conversationOnDisk(cli: string, cwd: string, id: string, env: No
 }
 
 /** The same launch line without its resume, for a CLI whose resume form is measured as a flag
- *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. */
+ *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. A resume inside
+ *  a trailing quoted script is stripped there and the quotes stay: a word after the closing
+ *  quote is the script's positional word, not the CLI's. */
 export function withoutResume(cli: string, command: string): string | null {
   if (cli !== 'claude-code') return null;
-  const stripped = command.replace(/(^|\s)(?:--resume|-r)(?:=|\s+)[A-Za-z0-9._-]+(?=\s|$)/, '$1').replace(/\s+$/, '').replace(/ {2,}/g, ' ');
-  return stripped === command ? null : stripped;
+  const strip = (words: string): string =>
+    words.replace(/(^|\s)(?:--resume|-r)(?:=|\s+)[A-Za-z0-9._-]+(?=\s|$)/, '$1');
+  const script = quotedScriptOf(command, 'claude');
+  if (script === null) {
+    const stripped = strip(command).replace(/\s+$/, '').replace(/ {2,}/g, ' ');
+    return stripped === command ? null : stripped;
+  }
+  const inner = strip(script.inner);
+  if (inner === script.inner) return null;
+  const trimmed = command.trimEnd();
+  return `${trimmed.slice(0, script.open + 1)}${inner.replace(/\s+$/, '').replace(/ {2,}/g, ' ')}${script.quote}`;
 }
 
 /** The screen a resume of a missing conversation leaves (Claude Code 2.1.x: "No conversation
