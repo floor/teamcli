@@ -506,15 +506,13 @@ export type QuestionReading = { text: string; complete: boolean };
  * anchor row itself (`inline`).
  *
  * The live dialog is drawn at the bottom of the pane, and the transcript above it may quote an
- * older dialog with the same anchor. The lowest block the screen reads is the live one: a block
- * that reaches the profile's end marker is read whole, and a block the supported rows cut is
- * returned cut, even when a whole block above it was quoted earlier — an older block never
+ * older dialog with the same anchor. The lowest anchored block with any text is the live one,
+ * however its walk stopped — at the profile's end marker, at the supported rows, or at the
+ * window's edge — and its own end is its completeness: a marker reaches the block's end, a row
+ * cap or a window edge returns it cut. A whole block quoted above the live one therefore never
  * certifies the current question. A block anchored inside another block's span is that block
  * read from a later row (a frame row repeated down the box) and is passed over, and a match that
  * reads no text at all — a profile's frame row can carry the anchor pattern — is passed over too.
- * When nothing on the screen reads as a block, the lowest reading that has any text is returned
- * incomplete, and the answer layer refuses it: a block the reader cannot follow to its end is not
- * quoted as a whole question.
  *
  * With an end marker named, a blank row (one the strips empty, frame included) is part of the
  * block, not its end: the walk passes it and reads on to the marker, and only reaching the
@@ -572,11 +570,15 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
     if (pattern.test(line)) anchors.push(at);
   });
   type Reading = { anchor: number; stop: number; taken: string[]; end: WalkEnd };
-  // The block a reading opens: it reached its end marker, or the supported rows stopped it while
-  // text went on — the reader's own limit cut it. A reading the window's edge stopped proves no
-  // block was there; a spec with no marker declares every reading a block.
+  // Every reading with text opens a block, however its walk stopped — at the marker, at the row
+  // cap, or at the window's edge — and a window-stopped block reads complete: false. The one
+  // exception is a frame row's anchor: a row the strips empty is the pane's own frame (grok's
+  // bare `┃` rows run past the option marker into the box's footer chrome), so a walk the
+  // window stopped from such a row proves no block; a frame row still opens one when its walk
+  // reaches the marker or the row cap.
+  const anchorHasText = (reading: Reading): boolean => textRow(plain[reading.anchor] as string, strip) !== '';
   const isBlock = (reading: Reading): boolean =>
-    spec.until === null || reading.end === 'marker' || reading.end === 'rows';
+    spec.until === null || reading.end !== 'window' || anchorHasText(reading);
   // The span a block covers, for spotting an anchor that sits inside it. A cap-cut block's span
   // reaches to the end marker the walk did not get to read; a markerless block's is where its
   // walk stopped.
@@ -602,8 +604,9 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
     readings.push({ anchor, stop, taken, end });
   }
   // The live dialog is drawn at the bottom: the lowest block no block above it contains is the
-  // one on screen now, and its own completeness is the reading — an older block above it never
-  // certifies the current question.
+  // one on screen now. Its own completeness is the reading — an older block above it never
+  // certifies the current question, and a window-cut live block is returned cut, never shadowed
+  // by a whole block quoted above it.
   const blocks = readings.filter(isBlock);
   const live = blocks
     .filter((block) => !blocks.some((other) => other !== block && inside(other, block.anchor)))
