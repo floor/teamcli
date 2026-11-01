@@ -319,7 +319,10 @@ function sameWords(unit: readonly string[], own: readonly string[]): boolean {
  *
  * The ceiling this proves is "the service manager started this process from a unit the user
  * owns": any process of that same user can register a job under a label that is not loaded, so
- * this is an identity check against mistakes, not a boundary against that user's attempt.
+ * this is an identity check against mistakes, not a boundary against that user's attempt. The
+ * retained program the unit runs carries the same limit: its copy is verified before the unit is
+ * written, but a process of that user can replace it, or a folder in it, between that check and
+ * the manager's exec, exactly as it can rewrite the unit file.
  */
 function serviceManaged(io: Io, home: string, sources: DaemonCommandSources, json: boolean): boolean {
   const manager = sources.service !== undefined ? sources.service : systemServiceManager();
@@ -678,6 +681,17 @@ async function daemonAnswers(home: string, sources: DaemonCommandSources): Promi
 }
 
 /**
+ * The one exit an install that leaves no new daemon reports through. The pre-flight plan that
+ * cannot read the program whole and a failure the adapter reports both end here, so the exit
+ * contract keeps one marker for the id.
+ */
+function installFailed(io: Io, parsed: Parsed, spec: Parameters<typeof refuse>[3]): number {
+  refuse(io, parsed.json, 'daemon', spec);
+  // exit: daemon.install-failed
+  return 1;
+}
+
+/**
  * Reports an install that left no new daemon: a load the manager refused, or a unit whose daemon
  * did not answer and was taken back out. A rollback is reported as one only after the daemon it
  * started answers the same health probe; a rollback that started nothing answering takes the
@@ -721,14 +735,12 @@ async function reportInstallFailure(
     // exit: daemon.install-rollback-failed
     return 1;
   }
-  refuse(io, parsed.json, 'daemon', {
+  return installFailed(io, parsed, {
     id: 'daemon.install-failed',
     message: why,
     repair,
     plain: `${why}; ${repair} to try again${keptAt}`,
   });
-  // exit: daemon.install-failed
-  return 1;
 }
 
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
@@ -932,14 +944,12 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   } catch (error) {
     // The plan names the retained copy the unit would run, and a program that cannot be read
     // whole is refused before anything is written — by a dry run too, which must not promise a
-    // unit the install would then refuse.
-    refuse(io, parsed.json, 'daemon', {
+    // unit the install would then refuse. It leaves through the one install-failure site.
+    return installFailed(io, parsed, {
       id: 'daemon.install-failed',
       message: `the program this unit would run could not be read whole, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
       repair: null,
     });
-    // exit: daemon.install-failed
-    return 1;
   }
   if (parsed.dryRun) {
     if (parsed.json) {

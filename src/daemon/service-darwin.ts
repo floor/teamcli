@@ -261,6 +261,40 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const runtimeRoot = (home: string): string => join(machineConfigDir(home), RUNTIME_DIR);
 
   /**
+   * The folder the retained copies live in, made or checked before anything is written there.
+   * It is made owner-only. One already there must be this user's own directory, and no group or
+   * other write may reach it, or the install refuses: a folder another user can write is not a
+   * place to keep a program a unit runs. The folder itself is never taken as a symbolic link —
+   * a link could name a folder other than the one a unit appears to run — and the copies inside
+   * it are checked the same way by `verifiedCopy`.
+   */
+  const runtimeFolder = (home: string): { ok: true; path: string } | { ok: false; detail: string } => {
+    const root = runtimeRoot(home);
+    let stats: ReturnType<typeof lstatSync> | null = null;
+    try {
+      stats = lstatSync(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return { ok: false, detail: `${root} cannot be read: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+    if (stats === null) {
+      try {
+        mkdirSync(root, { recursive: true, mode: 0o700 });
+        chmodSync(root, 0o700);
+      } catch (error) {
+        return { ok: false, detail: `${root} could not be made: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      return { ok: true, path: root };
+    }
+    if (stats.isSymbolicLink()) return { ok: false, detail: `${root} is a symbolic link` };
+    if (!stats.isDirectory()) return { ok: false, detail: `${root} is not a directory` };
+    if (stats.uid !== ownUid()) return { ok: false, detail: `${root} is not this user's` };
+    if ((stats.mode & 0o022) !== 0) return { ok: false, detail: `${root} is writable by the group or the world` };
+    return { ok: true, path: root };
+  };
+
+  /**
    * The program as the set of files a copy must reproduce. A caller that names a set has it
    * copied as it stands; a synthetic scene's entry names none, and its own directory is then the
    * whole program. The entry is always named relative to the set's root, because that is the
@@ -385,14 +419,17 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   /**
    * Writes the program's files into `<machine config>/daemon-runtime/<sha>/`, owner-only, under
    * a temporary name and renamed into place, so a folder that carries the name is always whole.
-   * A folder already there is used only after `verifiedCopy` accepts it.
+   * The folder those copies live in is made or checked first, and only then is an existing copy
+   * at the name used, after `verifiedCopy` accepts it.
    */
   const materialize = (
     home: string,
     files: readonly RuntimeFile[],
     sha: string,
   ): { ok: true; path: string } | { ok: false; detail: string } => {
-    const root = runtimeRoot(home);
+    const folder = runtimeFolder(home);
+    if (!folder.ok) return { ok: false, detail: folder.detail };
+    const root = folder.path;
     const target = join(root, sha);
     if (existsSync(target)) {
       const bad = verifiedCopy(target, sha);
@@ -400,8 +437,6 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
     }
     let temporary: string | null = null;
     try {
-      mkdirSync(root, { recursive: true, mode: 0o700 });
-      chmodSync(root, 0o700);
       temporary = join(root, `.${sha}.${String(process.pid)}.tmp`);
       rmSync(temporary, { recursive: true, force: true });
       mkdirSync(temporary, { mode: 0o700 });
