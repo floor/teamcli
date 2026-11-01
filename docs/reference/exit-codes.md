@@ -32,7 +32,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.delegate-flag` | `add` | 1 | the delegate may not use this flag | `team add worker --temporary` |
 | `add.delegate-placement` | `add` | 1 | the approved delegate must be an external non-seat pane | `team add worker` |
 | `add.detached` | `add` | 1 | a run with no terminal | `team add worker` |
-| `add.doctor` | `add` | 1 | doctor refuses the launch | `team add worker` |
+| `add.doctor` | `add` | 1 | doctor refuses the launch, an override rule with no matching primitive among its findings | `team add worker` |
 | `add.file-owner` | `add` | 1 | --file is the owner's | `team add worker --file .agents/team.yaml` |
 | `add.herdr` | `add` | 1 | herdr doesn't answer | `team add worker` |
 | `add.human` | `add` | 1 | the named seat is a human's pane | `team add worker` |
@@ -254,7 +254,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `development-mode.refused` | `development-mode` | 1 | a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified | `team development-mode set off` |
 | `development-mode.invocation` | `development-mode` | 2 | the command arguments are invalid | `team development-mode set maybe` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
-| `doctor.missing` | `doctor` | 1 | something is missing | `team doctor` |
+| `doctor.missing` | `doctor` | 1 | something is missing, including an override rule with no matching primitive | `team doctor` |
 | `doctor.both-modes` | `doctor` | 2 | both focused modes were asked at once | `team doctor --login --jules` |
 | `doctor.file` | `doctor` | 2 | the team file can't be read | `team doctor --file missing.yaml` |
 | `doctor.file-invalid` | `doctor` | 2 | the team file can't be parsed | `team doctor --file team.yaml` |
@@ -722,7 +722,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |
-| `status.difference` | `status` | 1 | there is a difference | `team status` |
+| `status.difference` | `status` | 1 | there is a difference, including an override rule with no matching primitive | `team status` |
 | `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
 | `status.project-unknown` | `status` | 1 | no project is named that | `team status --project nope` |
 | `status.session-owner` | `status` | 1 | --session is the owner's | `team status --session team` |
@@ -794,7 +794,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.delegate-placement` | `up` | 1 | the approved delegate must be an external non-seat pane | `team up` |
 | `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
-| `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
+| `up.doctor` | `up` | 1 | doctor refuses the launch, an override rule with no matching primitive among its findings | `team up` |
 | `up.general-refused` | `up` | 1 | the general grant does not admit this launch; nothing ran | `team up --general <grant.json> --key <client.key>` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |

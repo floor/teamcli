@@ -187,7 +187,7 @@
       "code": 1,
       "command": "add",
       "id": "add.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team add worker"
     },
     {
@@ -1741,7 +1741,7 @@
       "code": 1,
       "command": "doctor",
       "id": "doctor.missing",
-      "meaning": "something is missing",
+      "meaning": "something is missing, including an override rule with no matching primitive",
       "trigger": "team doctor"
     },
     {
@@ -5017,7 +5017,7 @@
       "code": 1,
       "command": "status",
       "id": "status.difference",
-      "meaning": "there is a difference",
+      "meaning": "there is a difference, including an override rule with no matching primitive",
       "trigger": "team status"
     },
     {
@@ -5521,7 +5521,7 @@
       "code": 1,
       "command": "up",
       "id": "up.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team up"
     },
     {

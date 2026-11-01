@@ -36,6 +36,14 @@ profiles:
       mode: status-last
 `;
 
+const RULE_REFUSED = `format: 1
+profiles:
+  codex:
+    screen:
+      permission:
+        - live: false
+`;
+
 let base: string;
 let root: string;
 let home: string;
@@ -152,27 +160,30 @@ describe('an override is the owner\'s, by approval', () => {
     expect(approvalStanding(root, home).kind).toBe('refused');
   });
 
-  test('a malformed file is reported by approve, doctor, status, watch and up, and does not throw', async () => {
+  test.each([
+    ['a malformed profile section', BROKEN, 'unknown key "composer"'],
+    ['a rule with no matching primitive', RULE_REFUSED, 'a rule needs a matching primitive'],
+  ])('%s is reported by approve, doctor, status, watch and up, and does not throw', async (_name, body, message) => {
     expect((await approve()).code).toBe(0);
     writeFileSync(path(), OVERRIDE);
     expect((await approve()).code).toBe(0);
-    writeFileSync(path(), BROKEN);
+    writeFileSync(path(), body);
 
     const refused = await approve();
     expect(refused.code).toBe(2);
     expect(refused.err).toContain(`${path()}: line`);
-    expect(refused.err).toContain('unknown key "composer"');
+    expect(refused.err).toContain(message);
     expect(quotaWith('codex', overridesInForce('acme-web', root, home).profiles).some((pattern) => pattern.account === 'anthropic')).toBe(true);
 
     const doctor = testIo(root, OWNER);
     const doctorCode = await runDoctor(FILE, doctor, doctorSources());
     expect(doctorCode).toBe(1);
-    expect(doctor.out).toContain('unknown key "composer"');
+    expect(doctor.out).toContain(message);
 
     const status = testIo(root, OWNER);
     const statusCode = await runStatus(FILE, status, statusSources());
-    expect(statusCode).not.toBe(2);
-    expect(`${status.out}${status.err}`).toContain('unknown key "composer"');
+    expect(statusCode).toBe(1);
+    expect(`${status.out}${status.err}`).toContain(message);
 
     const watch = testIo(root, OWNER);
     const watchCode = await runWatch(FILE, watch, {
@@ -194,7 +205,7 @@ describe('an override is the owner\'s, by approval', () => {
       home,
     } satisfies WatchSources);
     expect(watchCode).toBe(0);
-    expect(watch.out).toContain('unknown key "composer"');
+    expect(watch.out).toContain(message);
 
     const up = testIo(root, OWNER);
     const upCode = await runUp(['--dry-run', ...FILE], up, {
@@ -204,6 +215,6 @@ describe('an override is the owner\'s, by approval', () => {
       doctor: doctorSources(),
     } satisfies Partial<UpSources> as UpSources);
     expect(upCode).toBe(1);
-    expect(up.out).toContain('unknown key "composer"');
+    expect(up.out).toContain(message);
   });
 });
