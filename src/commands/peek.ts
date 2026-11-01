@@ -17,9 +17,10 @@ import { herdrStatusSource, type StatusSource, type StatusWaitSeat } from '../wa
 export const USAGE = `Usage: team peek <seat> [--lines <n>]
 
 Prints the last lines of a seat's screen: 50 by default, 1 to 500 with --lines. It reads the
-screen and sends nothing — no text, no key and no turn. A line that looks like a credential is
-masked before it is printed, and the audit log records the caller, the seat and the line count,
-never the text.
+screen and sends nothing — no text, no key and no turn. Masking covers a known key shape, a URL's
+userinfo, a private-key header and a random-looking word, and a bare hex string looks like a
+commit id, so it is shown. The audit log records the caller, the seat and the line count, never
+the text.
 
 Exits 0 when the screen is printed, 1 when the peek is refused, 2 when the invocation or team
 file can't be read, or no screen is readable.
