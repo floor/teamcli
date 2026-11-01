@@ -55,6 +55,12 @@ workspace:
 seats:
 ${SEAT('coordinator', 'lead', ['    label: lead\n', '    leads: true\n'])}${SEAT('implementer', 'worker', ['    nickname: Cicero\n', '    label: Cicero · implementer\n'])}`;
 
+/** The same team where the worker's written label carries no middle dot: the word whole. */
+const DOTLESS = TEAM.replace('label: Cicero · implementer', 'label: Cicero');
+
+/** Two seats that already address by name: the worker Cicero, the reviewer Joan. */
+const TWO = TEAM.replace('    label: Cicero · implementer\n', `    label: Cicero · implementer\n${SEAT('reviewer', 'other', ['    nickname: Joan\n', '    label: Joan · reviewer\n'])}`);
+
 /** A team with a retired reviewer beside a new one whose label names another persona. */
 const RETIRED = `format: 1
 project: acme
@@ -122,7 +128,7 @@ describe('the persona a written label names', () => {
   test('the launch names its session with the label, not the record’s nickname', () => {
     const seat = team2.seats.find((item) => item.name === 'reviewer-2')!;
     expect(seat.nickname).toBeUndefined();
-    expect(seatSessionName(seat, { team: 'ee', teamName: 'acme', mode: 'auto' })).toBe('Ines');
+    expect(seatSessionName(seat, { team: 'ee', teamName: 'acme', mode: 'auto', seats: team2.seats })).toBe('Ines');
     const line = launchCommand(profileFor('claude-code')!, seat.launch, 'Rules.', undefined, undefined, 'Ines');
     expect(line).toContain('--name Ines');
   });
@@ -130,7 +136,7 @@ describe('the persona a written label names', () => {
   test('a nickname the record still writes does not outrank the label', () => {
     const seat = team2.seats.find((item) => item.name === 'reviewer')!;
     expect(seat.nickname).toBe('Cicero');
-    expect(seatSessionName(seat, { team: 'ee', teamName: 'acme', mode: 'auto' })).toBe('Cicero');
+    expect(seatSessionName(seat, { team: 'ee', teamName: 'acme', mode: 'auto', seats: team2.seats })).toBe('Cicero');
     // The same rule read directly: the label's word stands over the field's.
     expect(sessionDisplayName({ seat: seat.name, persona: 'Joan', nickname: 'Cicero', team: 'ee', teamName: 'acme', mode: 'nickname' })).toBe('Joan');
   });
@@ -153,7 +159,7 @@ describe('the persona a written label names', () => {
     expect(readAgents(p.home).find((agent) => agent.id === registered.id)?.settings).toBeUndefined();
     const naming = namingFor({ home: p.home, root: p.root });
     expect(senderDisplayName({ seat: 'reviewer-3', team: teamId }, naming)).toBe('Damon');
-    expect(seatSessionName(fresh, { team: teamId, teamName: team2.project, mode: 'auto' })).toBe('Damon');
+    expect(seatSessionName(fresh, { team: teamId, teamName: team2.project, mode: 'auto', seats: team2.seats })).toBe('Damon');
   });
 });
 
@@ -185,7 +191,95 @@ describe('a config write keeps the label and the nickname together', () => {
     // The roster line was refreshed in the same run, so no relaunch is needed.
     expect(getTeam(p.home, teamId)?.roster.find((line) => line.seat === 'worker')?.nickname).toBe('Joan');
     expect(senderDisplayName({ seat: 'worker', team: teamId }, namingFor({ home: p.home, root: p.root }))).toBe('Joan');
-    expect(seatSessionName({ ...worker, label: 'Joan · implementer', labelWritten: true }, { team: teamId, teamName: 'acme', mode: 'auto' })).toBe('Joan');
+    const renamed = { ...worker, label: 'Joan · implementer', labelWritten: true as const };
+    expect(seatSessionName(renamed, { team: teamId, teamName: 'acme', mode: 'auto', seats: [renamed] })).toBe('Joan');
+  });
+
+  test('a label the nickname field cannot hold is written, and the field keeps its name', async () => {
+    // A space and an accent are ordinary display words, and the nickname alphabet has neither:
+    // the label is written, the field is left as it is, and nothing is slugged.
+    for (const persona of ['Jane Doe', 'Inès']) {
+      const p = place();
+      const label = `${persona} · implementer`;
+      const sources = sourcesOf(p);
+      const ask = ioOf(p.root);
+      expect(await runConfig(['set', 'seats.worker.label', label, '--request'], ask, sources), ask.err).toBe(0);
+      const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1] ?? '';
+      expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+      const ran = ioOf(p.root);
+      expect(await runConfig(['set', 'seats.worker.label', label, '--approval', id], ran, sources), `${persona}: ${ran.err}`).toBe(0);
+      const text = storedTeam(p.root, p.home)?.text ?? '';
+      expect(text).toContain(`label: "${label}"`);
+      expect(text).toContain('nickname: Cicero');
+      // The launch reads the field: the label's word is display alone, never an address.
+      const loaded = validateTeamFile(text);
+      if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+      const worker = loaded.team.seats.find((seat) => seat.name === 'worker')!;
+      expect(seatSessionName(worker, { team: teamIdOf(p.root), teamName: 'acme', mode: 'auto', seats: loaded.team.seats })).toBe('Cicero');
+    }
+  });
+
+  test('a set on a nickname rewrites a label with no middle dot whole', async () => {
+    // The whole label is the persona (labelPersona), so leaving the old word in place would keep
+    // the launch, the roster and the header on the name the set replaced.
+    const p = place(DOTLESS);
+    const teamId = teamIdOf(p.root);
+    const loaded = validateTeamFile(DOTLESS);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    const worker = loaded.team.seats.find((seat) => seat.name === 'worker')!;
+    registerLaunch({ home: p.home, team: loaded.team, root: p.root, by: 'scene' }, worker, 'pane1:p1');
+
+    const sources = sourcesOf(p);
+    const ask = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.nickname', 'Joan', '--request'], ask, sources), ask.err).toBe(0);
+    const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1] ?? '';
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const ran = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.nickname', 'Joan', '--approval', id], ran, sources), ran.err).toBe(0);
+
+    const text = storedTeam(p.root, p.home)?.text ?? '';
+    expect(text).toContain('label: Joan');
+    expect(text).not.toContain('label: Cicero');
+    expect(text).toContain('nickname: Joan');
+    expect(getTeam(p.home, teamId)?.roster.find((line) => line.seat === 'worker')?.nickname).toBe('Joan');
+    const after = validateTeamFile(text);
+    if (!after.ok) throw new Error(JSON.stringify(after.errors));
+    const renamed = after.team.seats.find((seat) => seat.name === 'worker')!;
+    expect(seatSessionName(renamed, { team: teamId, teamName: 'acme', mode: 'auto', seats: after.team.seats })).toBe('Joan');
+    expect(senderDisplayName({ seat: 'worker', team: teamId }, namingFor({ home: p.home, root: p.root }))).toBe('Joan');
+  });
+
+  test('a label naming a word another seat already addresses by leaves both addresses working', async () => {
+    // The set pairs the label with the nickname only when the field could hold it: Joan is the
+    // reviewer's, so the worker keeps Cicero — and the roster re-mark must not write Joan on both.
+    const p = place(TWO);
+    const teamId = teamIdOf(p.root);
+    const loaded = validateTeamFile(TWO);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    for (const [index, seat] of loaded.team.seats.entries()) {
+      registerLaunch({ home: p.home, team: loaded.team, root: p.root, by: 'scene' }, seat, `pane${String(index + 1)}:p1`);
+    }
+    const sources = sourcesOf(p);
+    const ask = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.label', 'Joan · implementer', '--request'], ask, sources), ask.err).toBe(0);
+    const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1] ?? '';
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const ran = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.label', 'Joan · implementer', '--approval', id], ran, sources), ran.err).toBe(0);
+
+    const text = storedTeam(p.root, p.home)?.text ?? '';
+    expect(text).toContain('label: "Joan · implementer"');
+    expect(text).toContain('nickname: Cicero');
+    const roster = getTeam(p.home, teamId)?.roster ?? [];
+    expect(roster.find((line) => line.seat === 'worker')?.nickname).toBe('Cicero');
+    expect(roster.find((line) => line.seat === 'other')?.nickname).toBe('Joan');
+    expect(senderDisplayName({ seat: 'worker', team: teamId }, namingFor({ home: p.home, root: p.root }))).toBe('Cicero');
+    expect(senderDisplayName({ seat: 'other', team: teamId }, namingFor({ home: p.home, root: p.root }))).toBe('Joan');
+    // The launch reads the same: the label's word is a workspace title, not the seat's name.
+    const after = validateTeamFile(text);
+    if (!after.ok) throw new Error(JSON.stringify(after.errors));
+    const worker = after.team.seats.find((seat) => seat.name === 'worker')!;
+    expect(seatSessionName(worker, { team: teamId, teamName: 'acme', mode: 'auto', seats: after.team.seats })).toBe('Cicero');
   });
 
   test('a label with no usable nickname leaves the field alone and still writes', async () => {
