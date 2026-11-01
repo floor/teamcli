@@ -424,3 +424,28 @@ describe('one fresh dialog reading', () => {  const data = loadScreen(
     expect(readDialog('no-such-cli', 'Which name\n')).toEqual({ dialog: null });
   });
 });
+
+describe('the lowest anchored block is live, however its walk stopped', () => {
+  // Operator-3's probe at 805604e8a: a whole question quoted above, and the live question below
+  // it cut at the window's edge. The whole block above certified the old text as complete while
+  // a block with text stood below it, and changing only the live question changed nothing. The
+  // lowest block with any text is the live one however its walk stopped — marker, row cap or
+  // window — and its own end is its completeness, so a window cut reads complete: false.
+  const header = 'Question 1/1 (1 unanswered)';
+  const old = `${header}\nOld transcript question?\n1. old option\n\n`;
+  const live = (question: string): string => `${header}\n${question}\nesc to interrupt\n`;
+
+  test('the live window-cut block is the reading, not the whole block quoted above it', () => {
+    expect(readDialog('codex', old + live('Current partial question?')))
+      .toEqual({ dialog: 'question', text: 'Current partial question? esc to interrupt', complete: false });
+  });
+
+  test('changing only the live question changes the reading', () => {
+    expect(readDialog('codex', old + live('Changed partial question?')))
+      .toEqual({ dialog: 'question', text: 'Changed partial question? esc to interrupt', complete: false });
+  });
+
+  test('a pane whose only dialog text is its working chrome is not a question', () => {
+    expect(readDialog('codex', live('Current partial question?'))).toEqual({ dialog: null });
+  });
+});
