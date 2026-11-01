@@ -71,10 +71,18 @@ test('an uncaptured numeric version does not gain an Antigravity question key', 
   expect(keyFor('antigravity', 'question', '1.2.17')).toBeNull();
 });
 
-test('Codex trust records select the captured printed CLI version without dropping its prefix', () => {
+test('a trust capture without a measured approval key or printed version grants no answer', () => {
+  // The original Codex capture notes record Escape, and no --version print at 0.157.0.
+  // A visible trust layout alone cannot supply an answered key or invent that print.
   const records = profileFor('codex')!.answers;
-  expect(records.find(record => versionMatches(record, 'codex-cli 0.157.0'))?.capture).toBe('codex/0.157.0/trust-folder.txt');
-  expect(records.find(record => versionMatches(record, 'codex-cli 0.157.X'))).toBeUndefined();
+  expect(records).toEqual([]);
+  for (const printed of ['codex-cli 0.157.0', '0.157.0', 'codex-cli 0.157.X']) {
+    expect(records.find(record => versionMatches(record, printed))).toBeUndefined();
+  }
+  // These trust layouts were also left with Escape, without a measured approval key.
+  for (const [cli, printed] of [['cursor', '2026.10.01-14929f9'], ['antigravity', '1.2.16']] as const) {
+    expect(profileFor(cli)!.answers.find(record => versionMatches(record, printed))).toBeUndefined();
+  }
 });
 
 const AT = Date.parse('2026-11-01T15:00:00Z');
