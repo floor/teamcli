@@ -170,10 +170,15 @@ screen:
   # draws, then the question on the `┃` rows under it (`grok/1.0.52/question.txt`). A question
   # the pane wraps over two rows is read whole (`grok/1.0.52/permission.txt`); the bare `┃` row
   # under it ends the walk.
+  # The widget's question sits under an empty `┃` row and ends at the first option row
+  # (`┃  1 (○) alpha`, `┃  z (○) …`, 1.0.52/question.txt). A question wraps with the pane's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
   question_text:
     question:
       after: '^\s*┃\s*$'
-      rows: 2
+      until: '^\s*┃\s*(?:[0-9]+|[a-z])\s*\(.\)'
+      rows: 6
       strip:
         - '^\s*┃\s*'
   composer:

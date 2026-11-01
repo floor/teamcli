@@ -4,7 +4,7 @@
 // runs on the plain form, and the styling tells a greyed suggestion from typed text.
 import { readFileSync } from 'node:fs';
 import { stripSgr } from '../ansi.ts';
-import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type ReadClock, type ScreenOptions } from './screen-core.ts';
+import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type QuestionReading, type ReadClock, type ScreenOptions } from './screen-core.ts';
 import type { ScreenData, VersionRange } from './screen-data.ts';
 import { loadScreen } from './screen-file.ts';
 
@@ -141,6 +141,14 @@ export function readScreen(cli: string | ScreenData, screen: string | undefined,
  *  the screen passed in: it costs one classify, and it never quotes a row the caller did not
  *  see. */
 export function questionText(cli: string | ScreenData, screen: string | undefined): string | null {
+  return questionTextReading(cli, screen)?.text ?? null;
+}
+
+/** The same reading with the block's completeness: a profile that names the row ending a
+ *  dialog's block reads to it, and a block still going when the supported rows run out reads
+ *  `complete: false` — the text is then a cut, and an answer layer refuses it rather than acting
+ *  on part of the question. */
+export function questionTextReading(cli: string | ScreenData, screen: string | undefined): QuestionReading | null {
   const data = typeof cli === 'string' ? DATA[cli] : cli;
   if (data === undefined || screen === undefined) return null;
   const lines = linesFor(data, screen.split('\n'));

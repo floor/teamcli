@@ -37,28 +37,44 @@ timeouts:
   idle: 90s
   exit: 30s
 # The dialog dismiss key the project's own captures recorded, the footer's skip key pressed in
-# a scratch session and the dialog left without an answer: `1.2.16/question-54.txt` and
-# `1.4.2/question.txt`, both "Escape dismissed it". The unsent-comments confirmation
-# (`1.2.16/question-unsent-54.txt`) was closed rather than dismissed, so it claims no key.
+# a scratch session and the dialog left without an answer, on every version the choice screen was
+# captured on: `1.2.16/question-54.txt`, `1.3.5/question.txt`, `1.4.0/question.txt`,
+# `1.4.1/question.txt` and `1.4.2/question.txt`, each "Escape dismissed it". Only those captured
+# versions are listed, one exact record each: a range would press a key on a version no run
+# pressed it on. The unsent-comments confirmation (`1.2.16/question-unsent-54.txt`) was closed
+# rather than dismissed, so it claims no key.
 question_answer:
   - kind: question
     key: escape
     from: '1.2.16'
+    to: '1.2.16'
+  - kind: question
+    key: escape
+    from: '1.3.5'
+    to: '1.3.5'
+  - kind: question
+    key: escape
+    from: '1.4.0'
+    to: '1.4.0'
+  - kind: question
+    key: escape
+    from: '1.4.1'
+    to: '1.4.1'
+  - kind: question
+    key: escape
+    from: '1.4.2'
     to: '1.4.2'
+# No record for `1.2.16`: its captures (`antigravity/1.2.16/trust.txt`, `trust-54.txt`) show
+# the workspace trust dialog, and none answered it — the README records "The workspace was
+# closed without answering the question" and `trust-54.txt` "Escape was the only answer
+# given". A record that sends a key names one captured version that a run answered, so there
+# is none here: a seat printing 1.2.16 is refused as a version with no trust answer rather
+# than pressed on a key no run pressed.
 # The predicate, label and extractor come from the registered
-# antigravity/1.2.16/trust.txt capture. That capture was taken in a fresh untrusted
+# antigravity/1.3.5/trust.txt capture, whose README records `idle.txt` as "the same directory
+# after Enter on the marked trust row". That capture was taken in a fresh untrusted
 # temporary directory, not the lobby, so the record claims no lobby evidence.
 trust_answer:
-  - from: '1.2.16'
-    to: '1.2.16'
-    label: 'Yes, I trust this folder'
-    mark: '>'
-    footer: 'enter Confirm'
-    action: '0d'
-    capture: antigravity/1.2.16/trust.txt
-    extract:
-      after: 'Accessing workspace:'
-      before: 'Do you trust the contents of this project?'
   # The same dialog on 1.3.5 (`antigravity/1.3.5/trust.txt`): the marked row is still
   # `Yes, I trust this folder`, Enter still confirms, and the path still sits between
   # `Accessing workspace:` and the question. The footer gained `↑/↓ Navigate ·` in front
@@ -73,12 +89,26 @@ trust_answer:
     extract:
       after: 'Accessing workspace:'
       before: 'Do you trust the contents of this project?'
-  # The same dialog again on 1.4.0 and 1.4.1 (`antigravity/1.4.1/trust.txt`): the marked row is
-  # still `Yes, I trust this folder`, Enter still confirms, and the path still sits between
-  # `Accessing workspace:` and the question. The footer still reads `↑/↓ Navigate · enter Confirm`.
-  # 1.4.1 adds the model row `Gemini 4 Argon · medium` under the footer; the question itself and
-  # the box's rows are unchanged.
+  # The same dialog on 1.4.0 (`antigravity/1.4.0/trust.txt`): the marked row is still
+  # `Yes, I trust this folder`, Enter still confirms — its `idle.txt` is the same directory after
+  # Enter on the marked row — and the path still sits between `Accessing workspace:` and the
+  # question. The footer reads `↑/↓ Navigate · enter Confirm`. The version is exact, like every
+  # record that sends a key: a version no capture shows is never claimed by a range.
   - from: '1.4.0'
+    to: '1.4.0'
+    label: 'Yes, I trust this folder'
+    mark: '>'
+    footer: 'enter Confirm'
+    action: '0d'
+    capture: antigravity/1.4.0/trust.txt
+    extract:
+      after: 'Accessing workspace:'
+      before: 'Do you trust the contents of this project?'
+  # The same dialog again on 1.4.1 (`antigravity/1.4.1/trust.txt`): the marked row, the footer
+  # and the path's place are unchanged, and its `idle.txt` is the directory after Enter on the
+  # marked row. 1.4.1 adds the model row `Gemini 4 Argon · medium` under the footer; the question
+  # itself and the box's rows are unchanged.
+  - from: '1.4.1'
     to: '1.4.1'
     label: 'Yes, I trust this folder'
     mark: '>'
@@ -225,9 +255,16 @@ screen:
   # Where each dialog's question sits, so a report can quote it. The question tool words its
   # question after the counter's colon (`antigravity/1.2.16/question-54.txt`); the unsent
   # confirmation asks on its own sentence row (`antigravity/1.2.16/question-unsent-54.txt`).
+  # The question is drawn inline after the tool's `Question N/N:` counter, and its block ends at
+  # the first option row (`> 1. alpha`, `  3. Write-in...`, 1.4.2/question.txt). A question wraps
+  # with the pane's width, so the walk reads up to the marker rather than one row; six rows is the
+  # cap this profile declares, and a block still going past it is reported cut, never answered
+  # part-way.
   question_text:
     question:
       inline: '^\s*Question [0-9]+/[0-9]+:'
+      until: '^\s*>?\s*[0-9]+\.\s'
+      rows: 6
       strip:
         - '^\s*Question [0-9]+/[0-9]+:\s*'
     confirmation:

@@ -121,10 +121,15 @@ screen:
   # Where the answer box's question sits, so a report can quote it: the title row, a blank box
   # row, then the question, all inside the frame (`gemini/0.64.0/question.txt`). The frame is
   # stripped from each taken row.
+  # The question's block starts under the box's `Answer Questions` row and ends at the first
+  # option row (`● 1. …` or `  2. …`, 0.64.0/question.txt). A question wraps with the box's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
   question_text:
     question:
       after: '^\s*│\s*Answer Questions\s*│\s*$'
-      rows: 1
+      until: '^\s*│\s*(?:●\s*)?[0-9]+\.\s'
+      rows: 6
       strip:
         - '^\s*│\s*'
         - '\s*│\s*$'

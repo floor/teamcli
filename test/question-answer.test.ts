@@ -44,8 +44,9 @@ describe('the question-answer records a profile lists', () => {
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289 (Claude Code)')?.key).toBe('escape');
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302 (Claude Code)')?.key).toBe('escape');
     expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289 (Claude Code)')?.key).toBe('escape');
-    // No question was captured at 2.1.299, and a bare version is not the printed text.
-    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')).toBeNull();
+    // The 2.1.299 question capture records Escape dismissing it (`2.1.299/question.txt`), so
+    // the printed version answers; a bare version is not the printed text.
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')?.key).toBe('escape');
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')).toBeNull();
     // The held frame was captured but never dismissed: no key is claimed, so the answer layer
     // refuses it rather than pressing a key the run did not record.
@@ -63,6 +64,8 @@ describe('the question-answer records a profile lists', () => {
     if (!cursor) throw new Error('no cursor profile');
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16-e3cb207')?.key).toBe('escape');
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.01-14929f9')?.key).toBe('escape');
+    // The 2026.10.14 capture's README records `Esc to skip` and "Escape dismissed it".
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.14-0f9edde')?.key).toBe('escape');
     expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01-14929f9')?.key).toBe('escape');
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16')).toBeNull();
 
@@ -72,12 +75,38 @@ describe('the question-answer records a profile lists', () => {
 
     const antigravity = profileFor('antigravity');
     if (!antigravity) throw new Error('no antigravity profile');
-    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.4.2')?.key).toBe('escape');
+    // The choice screen was captured on every version the profile was tested against, and each
+    // capture's README records Escape dismissing it, so each captured version answers.
+    for (const version of ['1.2.16', '1.3.5', '1.4.0', '1.4.1', '1.4.2']) {
+      expect(questionAnswerFor(antigravity.questionAnswers, 'question', version)?.key).toBe('escape');
+    }
+    // A version the old `1.2.16`..`1.4.2` range admitted but no capture names is refused: no
+    // run pressed a key on it, so nothing may claim one.
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.2.17')).toBeNull();
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.3.0')).toBeNull();
     // The unsent-comments dialog was closed from, not dismissed with a key.
     expect(questionAnswerFor(antigravity.questionAnswers, 'confirmation', '1.2.16')).toBeNull();
 
     // Grok's capture README records no dismissal key.
     expect(profileFor('grok')?.questionAnswers).toEqual([]);
+  });
+
+  test('every record that sends a key names one captured version, never a range', () => {
+    // A range admits versions no capture ever ran, and a record that presses a key is a claim
+    // about the run that pressed it. The only such record is an exact one: `from` is `to`.
+    const names = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'];
+    const ranged: string[] = [];
+    for (const name of names) {
+      const profile = profileFor(name);
+      if (!profile) continue;
+      for (const record of profile.questionAnswers) {
+        if (record.from !== record.to) ranged.push(`${name} question ${record.from}..${record.to}`);
+      }
+      for (const record of profile.answers) {
+        if (record.from !== record.to) ranged.push(`${name} trust ${record.from}..${record.to}`);
+      }
+    }
+    expect(ranged).toEqual([]);
   });
 
   test('the lookup takes the record that names the kind and the version printed', () => {

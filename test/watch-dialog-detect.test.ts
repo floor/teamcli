@@ -244,7 +244,7 @@ describe('the watch reports the seat and the question, once per occurrence', () 
       expect(readScreen('codex', screen).kind).toBe(kind);
       expect(questionText('codex', screen)).toBe(text);
       // One read gives the kind and the question together, the shape the status adapter uses.
-      expect(readDialog('codex', screen)).toEqual({ dialog: kind, text });
+      expect(readDialog('codex', screen)).toEqual({ dialog: kind, text, complete: true });
     }
     // The composer and a running turn around the same profile stay what they were: neither draws
     // a question, and the approval dialog's footer (`esc to interrupt` is the working row's own
