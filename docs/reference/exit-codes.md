@@ -7,7 +7,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | Id | Command | Code | Meaning | Example |
 | --- | --- | --- | --- | --- |
 | `ack.read` | `ack` | 0 | the message was marked read, or another reader had already marked it read or answered it | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped` | `ack` | 0 | every record of the seat due by the window was marked read, or already was | `team ack --seat worker --older-than 7d` |
 | `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped-failed` | `ack` | 1 | at least one record of the seat due by the window could not be marked read; the others were | `team ack --seat worker --older-than 7d` |
+| `ack.scoped-refused` | `ack` | 1 | the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands | `team ack --seat worker --older-than 7d` |
 | `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
 | `add.approval-requested` | `add` | 0 | an owner-seat request for this add was recorded and sent to the owner seat | `team add <name> --request` |
@@ -116,10 +119,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
 | `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
+| `archive.scoped` | `archive` | 0 | every family of the seat due by the window was moved, or nothing was due | `team archive --seat worker --older-than 7d` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
 | `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
 | `archive.file-owner` | `archive` | 1 | --file is the owner’s | `team archive --file .agents/team.yaml` |
 | `archive.out-owner` | `archive` | 1 | --out is the owner’s | `team archive --out ~/archives` |
+| `archive.scoped-failed` | `archive` | 1 | at least one family of the seat due by the window could not be moved; the others were | `team archive --seat worker --older-than 7d` |
+| `archive.scoped-refused` | `archive` | 1 | the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands | `team archive --seat worker --older-than 7d` |
 | `archive.file` | `archive` | 2 | the team file can’t be read | `team archive --file missing.yaml` |
 | `archive.file-invalid` | `archive` | 2 | the team file can’t be parsed | `team archive --file team.yaml` |
 | `archive.invocation` | `archive` | 2 | the invocation can’t be read | `team archive extra` |

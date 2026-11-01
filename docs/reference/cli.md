@@ -34,6 +34,7 @@ Hidden: no
 Usage:
 
     team ack <id> [--json]
+    team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -45,17 +46,20 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
+| `--seat` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id` | yes | no |
 
 ## `add`
 
@@ -283,6 +287,7 @@ Hidden: no
 Usage:
 
     team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team archive --seat <seat> --older-than <dur> [--dry-run] [--file <path>]
 
 ### Who may run it
 
@@ -299,7 +304,9 @@ Usage:
 | `--help` | no | no | no |
 | `--keep-running` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
 | `--out` | yes | no | no |
+| `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |

@@ -6,9 +6,15 @@ refusals, its waits and its exit codes are that command's own, and a stop it ref
 snapshot where it was written. `--keep-running` takes the snapshot alone. Every run writes a new
 folder: an archive is never overwritten.
 
+`team archive --seat <seat> --older-than <dur>` is the scoped move: it takes one seat's
+acknowledged message families — and the plain-text drops an earlier build wrote — out of the trees
+a bus pass re-reads, into their own dated archive, with a sha256 manifest. Nothing is deleted, the
+team keeps running, and only the owner or a seat this team marks `leads` runs it.
+
 ## Synopsis
 
     team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team archive --seat <seat> --older-than <dur> [--dry-run] [--file <path>]
 
 ## Flags
 
@@ -18,7 +24,13 @@ folder: an archive is never overwritten.
 | `--keep-running` | — | the snapshot alone: the stop is skipped. With it, `--wait`, `--abandon` and `--session` are refused rather than quietly ignored |
 | `--dry-run` | — | print both halves' plans — the archive's and the stop's — and write nothing |
 | `--wait`, `--abandon`, `--session`, `--file` | — | the stop's own flags, handed to `down` unchanged; `--session` and `--file` are the owner's alone |
+| `--seat` | `<seat>` | the scoped form: the seat of this team whose message families are moved |
+| `--older-than` | `<dur>` | the scoped form's window, `90m`, `12h`, `7d` or `30s`, read from the newest file of each family |
 | `--help`, `-h` | — | the usage, and exit 0 |
+
+The scoped form takes `--seat`, `--older-than`, `--dry-run` and `--file` only: `--out`,
+`--keep-running`, `--wait`, `--abandon` and `--session` describe the whole-team snapshot and the
+stop, and are refused with it rather than quietly ignored.
 
 ## The archive folder
 
@@ -43,6 +55,36 @@ no state and no queues, and its archive holds neither. Links are never followed 
 a link where a file would be is skipped, never copied and never read through. A folder that
 already exists is refused, never merged into.
 
+## The scoped move
+
+One *family* is a message record and every sidecar beside it: its `held`, `delivered`, `read`,
+`replied` and `closed` receipts, its bookkeeping markers, and its fallback record. The record must
+verify against this checkout's message key and name the seat, the session and this checkout; a
+`read` or `replied` receipt must verify before the family is due. A family is pre-checked whole
+before anything moves: every source must be readable without following a link and every
+destination name free, so a refusal leaves the family where it is. Its files are then renamed one
+at a time; a failure part way is reported, what moved stays moved, and the manifest holds exactly
+the files that moved. A file is never unlinked.
+
+The scoped move reads the same trees the bus does, and writes beside them, dated by the run's day:
+
+```text
+.agents/send-drops-archive/<YYYY-MM-DD>/<session>/<seat>/   record first, then its sidecars
+.agents/messages-archive/<YYYY-MM-DD>/<seat>/               the earlier store: receipt first
+.agents/archive-manifests/<YYYY-MM-DD>/manifest-<stamp>.tsv   one row per moved file
+```
+
+The manifest holds one header line and one row per moved file — sha256, byte count, and the
+source and destination paths relative to the checkout — and is written only after something
+moved. A dry run prints the count it would move and writes nothing: no folder, no manifest, no
+receipt. One family's failure is reported on stderr and the rest of the run continues.
+
+A plain-text drop an earlier build wrote where a record would be has no record, no receipt and no
+reader: it moves whole, alone, and is never served or acknowledged. The general seat brief, a
+client's record, a family a handoff has pending or taken, an unread or delivered-only family, a
+family newer than the window, and one that does not verify always stay where they are. They are
+counted on the summary as `stay <reason>: <count>`.
+
 ## Who may run it
 
 | Caller | May |
@@ -51,6 +93,8 @@ already exists is refused, never merged into.
 | the orchestrator's or the operator's seat | the snapshot, and then the stop `down` allows that seat |
 | any other seat | the snapshot alone: `down` refuses the stop afterwards, in its own words, and the archive stays where it was written |
 | a run with no terminal | nothing, before anything is written: `team archive: only the owner runs this, from a terminal outside herdr` |
+| the owner or a seat this team marks `leads`, scoped form | the move of one seat's due families; the same admission `team ack --seat` asks |
+| any other seat, scoped form | nothing: `team archive: only the owner or a seat this team marks \`leads\` moves another seat's messages` |
 
 ## Output and exit codes
 
@@ -62,6 +106,10 @@ already exists is refused, never merged into.
 | the folder exists already | `team archive: <folder> exists already: an archive is never overwritten` | 1 |
 | the caller, `--out` or `--file` is refused | `team archive: <reason>` | 1 |
 | the invocation or the team file can't be read | `team archive: <problem>`, with the usage for a bad option | 2 |
+| scoped, every due family moved | `seat <seat>, older than <dur>: <n> family(ies) moved (<f> files)`, one `stay <reason>: <count>` line per reason, then `manifest: <path>` | 0 |
+| scoped, nothing was due | `seat <seat>, older than <dur>: nothing to move` | 0 |
+| scoped, a family could not move | the summary and `team archive: <reason>` on stderr for each family left in place | 1 |
+| scoped, refused | `team archive: only the owner or a seat this team marks \`leads\` moves another seat's messages; this call is <caller>` on stderr | 1 |
 
 ## Example
 

@@ -4,6 +4,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--general",
           "repeatable": false,
           "takesValue": true
@@ -27,6 +33,18 @@
           "takesValue": true
         },
         {
+          "hidden": false,
+          "name": "--older-than",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -38,13 +56,14 @@
       "positionals": [
         {
           "name": "id",
-          "optional": false,
+          "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team ack <id> [--json]"
+        "team ack <id> [--json]",
+        "team ack --seat <seat> --older-than <dur> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-or-own-team",
@@ -551,7 +570,19 @@
         },
         {
           "hidden": false,
+          "name": "--older-than",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--out",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
           "repeatable": false,
           "takesValue": true
         },
@@ -579,7 +610,8 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]"
+        "team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]",
+        "team archive --seat <seat> --older-than <dur> [--dry-run] [--file <path>]"
       ],
       "who": {
         "gate": "owner-or-leads",

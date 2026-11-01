@@ -3,7 +3,7 @@
 import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -54,7 +54,7 @@ import { historyPath, readHistory } from '../src/send/history.ts';
 import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signRecord, signReceiptPayload, writeReceipt, type RecordPayload } from '../src/send/record.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
@@ -1888,6 +1888,36 @@ scene('archive.exists', async (place) => {
   const first = await archived(place, ['--keep-running'], owner, downSources());
   if (first.code !== 0) throw new Error(`${first.err}${first.out}`);
   return show(await archived(place, ['--keep-running'], owner, downSources()), 'exists already');
+});
+const SCOPED_ID = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+scene('archive.scoped', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  messageKeyOf(place.home);
+  return show(await archived(place, ['--seat', 'worker', '--older-than', '7d'], owner, downSources()), 'nothing to move');
+});
+scene('archive.scoped-failed', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  plantRecord(place.home, place.root, 'acme', 'worker', SCOPED_ID, 'a stale body\n', { from: 'lead', at: NOW.toISOString() });
+  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: SCOPED_ID, to: 'worker', root: place.root, session: 'acme', at: NOW.toISOString() }, place.home);
+  const written = writeReceipt(recordDir(place.root, 'acme', 'worker'), receipt, place.home);
+  if (!written.ok) throw new Error(written.reason);
+  const dir = recordDir(place.root, 'acme', 'worker');
+  const old = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000);
+  for (const name of readdirSync(dir)) utimesSync(join(dir, name), old, old);
+  // The day's destination already holds the record's name: the family cannot move whole, so it
+  // is left in place and the run ends 1.
+  const dest = join(place.root, '.agents', 'send-drops-archive', NOW.toISOString().slice(0, 10), 'acme', 'worker');
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, SCOPED_ID), 'occupied\n');
+  return show(await archived(place, ['--seat', 'worker', '--older-than', '7d'], owner, downSources()), 'destination already holds');
+});
+scene('archive.scoped-refused', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  messageKeyOf(place.home);
+  return show(
+    await archived(place, ['--seat', 'worker', '--older-than', '7d'], other, downSources()),
+    'only the owner or a seat this team marks `leads` moves another seat\'s messages',
+  );
 });
 
 async function initial(
@@ -6946,8 +6976,8 @@ for (const [name, command, args, invalidArgs] of [
 {
   const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
   const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
-  async function acked(place: Place, argv: readonly string[]): Promise<Ran> {
-    const io = testIo(place.root, owner);
+  async function acked(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
     return { code: await runAck([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
   }
   scene('ack.read', async (place) => {
@@ -6965,6 +6995,30 @@ for (const [name, command, args, invalidArgs] of [
     return show(await acked(place, [SENT]), 'team ack:');
   });
   scene('ack.usage', async (place) => show(await acked(place, []), '<id> is required'));
+  scene('ack.scoped', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await acked(place, ['--seat', 'worker', '--older-than', '7d']), '0 marked read');
+  });
+  scene('ack.scoped-failed', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'worker', SENT, 'a stale body\n', { from: 'lead', at: NOW.toISOString() });
+    // The receipt name is held by a file that does not verify: the ack may not overwrite it, so
+    // this due record is reported and the run ends 1.
+    const dir = recordDir(place.root, 'acme', 'worker');
+    writeFileSync(join(dir, `${SENT}.read.json`), '{"payload":{}}\n');
+    const old = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000);
+    for (const name of readdirSync(dir)) utimesSync(join(dir, name), old, old);
+    return show(await acked(place, ['--seat', 'worker', '--older-than', '7d']), 'not marked read');
+  });
+  scene('ack.scoped-refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(
+      await acked(place, ['--seat', 'worker', '--older-than', '7d'], other),
+      'only the owner or a seat this team marks `leads` acknowledges another seat\'s messages',
+    );
+  });
 }
 
 {
