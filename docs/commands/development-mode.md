@@ -96,9 +96,16 @@ reload warnings also print to stderr, while the installer admission's is in the 
 
 ## What it never lifts
 
-- **The client pane guard.** It is a machine guard: a client key is never used from inside a team
-  pane, whatever mode is on. Every `--client` form and `team client keygen` keep the refusal — a
-  lift would hand a seat's own process the key the guard exists to keep out of it.
+- **The client pane guard.** It is a machine guard, and dev mode never lifts it: `team send
+  --client`, `team messages --client`, `team client keygen`, `team grant --client-request`, a
+  holder's `team client general-grant --via --key`, and every grant-verified `--client` form
+  (`team up --client`, `team down --client`, `team status --client`, and the bundle ops `add`,
+  `hold`, `pause`, `reload`, `remove`, `restart`, `resume`, `seat`, `seats` and `sessions`) refuse
+  a caller that runs inside a team pane, whatever mode is on — a lift would hand a seat's own
+  process the key the guard exists to keep out of it. The general door, `--general <grant.json>
+  --key <client.key>` on a command, and the own `--general` doors of `up`, `init` and `config` are
+  deliberately not pane-guarded: an owner tool applies changes under a general grant from inside a
+  team pane, and the grant's own bounds cover the call.
 - **The load guard.** After a caller gate folds, `up`, `restart` and `add` still pass the
   launcher's own admission: load per core, free memory, free disk, memory pressure and swap
   growth against the team file's `machine:` limits, and the seat ceiling. A launch over them is
