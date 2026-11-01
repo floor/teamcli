@@ -162,8 +162,56 @@ export function keyFingerprint(key: KeyObject): string {
 
 export type Generation = { format: 1; generation: number; at: string };
 
-/** The generation recorded for this root, or null when none was. */
+/**
+ * How the generation's path reads, walked one component at a time: `absent` when a component is
+ * missing under real folders (this project recorded no generation), `recorded` when the entry and
+ * both folders above it are the real thing, and `unreadable` — never `absent` — for a link, a
+ * component of the wrong shape, or a path that cannot be listed. A virgin project and a project
+ * whose generation is lost behind a broken path are different rules, so a reader that must tell
+ * them apart asks this first.
+ *
+ * The key folder, the generations folder and the entry are read with lstat and never followed: a
+ * generation read through a link is a generation from wherever that link points. Only a component
+ * that is genuinely not there (ENOENT) is absence; ENOTDIR, where a folder should be, is a wrong
+ * shape and refuses.
+ */
+export type GenerationPresence =
+  | { kind: 'absent' }
+  | { kind: 'recorded' }
+  | { kind: 'unreadable'; why: string };
+
+export function generationPresence(root: string, home: string = homedir()): GenerationPresence {
+  const steps = [
+    { path: keyFolder(home), what: 'the key folder', folder: true },
+    { path: generationsFolder(home), what: 'the generations folder', folder: true },
+    { path: generationPath(root, home), what: 'the generation', folder: false },
+  ] as const;
+  for (const step of steps) {
+    let stat;
+    try {
+      stat = lstatSync(step.path);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Nothing there, under folders that are themselves the real thing: a project that never
+      // recorded one. Any other answer (a path that cannot be listed, or ENOTDIR where a folder
+      // should be) is not an absence, and the caller refuses rather than calling it virgin.
+      if (code === 'ENOENT') return { kind: 'absent' };
+      return { kind: 'unreadable', why: `${step.what} cannot be read (${code ?? String(error)}): ${step.path}` };
+    }
+    if (stat.isSymbolicLink()) return { kind: 'unreadable', why: `${step.what} is a link: ${step.path}` };
+    if (step.folder && !stat.isDirectory()) return { kind: 'unreadable', why: `${step.what} is not a folder: ${step.path}` };
+    if (!step.folder && !stat.isFile()) return { kind: 'unreadable', why: `${step.what} is not a regular file: ${step.path}` };
+  }
+  return { kind: 'recorded' };
+}
+
+/**
+ * The generation recorded for this root, or null when none was or when the path is not the real
+ * thing. The walk is repeated here, so a generation is never read through a link or out of a
+ * folder of the wrong shape, even if the path changed after a caller's own check.
+ */
 export function recordedGeneration(root: string, home: string = homedir()): Generation | null {
+  if (generationPresence(root, home).kind !== 'recorded') return null;
   let text: string;
   try {
     text = readFileSync(generationPath(root, home), 'utf8');
@@ -176,29 +224,6 @@ export function recordedGeneration(root: string, home: string = homedir()): Gene
     return stored;
   } catch {
     return null;
-  }
-}
-
-/**
- * Whether this project's approval generation is there, provably absent, or cannot be told apart
- * from absent. `recordedGeneration` answers null both for an absent entry and for one it cannot
- * read — a virgin project and a project whose generation is lost behind a broken file are
- * different rules, so a reader that must tell them apart asks this first. An entry at the path is
- * `recorded` whether or not it parses, because the generation is written before the record and
- * outlives it; a path that cannot be listed is `unknown`, never `absent`.
- */
-export type GenerationPresence = 'absent' | 'recorded' | 'unknown';
-
-export function generationPresence(root: string, home: string = homedir()): GenerationPresence {
-  try {
-    lstatSync(generationPath(root, home));
-    return 'recorded';
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    // No entry where the path should be: a project that never recorded one. Any other answer
-    // (an unreadable folder above it) is not an absence, and the reader refuses rather than
-    // calling the project virgin.
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown';
   }
 }
 

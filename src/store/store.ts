@@ -305,14 +305,18 @@ function linkOnRecordPath(store: string, home: string): string | null {
  *
  * `none` is a project no approval was ever written for on this machine, and the generation is
  * what says so: it is written before any record and outlives the record's removal. A project
- * that has one is never `none` again — a store or a record that has gone missing, or cannot be
- * read, is refused with its own reason, because a record that was removed is not a team that
- * was never approved.
+ * that has one is never `none` again — a store or a record that has gone missing, a generation
+ * path that holds a link or a component of the wrong shape, or anything on either path that
+ * cannot be read, is refused with its own reason, because a record that was removed is not a
+ * team that was never approved.
  */
 export function approvalStanding(root: string, home: string = homedir()): Standing {
   const presence = generationPresence(root, home);
-  const recorded = presence === 'absent' ? null : recordedGeneration(root, home);
-  if (presence !== 'absent' && recorded === null) {
+  if (presence.kind === 'unreadable') {
+    return { kind: 'refused', why: `this project's approval generation cannot be read (${presence.why}): no approval is judged until it is restored` };
+  }
+  const recorded = presence.kind === 'recorded' ? recordedGeneration(root, home) : null;
+  if (presence.kind === 'recorded' && recorded === null) {
     return { kind: 'refused', why: "this project's approval generation cannot be read: no approval is judged until it is restored" };
   }
   const located = locateStores(root, home);
