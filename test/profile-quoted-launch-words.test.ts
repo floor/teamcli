@@ -402,6 +402,24 @@ describe('an unprovable line proves no word, and every reader reads it as 0.5.10
     });
   });
 
+  test('a resume the unprovable script appears to name is not stripped from the line either', () => {
+    // Builder-3's round-8 probe: the outer shell expands the variable inside the inner script's
+    // single quotes, so the text this reader decodes is not the script the CLI runs. Stripping
+    // the resume by a source span would rewrite the line on a reading the shell never hands on.
+    const line = '/bin/sh -c "claude --model m \'$SYNTHETIC_TAIL\' --resume synthetic-one"';
+    expect(cliWordList('claude-code', line)).toBeNull();
+    expect(withResume('claude-code', line, 'synthetic-two')).toBeNull();
+    expect(withoutResume('claude-code', line)).toBeNull();
+    // The controls: a body whose source the reader decoded exactly strips, single- and
+    // double-quoted alike.
+    expect(withoutResume('claude-code', "/bin/sh -c 'claude --model m --resume synthetic-one'")).toBe(
+      "/bin/sh -c 'claude --model m'",
+    );
+    expect(withoutResume('claude-code', '/bin/sh -c "claude --model m --resume synthetic-one"')).toBe(
+      '/bin/sh -c "claude --model m"',
+    );
+  });
+
   test('a quoted settings flag on an unprovable line is not the CLI setting: 0.5.10 did not see it either', () => {
     // The flag name is quoted in the source, so 0.5.10's own `/(^|\s)--settings(=|\s|$)/` never
     // matched it: the reader keeps that answer instead of inventing a setting from the decoded text.

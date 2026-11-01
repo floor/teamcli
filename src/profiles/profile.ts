@@ -411,10 +411,18 @@ export function supportsSessionResume(cli: string): boolean {
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. The line is
- *  read as a shell reads it: a quoted flag name is the flag and a quoted value is the value. */
+ *  read as a shell reads it, through the same proved read every other reader asks
+ *  ({@link cliWordListOf}): a quoted flag name is the flag and a quoted value is the value. A
+ *  line that runs some other program leaves the script's words to the program the script names,
+ *  exactly as a session selection there is not the line's. */
 export function launchSessionId(command: string): string | undefined {
-  const words = shellWords(command.trimEnd());
-  return words === null ? undefined : sessionIdIn(words.map((word) => word.text));
+  const trimmed = command.trimEnd();
+  const words = shellWords(trimmed);
+  if (words === null) return undefined;
+  const program = words[programWordAt(words)];
+  if (program === undefined) return undefined;
+  const own = cliWordListOf(program.text.split('/').pop() ?? program.text, trimmed);
+  return own === null ? undefined : sessionIdIn(own);
 }
 
 /**
@@ -917,17 +925,19 @@ function cliBodyOn(binary: string, command: string): CliBody | null {
     if (found === null) return null;
     const shell = shellProgramOf(text);
     if (shell === null || !POSIX_SHELLS.has(shell)) return null;
-    const layer = quotedWordOf(text, found.word);
-    if (layer === null) return null;
-    const raw = text.slice(found.word.start + layer.openLen, found.word.end - 1);
-    if (raw !== found.word.text) return null;
-    if (!isSimpleCommand(found.word.text)) return null;
-    const start = offset + found.word.start + layer.openLen;
-    if (startsWithCli(binary, found.word.text)) {
-      return { text: found.word.text, start, end: start + found.word.text.length };
+    // The proof every reader and every placement asks, before any span is trusted.
+    const proof = provenScriptWord(text, found.word);
+    if (proof === null) return null;
+    // The position guard this reader needs on top: the raw source between the quotes must be
+    // exactly the text this reader decoded, so a position in the body is a position in the line.
+    const openAt = found.word.start + proof.layer.openLen;
+    if (text.slice(openAt, found.word.end - 1) !== proof.body) return null;
+    const start = offset + openAt;
+    if (startsWithCli(binary, proof.body)) {
+      return { text: proof.body, start, end: start + proof.body.length };
     }
     offset = start;
-    text = found.word.text;
+    text = proof.body;
   }
   return null;
 }
