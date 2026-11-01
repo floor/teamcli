@@ -499,3 +499,43 @@ describe('the lowest anchored block is live, however its walk stopped', () => {
     expect(readDialog('codex', live('Current partial question?'))).toEqual({ dialog: null });
   });
 });
+
+describe('a frame-anchored question is read by its content, not its anchor row', () => {
+  // Operator-3's fixture-derived probe at 98dc7b9dc: every supported Grok question anchor is a
+  // bare `┃` frame row, so testing the anchor row discarded every genuine Grok window-cut
+  // question. With a stale whole block above and the live option rows removed, the reader
+  // returned "Old transcript question?" complete:true for the live question and for its changed
+  // twin. The walk now ends at the widget's own chrome rows, and a widget that shows only chrome
+  // is no reading at all.
+  const captured = fixture('grok/1.0.52/question.txt');
+  const withStale = (screen: string): string => screen.replace('\n  ┃\n  ┃  Which name do you choose?', [
+    '',
+    '  ┃',
+    '  ┃  Old transcript question?',
+    '  ┃  1 (○) stale  Use the stale one.',
+    '  ┃',
+    '  ┃  Which name do you choose?',
+  ].join('\n'));
+  const withoutLiveOptions = (screen: string): string =>
+    screen.split('\n').filter((line) => !line.includes('1 (○) alpha') && !line.includes('z (○) Type your answer')).join('\n');
+  const both = withStale(captured);
+  const cut = withoutLiveOptions(both);
+
+  test('a stale whole block above the live one does not change the live reading', () => {
+    expect(readDialog('grok', both)).toEqual({ dialog: 'question', text: 'Which name do you choose?', complete: true });
+  });
+
+  test('the live question whose options are not on screen is the reading, complete:false', () => {
+    expect(readDialog('grok', cut)).toEqual({ dialog: 'question', text: 'Which name do you choose?', complete: false });
+  });
+
+  test('changing only the current question in that window changes the reading', () => {
+    expect(readDialog('grok', cut.replace('Which name do you choose?', 'Which current question changed?')))
+      .toEqual({ dialog: 'question', text: 'Which current question changed?', complete: false });
+  });
+
+  test('a widget that shows only its own chrome is not a question', () => {
+    expect(readDialog('grok', 'Waiting on answers\n  ┃\n  ┃ ↑/↓ navigate · y copy Enter:submit\nTab:next answer\n'))
+      .toEqual({ dialog: null });
+  });
+});
