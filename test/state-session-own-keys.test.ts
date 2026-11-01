@@ -52,8 +52,8 @@ describe('a write through a session name the team does not hold', () => {
     let inherited: unknown;
     try {
       updateState(dir, (state) => {
-        // The watch's beat, verbatim: this is the write operator-2's probe observed landing on
-        // `Object.prototype` when the map was a plain object.
+        // The watch's beat, verbatim: this is the write that landed on `Object.prototype` when
+        // the map was a plain object.
         const record = (state.sessions['__proto__'] ??= emptySession());
         record.watch = { pid: 123, heartbeat: '2026-11-01T09:00:00.000Z', started_at: '2026-11-01T09:00:00.000Z' };
       });
