@@ -2,7 +2,7 @@
 // `--general <grant.json> --key <client.key>` through the dispatcher, admitted as the owner with no
 // terminal; every refusal is the door's own, before the command runs.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands, main } from '../src/cli.ts';
 import { GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
@@ -14,6 +14,14 @@ import { fixtureBase } from './helpers.ts';
 const base = fixtureBase('.gg-test-door-');
 const home = join(base, 'home');
 const cwd = join(base, 'plain');
+
+/** A program on disk: the adapter keeps the entry's own folder as the whole program. */
+function programEntry(): string {
+  const folder = join(home, 'app');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'cli.js'), 'synthetic entry\n');
+  return join(folder, 'cli.js');
+}
 const savedHome = process.env.HOME;
 beforeAll(() => { process.env.HOME = home; });
 afterAll(() => {
@@ -174,7 +182,7 @@ test('an admitted run carries the verified grant and key paths to the command (i
 test('a unit never names the grant or key that admitted its install: the service-started run is its own admission', async () => {
   const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
   const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-  const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'], presence: true, watch: true };
+  const base = { execPath: '/bin/node', entry: programEntry(), roots: ['/r'], presence: true, watch: true };
   const program = manager.plan(home, base).program;
   expect(program).toContain('service-manager');
   expect(program).not.toContain('--general');
@@ -198,7 +206,7 @@ test('the service-started run line passes the door while the grant holds, and is
 test('the launchd unit carries the installing PATH, so the service finds herdr (0.5.9)', async () => {
   const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
   const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-  const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'] };
+  const base = { execPath: '/bin/node', entry: programEntry(), roots: ['/r'] };
   expect(manager.install(home, { ...base, path: '/home/x/.local/bin:/usr/bin' }).ok).toBe(true);
   const unit = readFileSync(manager.unitPath(home), 'utf8');
   expect(unit).toContain('<key>EnvironmentVariables</key>');

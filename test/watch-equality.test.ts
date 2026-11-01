@@ -9,6 +9,11 @@
 // equal reports alone,
 // and the idle check's owner stage, which reports at `idle_owner` as well as the lead at
 // `idle_first` — added to both sides below —
+// and the prompt-escalation check, which the pass replaced never had at all: the one scenario
+// whose fixture holds a seat at a question dialog past the check's window sets the new
+// `prompt-escalated:` report aside on both sides and asserts the new pass's own report beside
+// the comparison — the fixture's screen is a question by the profile's captured footer, so the
+// report is the rule working, never a misread —
 // and used by this file alone. Every scenario runs both
 // implementations over the same fixtures, step for step, and demands equal reports and equal
 // readings — for a team file without `watch.checks`, which is every fixture here.
@@ -263,8 +268,15 @@ type Step = {
   readings?: Seen[];
 };
 
-/** Runs both implementations over one sequence and demands the same result, every step. */
-function both(name: string, team: TeamFile, steps: Step[]): void {
+/** Runs both implementations over one sequence and demands the same result, every step.
+ *  `apart` names reports a scenario sets aside on both sides: a check the pass replaced had no
+ *  rule to raise, whose own scene asserts the new pass's report. Default: nothing is set aside. */
+function both(
+  name: string,
+  team: TeamFile,
+  steps: Step[],
+  apart: (report: { key: string }) => boolean = () => false,
+): void {
   const before = oldNewMemory();
   const after = newMemory();
   for (const step of steps) {
@@ -276,8 +288,9 @@ function both(name: string, team: TeamFile, steps: Step[]): void {
     // `readings` is the one field the old pass had no idea of (#46, #50); every fixture here
     // names no budget account, so it stays empty and the rest must be equal as before. A step
     // that hands the pass a cache gets it back as it handed it over.
-    expect({ name, at: step.at, reports: now.reports })
-      .toEqual({ name, at: step.at, reports: was.reports });
+    const shared = (reports: { key: string }[]) => reports.filter((one) => !apart(one));
+    expect({ name, at: step.at, reports: shared(now.reports) })
+      .toEqual({ name, at: step.at, reports: shared(was.reports) });
     expect(now.readings).toEqual(step.readings ?? []);
   }
 }
@@ -567,6 +580,21 @@ describe('the modular core against the pass it replaced', () => {
       'deepseek-acme-2': { status: 'blocked', screen: question },
       'claude-operator-acme': { status: 'working', screen: busy },
     });
+    // The prompt-escalation check is newer than the pass above, and this fixture holds
+    // `deepseek-acme-2` at a question dialog: the profile's captured footer (`Enter to select ·
+    // ↑/↓ to navigate · Esc to cancel`) is what the question stage reads, so after the check's
+    // five-minute window the new pass reports it to the owner. The old copy has no rule to
+    // raise, so its `prompt-escalated:` report is set aside on both sides here and the new
+    // pass's own report is pinned beside the comparison, never filtering another scenario.
+    const escalates = (report: { key: string }) => report.key.startsWith('prompt-escalated:');
+    const memory = newMemory();
+    const escalateRun = (at: number) => pass({ team: team(), watch: team().watch, state: emptySession(), live: askedBusy, machine: fine, now: at, memory });
+    expect(escalateRun(0).reports.filter(escalates)).toEqual([]);
+    expect(escalateRun(5 * MIN).reports.filter(escalates)).toEqual([{
+      key: 'prompt-escalated:deepseek-acme-2',
+      text: "deepseek-acme-2 is still at a question prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told",
+      to: 'owner',
+    }]);
     both('reports waiting', team(), [
       { live: askedBusy, at: 0 },
       { live: askedBusy, at: 5 * MIN },
@@ -575,14 +603,14 @@ describe('the modular core against the pass it replaced', () => {
       { live: live(), at: 8 * MIN },
       { live: live(), at: 9 * MIN },
       { live: asked, at: 10 * MIN },
-    ]);
+    ], escalates);
     both('reports waiting past the old fallback', team(), [
       { live: askedBusy, at: 0 },
       { live: askedBusy, at: 9 * MIN },
       { live: askedBusy, at: 10 * MIN },
       { live: askedBusy, at: 20 * MIN },
       { live: asked, at: 21 * MIN },
-    ]);
+    ], escalates);
   });
 
   test('the watch section changes mid-sequence', () => {

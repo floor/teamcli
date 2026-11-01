@@ -1664,7 +1664,7 @@
       "code": 0,
       "command": "daemon",
       "id": "daemon.installed",
-      "meaning": "the user service unit was written and registered, and the system service manager starts the daemon",
+      "meaning": "the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe",
       "trigger": "team daemon install"
     },
     {
@@ -1755,21 +1755,21 @@
       "code": 1,
       "command": "daemon",
       "id": "daemon.install-failed",
-      "meaning": "the system service manager refused to write or start the unit",
+      "meaning": "the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back",
       "trigger": "team daemon install"
     },
     {
       "code": 1,
       "command": "daemon",
       "id": "daemon.install-rollback-failed",
-      "meaning": "the system service manager refused the new unit and the previous one could not be started again, so no daemon was started",
+      "meaning": "the system's service manager refused the new unit or its daemon did not answer the health probe, and the previous one could not be started again, so no daemon was started",
       "trigger": "team daemon install"
     },
     {
       "code": 1,
       "command": "daemon",
       "id": "daemon.install-rolled-back",
-      "meaning": "the system service manager refused to start the new unit; the previous unit was put back and its daemon started again",
+      "meaning": "the new unit failed or its daemon did not answer the health probe; the previous unit was put back, and its daemon started again and answered",
       "trigger": "team daemon install"
     },
     {
@@ -1790,8 +1790,29 @@
       "code": 1,
       "command": "daemon",
       "id": "daemon.run-not-owner",
-      "meaning": "the caller may not run the machine daemon; only the owner or the system service manager starts it",
+      "meaning": "the caller may not run the machine daemon; only the owner or the system's service manager starts it",
       "trigger": "team daemon run"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.pid",
+      "meaning": "the system's service manager's record of the job does not name this process",
+      "trigger": "team daemon run --started-by service-manager"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.program",
+      "meaning": "the record and the unit do not run this executable with these words",
+      "trigger": "team daemon run --started-by service-manager"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.unit",
+      "meaning": "no unit file of this daemon's own can be read: another label, another owner, a group- or world-writable file, or no readable unit on this platform",
+      "trigger": "team daemon run --started-by service-manager"
     },
     {
       "code": 1,
@@ -1804,7 +1825,7 @@
       "code": 1,
       "command": "daemon",
       "id": "daemon.uninstall-failed",
-      "meaning": "the system service manager refused to stop or remove the unit",
+      "meaning": "the system's service manager refused to stop or remove the unit",
       "trigger": "team daemon uninstall"
     },
     {
