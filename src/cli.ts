@@ -227,6 +227,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
     else io.stderr(`team ${name}: ${door.why}\n`);
     return 1; // exit: team.general-refused
   }
+  if (door.kind === 'target') {
+    if (door.json) writeJsonError(io, 'team.general-target', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-target
+  }
   if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
   rest = door.argv;
   io = door.io;
