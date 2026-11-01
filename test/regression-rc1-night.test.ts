@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
-import { showsHeldFrameDialog } from '../src/send/deliver.ts';
+import { dialogKind, showsHeldFrameDialog } from '../src/send/deliver.ts';
 import { appendHistory, historyPath, readHistory } from '../src/send/history.ts';
 import { messageTrace } from '../src/labels/traces.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
@@ -221,7 +221,10 @@ describe('a pane the session holds at its cross-session frame is never a deliver
 
   test('the live capture is the dialog because no composer is under it, and a quote above a box is not', () => {
     expect(showsHeldFrameDialog(HELD_REAL)).toBe(true);
-    expect(readScreen('claude-code', HELD_REAL).kind).toBe('unknown');
+    // The screen is the CLI's own confirmation now that a profile reads it; the guard knows
+    // that kind, so the send still stops here instead of typing into the frame.
+    expect(readScreen('claude-code', HELD_REAL).kind).toBe('confirmation');
+    expect(dialogKind('claude-code', HELD_REAL)).toBe('confirmation');
     // The same sentence quoted in the transcript, with a live composer under it, is not the
     // dialog: the box reader sees the box.
     expect(showsHeldFrameDialog(QUOTE_ABOVE_BOX)).toBe(true);

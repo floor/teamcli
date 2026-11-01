@@ -3097,6 +3097,55 @@
     },
     {
       "code": 0,
+      "command": "peek",
+      "id": "peek.shown",
+      "meaning": "the seat's last lines were printed, masked where a line looks like a credential",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.owner-pane",
+      "meaning": "the named seat is a person's pane, and the owner's pane is never read",
+      "trigger": "team peek desk"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.unknown",
+      "meaning": "the team declares no seat by that name",
+      "trigger": "team peek ghost"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team peek lead --lines 0"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.no-screen",
+      "meaning": "no screen is readable: no pane is recorded, no reader stands, or the read failed",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.not-yours",
+      "meaning": "the caller is not the owner or a seat the read gate places on its recorded pane",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 0,
       "command": "plan",
       "id": "plan.none",
       "meaning": "nothing is takeable",

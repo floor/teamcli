@@ -137,7 +137,7 @@ describe('the event log under concurrent appenders', () => {
       record_id: 'writer-busy',
     });
     const waited = Date.now() - started;
-    expect(busy).toEqual({ ok: false, reason: 'the event log is busy; the record was not written' });
+    expect(busy).toEqual({ ok: false, busy: true, reason: 'the event log is busy; the record was not written' });
     expect(waited).toBeGreaterThanOrEqual(4_500);
     expect(waited).toBeLessThan(8_000);
     expect(readFileSync(path).equals(before)).toBe(true);

@@ -299,6 +299,10 @@ function buildGates(): Record<string, Gate> {
       why: 'a pause stops every seat\'s intake of new work, the orchestrator\'s own lever on the team: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`',
       terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
     },
+    peek: {
+      kind: 'team-read',
+      why: 'the last lines of one seat\'s screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner\'s own pane and a name the file does not declare are refused, and every attempt after the file loads is logged',
+    },
     plan: {
       kind: 'seat-only',
       why: 'a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted',

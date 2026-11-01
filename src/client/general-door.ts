@@ -13,9 +13,10 @@
 //
 // Left to the command itself: `up`, `init` and `config`, which read `--general` with their own
 // admission (an owner-seat-shaped launch, a first record, a signed edit). The dispatcher still
-// reads two things from their line before the command sees it (see `ownGeneral`): a grant that
-// lists entities refuses there too, and `--general` beside the owner-seat door is a usage error,
-// so neither admission path can outrun the 0.5.10 rule. Everything else is the command's.
+// reads three things from their line before the command sees it (see `ownGeneral`): a grant that
+// lists entities refuses there too, `--general` beside the owner-seat door is a usage error, and
+// so is `--general` on a form that never reads a grant. No admission path can outrun the 0.5.10
+// rule that way, and everything else is the command's.
 // Never admitted here: `team client general-grant`, the one command that issues grants — a
 // grant never issues itself.
 import { homedir } from 'node:os';
@@ -88,7 +89,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   drops: ['epoch', 'seat', 'session'],
   feed: ['audit', 'briefs', 'limit', 'seat'],
   forget: ['approval'],
-  grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'type', 'via'],
+  grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'from', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'to', 'type', 'via'],
   hold: ['client', 'team', 'until'],
   import: ['approval'],
   init: ['approval-mode', 'approve-as-owner-seat', 'assertion', 'execute', 'from-archive', 'revoke-approval', 'scope', 'signer'],
@@ -101,6 +102,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   next: [],
   'owner-seat': ['days', 'entity', 'grant-emission', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
+  peek: ['lines'],
   plan: [],
   policy: ['entity', 'file', 'kind', 'project', 'seat', 'until'],
   pr: ['file'],
@@ -232,13 +234,13 @@ function positionals(argv: readonly string[], valued: readonly string[] | undefi
 }
 
 /**
- * The two forms of an `OWN_GENERAL` command that read no team record and are open to any
- * caller, so a grant admits nothing on them: `team config keys` lists the static settings
- * registry (src/commands/config.ts:83, no caller gate on that path) and `team init
- * --approval-modes` lists the approval-mode records (src/commands/init.ts:298, before the
- * actionOutcome return at :343 and the caller read at :351). Accepting `--general` there and
- * ignoring it would make a readable grant look like it admitted the run; it is refused as usage
- * instead.
+ * The forms of an `OWN_GENERAL` command whose branch returns before the command's own
+ * `--general` admission, so the grant is never read: `team config keys` lists the static
+ * settings registry (src/commands/config.ts:83), and `team init --approval-modes` lists the
+ * approval-mode records, `--approval-mode` signs one with an owner signer, and
+ * `--revoke-approval` is the owner's revoke (each branch of src/commands/init.ts runs before
+ * the `--general` one). Accepting `--general` there and ignoring it would make a readable grant
+ * look like it admitted the run; it is refused as usage instead.
  */
 function noRecordForm(name: string, rest: readonly string[], scanned: Scan): string | null {
   if (name === 'config' && positionals(rest, VALUED.config)[0] === 'keys') {
@@ -246,6 +248,12 @@ function noRecordForm(name: string, rest: readonly string[], scanned: Scan): str
   }
   if (name === 'init' && scanned.flags.has('approval-modes')) {
     return 'team init --approval-modes takes no --general: no grant admits it, and it lists the approval modes';
+  }
+  if (name === 'init' && (scanned.counts['approval-mode'] ?? 0) > 0) {
+    return 'team init --approval-mode takes no --general: no grant admits it, and an owner signer sets the mode';
+  }
+  if (name === 'init' && (scanned.counts['revoke-approval'] ?? 0) > 0) {
+    return 'team init --revoke-approval takes no --general: no grant admits it, and only the owner revokes an approval rule';
   }
   return null;
 }
@@ -265,9 +273,10 @@ const OWNER_SEAT_OPTIONS = ['request', 'approval', 'approvals', 'approve-as-owne
  *  - `--general` beside an owner-seat option is refused as usage: the two doors have no defined
  *    meaning together (`init` already refuses that combination in its own words when it gets
  *    there; this makes the refusal reach the line whatever branch would have run);
- *  - `--general` on a form that reads no team record and is open to any caller (`config keys`,
- *    `init --approval-modes`) is refused as usage too: the grant admits nothing there, so it
- *    must not be taken and silently ignored.
+ *  - `--general` on a form whose branch returns before the command's own admission (`config
+ *    keys`, `init --approval-modes`, `init --approval-mode`, `init --revoke-approval`) is
+ *    refused as usage too: the grant would never be read, so it must not be taken and silently
+ *    ignored.
  *
  * Everything else, including the key match and the op, stays with the command's own admission.
  * A grant that cannot be read is left to it too, so each command keeps its own refusal id.

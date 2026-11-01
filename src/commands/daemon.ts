@@ -753,8 +753,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // install writes no flag and starts exactly the daemon it did before.
     ...(parsed.presence ? { presence: true } : {}),
     ...(parsed.watch ? { watch: true } : {}),
-    // Only the paths the door verified for this run (io.general), never a path read elsewhere.
-    ...(io.general !== undefined ? { general: io.general } : {}),
+    // The general grant and client key that admitted this install (io.general) are the door's
+    // for this run and are never written into the unit: the service-started run is admitted by
+    // its own `--started-by service-manager`, and a definition that named a key or a grant would
+    // keep a credential on disk. An earlier unit that named them is rewritten; see below.
     // The installing shell's PATH, so the service finds herdr where the owner's shell does.
     ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
@@ -832,11 +834,17 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       unit_path: installed.unitPath,
       program: plan.program,
       roots: named.roots,
+      // The removal is never silent: a structured run says it in a field, a plain run below in
+      // a sentence.
+      ...(installed.droppedAuthorization === true ? { dropped_authorization: true } : {}),
     });
   } else {
     io.stdout(
       `team daemon: installed for ${String(named.roots.length)} checkout(s); the system service manager starts it at login and restarts it after a failure\n`,
     );
+    if (installed.droppedAuthorization === true) {
+      io.stdout('team daemon: the earlier unit named a client key or a general grant; this unit was rewritten without either\n');
+    }
   }
   // exit: daemon.installed
   return 0;

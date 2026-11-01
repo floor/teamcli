@@ -1,7 +1,7 @@
 // The dev-mode scope, in one place. Kernel amendment 02 (§2.7, catalogue `dev-mode`): the
 // `dev-mode` policy, set at entity, project or team and never at a seat, lifts the "who may run
 // it" gate of the `DEV_MODE_OPERATIONS` commands — up, down, remove of an ordinary seat,
-// register, add, restart, init and reload — while it is `on` for the caller's level. It lifts
+// register, add, restart, init, reload, rename and peek — while it is `on` for the caller's level. It lifts
 // only that gate: the placement, CLI, record and scope checks stay.
 //
 // The owner's urgent widening adds a second, narrower admission: while dev mode

@@ -101,9 +101,17 @@ function programOf(program: ServiceProgram): string[] {
   if (program.presence === true) args.push('--presence');
   // The watch opt-in is separate: a unit may record either, both or neither.
   if (program.watch === true) args.push('--watch');
-  // An install admitted by a general grant: the run is admitted by the same grant, verified anew.
-  if (program.general !== undefined) args.push('--general', program.general.grant, '--key', program.general.key);
+  // The general grant and client key that admitted the install are never written here: the
+  // service-started run is admitted by `--started-by service-manager` itself, and a definition
+  // that named either would keep a credential on disk where the service manager reads it.
   return args;
+}
+
+/** Whether a written unit's run command names a client key or a general grant — the two
+ *  arguments a version before this one persisted, and that an install now rewrites without. */
+function namesAuthorization(text: string): boolean {
+  return [...text.matchAll(/<string>([^<]*)<\/string>/g)]
+    .some((entry) => entry[1] === '--general' || entry[1] === '--key');
 }
 
 function unitText(home: string, program: string[], path?: string): string {
@@ -346,6 +354,9 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
           };
         }
       }
+      // A definition written by a version that persisted the install's authorization is
+      // rewritten without it; the command says so, so the removal is never silent.
+      const droppedAuthorization = prior !== null && namesAuthorization(prior.text);
       let temporary: string | null = null;
       // Whether the rename put the new definition at `path`, replacing any earlier one: a failure
       // after that point leaves no earlier unit for the command to point the owner at.
@@ -387,13 +398,13 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         // The unit the manager just took is the one a later refresh restores, so the program it
         // runs is kept now, while those bytes are the ones in place.
         retainProgram(home, program.entry, text);
-        return { ok: true, unitPath: path };
+        return { ok: true, unitPath: path, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
       }
       run('launchctl', ['bootout', service]);
       const loaded = loadWithRetry(path);
       if (loaded.status === 0) {
         retainProgram(home, program.entry, text);
-        return { ok: true, unitPath: path };
+        return { ok: true, unitPath: path, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
       }
       // The new unit did not start after every bounded retry: the earlier definition is put
       // back and its daemon started, so a failure is reported and a daemon still runs.

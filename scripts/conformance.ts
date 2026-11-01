@@ -80,6 +80,7 @@ function nonAscii(text: string): boolean {
 // CLI folder whose `.txt` files, at any depth, are screen captures the manifest must list; `yaml`
 // holds the YAML cases the same way. An unlisted folder is not exempt: its `.txt` files are named.
 const EXEMPT = new Map<string, string>([
+  ['banner', "constructed wrapper banner screens the banner scenes read, not a shipped CLI's screen"],
   ['hatch', "a fake CLI used only by the hatch tests, not a shipped CLI's screen"],
   ['herdr', 'JSON shapes herdr itself prints, read by the herdr tests'],
   ['linux', 'a fake /proc tree for the load and memory readers'],

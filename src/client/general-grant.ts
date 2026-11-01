@@ -18,7 +18,7 @@ export const GENERAL_OPS = [
   'config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply', 'init',
   'ack', 'add', 'agents', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'client',
   'commits', 'daemon', 'delegate', 'development-mode', 'doctor', 'drops', 'feed', 'forget', 'grant', 'hold', 'import',
-  'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'owner-seat', 'pause', 'plan', 'policy', 'pr', 'proc', 'projects',
+  'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'owner-seat', 'pause', 'peek', 'plan', 'policy', 'pr', 'proc', 'projects',
   'queue', 'raise', 'register', 'release', 'reload', 'remove', 'rename', 'resume', 'revoke', 'route', 'seat', 'seats',
   'sessions', 'settings', 'setup', 'status', 'swap', 'tempo', 'unlock', 'usage', 'watch', 'workflow', 'worktree',
 ] as const;

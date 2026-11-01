@@ -127,6 +127,7 @@ describe('checkLogin with fake command results', () => {
       startsOnLastModel: false,
       modelFlag: () => ({ option: '--model', id: null }),
       answers: [],
+      questionAnswers: [],
     };
     let ran = false;
     expect(checkLogin(noCheckProfile, () => { ran = true; return { status: 0, stdout: '' }; })).toBeNull();

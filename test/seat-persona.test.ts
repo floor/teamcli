@@ -297,4 +297,34 @@ describe('a config write keeps the label and the nickname together', () => {
     expect(text).toContain('label: "lead · implementer"');
     expect(text).toContain('nickname: Cicero');
   });
+
+  test('a roster line carries no nickname that is the seat’s own name', async () => {
+    // A label that names the seat itself adds no second name
+    // (src/file/sections/seats.ts:seatNicknames), so the roster line holds the seat, its role
+    // and its capabilities alone — the seat name is already the address. The same answer holds
+    // when a set renames a seat after itself: the old persona leaves the roster with the label.
+    const p = place();
+    const teamId = teamIdOf(p.root);
+    const loaded = validateTeamFile(TEAM);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    const lead = loaded.team.seats.find((seat) => seat.name === 'lead')!;
+    const worker = loaded.team.seats.find((seat) => seat.name === 'worker')!;
+    const leadId = (registerLaunch({ home: p.home, team: loaded.team, root: p.root, by: 'scene' }, lead, 'wScene:p1') as { id: string }).id;
+    const workerId = (registerLaunch({ home: p.home, team: loaded.team, root: p.root, by: 'scene' }, worker, 'wScene:p2') as { id: string }).id;
+    // The lead's label is its own name; the worker's names Cicero.
+    let roster = getTeam(p.home, teamId)?.roster ?? [];
+    expect(roster.find((line) => line.seat === 'lead')).toEqual({ agent: leadId, seat: 'lead', role: 'coordinator', leads: true });
+    expect(roster.find((line) => line.seat === 'worker')?.nickname).toBe('Cicero');
+
+    const sources = sourcesOf(p);
+    const ask = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.label', 'worker', '--request'], ask, sources), ask.err).toBe(0);
+    const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1] ?? '';
+    expect(id).not.toBe('');
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const ran = ioOf(p.root);
+    expect(await runConfig(['set', 'seats.worker.label', 'worker', '--approval', id], ran, sources), ran.err).toBe(0);
+    roster = getTeam(p.home, teamId)?.roster ?? [];
+    expect(roster.find((line) => line.seat === 'worker')).toEqual({ agent: workerId, seat: 'worker', role: 'implementer' });
+  });
 });

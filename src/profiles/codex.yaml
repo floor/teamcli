@@ -48,23 +48,35 @@ input:
 timeouts:
   idle: 90s
   exit: 30s
-# The folder-only layout, from the registered codex/0.157.0/trust-folder.txt capture: the
-# path is wrapped at column 51, continuing at indent 2. Codex is eligible only when the
-# record also names `lobby_evidence`, a capture of the same dialog in the real lobby; none
-# is registered, so this record answers nothing yet.
-trust_answer:
-  - from: '0.157.0'
-    to: '0.157.0'
-    label: '1. Trust and continue'
-    action: '31'
-    capture: codex/0.157.0/trust-folder.txt
-    extract:
-      after: 'Folder access'
-      until_blank: true
-      join: true
-      indent: 2
-      wrap: 51
-      refuse_line: 'Trusting will apply to the repository root:'
+# No `trust_answer`: the folder trust dialog was captured at 0.157.0
+# (`codex/0.157.0/trust-folder.txt`, `trust-folder-163.txt`), but no capture answered it —
+# both READMEs record Escape quitting it back to the shell, nothing answered — and no capture
+# or note records `codex --version` at 0.157.0, so no version's own print is known. A record
+# that sends a key names one captured version, spelled as that CLI prints it, so there is
+# none: a Codex seat at the trust dialog is refused as a version with no trust answer rather
+# than pressed on a key or a version no run measured. Codex would also be eligible only when
+# a record named `lobby_evidence`, a capture of the same dialog in the real lobby; none is
+# registered. The layout the captures do show, kept for whoever records an answered one: the
+# 54-column pane wraps the path at column 51 and continues it at indent 2, and the 163-column
+# pane draws it on one row.
+# The dialog dismiss keys a 0.161.0 scratch capture recorded, each the key the dialog's own
+# footer names and the dialog left without an answer:
+# - `0.161.0/plan-approval.txt`: the footer's `enter select · esc back`; Escape returned to the
+#   composer with the plan still in the transcript and nothing implemented.
+# - `0.161.0/question.txt`: the footer's `esc to interrupt`; Escape closed the question and
+#   interrupted that turn, the composer back over an empty box.
+# Both are exact, and spelled as `codex --version` prints (`codex-cli 0.161.0`): the answer
+# layer compares that print, and an exact record matches it byte for byte. No other version
+# was captured with either dialog, so no range is claimed.
+question_answer:
+  - kind: plan approval
+    key: escape
+    from: 'codex-cli 0.161.0'
+    to: 'codex-cli 0.161.0'
+  - kind: question
+    key: escape
+    from: 'codex-cli 0.161.0'
+    to: 'codex-cli 0.161.0'
 startup_reads:
   - AGENTS.md
   - .codex/config.toml
@@ -158,10 +170,30 @@ screen:
         - '^\s*›?\s*2\. Yes, and don''t ask again for commands that start'
         - '^\s*›?\s*3\. No, and tell Codex what to do differently \(esc\)\s*$'
       footer: 'Press enter to confirm or esc to cancel'
+  # Plan mode's approval, from the 0.161.0 capture (plan-approval.txt): `/plan` puts the mode on
+  # the status row, and a plan the model wrote ends at this dialog. Its option rows are the
+  # generic numbered rows permission also draws, so plan_approval reads before permission — the
+  # core's order, which a profile cannot move.
+  plan_approval:
+    - all:
+        - '^\s*Implement this plan\?\s*$'
+        - '^\s*›?\s*1\. Yes, implement this plan\s*$'
+        - '^\s*›?\s*2\. Yes, clear context and implement\s*$'
+        - '^\s*›?\s*3\. No, stay in Plan mode\s*$'
+      footer: 'enter select · esc back'
+  # The agent's own question, from the same capture (question.txt): the dialog's
+  # `Question N/N (N unanswered)` header, its first option row, and its footer. The footer's
+  # `esc to interrupt` is the working row's phrase too; the header is what makes this a
+  # question, and the question stage reads before `working`.
+  question:
+    - all:
+        - '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
+        - '^\s*›?\s*1\.\s'
+      footer: 'esc to interrupt'
   # Codex's own update screen, drawn at startup before any composer (startup.txt, 0.157.0).
   # A vendor notice, not a question the agent asked: never answered, and the `tested` range
-  # says the version the capture was taken on. Codex has no `question` stage: a screen that
-  # reads as one is a dialog, and a dialog is never a vendor notice.
+  # says the version the capture was taken on. The `question` stage above is the 0.161.0
+  # plan-mode dialog; this notice's rows are its own, and a dialog is never a vendor notice.
   vendor_notice:
     tested:
       from: '0.157.0'
@@ -200,6 +232,21 @@ screen:
       at_composer: true
   working:
     - any: ['esc to interrupt']
+  # The question each answerable dialog carries, as the 0.161.0 captures draw it: the question
+  # dialog's own text row under its `Question N/N (N unanswered)` header, and the plan approval's
+  # one-line headline. Each reading is the dialog's words, not the transcript above it.
+  # The question's block starts under the dialog's `Question N/N (N unanswered)` header and ends
+  # at the first option row (`› 1. …` or `  2. …`, 0.161.0/question.txt). A question wraps with
+  # the pane's width, so the walk reads up to the marker rather than one row; six rows is the cap
+  # this profile declares, and a block still going past it is reported cut, never answered
+  # part-way.
+  question_text:
+    question:
+      after: '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
+      until: '^\s*›?\s*[0-9]+\.\s'
+      rows: 6
+    plan_approval:
+      inline: '^\s*Implement this plan\?\s*$'
   composer:
     # 0.161.0 draws one chrome row under the status row — `← for agents · ? for shortcuts`,
     # or the same with the warning count (`? for shortcuts … ⚠ 1 warning · f2 to view`) —

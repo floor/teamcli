@@ -27,7 +27,15 @@ export type Report = { key: string; text: string; to: 'operator' | 'owner' | 'or
 // never also merely idle. `permission` covers a permission or trust screen; `question` a question
 // the agent asked; `vendor notice` the CLI's own captured notice; `blocked` a herdr status the
 // screen doesn't explain; `unknown` a herdr status the watch doesn't know.
-export type Attention = 'permission' | 'question' | 'vendor notice' | 'blocked' | 'unknown' | null;
+export type Attention =
+  | 'permission'
+  | 'question'
+  | 'plan approval'
+  | 'confirmation'
+  | 'vendor notice'
+  | 'blocked'
+  | 'unknown'
+  | null;
 
 // A seat's history, kept by the core across passes: what the idle clock counts from.
 export type SeatHistory = {
@@ -118,6 +126,9 @@ export type SeatObservation = {
   parked: boolean;
   stopped: boolean;
   attention: Attention;
+  // The dialog's own question, read off the pane when the profile places one: what the seat waits
+  // to be asked about, quoted in the report. Null for every other screen.
+  dialogText: string | null;
   // The model the seat's screen shows it running, when it has a file seat and the screen says.
   model: { model: string; version: string } | null;
   history: SeatHistory;

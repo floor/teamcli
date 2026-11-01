@@ -10,7 +10,7 @@ import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
 import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
-import type { Mode, Seat, SeatReach } from '../types.ts';
+import type { Mode, Seat, SeatReach, SeatWebhook } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
@@ -101,6 +101,16 @@ export const seats: Section = {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
         },
+        webhook: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            url_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents are the routine\'s URL, read at POST time; the URL itself is never written here, printed or logged' },
+            secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
+          },
+          required: ['url_file', 'secret_file'],
+          $comment: 'the seat\'s webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here',
+        },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -142,7 +152,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -218,6 +228,10 @@ function readSeats(
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
     const inbound = check.oneOf<CrossSessionInbound>(fields.get('inbound'), `${at}: inbound`, [...INBOUND_WORDS]);
+    // The seat's webhook adapter, when the file writes one. A field of the built seat like
+    // `inbound`, omitted when the file writes none — every file that writes none keeps the
+    // digest it had, and a written one is part of the digest the owner approves.
+    const webhook = readWebhook(fields.get('webhook'), at, check);
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     if (assistant && count > 1) {
       check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
@@ -279,6 +293,8 @@ function readSeats(
         ...(human ? { human: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
+        // Omitted when the file configures no webhook adapter, for the same reason.
+        ...(webhook ? { webhook } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -361,6 +377,38 @@ function readLiveness(entry: YamlEntry | undefined, at: string, check: Check): P
     out[field.key as keyof LivenessThresholds] = value.value;
   }
   return bad || Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** The seat's webhook adapter: two absolute paths, both required. The values they name are
+ *  read at POST time and never enter the record. */
+function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): SeatWebhook | undefined {
+  if (!entry) return undefined;
+  const node = entry.value;
+  if (node.kind !== 'map') {
+    if (!(node.kind === 'scalar' && node.value === null)) {
+      check.fail(node.line, `${at}: webhook must be a map of url_file and secret_file`);
+      return undefined;
+    }
+    check.fail(node.line, `${at}: webhook.url_file is required`);
+    check.fail(node.line, `${at}: webhook.secret_file is required`);
+    return undefined;
+  }
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file']);
+  const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
+  const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
+  if (urlFile === undefined || secretFile === undefined) return undefined;
+  return { urlFile, secretFile };
+}
+
+function readWebhookPath(
+  value: string | undefined, name: string, entry: YamlEntry | undefined, check: Check,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isAbsolute(value)) {
+    check.fail(entry?.value.line ?? 0, `${name} must be an absolute path`);
+    return undefined;
+  }
+  return value;
 }
 
 function readEffort(

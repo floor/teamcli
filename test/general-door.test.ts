@@ -171,14 +171,16 @@ test('an admitted run carries the verified grant and key paths to the command (i
   expect(refused.kind).toBe('refused');
 });
 
-test('a unit installed under a general grant runs the daemon under the same grant, and a plain one does not', async () => {
+test('a unit never names the grant or key that admitted its install: the service-started run is its own admission', async () => {
   const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
   const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
   const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'], presence: true, watch: true };
-  const granted = manager.plan(home, { ...base, general: { grant: all, key: a.path } }).program;
-  expect(granted.slice(-4)).toEqual(['--general', all, '--key', a.path]);
-  expect(granted).toContain('service-manager');
-  expect(manager.plan(home, base).program).not.toContain('--general');
+  const program = manager.plan(home, base).program;
+  expect(program).toContain('service-manager');
+  expect(program).not.toContain('--general');
+  expect(program).not.toContain('--key');
+  expect(program).not.toContain(all);
+  expect(program).not.toContain(a.path);
 });
 
 test('the service-started run line passes the door while the grant holds, and is refused once it does not', async () => {
