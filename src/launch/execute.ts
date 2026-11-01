@@ -1156,7 +1156,12 @@ export async function executePlan(
       }
       case 'launch': {
         reportProgress(op.seat, 'launching');
-        if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
+        if (op.notice) {
+          hold(op.seat, `${op.seat}: ${op.notice}\n`);
+          // The plan's fallback placement is said once here, and `team.log` keeps the same
+          // words: a seat that lacks its rules must be explainable after the scrollback is gone.
+          host.log(op.seat, op.notice);
+        }
         const why = host.allow(op.seat);
         if (why) {
           dropped.add(op.seat);
