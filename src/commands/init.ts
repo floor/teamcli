@@ -304,14 +304,14 @@ export async function runInit(
     actionOutcome = 'done';
   } else if (args.values['revoke-approval'] !== undefined) {
     // Revoking is the owner's, on the same gate `team approvals revoke` reads: her terminal
-    // outside herdr, or an owner-signer's `team-revoke-approval` always rule covering this
-    // folder. The rule carries the owner's signature, so a seat admitted by it still acts as
-    // the owner's answer, never on its own say-so.
+    // outside the terminal host, or an owner-signer's `team-revoke-approval` always rule
+    // covering this folder. The rule carries the owner's signature, so a seat admitted by it
+    // still acts as the owner's answer, never on its own say-so.
     const caller = callerOf(io);
     const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
     if (!isOwner(caller) && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
-      const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
-      actionRefusal(detached ?? `only the owner revokes an approval rule, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+      const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
+      actionRefusal(detached ?? `only the owner revokes an approval rule, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
       actionOutcome = 'refused';
     } else {
       const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);

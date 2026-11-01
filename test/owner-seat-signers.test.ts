@@ -390,7 +390,7 @@ describe('team init approved by the owner seat', () => {
   });
 
   // Revoking a team-create rule is the owner's, the same gate `team approvals revoke`
-  // reads — her terminal outside herdr, or an owner-signer's `team-revoke-approval` always rule.
+  // reads — her terminal outside the terminal host, or an owner-signer's rule.
   test('only the owner revokes a team-create rule: a seat and a line with no terminal are refused', async () => {
     const s = setup('init-revoke-caller');
     const first = repo(s.base, 'docs');
@@ -405,7 +405,7 @@ describe('team init approved by the owner seat', () => {
     expect(existsSync(rule)).toBe(true);
     const detached = await s.runAs({ kind: 'owner-no-tty' }, first, ['--revoke-approval', id]);
     expect(detached.code).toBe(1);
-    expect(detached.err).toContain('only the owner runs this, from a terminal outside herdr');
+    expect(detached.err).toContain('only the owner runs this, from a terminal outside the terminal host');
     expect(existsSync(rule)).toBe(true);
     const owner = await s.runAs({ kind: 'owner' }, first, ['--revoke-approval', id]);
     expect(owner.code, owner.err).toBe(0);
