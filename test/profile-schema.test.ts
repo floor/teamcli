@@ -147,6 +147,33 @@ describe("the profiles' schema", () => {
     expect(errors(trust({ any: ['^x$'], without_rule: true }))).toEqual([]);
   });
 
+  test('reason belongs to a rate-limit rule, as the loader reads it', () => {
+    // The loader reads `reason` on a rate_limit stage's rule alone (screen-file's ruleOf) and
+    // refuses it on every other stage's rule as an unknown key. The schema is the published
+    // shape, so it must say the same — and refuse a rule of only `reason`, which would match
+    // every screen.
+    const rule = (stage: string, one: Record<string, unknown>): unknown => ({
+      format: 1, cli: 'sample', exit: 'bye', screen: { [stage]: [one], composer: COMPOSER },
+    });
+    expect(errors(rule('rate_limit', { any: ['^Usage limit reached'], reason: 'needs a choice' }))).toEqual([]);
+    expect(errors(rule('rate_limit', { reason: 'needs a choice' })).length).toBeGreaterThan(0);
+    for (const stage of ['trust', 'permission', 'exit_question', 'question', 'provider_error', 'working']) {
+      expect([stage, errors(rule(stage, { any: ['^x$'], reason: 'needs a choice' })).length > 0]).toEqual([stage, true]);
+    }
+    const mapped = (stage: string, one: Record<string, unknown>, extra: Record<string, unknown> = {}): unknown => ({
+      format: 1, cli: 'sample', exit: 'bye', screen: { [stage]: { ...extra, rules: [one] }, composer: COMPOSER },
+    });
+    expect(errors(mapped('rate_limit', { any: ['^Usage limit reached'], reason: 'needs a choice' }, { reason: 'switch the model' }))).toEqual([]);
+    expect(errors(mapped('rate_limit', { reason: 'needs a choice' })).length).toBeGreaterThan(0);
+    // The stage's own reason is the loader's too, and the same refusal guards the flag on a
+    // stage that is not a rate limit.
+    expect(errors(mapped('trust', { any: ['^x$'] }, { reason: 'needs a choice' })).length).toBeGreaterThan(0);
+    const notice = (one: Record<string, unknown>): unknown => ({
+      format: 1, cli: 'sample', exit: 'bye', screen: { vendor_notice: { rules: [one], tested: { from: '1', to: '2' } }, composer: COMPOSER },
+    });
+    expect(errors(notice({ any: ['^x$'], reason: 'needs a choice' })).length).toBeGreaterThan(0);
+  });
+
   test('the composer’s ignore_case is the one mode the loader reads it on', () => {
     const doc = (mode: string, ignoreCase = false): unknown => {
       const composer: Record<string, unknown> = { mode, prompt: '^>', placeholders: [{ equals: '' }] };
