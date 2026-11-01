@@ -102,6 +102,14 @@ describe('one commit', () => {
     expect(kindsOf('unsigned')).toEqual(['signature-missing']);
   });
 
+  test('a NUL in a raw commit message does not hide the line after it', () => {
+    const literal = repo.literal('feat: literal\n\nhidden\u0000WEB-12', hash.old);
+    const report = runCheck(config(), { cwd: repo.path, ref: literal });
+    expect(report.commits).toHaveLength(1);
+    const findings = report.commits[0]!.findings;
+    expect(findings.find((finding) => finding.kind === 'forbidden')?.line).toBe(3);
+  });
+
   test('prose in the trailer paragraph is named as that case', () => {
     expect(kindsOf('prose')).toEqual(['signature-in-prose']);
   });
