@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
@@ -14,6 +13,7 @@ import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
+import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -207,7 +207,9 @@ describe('the real restart launch', () => {
 });
 
 function makeFixture(rawYaml = TEAM_YAML): Fixture {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-restart-')));
+  // The state folder sits under a short base so the endpoint path a managed launch owns for this
+  // seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path limit.
+  const base = realpathSync(mkdtempSync('/private/tmp/team-restart-'));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -421,9 +423,19 @@ function makeHarness(
   return { sources, did };
 }
 
+/** The endpoint URL a managed launch owns for this fixture's seat under `binding`. The bind reads
+ *  only this URL, so a scene recording any other records an endpoint this seat's launch never
+ *  started. */
+function ownedEndpointUrl(fixture: Fixture, binding: string): string {
+  const socket = codexEndpointSocket(fixture.dir, 'acme', 'worker', binding);
+  if (socket === null) throw new Error('the fixture state folder is too long for an owned endpoint path');
+  return socket.url;
+}
+
 /** What a real managed Codex launch leaves on the seat: a fresh presence incarnation and the
  *  app-server endpoint recorded under it, bound to each other. */
-function managedEndpoint(fixture: Fixture, binding: string, url = 'unix:///tmp/worker.sock'): NonNullable<Launch['codexEndpoint']> {
+function managedEndpoint(fixture: Fixture, binding: string): NonNullable<Launch['codexEndpoint']> {
+  const url = ownedEndpointUrl(fixture, binding);
   return {
     managed: async () => {
       updateState(fixture.dir, (state) => {
@@ -1419,7 +1431,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     // The read is addressed by the seat's own recorded endpoint, never a home-derived path.
-    expect(asked).toEqual(['unix:///tmp/worker.sock']);
+    expect(asked).toEqual([ownedEndpointUrl(fixture, BINDING)]);
     expect(io.out).not.toContain('pull-only');
     // Both records now name the endpoint's thread, under the incarnation the launch wrote.
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;

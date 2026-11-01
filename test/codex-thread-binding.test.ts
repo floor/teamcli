@@ -21,6 +21,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../src/daemon/presence/codex-source.ts';
+import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import { bindCodexSeatThread } from '../src/launch/codex-thread-binding.ts';
 import { findAgent, registerAgent } from '../src/registry/agents.ts';
@@ -32,6 +33,7 @@ import { startFakeThreadEndpoint, type FakeThreadEndpoint } from './helpers/fake
 const THREAD = '01a1945b-5982-7751-9476-6a2ef1c45d6d';
 const OTHER_THREAD = '01a1945b-1111-7222-8333-444455556666';
 const OLD_THREAD = '019a0000-aaaa-7bbb-8ccc-ddddeeeeffff';
+const BINDING = 'prs_0123456789ab';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 
@@ -46,7 +48,9 @@ function world(): {
   dir: string;
   socketPath: string;
 } {
-  const base = mkdtempSync(join(tmpdir(), 'teamcli-thread-binding-'));
+  // The state folder sits under a short base so the owned endpoint path this build computes
+  // (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path limit.
+  const base = mkdtempSync('/private/tmp/teamcli-thread-');
   const root = join(base, 'team-root');
   const home = join(base, 'home');
   const dir = join(base, 'state');
@@ -54,6 +58,17 @@ function world(): {
   mkdirSync(dir, { recursive: true });
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   return { base, root, home, dir, socketPath: join(base, 'run', 'codex.sock') };
+}
+
+/** The endpoint path this build's managed launch gives the scene's seat under the binding. */
+function ownedSocket(
+  w: ReturnType<typeof world>,
+  seat = 'worker',
+  binding = BINDING,
+): { url: string; path: string } {
+  const socket = codexEndpointSocket(w.dir, 'teamcli', seat, binding);
+  if (socket === null) throw new Error('the fixture state folder is too long for an owned endpoint path');
+  return socket;
 }
 
 async function endpoint(
@@ -210,13 +225,12 @@ describe('readLoadedCodexThreads', () => {
 });
 
 describe('bindCodexSeatThread', () => {
-  const BINDING = 'prs_0123456789ab';
-
   test('one loaded thread is bound to the state and the agent record, and the class reads between-turns', async () => {
     const w = world();
-    await endpoint(w.socketPath, { ids: [THREAD] });
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
     const agentId = registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
-    const state = seatRecord(BINDING, w.socketPath);
+    const state = seatRecord(BINDING, socket.path);
     writeState(w.dir, state);
 
     const bound = await bindCodexSeatThread({
@@ -258,9 +272,10 @@ describe('bindCodexSeatThread', () => {
 
   test('several loaded threads prove nothing; the records are left as they were', async () => {
     const w = world();
-    await endpoint(w.socketPath, { ids: [THREAD, OTHER_THREAD] });
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD, OTHER_THREAD] });
     registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
-    const state = seatRecord(BINDING, w.socketPath);
+    const state = seatRecord(BINDING, socket.path);
     writeState(w.dir, state);
 
     const bound = await bindCodexSeatThread({
@@ -281,9 +296,10 @@ describe('bindCodexSeatThread', () => {
 
   test('a state naming a thread its endpoint does not hold is not rebound', async () => {
     const w = world();
-    await endpoint(w.socketPath, { ids: [THREAD] });
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
     registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
-    const state = { ...seatRecord(BINDING, w.socketPath), agent_session: OLD_THREAD };
+    const state = { ...seatRecord(BINDING, socket.path), agent_session: OLD_THREAD };
     writeState(w.dir, state);
 
     const bound = await bindCodexSeatThread({
@@ -303,9 +319,10 @@ describe('bindCodexSeatThread', () => {
 
   test('a state naming a thread the endpoint holds repairs a record that lost it', async () => {
     const w = world();
-    await endpoint(w.socketPath, { ids: [THREAD] });
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
     registerWorker(w.home, w.root);
-    const state = { ...seatRecord(BINDING, w.socketPath), agent_session: THREAD };
+    const state = { ...seatRecord(BINDING, socket.path), agent_session: THREAD };
     writeState(w.dir, state);
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBeUndefined();
 
@@ -332,9 +349,10 @@ describe('bindCodexSeatThread', () => {
 
   test('a record whose handle is another incarnation\'s is refused before the state is written', async () => {
     const w = world();
-    await endpoint(w.socketPath, { ids: [THREAD] });
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
     registerWorker(w.home, w.root, { agentSession: OLD_THREAD, seatHandle: 'seat_999999999999' });
-    const state = seatRecord(BINDING, w.socketPath);
+    const state = seatRecord(BINDING, socket.path);
     writeState(w.dir, state);
 
     const bound = await bind(w, state);
@@ -343,6 +361,47 @@ describe('bindCodexSeatThread', () => {
     // so it is refused and left as it was, and the state never gains the thread.
     expect(bound.kind).toBe('unbound');
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another agent for this seat');
+    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  test('an endpoint recorded inside another seat\'s run folder is not read or bound', async () => {
+    const w = world();
+    const foreign = ownedSocket(w, 'other');
+    await endpoint(foreign.path, { ids: [THREAD] });
+    registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
+    const state = seatRecord(BINDING, foreign.path);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state);
+
+    // The record is well-formed and its binding matches, but its URL is another seat's own
+    // socket: nothing proves this seat's launch gave it, so the thread is not read.
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('not the one its launch owns');
+    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  test('an endpoint two seats both record is refused as ambiguous', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
+    registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
+    const state = seatRecord(BINDING, socket.path);
+    updateState(w.dir, (file) => {
+      const session = (file.sessions.teamcli ??= emptySession());
+      session.seats.worker = state;
+      // A second live seat records the very same endpoint.
+      session.seats.other = { ...seatRecord(BINDING, socket.path), id: 'seat_111111111111', pane: 'pane-other' };
+    });
+
+    const bound = await bind(w, state);
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('another seat records the same Codex endpoint');
     expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
     expect(deliveryOf(w).class).toBe('pull-on-turn');

@@ -14,10 +14,15 @@
 // before either record changes. A read that proves nothing leaves both records as they were, and
 // the caller reports the seat pull-only rather than claiming a queue that cannot be addressed.
 import type { CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
-import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import {
+  inspectRecordedCodexEndpoint,
+  readCodexEndpointRecord,
+  type CodexEndpointRecord,
+} from '../daemon/presence/endpoint-record.ts';
 import { recordAgentSession, type Agent } from '../registry/agents.ts';
 import { recordedSeatRecord } from '../registry/resume.ts';
-import { readState, updateState, type SeatState } from '../state.ts';
+import { readState, updateState, type SeatState, type State } from '../state.ts';
+import { codexEndpointSocket } from './codex-endpoint.ts';
 
 export type CodexThreadBinding =
   | { kind: 'bound'; id: string }
@@ -28,6 +33,54 @@ type StateWrite = 'written' | 'named' | 'moved' | 'gone';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The first other seat whose record names `url`, as `<session>/<seat>`, or null. The record is
+ *  read by shape, not by its binding, so a predecessor's record that still names the same socket
+ *  makes the endpoint just as ambiguous. */
+function sharingSeat(file: State, session: string, seat: string, url: string): string | null {
+  for (const [otherSession, one] of Object.entries(file.sessions)) {
+    for (const [otherSeat, other] of Object.entries(one.seats)) {
+      if (otherSession === session && otherSeat === seat) continue;
+      const record = readCodexEndpointRecord(other.codex_endpoint);
+      if (record !== null && record.url === url) return `${otherSession}/${otherSeat}`;
+    }
+  }
+  return null;
+}
+
+/** The endpoint record this seat's incarnation can prove as its own. The strict read proves the
+ *  record was written under the seat's current presence binding; the owned-path rule — the one a
+ *  stop acts on — proves the URL is exactly the socket this launch gives this session and seat
+ *  under that binding; and no other seat's record may name the same URL. A record pointing into
+ *  another seat's run folder, a record whose URL is not the binding's own socket, or one two
+ *  seats both name is ambiguous ownership: reading it would bind this seat to a conversation its
+ *  runtime queue does not address. */
+function ownedEndpoint(
+  input: { dir: string; session: string; seat: { name: string } },
+  state: SeatState,
+  file: State,
+): { kind: 'ok'; url: string; binding: string; record: CodexEndpointRecord } | { kind: 'unbound'; why: string } {
+  const recorded = inspectRecordedCodexEndpoint(state.codex_endpoint, state.presence_binding);
+  if (recorded.kind === 'absent') {
+    return { kind: 'unbound', why: 'the seat records no managed Codex endpoint' };
+  }
+  if (recorded.kind === 'invalid') {
+    return {
+      kind: 'unbound',
+      why: `the seat's recorded Codex endpoint cannot be used (${recorded.why})`,
+    };
+  }
+  const binding = recorded.record.binding;
+  const own = codexEndpointSocket(input.dir, input.session, input.seat.name, binding);
+  if (own === null || own.url !== recorded.record.url) {
+    return { kind: 'unbound', why: 'the seat’s recorded Codex endpoint is not the one its launch owns' };
+  }
+  const shared = sharingSeat(file, input.session, input.seat.name, recorded.record.url);
+  if (shared !== null) {
+    return { kind: 'unbound', why: `another seat records the same Codex endpoint (${shared})` };
+  }
+  return { kind: 'ok', url: recorded.record.url, binding, record: recorded.record };
 }
 
 /** The seat's agent record by the strict door every binding uses — team, seat, orphan mark, the
@@ -83,20 +136,21 @@ export async function bindCodexSeatThread(input: {
       why: 'the seat state names no stable id, so its record cannot be told from another incarnation’s',
     };
   }
+  // The whole state is read once for the sharing proof: an endpoint two seats both name is not
+  // this seat's own, whatever the record's own fields say.
+  let file: State;
+  try {
+    file = readState(input.dir);
+  } catch (error) {
+    return { kind: 'unbound', why: `the team state could not be read (${errorText(error)})` };
+  }
+  const own = ownedEndpoint(input, state, file);
+  if (own.kind === 'unbound') return own;
   const entry = strictRecordOf(input, state);
   if (entry.kind === 'unbound') return entry;
-  const recorded = inspectRecordedCodexEndpoint(state.codex_endpoint, state.presence_binding);
-  if (recorded.kind !== 'ok') {
-    return {
-      kind: 'unbound',
-      why: recorded.kind === 'invalid'
-        ? `the seat's recorded Codex endpoint cannot be used (${recorded.why})`
-        : 'the seat records no managed Codex endpoint',
-    };
-  }
   let read: CodexLoadedThreadsRead;
   try {
-    read = await input.read(recorded.record.url);
+    read = await input.read(own.url);
   } catch (error) {
     read = { kind: 'unavailable', why: `the endpoint read failed (${errorText(error)})` };
   }
