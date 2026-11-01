@@ -286,18 +286,31 @@ export async function runInit(
     actionDone('answered', 'team init: team-create approval rules', { rules: listed.rules, ignored: listed.ignored });
     actionOutcome = 'done';
   } else if (args.values['approval-mode'] !== undefined) {
-    // Signed once by an owner signer at setup; never by the requester at action time.
-    const assertion = assertionFile(args.values.assertion, io.cwd);
-    const scope = args.values.scope;
-    const set = scope === undefined
-      ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
-      : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
-        ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
-        ...(assertion !== undefined ? { assertion } : {}),
-      });
-    if (!set.ok) actionRefusal(set.why);
-    else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
-    actionOutcome = set.ok ? 'done' : 'refused';
+    // A mode change replaces the folder's signed record, so it is a revoke as much as a set:
+    // the owner's act, admitted by her terminal or by an owner-signer's `team-revoke-approval`
+    // always rule, exactly as the revoke below and `team approvals revoke` admit it. The `none`
+    // record is signed by the owner signer inside setApprovalMode, which removes nothing before
+    // that signature succeeds; `per-action` and `always-rule` remove nothing at all until the
+    // caller is admitted here.
+    const caller = callerOf(io);
+    const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+    if (!isOwner(caller) && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
+      const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
+      actionRefusal(detached ?? `only the owner changes an approval mode, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
+      actionOutcome = 'refused';
+    } else {
+      const assertion = assertionFile(args.values.assertion, io.cwd);
+      const scope = args.values.scope;
+      const set = scope === undefined
+        ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
+        : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
+          ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
+          ...(assertion !== undefined ? { assertion } : {}),
+        });
+      if (!set.ok) actionRefusal(set.why);
+      else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
+      actionOutcome = set.ok ? 'done' : 'refused';
+    }
   } else if (args.flags.has('approval-modes')) {
     const listed = listApprovalModes(actionHome, store, now);
     actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });

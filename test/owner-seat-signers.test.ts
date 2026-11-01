@@ -453,12 +453,16 @@ describe('approval mode none for team-create: one owner signature at setup, none
     const counted: OwnerSeatKeyStore = { ...store, sign: (l, m, r) => { signs += 1; return store.sign(l, m, r); } };
     expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, counted).ok).toBe(true);
     allowSigners(h.home, ['mac']);
-    const run = async (cwd: string, argv: string[]) => {
+    // Changing a mode is the owner's from her terminal; a scene that wants another caller pins
+    // it rather than letting the machine's own process tree decide.
+    const runAs = async (caller: Caller, cwd: string, argv: string[], store: OwnerSeatKeyStore = counted) => {
       const c = io(cwd);
-      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: counted });
+      c.io.caller = caller;
+      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: store });
       return { code, out: c.out(), err: c.err(), json: argv.includes('--json') && c.out().trim().startsWith('{') ? JSON.parse(c.out()) : null };
     };
-    return { ...h, store: counted, run, signs: () => signs };
+    const run = (cwd: string, argv: string[]) => runAs({ kind: 'owner' }, cwd, argv);
+    return { ...h, store: counted, run, runAs, signs: () => signs };
   }
 
   test('a signed none mode lets request then execute run with no answer, audited via policy, no signature at action time', async () => {
@@ -531,5 +535,78 @@ describe('approval mode none for team-create: one owner signature at setup, none
     const root = repo(s.base, 'later');
     const id = (await s.run(root, ['--request', '--json'])).json.request_id as string;
     expect((await s.run(root, ['--execute', id])).code).toBe(1);
+  });
+
+  // A mode change removes the signed record of that scope, so it is a revoke: the owner's act,
+  // admitted by her terminal or by an owner-signer's team-revoke-approval rule. A seat must not
+  // remove or replace the record at all, and the removal waits for any replacement's signature.
+  test('a seat changes no approval mode: every mode is refused and the signed record stays byte-identical', async () => {
+    const s = setup('mode-seat-gate');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const path = join(actionApprovalsFolder(s.home), `${modeId}.json`);
+    const original = readFileSync(path);
+    let seatSigns = 0;
+    const refusing = { ...s.store, sign: () => { seatSigns += 1; return { ok: false as const, why: 'synthetic signer refused' }; } };
+    for (const mode of ['per-action', 'always-rule', 'none']) {
+      const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, s.base, ['--approval-mode', mode, '--scope', scope, '--json'], refusing);
+      expect(seat.code, mode).toBe(1);
+      // With --json the refusal is the error envelope on stdout; the seat's name is in the words.
+      const message = seat.json.error.message as string;
+      expect(message, mode).toContain('only the owner changes an approval mode');
+      expect(message, mode).toContain('probe');
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path).equals(original)).toBe(true);
+    }
+    // No owner signer was called for any of them: the caller is refused before the branch runs.
+    expect(seatSigns).toBe(0);
+    const detached = await s.runAs({ kind: 'owner-no-tty' }, s.base, ['--approval-mode', 'per-action', '--scope', scope]);
+    expect(detached.code).toBe(1);
+    expect(detached.err).toContain('only the owner runs this, from a terminal outside the terminal host');
+    expect(readFileSync(path).equals(original)).toBe(true);
+  });
+
+  test('a refused signature leaves the signed mode record byte-identical', async () => {
+    const s = setup('mode-sign-refused');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const path = join(actionApprovalsFolder(s.home), `${modeId}.json`);
+    const original = readFileSync(path);
+    const refusing = { ...s.store, sign: () => ({ ok: false as const, why: 'synthetic signer refused' }) };
+    const c = io(s.base);
+    c.io.caller = { kind: 'owner' };
+    const code = await runInit(['--approval-mode', 'none', '--scope', scope], c.io, s.home, undefined, { loggedIn: () => true, ownerSeatStore: refusing });
+    expect(code).toBe(1);
+    expect(c.err()).toContain('synthetic signer refused');
+    // The replacement was never signed, so nothing was removed and nothing was added.
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path).equals(original)).toBe(true);
+    expect(readdirSync(actionApprovalsFolder(s.home)).filter((name) => name.startsWith('am_'))).toEqual([`${modeId}.json`]);
+  });
+
+  test('a signed always rule for team-revoke-approval admits an approval-mode change from a seat', async () => {
+    const s = setup('mode-seat-rule');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const first = repo(s.base, 'docs');
+    const second = repo(s.base, 'notes');
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const teamRule = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(first);
+    ask.io.caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, second, ['--approval-mode', 'per-action', '--scope', scope, '--json']);
+    expect(seat.code, seat.err).toBe(0);
+    expect(seat.json.revoked).toEqual([modeId]);
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${modeId}.json`))).toBe(false);
+    // The rule the revoke request named is untouched by the change it admitted.
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${teamRule}.json`))).toBe(true);
   });
 });
