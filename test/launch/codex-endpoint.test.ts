@@ -5,7 +5,7 @@
 // signalled, and only the endpoint's own socket under the seat's own run folder is ever removed.
 // A socket no record names is left where it is, and said. A missing socket is no proof its
 // server is gone, and a record that is present but unreadable is unproven, never absent.
-import { describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, join } from 'node:path';
@@ -33,6 +33,27 @@ const BINDING = 'prs_0123456789ab';
 const OTHER = 'prs_fedcba987654';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
+
+// Every pid in this file is synthetic, so no scene may signal a real process. The seam that
+// would send is injected scene by scene; this guard makes that rule mechanical: a default
+// `terminate`, a default `alive` probe or any other `process.kill` is recorded and fails the
+// scene at afterEach, before a signal leaves the test. The one call the stub itself answers is
+// the state-lock scene's liveness probe of this very process (signal 0, nothing sent).
+const realKill = process.kill;
+const killCalls: { pid: number; signal: string | number | undefined }[] = [];
+beforeAll(() => {
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (signal === 0 && pid === process.pid) return true;
+    killCalls.push({ pid, signal });
+    throw new Error(`a scene called process.kill(${String(pid)}, ${String(signal)}); no real signal may leave a test`);
+  }) as typeof process.kill;
+});
+afterEach(() => {
+  expect(killCalls.splice(0)).toEqual([]);
+});
+afterAll(() => {
+  process.kill = realKill;
+});
 
 // A unix socket path has a hard OS limit, so scenes live under the short socket base with a
 // short prefix; the scenes that bind a socket measure their endpoint against the limit.
@@ -827,6 +848,7 @@ describe('a deep state folder', () => {
       chmodSync(victim, 0o600);
       symlinkSync(victim, ownerPath);
       let listening = false;
+      const terminated: number[] = [];
       const answer = await ensureCodexEndpoint({
         dir, session: SESSION, seat: SEAT,
         deps: {
@@ -840,6 +862,7 @@ describe('a deep state folder', () => {
           isPlainDir: () => true,
           isSocket: (path) => listening && path === expected.path,
           alive: () => false,
+          terminate: (pid) => { terminated.push(pid); },
           sleep: async () => {},
           now: () => new Date('2026-10-01T10:00:05.000Z'),
         },
@@ -850,8 +873,10 @@ describe('a deep state folder', () => {
       expect(readFileSync(victim, 'utf8')).toBe(original);
       expect(lstatSync(ownerPath).isSymbolicLink()).toBe(true);
       expect(readEndpointOwnerRecord(ownerPath)).toBeNull();
-      // What this call did make — the socket its own server created — is cleaned up.
+      // What this call did make — the socket its own server created — is cleaned up, and the
+      // only process it stops is the synthetic pid its own spawn returned.
       expect(existsSync(expected.path)).toBe(false);
+      expect(terminated).toEqual([9105]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(base, { recursive: true, force: true });

@@ -25,7 +25,7 @@
 // Nothing here spawns a process: every spawn, signal, drop and socket check is injected, and the
 // only real filesystem is the temporary state folder. The removal scenes at the end exercise the
 // command's ordering with the same injected endpoint stop.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -54,6 +54,25 @@ const OTHER = 'prs_bbbbbbbbbbbb';
 const THIRD = 'prs_cccccccccccc';
 const STARTED_AT = '2026-10-20T07:59:00.000Z';
 const NOW = new Date('2026-10-20T08:00:00.000Z');
+
+// Every spawn here returns a synthetic pid, so no scene may signal a real process. The scenes
+// inject `terminate`; this guard makes that mechanical: any call the stub sees other than a
+// liveness probe of this very process is recorded and fails the scene at afterEach.
+const realKill = process.kill;
+const killCalls: { pid: number; signal: string | number | undefined }[] = [];
+beforeAll(() => {
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (signal === 0 && pid === process.pid) return true;
+    killCalls.push({ pid, signal });
+    throw new Error(`a scene called process.kill(${String(pid)}, ${String(signal)}); no real signal may leave a test`);
+  }) as typeof process.kill;
+});
+afterEach(() => {
+  expect(killCalls.splice(0)).toEqual([]);
+});
+afterAll(() => {
+  process.kill = realKill;
+});
 
 // The endpoint path has a 100-byte contract limit, so the state folder has to be short: these
 // scenes take the short socket base, and the endpoint a scene builds is measured against the limit.
