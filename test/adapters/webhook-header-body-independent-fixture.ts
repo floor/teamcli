@@ -107,7 +107,7 @@ function unchanged(drop: ReturnType<typeof signedDrop>) {
   expect(fs.statSync(drop.path).ino).toBe(drop.ino);
   expect(fs.readdirSync(join(drop.path, '..'))).toEqual(drop.names);
 }
-for (const header of ['X-Routine-Key', 'Authorization']) {
+for (const header of ['X-Routine-Key', 'Authorization', '__proto__', 'constructor', 'prototype']) {
   test('configured header ' + header + ' sends the secret line verbatim', async () => {
     const r = receiver(); const w = world(r.url); const { hook } = accepted(w, { header });
     expect(await deliver(w, hook)).toBe('delivered'); expect(r.posts).toHaveLength(1);
