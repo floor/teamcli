@@ -757,6 +757,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
+| `team.general-target` | `team` | 1 | the team the command would act on cannot be resolved, so the general grant cannot be checked against it; nothing ran | `team status --project <name> --general <grant.json> --key <client.key>` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
@@ -796,6 +797,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
 | `up.general-refused` | `up` | 1 | the general grant does not admit this launch; nothing ran | `team up --general <grant.json> --key <client.key>` |
+| `up.general-target` | `up` | 1 | the team file the launch names cannot be resolved, so the general grant cannot be checked against it; nothing ran | `team up --file <team.yaml> --general <grant.json> --key <client.key>` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
 | `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |
