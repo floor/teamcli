@@ -8,7 +8,7 @@
 // the scene's own, and no live registry is read.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
@@ -377,6 +377,137 @@ describe('the other doors', () => {
     const allowed = await run('Joan');
     expect(allowed.code, allowed.err).toBe(0);
     expect(stored(root, world.home)).toContain('nickname: Joan');
+  });
+});
+
+describe('the word is set through team config', () => {
+  /** The owner's entities file this world wrote. */
+  const entityFile = (world: World): string => join(world.home, '.config', 'team', 'entities.yaml');
+
+  test('the owner sets the word, a get reads it back, and the next name is held to it', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const sources = sourcesOf(world);
+    const file = entityFile(world);
+    const set = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.names.unique', 'off'], set, sources), set.err).toBe(0);
+    // `off` is quoted so a YAML reader that still treats it as a boolean reads the word.
+    expect(readFileSync(file, 'utf8')).toContain('unique: "off"');
+    expect(set.out).toContain('set floor.names.unique: off');
+    const got = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['get', 'floor.names.unique'], got, sources)).toBe(0);
+    expect(got.out).toBe('off\n');
+    // The same word again changes nothing.
+    const again = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.names.unique', 'off'], again, sources)).toBe(0);
+    expect(again.out).toContain('nothing changed');
+    // And it is in force: the name acme's worker holds is written by the site team.
+    const ran = await ownerSet(world, 'site', 'seats.reviewer.label', 'Cicero · reviewer');
+    expect(ran.code, ran.err).toBe(0);
+    expect(stored(world.roots.site!, world.home)).toContain('nickname: Cicero');
+  });
+
+  test('a seat is refused, and the file is untouched', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const before = readFileSync(file, 'utf8');
+    const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+    expect(await runConfig(['set', 'floor.names.unique', 'off'], io, sourcesOf(world))).toBe(1);
+    expect(io.err).toContain('only the owner, or a seat holding the owner\'s general grant for entity "floor"');
+    expect(io.err).toContain('this call is builder-9');
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  test('a general grant sets the word for the entity it lists, and not another', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const pair = newClientKeyPair();
+    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'iris'), pair);
+    if (!keys.ok) throw new Error(keys.why);
+    const grant = issueOwnerGeneralGrant(world.home, {
+      clientId: 'iris',
+      publicKey: pair.publicKey,
+      entities: ['floor'],
+      ops: ['config'],
+      mayIssue: true,
+      expires: new Date(NOW.getTime() + 86_400_000),
+    });
+    if (!grant.ok) throw new Error(grant.why);
+    const sources = sourcesOf(world);
+    const run = async (entity: string) => {
+      const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+      const code = await runConfig(['set', `${entity}.names.unique`, 'team', '--general', grant.path, '--key', keys.keyPath], io, sources);
+      return { code, out: io.out, err: io.err };
+    };
+    const admitted = await run('floor');
+    expect(admitted.code, admitted.err).toBe(0);
+    expect(admitted.err).toContain('admitted by general grant');
+    expect(readFileSync(file, 'utf8')).toContain('unique: team');
+    const afterFloor = readFileSync(file, 'utf8');
+    const refused = await run('material');
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('does not cover entity "material"');
+    expect(readFileSync(file, 'utf8')).toBe(afterFloor);
+  });
+
+  test('a word outside the four is refused, and nothing is written', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const before = readFileSync(file, 'utf8');
+    const io = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.names.unique', 'sometimes'], io, sourcesOf(world))).toBe(1);
+    expect(io.err).toContain('"sometimes" is not a names.unique word');
+    expect(io.err).toContain('entity, project, team, off');
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  test('an entity the file does not declare is refused', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const before = readFileSync(file, 'utf8');
+    const io = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'omega.names.unique', 'off'], io, sourcesOf(world))).toBe(1);
+    expect(io.err).toContain('no entry for entity "omega"');
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  test('an unreadable entities file is refused whole, never replaced', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const broken = 'floor:\n\troots: x\n';
+    writeFileSync(file, broken);
+    const io = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.names.unique', 'off'], io, sourcesOf(world))).toBe(2);
+    expect(io.err).toContain('a tab in the indentation');
+    expect(readFileSync(file, 'utf8')).toBe(broken);
+  });
+
+  test('the entity form takes its four words, a get or a set, and no unset', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const unset = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['unset', 'floor.names.unique'], unset, sourcesOf(world))).toBe(2);
+    expect(unset.err).toContain('an entity\'s word has no unset');
+    const extra = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['set', 'floor.names.unique', 'off', 'extra'], extra, sourcesOf(world))).toBe(2);
+    expect(extra.err).toContain('unexpected "extra"');
+  });
+
+  test('a get is any caller’s, and a word the file does not spell is named as the default', async () => {
+    const world = place({ acme: ACA, site: SITE }, 'project');
+    const sources = sourcesOf(world);
+    const seat = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+    expect(await runConfig(['get', 'floor.names.unique'], seat, sources)).toBe(0);
+    expect(seat.out).toBe('project\n');
+    const none = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['get', 'material.names.unique'], none, sources)).toBe(1);
+    expect(none.err).toContain('entity "material" writes no names.unique');
+  });
+
+  test('a word the check does not read is printed with the default it leaves in force', async () => {
+    const world = place({ acme: ACA, site: SITE }, 'everywhere');
+    const io = testIo(world.roots.site!, { kind: 'owner' });
+    expect(await runConfig(['get', 'floor.names.unique'], io, sourcesOf(world))).toBe(0);
+    expect(io.out).toBe('everywhere\n');
+    expect(io.err).toContain('is not one of entity, project, team, off: the default entity is in force');
   });
 });
 

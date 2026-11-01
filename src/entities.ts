@@ -1,6 +1,8 @@
 // The entities the owner declares: the name a team file's `entity:` carries, the roots that
-// entity's teams live under, and the entity's own word on the liveness defaults. Read-only, like
-// the rest of the configuration readers: this writes nothing, runs nothing and opens no pane.
+// entity's teams live under, and the entity's own words on the liveness defaults and on seat
+// nicknames. Read-only, like the rest of the configuration readers: this writes nothing, runs
+// nothing and opens no pane; the `names.unique` word has its own writer in
+// `src/config/entity-edit.ts`.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseYaml, type YamlEntry, type YamlNode } from './yaml.ts';
@@ -87,9 +89,10 @@ export const NICKNAME_SCOPE_DEFAULT: NicknameScope = 'entity';
 /**
  * Each entity's `names.unique` word, by entity name, from its entry's `names:` map —
  * `<entity>: { names: { unique: entity | project | team | off } }`. Only entities that write one
- * of the four words appear: the file is the owner's own, hand-written, so a word it does not
- * spell (a typo, a case, a stray value) declares nothing and the default stands rather than
- * widening the check by accident.
+ * of the four words appear: the file is the owner's own, written by hand or through
+ * `team config set <entity>.names.unique` (src/config/entity-edit.ts), so a word it does
+ * not spell (a typo, a case, a stray value, a file edited by hand) declares nothing and the
+ * default stands rather than widening the check by accident.
  */
 export function declaredNamesUnique(home: string): Map<string, NicknameScope> {
   const out = new Map<string, NicknameScope>();
