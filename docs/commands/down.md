@@ -21,6 +21,9 @@ pane being how it is verified, and a record that belongs to the session's own ho
 signalled. A seat whose launch
 started a managed Codex endpoint is stopped through the endpoint's recorded process, with the same
 proof `team remove` uses, before its state record goes; a seat that started none is not mentioned.
+A stop that cannot prove its process — or one that names no reason at all — signals nothing: the
+seat keeps its whole record, endpoint claim and presence binding included, and the run holds so a
+later cleanup can still account for the process.
 The event bus `team up` started is closed with the team: the workspace its record names is shut
 after the seats and before the session, and its state record is cleared when that close succeeds. A bus the
 owner runs in a terminal of their own is not in the state and is left running.
