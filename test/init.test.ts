@@ -145,12 +145,12 @@ describe('team init', () => {
     const key = swap(`sk-${'A'.repeat(24)}`);
     expect(key.ok).toBe(false);
     if (!key.ok) expect(key.errors).toEqual([{ line: 29, message: expect.stringMatching(/shaped like a key or token/) }]);
-    // A key-shaped tail after a path prefix is refused: the prefix is a token wherever a
-    // non-token character precedes it, and `/` is one — the same boundary the screen masker
-    // uses — so a path prefix hides the key from neither reader.
+    // A path prefix before a key-shaped tail never refused it — the prefix check is anchored at
+    // the word's start — and this change leaves that verdict alone. The warn no longer goes
+    // quiet: `/usr/sk-…` is not a directory, so nothing exempts it.
     const hidden = swap('/usr/sk-Zx8Kq2Lm9Pv4Rt7Wy1Bn6Cd3Fg5Hj0', '  - ~/.config/team/lobby');
-    expect(hidden.ok).toBe(false);
-    if (!hidden.ok) expect(hidden.errors).toEqual([{ line: 29, message: expect.stringMatching(/shaped like a key or token/) }]);
+    expect(hidden.ok).toBe(true);
+    if (hidden.ok) expect(hidden.warnings).toEqual([{ line: 29, message: expect.stringMatching(/random-looking/) }]);
     // A credentialed URL after a path prefix is still refused: the URL check reads the value.
     const url = swap('/usr/https://user:pass@host', '  - ~/.config/team/lobby');
     expect(url.ok).toBe(false);

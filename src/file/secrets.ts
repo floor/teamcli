@@ -58,8 +58,8 @@ function secretPattern(shape: keyof typeof SECRET_SHAPES, flags = ''): RegExp {
 export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused: Problem[]; warned: Problem[] } {
   const refused: Problem[] = [];
   const warned: Problem[] = [];
-  walk(root, (value, line) => {
-    if (secretPattern('keyToken').test(value)) {
+  walk(root, (value, line, field) => {
+    if (keyRefused(value, field, fs)) {
       refused.push({ line, message: 'a value shaped like a key or token: a team file never holds a credential' });
       return;
     }
@@ -72,6 +72,39 @@ export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused
     }
   });
   return { refused, warned };
+}
+
+/**
+ * True when a key-shaped token in the value is a credential rather than a location. The check and
+ * the masker share one token shape, but they do not owe the same verdict: a refusal blocks a real
+ * file, so a legitimate path must not be refused for a shape inside it. A token after a `/` is
+ * written as part of a path: a trust line keeps the warning it has always given, and a real
+ * absolute directory is a location; every other token is a credential, however punctuation
+ * frames it.
+ */
+function keyRefused(value: string, field: readonly string[], fs: FsReader): boolean {
+  for (const match of value.matchAll(secretPattern('keyToken', 'g'))) {
+    const separator = match[1] ?? '';
+    const tokenStart = (match.index ?? 0) + separator.length;
+    if (separator !== '/') return true;
+    const word = wordAround(value, tokenStart);
+    // A trust line keeps the earlier verdict it has always had: a warning, never a refusal, for
+    // a token written as part of a path there.
+    if (field[0] === 'trust') continue;
+    // A real absolute directory named like a token is a location: no refusal, no warning either.
+    if (isAbsolutePath(word) && isDirectory(fs, word)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** The whitespace-delimited word around a position: a path is judged whole, as the random rule reads it. */
+function wordAround(value: string, position: number): string {
+  let start = position;
+  while (start > 0 && !/\s/.test(value.charAt(start - 1))) start -= 1;
+  let end = position;
+  while (end < value.length && !/\s/.test(value.charAt(end))) end += 1;
+  return value.slice(start, end);
 }
 
 /** Every URL on a line, with its userinfo: the masker rewrites each match to `scheme[masked]@`. */
@@ -350,13 +383,14 @@ function replaceWords(line: string, shaped: (word: string) => boolean): string {
   );
 }
 
-function walk(node: YamlNode, visit: (value: string, line: number) => void): void {
+/** A value under its field path, so a rule can tell a trust line from any other value. */
+function walk(node: YamlNode, visit: (value: string, line: number, field: readonly string[]) => void, field: readonly string[] = []): void {
   if (node.kind === 'scalar') {
-    if (typeof node.value === 'string') visit(node.value, node.line);
+    if (typeof node.value === 'string') visit(node.value, node.line, field);
   } else if (node.kind === 'seq') {
-    for (const item of node.items) walk(item, visit);
+    for (const item of node.items) walk(item, visit, field);
   } else {
-    for (const entry of node.entries) walk(entry.value, visit);
+    for (const entry of node.entries) walk(entry.value, visit, [...field, entry.key]);
   }
 }
 

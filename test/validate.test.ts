@@ -555,10 +555,9 @@ describe('secrets', () => {
     const singleSegment = `${minimal}tools:\n  chat: { kind: slack, channel: /abcdefghijklmnopqrstuvwxyz0123456789abcd }\n`;
     expect(valid(singleSegment).warnings).toEqual([notice, { line: 16, message: expect.stringMatching(/random-looking/) }]);
     // A path-shaped prefix over a credential-shaped word is not a directory either: what once
-    // silenced it silences nothing now. The word keeps its key shape through the path, so the
-    // file is refused — the same judgement that masks it on a screen, never a quieter warning.
+    // silenced it silences nothing now, and the value warns like any other.
     const inPathClothing = `${minimal}trust:\n  - /x/sk-Zx8Kq2Lm9Pv4Rt7Wy1Bn6Cd3Fg5Hj0QsAeUiOpXc\n`;
-    expect(errors(inPathClothing)).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
+    expect(valid(inPathClothing).warnings).toEqual([notice, { line: 16, message: expect.stringMatching(/random-looking/) }]);
   });
   test('a regular file, and a symlink to a directory, are not directories to the exemption', () => {
     // lstat, never stat: a regular file is not a directory, and a symlink is lstat's own kind —
@@ -581,6 +580,31 @@ describe('secrets', () => {
       // The trust slot refuses both by its own rules, before the exemption matters.
       expect(errors(`${minimal}trust:\n  - ${file}\n`)).toEqual([expect.stringMatching(/is not a directory/)]);
       expect(errors(`${minimal}trust:\n  - ${link}\n`)).toEqual([expect.stringMatching(/is a symbolic link/)]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a framed key in an ordinary value is refused', () => {
+    // A channel name wrapped in backticks: framing punctuation is a boundary, so the token is
+    // a key, and the value is no path the exemption could cover.
+    const framed = `\`ghp_${'a'.repeat(16)}\``;
+    const text = `${minimal}tools:\n  chat: { kind: slack, channel: ${JSON.stringify(framed)} }\n`;
+    expect(errors(text)).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
+  });
+  test('a real directory named like a token is a location, not a credential', () => {
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, 'sk-learn-experiments-2026');
+    mkdirSync(dir);
+    const text = (path: string) =>
+      `${minimal}tools:\n  chat: { kind: slack, channel: ${JSON.stringify(path)} }\n`;
+    try {
+      // The token sits in a path component the reader can lstat: a location, so it is neither
+      // refused nor warned about.
+      expect(valid(text(dir)).warnings).toEqual([notice]);
+      // Without the directory the same path holds a credential-shaped component and is refused:
+      // the exemption is the file's own verdict, never the shape alone.
+      rmSync(dir, { recursive: true, force: true });
+      expect(errors(text(dir))).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
