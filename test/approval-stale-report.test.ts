@@ -1,7 +1,7 @@
-// The stale-approval report after an owner-section change: a removed seat is named instead of a
-// bare `limits` change, a default seat ceiling that followed the roster says so, and the printed
-// repair is an outcome this build can actually reach. Display only: the gate's own list is
-// unchanged. Every scene keeps its registry under its own temp home; the real one is never read.
+// A config write no longer reports on a stored approval: the removed approval step left the
+// warning behind, so the write names the change and nothing else. The migrate scenes keep their
+// own reports of a legacy record. Every scene keeps its registry under its own temp home; the
+// real one is never read.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,12 +43,6 @@ workspace:
   mode: shared
 `;
 const TEAM = HEAD + SEATS;
-const TEAM_NO_TEMPORARY = HEAD + `limits:
-  temporary: 0
-` + SEATS;
-const TEAM_EXPLICIT_SEATS = HEAD + `limits:
-  seats: 2
-` + SEATS;
 // A pre-default approval: the session was written explicitly; the live record takes the default.
 const MOVED = `format: 1
 project: acme
@@ -142,94 +136,52 @@ function live(at: Place) {
   return { text, team: checked.team };
 }
 
-test('a removed seat is named, and the default ceiling says it followed the roster', async () => {
+test('a config write names the change and nothing about a stored approval', async () => {
   const at = place(TEAM);
   const removed = await config(at, ['unset', 'seats.worker']);
   expect(removed.code, removed.err).toBe(0);
-  expect(removed.out).toContain('seat worker is missing since the last approval');
-  expect(removed.out).toContain('the default seat ceiling follows the roster (3 seats)');
-  expect(removed.out).not.toContain('`limits` changed');
-  // The repair names an outcome this build has, never a command it does not.
-  expect(removed.out).toContain('the change was applied');
-  expect(removed.out).toContain('the stored team approval still describes an earlier record');
-  expect(removed.out).toContain('this version has no command to refresh that snapshot');
-  expect(removed.out).not.toContain('approve the team again');
+  expect(removed.out).toContain('unset seats.worker in');
+  expect(removed.out).toContain('validated');
+  expect(removed.out).not.toContain('approval');
+  expect(removed.out).not.toContain('seat worker is missing since the last approval');
+  expect(removed.out).not.toContain('the default seat ceiling follows the roster');
+  expect(removed.out).not.toContain('no command to refresh');
 });
 
-test('a seat change beside the removal is named too', async () => {
+test('the JSON write carries no approval report', async () => {
   const at = place(TEAM);
-  const changed = await config(at, ['set', 'seats.lead.model', 'Claude Sonnet']);
-  expect(changed.code, changed.err).toBe(0);
-  expect(changed.out).toContain('seat lead changed');
-  const removed = await config(at, ['unset', 'seats.worker']);
-  expect(removed.code, removed.err).toBe(0);
-  expect(removed.out).toContain('seat lead changed');
-  expect(removed.out).toContain('seat worker is missing since the last approval');
-  expect(removed.out).toContain('the default seat ceiling follows the roster (3 seats)');
+  const json = await config(at, ['unset', 'seats.worker', '--json']);
+  expect(json.code, json.err).toBe(0);
+  const doc = JSON.parse(json.out) as Record<string, unknown>;
+  expect(doc.changed).toBe(true);
+  expect(Object.hasOwn(doc, 'approval_differences')).toBe(false);
 });
 
-test('one seat left reads as one seat', async () => {
-  const at = place(TEAM_NO_TEMPORARY);
-  const removed = await config(at, ['unset', 'seats.worker']);
-  expect(removed.code, removed.err).toBe(0);
-  expect(removed.out).toContain('the default seat ceiling follows the roster (1 seat)');
+test('a no-op write carries no approval report either', async () => {
+  const at = place(TEAM);
+  const same = await config(at, ['set', 'seats.lead.model', 'Claude Opus', '--json']);
+  expect(same.code, same.err).toBe(0);
+  const doc = JSON.parse(same.out) as Record<string, unknown>;
+  expect(doc.changed).toBe(false);
+  expect(Object.hasOwn(doc, 'approval_differences')).toBe(false);
 });
 
-test('a limits edit of its own keeps its own line beside the removed seat', async () => {
-  const at = place(TEAM_NO_TEMPORARY);
-  const removed = await config(at, ['unset', 'seats.worker']);
-  expect(removed.code, removed.err).toBe(0);
-  const temporary = await config(at, ['set', 'limits.temporary', '3']);
-  expect(temporary.code, temporary.err).toBe(0);
-  expect(temporary.out).toContain('`limits` changed');
-  expect(temporary.out).toContain('seat worker is missing since the last approval');
-  expect(temporary.out).not.toContain('the default seat ceiling follows the roster');
-  expect(temporary.out).toContain('this version has no command to refresh that snapshot');
-});
-
-test('an explicit limits.seats keeps a removal out of the stale report', async () => {
-  const at = place(TEAM_EXPLICIT_SEATS);
-  const removed = await config(at, ['unset', 'seats.worker']);
-  expect(removed.code, removed.err).toBe(0);
-  expect(removed.out).not.toContain('the approval no longer covers');
-  expect(removed.out).not.toContain('seat worker is missing');
-});
-
-test('the gate list is unchanged: no option, no report lines', async () => {
+test("the gate's own comparison is unchanged", async () => {
   const at = place(TEAM);
   const removed = await config(at, ['unset', 'seats.worker']);
   expect(removed.code, removed.err).toBe(0);
   const after = live(at);
   expect(approvalDifferences(after.team, at.root, at.home)).toEqual(['`limits` changed']);
-  // The report the config write prints adds the two display lines and never drops the gate's.
-  expect(approvalDifferences(after.team, at.root, at.home, { text: after.text })).toEqual([
-    'seat worker is missing since the last approval',
-    'the default seat ceiling follows the roster (3 seats)',
-  ]);
   expect(approvalStanding(at.root, at.home).kind).toBe('verified');
 });
 
-// The removed `team approve` cannot be run, so the config report never sends the owner to it,
-// while the option that works stays. Both surfaces the report writes are checked.
-test('a session-default move drops the removed re-approval and keeps the viable option', async () => {
+test('a legacy session-default record draws no line from the write', async () => {
   const at = placeApproved(MOVED_APPROVED, MOVED);
   const human = await config(at, ['set', 'watch.interval', '20s']);
   expect(human.code, human.err).toBe(0);
-  expect(human.out).toContain('`session` changed: "acme" -> "acme-acme", the new default session (<entity>-<project>)');
-  expect(human.out).toContain('set `session: acme` to keep the old one');
+  expect(human.out).not.toContain('session');
   expect(human.out).not.toContain('approve the file again');
-  expect(human.out).toContain('this version has no command to refresh that snapshot');
-});
-
-test('the JSON report carries the same session line without the removed re-approval', async () => {
-  const at = placeApproved(MOVED_APPROVED, MOVED);
-  const json = await config(at, ['set', 'watch.interval', '20s', '--json']);
-  expect(json.code, json.err).toBe(0);
-  const report = JSON.parse(json.out) as { approval_differences: string[] };
-  const session = report.approval_differences.filter((line) => line.startsWith('`session` changed'));
-  expect(session).toHaveLength(1);
-  expect(session[0]).toContain('set `session: acme` to keep the old one');
-  expect(session[0]).not.toContain('approve the file again');
+  expect(human.out).not.toContain('no command to refresh');
 });
 
 // After a migration the approval may stop verifying because its signature was disturbed, with

@@ -1,16 +1,16 @@
 // The default session moved to <entity>-<project>: a team approved under the old default (the
-// project name alone) is told the old and the new session and that it must approve again.
+// project name alone) is told the old and the new session and how to keep the old one.
 import { describe as group, expect, test } from 'bun:test';
 import { compare, describe, fingerprints, type Approvable } from '../../src/approve/fingerprint.ts';
 
 const team = (fields: Record<string, unknown>): Approvable => ({ project: 'web', seats: [], ...fields });
 
 group('the session default move', () => {
-  test('an entity team approved under the project name is told old -> new and to approve again', () => {
+  test('an entity team approved under the project name is told old -> new and how to keep the old one', () => {
     const approved = fingerprints(team({ entity: 'acme', session: 'web' }));
     const current = team({ entity: 'acme', session: 'acme-web' });
     const lines = compare(approved, fingerprints(current), current).map(describe);
-    expect(lines).toContain('`session` changed: "web" -> "acme-web", the new default session (<entity>-<project>); approve the file again, or set `session: web` to keep the old one');
+    expect(lines).toContain('`session` changed: "web" -> "acme-web", the new default session (<entity>-<project>); set `session: web` to keep the old one');
   });
 
   test('any other session change reads as before', () => {

@@ -8,8 +8,7 @@ launched or typed: nothing is typed into it or launched over it; left as it is.
 
 A declared seat can be copied too: `team add <name> --like <seat>` writes a new entry under the
 source in the file, with the source's fields and titled `<name>`, and starts it now. The source's
-own entry is left as it is. A source marked `human: true` is refused the same way. The new entry is
-not added to the approval record: the roster change is the owner's to approve, like any other.
+own entry is left as it is. A source marked `human: true` is refused the same way.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
@@ -73,9 +72,8 @@ grant lock immediately before the first effect, and the run is the grant's folde
 the refusal above is unchanged. The run is never the owner's: `--file`, `--session`, `--model` and `--effort`
 are refused with `--client` (exit 2), a seat marked `human: true` is never a source or a target, and a lead
 seat (the orchestrator or the operator) is never started by a client, because that is the second half of the
-owner's swap. The new entry is **not** added to the approval record: the roster change is for the owner to
-approve with the owner seat, and the run says so. Because the new seat is not in the fingerprints the owner
-signed, `team up --client` for this team stops until the owner signs a fresh manager grant. Each run writes
+owner's swap. Because the new seat is not in the roster the owner signed the grant against,
+`team up --client` for this team stops until the owner signs a fresh manager grant. Each run writes
 `client-add-authorized: grant <cg_id> client <client-id> team <project> root <root> request <rid> seat <name>`
 to `<root>/.agents/team.log`, or `client-add-refused: …` after the key proved who the client is. A refusal is
 `add.client-refused` (exit 1).
@@ -150,8 +148,7 @@ source's last field, takes the source's fields and the title `<name>`, drops its
 `count:` (a counted source is split first), and leaves the source's comments and blank lines where
 they are. The name must be one the file does not declare, and the source one it does. A copy the
 file's own validation refuses — one that repeats the source's `leads`, `assistant` or nickname —
-stops before anything is written or launched. The record keeps its own bytes: the new entry is the
-owner's to approve.
+stops before anything is written or launched. The record keeps its own bytes.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -414,7 +411,7 @@ Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--
 
 The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, and never starts the orchestrator or the operator.
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 exit 2
