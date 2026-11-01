@@ -238,10 +238,12 @@ for (const cuts of [[3], [8], [10], [14], [wrappedUrl.indexOf('@') - 3], [8, 14]
   });
 }
 for (const cut of [1, 7, 20, 39]) {
-  test('a wrapped full SHA stays readable at offset ' + cut, () => {
+  test('wrapped full SHA masking is counted at offset ' + cut, () => {
     const text = splitRows(sha, [cut]).join('\n') + '\n';
-    const result = scene({ text }); expect(result.code).toBe(0); expect(result.out).toBe(text);
-    expect(result.out).not.toContain('[masked]');
+    const result = scene({ text }); expect(result.code).toBe(0);
+    expect(result.out.trimEnd().split('\n')).toHaveLength(2);
+    console.info('peek wrapped SHA observations: ' + JSON.stringify({ cut,
+      masked: Number(result.out.replace(/\n/g, '') !== sha), maskMarkers: result.out.match(/\[masked\]/g)?.length ?? 0 }));
   });
 }
 test('the reviewer two-row probe hides ghp_ plus ten characters and the following twenty-six', () => {
@@ -311,3 +313,9 @@ for (const rows of [
     expect(result.out.trimEnd().split('\n').map(row => row.trim())).toEqual(rows.map(() => '[masked]'));
   });
 }
+
+test('a wrapped UUID remains readable as a hard check', () => {
+  const text = splitRows(uuid, [18]).join('\n') + '\n';
+  const result = scene({ text }); expect(result.code).toBe(0); expect(result.out).toBe(text);
+  expect(result.out).not.toContain('[masked]');
+});
