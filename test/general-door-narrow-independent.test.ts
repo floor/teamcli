@@ -9,7 +9,7 @@ mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
 afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
 type Input = { command: string; words: string[]; entities?: string[]; ops?: string[]; mode?: 'daemon' | 'config' | 'up' };
-type Result = { home: string; code: number; out: string; err: string; calls: number; calledAs?: { kind: string }; received: string[]; marker: boolean; servicePlans: number; serviceInstalls: number; upReads: number; storedModel?: string; originalFile: string };
+type Result = { storeChanges: string[]; home: string; code: number; out: string; err: string; calls: number; calledAs?: { kind: string }; received: string[]; marker: boolean; servicePlans: number; serviceInstalls: number; upReads: number; storedModel?: string; originalFile: string };
 function scene(input: Input): Result {
   const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-')));
   bases.push(base);
@@ -137,3 +137,28 @@ test('full wildcard daemon install dry run plans once and never installs', () =>
   expect(result.out).toContain('would install');
 });
 test('full wildcard admits down abandon', () => admitted(scene({ command: 'down', words: ['--abandon'] })));
+
+for (const [command, words] of [
+  ['init', ['--request']], ['init', ['--approvals']],
+  ['config', [...configWords, '--request']], ['config', ['keys']],
+] as [string, string[]][]) {
+  test(`alpha-only own admission ${command} ${words.join(' ')} stops before command loading`, () => {
+    const result = scene({ command, words, entities: ['alpha'] });
+    stopped(result);
+    expect(result.out + result.err).toContain(scopedMessage);
+    expect(result.storeChanges).toEqual([]);
+  });
+}
+for (const [command, words] of [
+  ['init', ['--request']], ['init', ['--approvals']],
+  ['config', [...configWords, '--request']], ['up', ['--request']],
+] as [string, string[]][]) {
+  test(`wildcard own admission ${command} ${words.join(' ')} is a usage refusal`, () => {
+    const result = scene({ command, words });
+    expect(result.code, result.out + result.err).toBe(2);
+    expect(result.calls).toBe(0);
+    expect(result.marker).toBe(false);
+    expect(result.out + result.err).toContain('--general is its own door');
+    expect(result.storeChanges).toEqual([]);
+  });
+}

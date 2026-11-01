@@ -1,7 +1,7 @@
 // This worker loads command and store modules only after checking its child-start HOME.
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Io } from '../../src/io.ts';
 import type { GrantOp } from '../../src/client/general-grant.ts';
@@ -58,6 +58,15 @@ const io = testIo(roots.alpha!, { kind: 'unplaced', reason: 'synthetic external 
 io.env = { HOME: home, TEAM_CONFIG_SOURCE: 'registry' };
 const options = ['--general', grant.path, '--key', keyFiles.keyPath];
 const marker = join(base, 'command-called');
+const storeRoot = join(home, '.config', 'team');
+function storeSnapshot() {
+  return new Map(readdirSync(storeRoot, { recursive: true, withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isFile()) return [];
+    const path = join(entry.parentPath, entry.name);
+    return [[path, readFileSync(path).toString('base64')] as const];
+  }));
+}
+const storeBefore = storeSnapshot();
 let calls = 0;
 let calledAs: Io['caller'];
 let received: string[] = [];
@@ -110,4 +119,6 @@ if (input.mode === 'daemon') {
   });
   code = await main([input.command, ...words, '--json', ...options], io);
 }
-console.log(JSON.stringify({ home, code, out: io.out, err: io.err, calls, calledAs, received, marker: existsSync(marker), servicePlans, serviceInstalls, storedModel, upReads, originalFile: readFileSync(files.alpha!, 'utf8') }));
+const storeAfter = storeSnapshot();
+const storeChanges = [...new Set([...storeBefore.keys(), ...storeAfter.keys()])].filter((path) => storeBefore.get(path) !== storeAfter.get(path));
+console.log(JSON.stringify({ storeChanges, home, code, out: io.out, err: io.err, calls, calledAs, received, marker: existsSync(marker), servicePlans, serviceInstalls, storedModel, upReads, originalFile: readFileSync(files.alpha!, 'utf8') }));
