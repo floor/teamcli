@@ -6,7 +6,10 @@
 // definition whose requested target and error redirect coincide, read through the core, the
 // append gate, the fold and the replay.
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   canonicalEffectPayload,
   canonicalJson,
@@ -22,6 +25,7 @@ import type {
   DryEffectRecord,
   EvidenceRecord,
   EvidenceRef,
+  RunId,
   SignalName,
   Workflow,
   WorkflowEnvelope,
@@ -31,8 +35,11 @@ import type { StepDecision } from '../../src/workflow/core.ts';
 import type { OccurrenceRecord, RunState } from '../../src/workflow/core-state.ts';
 import { LIVE_KIND, LIVE_NOTICE, runIdFor } from '../../src/workflow/live/records.ts';
 import type { LiveRecord, LiveRunOpenRecord, LiveStepRecord } from '../../src/workflow/live/records.ts';
+import { journalPath } from '../../src/workflow/live/journal.ts';
 import { foldLive, replayLive, stepFault } from '../../src/workflow/live/replay.ts';
 import type { StepInput } from '../../src/workflow/live/replay.ts';
+import { LiveStoreError, openRunStore } from '../../src/workflow/live/store.ts';
+import type { RunStore } from '../../src/workflow/live/store.ts';
 
 const SOURCE = `workflow: same-dest
 version: 1
@@ -67,12 +74,12 @@ function parseOk(): { workflow: Workflow; definition: DefinitionId } {
   return result;
 }
 
-function startEffect(): DryEffectRecord {
+function startEffect(runId: RunId = RUN): DryEffectRecord {
   return {
     name: 'dispatch-worker',
     state: 'working',
     activation: 1,
-    occurrence: ENTRY,
+    occurrence: occurrenceId(runId, 1, 'dispatch-worker'),
     payloadDigest: payloadDigest(
       canonicalEffectPayload('dispatch-worker', 'dispatch-worker', TARGET, ARTIFACT),
     ),
@@ -80,8 +87,8 @@ function startEffect(): DryEffectRecord {
   };
 }
 
-function occurrences(): Map<string, OccurrenceRecord> {
-  const effect = startEffect();
+function occurrences(runId: RunId = RUN): Map<string, OccurrenceRecord> {
+  const effect = startEffect(runId);
   return new Map([
     [
       effect.occurrence,
@@ -96,8 +103,14 @@ function occurrences(): Map<string, OccurrenceRecord> {
   ]);
 }
 
-function outcome(result: 'done' | 'refused'): EvidenceRecord {
-  return { type: 'outcome', operation: 'dispatch-worker', effect: ENTRY, result, target: TARGET };
+function outcome(result: 'done' | 'refused', runId: RunId = RUN): EvidenceRecord {
+  return {
+    type: 'outcome',
+    operation: 'dispatch-worker',
+    effect: occurrenceId(runId, 1, 'dispatch-worker'),
+    result,
+    target: TARGET,
+  };
 }
 
 type Scene = {
@@ -111,15 +124,19 @@ type Scene = {
 
 /** One synthetic run: the refusal outcome answers the `working` entry effect, and the signal's
  *  own record answers the signal. The decision is the core's, never hand-written. */
-function scene(signal: SignalName, evidence: Record<EvidenceRef, EvidenceRecord>): Scene {
+function scene(
+  signal: SignalName,
+  evidence: Record<EvidenceRef, EvidenceRecord>,
+  runId: RunId = RUN,
+): Scene {
   const { workflow, definition } = parseOk();
   const run: RunState = {
-    runId: RUN,
+    runId,
     definitionId: definition,
     state: 'working',
     revision: 0,
     activation: 1,
-    occurrences: occurrences(),
+    occurrences: occurrences(runId),
     requests: new Map(),
     waits: [],
   };
@@ -130,7 +147,7 @@ function scene(signal: SignalName, evidence: Record<EvidenceRef, EvidenceRecord>
   if (transition === undefined) throw new Error(`no transition for ${run.state}/${signal}`);
   const envelope: WorkflowEnvelope = {
     format: 1,
-    run: RUN,
+    run: runId,
     definition,
     expectedRevision: run.revision,
     requestId: 'req-1',
@@ -207,7 +224,7 @@ function stepOf(scene: Scene): StepInput {
 function faultOf(scene: Scene, step: StepInput = stepOf(scene)): string | undefined {
   return stepFault({
     definition: scene.workflow,
-    runId: RUN,
+    runId: scene.run.runId,
     target: TARGET,
     artifact: ARTIFACT,
     state: scene.run.state,
@@ -398,5 +415,96 @@ describe('the error move still decides the path', () => {
     if (folded.ok) return;
     expect(folded.why).toBe('the error move names another move');
     expect(folded.seq).toBe(2);
+  });
+});
+
+describe('the real store applies the same judgement as the replay', () => {
+  let base: string | undefined;
+
+  afterEach(() => {
+    if (base !== undefined) rmSync(base, { recursive: true, force: true });
+    base = undefined;
+  });
+
+  /** A real run opened from `SOURCE`, exactly as a caller would open it. */
+  function opened(): { store: RunStore; run: RunId; path: string } {
+    const { workflow } = parseOk();
+    base = mkdtempSync(join(tmpdir(), 'error-same-dest-'));
+    const store = openRunStore({ root: base, now: () => Date.parse(AT) });
+    const created = store.transact((tx) =>
+      tx.createRun({
+        item: ITEM,
+        definitionBytes: SOURCE,
+        definition: workflow,
+        target: TARGET,
+        artifact: ARTIFACT,
+        inputs: { 'item-key': KEY },
+        settings: {},
+      }),
+    );
+    return { store, run: created.record.run, path: journalPath(base, created.record.run) };
+  }
+
+  test('a forged same-destination error over a done outcome is refused before the write', () => {
+    const { store, run, path } = opened();
+    const normal = scene(
+      'step-failed',
+      { 'ev-refusal': REFUSAL, 'ev-outcome': outcome('done', run) },
+      run,
+    );
+    const forged: StepInput = {
+      ...stepOf(normal),
+      error: {
+        rule: 'entry-effect-refused',
+        from: 'working',
+        to: 'failed',
+        effect: 'dispatch-worker',
+        occurrence: occurrenceId(run, 1, 'dispatch-worker'),
+      },
+    };
+    let thrown: unknown;
+    try {
+      store.transact((tx) => tx.appendStep(run, { ...forged, at: AT }));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(LiveStoreError);
+    if (!(thrown instanceof LiveStoreError)) throw new Error('the append did not throw a store error');
+    expect(thrown.code).toBe('workflow.store.record-invalid');
+    expect(thrown.why).toBe(
+      'the step records error {"effect":"dispatch-worker","from":"working","occurrence":"' +
+        occurrenceId(run, 1, 'dispatch-worker') +
+        '","rule":"entry-effect-refused","to":"failed"}; the decision carries null',
+    );
+
+    const persisted = readFileSync(path, 'utf8');
+    expect(persisted.trimEnd().split('\n')).toHaveLength(1);
+    const replay = replayLive({ definitionBytes: SOURCE, definition: normal.workflow, journalText: persisted });
+    expect(replay.ok).toBe(true);
+  });
+
+  test('the honest same-destination error step is appended and replays', () => {
+    const { store, run, path } = opened();
+    const refused = scene(
+      'step-failed',
+      { 'ev-refusal': REFUSAL, 'ev-outcome': outcome('refused', run) },
+      run,
+    );
+    const record = store.transact((tx) => tx.appendStep(run, { ...stepOf(refused), at: AT }));
+    expect(record.error).toEqual({
+      rule: 'entry-effect-refused',
+      from: 'working',
+      to: 'failed',
+      effect: 'dispatch-worker',
+      occurrence: occurrenceId(run, 1, 'dispatch-worker'),
+    });
+    const replay = replayLive({
+      definitionBytes: SOURCE,
+      definition: refused.workflow,
+      journalText: readFileSync(path, 'utf8'),
+    });
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) throw new Error(replay.fail.why);
+    expect(replay.run.state).toBe('failed');
   });
 });

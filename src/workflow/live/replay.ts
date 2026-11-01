@@ -1,10 +1,12 @@
 // The live fold and the live replay. `foldLive` is the structural fold every read and append uses:
 // sequence, state continuity, revisions, activations and occurrence ids, with no definition in
-// hand. `replayLive` rechecks the same journal against the pinned definition's bytes: the
-// transition set, the request digests, the run-open pin, and the decision itself — it re-derives
-// the engine's answer for every step with the pinned settings, the recorded evidence and the real
-// guard catalogue, then compares the next state, the error move and the effect plan. Neither
-// writes anything, verifies a signature, dispatches or claims the Kernel ledger.
+// hand. `recheckLive` rechecks a folded journal against the pinned definition: the transition set,
+// the request digests, the run-open pin, and the decision itself — it re-derives the engine's
+// answer for every step with the pinned settings, the recorded evidence and the real guard
+// catalogue, then compares the next state, the error move and the effect plan. `replayLive` parses
+// the bytes and calls it; the store calls it on the records it is about to extend, so a step the
+// replay would refuse is refused before it is written. Neither writes anything, verifies a
+// signature, dispatches or claims the Kernel ledger.
 
 import {
   canonicalEffectPayload,
@@ -520,20 +522,29 @@ export function evidenceConflict(records: readonly LiveRecord[], document: Evide
   return undefined;
 }
 
-export type ReplayLiveFailure = {
+export type LiveCheckFailure = {
   code: 'journal-invalid' | 'definition-mismatch' | 'start-mismatch' | 'step-mismatch' | 'entry-outcome-mismatch';
   record?: number;
   why: string;
 };
 
-export type ReplayLiveResult =
+export type LiveCheckResult =
   | { ok: true; run: RunState; live: LiveState }
-  | { ok: false; fail: ReplayLiveFailure };
+  | { ok: false; fail: LiveCheckFailure };
+
+export type ReplayLiveFailure = LiveCheckFailure;
+export type ReplayLiveResult = LiveCheckResult;
 
 export type ReplayLiveInput = {
   definitionBytes: Uint8Array | string;
   definition: Workflow;
   journalText: string;
+};
+
+export type LiveCheckInput = {
+  definition: Workflow;
+  definitionId: DefinitionId;
+  records: readonly LiveRecord[];
 };
 
 /**
@@ -550,16 +561,26 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
 
   const parsed = parseJournalText(input.journalText);
   if (!parsed.ok) return { ok: false, fail: { code: 'journal-invalid', why: parsed.why } };
-  const folded = foldLive(parsed.records);
+  return recheckLive({ definition: input.definition, definitionId: pin, records: parsed.records });
+}
+
+/**
+ * The judgement every reader applies to a journal: the structural fold, the run-open pin, the
+ * start plan, and every step's decision re-derived from the folded run state and the evidence the
+ * step itself records. `replayLive` calls it on parsed bytes; the store calls it on the records it
+ * is about to extend, so a step that replay would later refuse is refused before it is written.
+ */
+export function recheckLive(input: LiveCheckInput): LiveCheckResult {
+  const folded = foldLive(input.records);
   if (!folded.ok) {
     return { ok: false, fail: { code: 'journal-invalid', ...(folded.seq !== undefined ? { record: folded.seq } : {}), why: folded.why } };
   }
   const live = folded.live;
-  const open = parsed.records[0]!;
+  const open = input.records[0]!;
   if (open.record !== 'run-open') {
     return { ok: false, fail: { code: 'journal-invalid', record: open.seq, why: 'the journal does not start with a run-open record' } };
   }
-  if (!sameDefinition(open.definition, pin)) {
+  if (!sameDefinition(open.definition, input.definitionId)) {
     return {
       ok: false,
       fail: { code: 'definition-mismatch', record: open.seq, why: 'the run opened with a different definition pin' },
@@ -591,7 +612,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
 
   let run: RunState = {
     runId: open.run,
-    definitionId: pin,
+    definitionId: input.definitionId,
     state: open.initial,
     revision: 0,
     activation: 1,
@@ -608,7 +629,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
   const guards = provisionalResolvers().guards;
 
   let stepIndex = 0;
-  for (const record of parsed.records) {
+  for (const record of input.records) {
     if (record.record !== 'step') continue;
     const fault = stepFault({
       definition: input.definition,
@@ -631,7 +652,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     const envelope: WorkflowEnvelope = {
       format: 1,
       run: open.run,
-      definition: pin,
+      definition: input.definitionId,
       expectedRevision: run.revision,
       requestId: record.requestId,
       move: { transition: record.transition },
@@ -648,7 +669,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     try {
       decision = decide({
         definition: input.definition,
-        definitionId: pin,
+        definitionId: input.definitionId,
         run: decisionRun,
         envelope,
         signal: { name: record.signal, at: record.at },
