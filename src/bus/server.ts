@@ -54,7 +54,7 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
-import { reconcilePass } from './reconcile.ts';
+import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 
@@ -168,7 +168,9 @@ export type StartBusInput = {
 
 export type BusHandle = {
   close(): Promise<void>;
-  reconcileNow(): SignedEventRecord[];
+  /** The pass in flight, or a new one started now; the pass yields between slices, so a caller
+   *  that does not await it does not stop the bus's own answers. */
+  reconcileNow(): Promise<SignedEventRecord[]>;
 };
 
 export type StartBusResult =
@@ -695,8 +697,14 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       }
     };
 
-    const runReconcile = (): SignedEventRecord[] => {
-      const res = reconcilePass({
+    // One cache across this bus's passes. The pass runs in slices and yields between them, so a
+    // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
+    // flight instead of starting a second one over the same records.
+    const reconcileState = createReconcileState();
+    let reconcileRun: Promise<SignedEventRecord[]> | null = null;
+    const runReconcile = (): Promise<SignedEventRecord[]> => {
+      if (reconcileRun !== null) return reconcileRun;
+      const run = reconcilePassAsync({
         project: input.team.project,
         root: input.root,
         session: input.team.session,
@@ -706,12 +714,20 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         kept: input.keptLogFiles,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
+        state: reconcileState,
+      }).then(
+        (res) => (res.ok ? res.raised : []),
+        (error: unknown) => {
+          input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          return [];
+        },
+      );
+      reconcileRun = run;
+      void run.finally(() => {
+        if (reconcileRun === run) reconcileRun = null;
       });
-      return res.ok ? res.raised : [];
+      return run;
     };
-
-    // Initial reconcile pass at bus start (Amendment 01 §4.2).
-    runReconcile();
 
     const server = createServer((socket) => {
       sockets.add(socket);
@@ -735,14 +751,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // pid, while it serves. A marker whose pid is gone is a bus that died; `team up` starts one.
     writeBusMarker(input.root, now());
 
+    // Initial reconcile pass at bus start (Amendment 01 §4.2). The listener is already bound, so
+    // the pass's own yields let a liveness probe and a subscriber connect while it runs.
+    await runReconcile();
+
     const timer =
       reconcileIntervalMs > 0
         ? setInterval(() => {
-            try {
-              runReconcile();
-            } catch (error) {
-              input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
-            }
+            // The pass answers its own failures; an interval tick never starts a second pass.
+            void runReconcile();
           }, reconcileIntervalMs)
         : undefined;
     timer?.unref?.();

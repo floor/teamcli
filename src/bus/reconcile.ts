@@ -5,7 +5,21 @@
 // and `.agents/team.state.json` — for message records, receipts, and seat states that have no
 // corresponding event in `events.jsonl`, and appends the missing events idempotently. A tool
 // that crashed between writing its record and publishing to the bus loses time, never the event.
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+//
+// The pass is a sequence of small steps, not one blocking call. `reconcileSteps` yields after
+// every record it examines; `reconcilePassAsync` runs those steps in slices and gives the event
+// loop a turn between them, so a large store never stops the bus, the daemon's heartbeat or a
+// send endpoint's liveness answer. `reconcilePass` drains the same steps without yielding, for
+// callers that want the whole pass before they move on.
+//
+// A pass also remembers what it already read and verified. Per-folder entries are keyed by the
+// file's own stat stamp (inode, size, mtime, ctime): an unchanged record is raised from that
+// cache — a map lookup in the log, not a read, a parse or a signature check — and only a changed
+// or new file is read again. The log read itself is reused while the retained log files are
+// unchanged, and so is the parsed history. Correctness does not move: every record is still
+// raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
+// receipt that arrives in a later pass than its record still carries that record's sender.
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   configChangedRecordId,
@@ -21,7 +35,7 @@ import {
 } from '../config/sources.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { markOrphanedSeats } from '../registry/sync.ts';
-import { readHistory } from '../send/history.ts';
+import { HISTORY_KEPT, readHistory, type HistoryEntry } from '../send/history.ts';
 import { readPending } from '../send/pending.ts';
 import { readState } from '../state.ts';
 import {
@@ -35,6 +49,7 @@ import { compareSeatNames } from '../seat-names.ts';
 import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
+  EVENT_LOG_KEPT,
   readEvents,
   type EventAppendInput,
   type SignedEventRecord,
@@ -51,6 +66,12 @@ export type ReconcileOptions = {
   kept?: number;
   heldThresholdSeconds?: number;
   onEvent?: (record: SignedEventRecord) => void;
+  /** The caches and counters a sequence of passes shares. Absent, every pass starts empty, which
+   *  is exactly the old behavior. */
+  state?: ReconcileState;
+  /** How long `reconcilePassAsync` runs before it gives the event loop a turn. 0 yields at every
+   *  step, which a scene uses to prove the pass yields at all; a negative value never yields. */
+  sliceMs?: number;
 };
 
 export type ReconcileResult =
@@ -65,15 +86,77 @@ export type ReconcileResult =
     }
   | { ok: false; reason: string };
 
-const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+/** What one pass did, and what it could reuse. Reset at the start of every pass except
+ *  `passes`, which counts them; `yields` counts the turns `reconcilePassAsync` gave the loop. */
+export type ReconcileStats = {
+  passes: number;
+  /** Record files whose content this pass read (drop records and signed records). */
+  filesRead: number;
+  /** Files whose content this pass did not read because their stat stamp was unchanged. */
+  filesReused: number;
+  /** Signed records this pass verified against the key. */
+  verifies: number;
+  /** Signed records whose verification result came from the cache. */
+  verifiesReused: number;
+  yields: number;
+};
 
-function isRegularFile(path: string): boolean {
-  try {
-    return lstatSync(path).isFile();
-  } catch {
-    return false;
-  }
+type DropEntry = { kind: 'drop'; from?: string; ts?: string; thread?: string; at: string };
+type ReceiptEntry = { kind: 'receipt'; receipt: 'delivered' | 'read' | 'replied'; id: string; at: string };
+type MessageEntry = {
+  kind: 'message';
+  keyPrint: string;
+  verified: boolean;
+  from?: string;
+  at: string;
+  ownerDigest: boolean;
+};
+type SignedReceiptEntry = { kind: 'signed-receipt'; keyPrint: string; verified: boolean; id: string; at: string };
+type CachedEntry = DropEntry | ReceiptEntry | MessageEntry | SignedReceiptEntry;
+
+type FileCache = { stamp: string; entry: CachedEntry };
+type DirCache = { stamp: string; names: string[]; files: Map<string, FileCache> };
+type LogCache = {
+  path: string;
+  kept: number;
+  stamp: string;
+  checked: number;
+  full: boolean;
+  seen: Set<string>;
+  configSeen: Set<string>;
+  lastSeatEventTs: Map<string, string>;
+};
+type HistoryCache = { path: string; stamp: string; entries: HistoryEntry[] };
+
+/** The caches one bus keeps between passes. It is plain state: nothing here is saved to disk,
+ *  and a new bus process starts with an empty one, which only costs it one full first pass. */
+export type ReconcileState = {
+  dirs: Map<string, DirCache>;
+  /** Per drop folder, the sender each record id carried when the pass saw it. Held across passes
+   *  so a receipt that arrives after its record was taken still names the sender; pruned to the
+   *  ids the current listing still holds on every pass. */
+  senders: Map<string, Map<string, string>>;
+  /** The same map for signed mailboxes. */
+  signedSenders: Map<string, Map<string, string>>;
+  log: LogCache | null;
+  history: HistoryCache | null;
+  stats: ReconcileStats;
+};
+
+export function createReconcileState(): ReconcileState {
+  return {
+    dirs: new Map(),
+    senders: new Map(),
+    signedSenders: new Map(),
+    log: null,
+    history: null,
+    stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
+  };
 }
+
+const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+/** The share of the event loop one async pass takes between turns. */
+export const DEFAULT_RECONCILE_SLICE_MS = 8;
 
 function isRealDir(path: string): boolean {
   try {
@@ -120,15 +203,163 @@ function parseDropSender(raw: string): { from?: string; ts?: string; thread?: st
   return {};
 }
 
-export function reconcilePass(options: ReconcileOptions): ReconcileResult {
+/** A receipt's own name says what it is and which record it belongs to; its bytes are never
+ *  read. Returns null for anything that is not one of the three receipts. */
+function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; id: string } | null {
+  for (const receipt of ['delivered', 'read', 'replied'] as const) {
+    for (const suffix of [`.${receipt}.json`, `.${receipt}`]) {
+      if (file.endsWith(suffix)) return { receipt, id: file.slice(0, -suffix.length) };
+    }
+  }
+  return null;
+}
+
+function fileStampOf(path: string): { stamp: string; mtimeIso: string } | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    return {
+      stamp: `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`,
+      mtimeIso: new Date(stat.mtimeMs).toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function oneStamp(path: string): string {
+  try {
+    const stat = lstatSync(path);
+    return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** The stat signature of a retained log or history: the live file plus every rotated segment. A
+ *  rotation moves the live file and rewrites a segment, so any change to the set changes this. */
+function retainedStamp(path: string, kept: number): string {
+  const parts: string[] = [];
+  for (let n = kept - 1; n >= 1; n--) parts.push(oneStamp(`${path}.${String(n)}`));
+  parts.push(oneStamp(path));
+  return parts.join('|');
+}
+
+/** The directory's listing, reused whole while its own stat stamp is unchanged: a directory's
+ *  mtime moves when an entry is added or removed. Each file's stamp is still checked below, so a
+ *  record rewritten under the same name is read again. */
+function listDir(state: ReconcileState, dir: string, visited: Set<string>): string[] | null {
+  let signature: string;
+  try {
+    const stat = lstatSync(dir);
+    if (!stat.isDirectory()) {
+      state.dirs.delete(dir);
+      return null;
+    }
+    signature = `${String(stat.ino)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`;
+  } catch {
+    // A folder this pass cannot stat is gone or no longer a folder: its cached listing is no
+    // longer a fact, so the next pass that finds it lists it again from scratch.
+    state.dirs.delete(dir);
+    return null;
+  }
+  visited.add(dir);
+  const cached = state.dirs.get(dir);
+  if (cached !== undefined && cached.stamp === signature) return cached.names;
+  let names: string[];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return null;
+  }
+  const files = new Map<string, FileCache>();
+  if (cached !== undefined) {
+    for (const name of names) {
+      const hit = cached.files.get(name);
+      if (hit !== undefined) files.set(name, hit);
+    }
+  }
+  state.dirs.set(dir, { stamp: signature, names, files });
+  return names;
+}
+
+function cachedEntry(state: ReconcileState, dir: string, name: string, stamp: string): CachedEntry | null {
+  const hit = state.dirs.get(dir)?.files.get(name);
+  return hit !== undefined && hit.stamp === stamp ? hit.entry : null;
+}
+
+function storeEntry(state: ReconcileState, dir: string, name: string, stamp: string, entry: CachedEntry): void {
+  state.dirs.get(dir)?.files.set(name, { stamp, entry });
+}
+
+/** The key's public half as a stable print: a re-verified record stays verified only against the
+ *  key that verified it. */
+function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
+  if (keyState.kind !== 'key') return '';
+  try {
+    const jwk = keyState.key.export({ format: 'jwk' }) as { x?: string };
+    return typeof jwk.x === 'string' ? jwk.x : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The pass as a sequence of steps. Every `yield` is a point where the caller may give the event
+ * loop a turn; the caller's pacing never changes what the pass reads or raises.
+ */
+export function* reconcileSteps(options: ReconcileOptions): Generator<void, ReconcileResult, void> {
   const { project, root, session, home } = options;
+  const state = options.state ?? createReconcileState();
+  const stats = state.stats;
+  stats.passes += 1;
+  stats.filesRead = 0;
+  stats.filesReused = 0;
+  stats.verifies = 0;
+  stats.verifiesReused = 0;
+  stats.yields = 0;
+  const visited = new Set<string>();
   const nowDate = options.now ?? new Date();
   const nowIso = nowDate.toISOString();
   const nowMs = nowDate.getTime();
   const heldThresholdMs = (options.heldThresholdSeconds ?? DEFAULT_HELD_THRESHOLD_SECONDS) * 1000;
 
-  const existing = readEvents(project, root, home, { kept: options.kept });
-  if (!existing.ok) return existing;
+  // The retained log is read as a whole only when one of its files changed. Until then the
+  // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
+  // every retained line — is skipped.
+  let existing: ReturnType<typeof readEvents>;
+  let cachedLog = state.log;
+  if (cachedLog !== null) {
+    const stamp = retainedStamp(cachedLog.path, cachedLog.kept);
+    if (stamp !== cachedLog.stamp) cachedLog = null;
+  }
+  if (cachedLog === null) {
+    existing = readEvents(project, root, home, { kept: options.kept });
+    if (!existing.ok) return existing;
+    const kept = options.kept ?? EVENT_LOG_KEPT;
+    cachedLog = {
+      path: existing.path,
+      kept,
+      stamp: retainedStamp(existing.path, kept),
+      checked: existing.checked,
+      full: existing.full,
+      seen: new Set<string>(),
+      configSeen: new Set<string>(),
+      lastSeatEventTs: new Map<string, string>(),
+    };
+    for (const entry of existing.events) {
+      if (entry.payload.kind === 'config.changed') cachedLog.configSeen.add(entry.payload.record_id);
+      if (entry.payload.session !== session) continue;
+      cachedLog.seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
+      if (entry.payload.seat !== undefined) {
+        const prev = cachedLog.lastSeatEventTs.get(entry.payload.seat);
+        if (prev === undefined || Date.parse(entry.payload.ts) >= Date.parse(prev)) {
+          cachedLog.lastSeatEventTs.set(entry.payload.seat, entry.payload.ts);
+        }
+      }
+    }
+    state.log = cachedLog;
+  }
 
   // A seat whose declaration is gone keeps its record and every signed setting: the bootstrap
   // ruling asks for an observable mark instead of a delete, and this pass is where the removal
@@ -139,22 +370,9 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
     // The next pass retries; a registry this pass cannot write does not fail the reconcile.
   }
 
-  const seen = new Set<string>();
-  // A settings change is machine-wide: the signed generation it names is the same in every
-  // session, so its record ids are collected from the whole retained log, not this session's.
-  const configSeen = new Set<string>();
-  const lastSeatEventTs = new Map<string, string>();
-  for (const entry of existing.events) {
-    if (entry.payload.kind === 'config.changed') configSeen.add(entry.payload.record_id);
-    if (entry.payload.session !== session) continue;
-    seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
-    if (entry.payload.seat !== undefined) {
-      const prev = lastSeatEventTs.get(entry.payload.seat);
-      if (prev === undefined || Date.parse(entry.payload.ts) >= Date.parse(prev)) {
-        lastSeatEventTs.set(entry.payload.seat, entry.payload.ts);
-      }
-    }
-  }
+  const seen = cachedLog.seen;
+  const configSeen = cachedLog.configSeen;
+  const lastSeatEventTs = cachedLog.lastSeatEventTs;
 
   const raised: SignedEventRecord[] = [];
 
@@ -177,26 +395,19 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
 
   // 1. Scan `.agents/send-drops/<session>/<seat>` for drop files, `.pending` markers, and receipts.
   const sessionDropsDir = join(root, '.agents', 'send-drops', session);
-  if (isRealDir(sessionDropsDir)) {
-    let seats: string[] = [];
-    try {
-      seats = readdirSync(sessionDropsDir).sort(compareSeatNames);
-    } catch {
-      seats = [];
-    }
+  const dropSeatNames = listDir(state, sessionDropsDir, visited);
+  if (dropSeatNames !== null) {
+    const seats = [...dropSeatNames].sort(compareSeatNames);
     for (const seat of seats) {
       if (!RECORD_NAME.test(seat)) continue;
       const seatDir = join(sessionDropsDir, seat);
       if (!isRealDir(seatDir)) continue;
+      visited.add(seatDir);
 
-      let files: string[] = [];
-      try {
-        files = readdirSync(seatDir).sort();
-      } catch {
-        files = [];
-      }
+      const files = listDir(state, seatDir, visited) ?? [];
 
       const sendersById = new Map<string, string>();
+      const previousSenders = state.senders.get(seatDir);
 
       for (const file of files) {
         if (file.startsWith('.')) continue;
@@ -217,30 +428,37 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           continue;
         }
         const fullPath = join(seatDir, file);
-        if (!isRegularFile(fullPath)) continue;
+        const fresh = fileStampOf(fullPath);
+        if (fresh === null) continue;
         const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
         if (!RECORD_NAME.test(id)) continue;
 
-        let raw = '';
-        let mtimeIso = nowIso;
-        try {
-          raw = readFileSync(fullPath, 'utf8');
-          mtimeIso = new Date(statSync(fullPath).mtimeMs).toISOString();
-        } catch {
-          continue;
+        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        if (entry === null || entry.kind !== 'drop') {
+          let raw = '';
+          try {
+            raw = readFileSync(fullPath, 'utf8');
+          } catch {
+            continue;
+          }
+          stats.filesRead += 1;
+          entry = { kind: 'drop', at: fresh.mtimeIso, ...parseDropSender(raw) };
+          storeEntry(state, seatDir, file, fresh.stamp, entry);
+        } else {
+          stats.filesReused += 1;
         }
-        const meta = parseDropSender(raw);
-        if (meta.from !== undefined) sendersById.set(id, meta.from);
+        if (entry.from !== undefined) sendersById.set(id, entry.from);
 
         raise({
-          ts: meta.ts ?? mtimeIso,
+          ts: entry.ts ?? entry.at,
           kind: 'message.arrived',
           session,
           record_id: id,
           to: seat,
-          ...(meta.from !== undefined ? { from: meta.from } : {}),
-          ...(meta.thread !== undefined ? { thread: meta.thread } : {}),
+          ...(entry.from !== undefined ? { from: entry.from } : {}),
+          ...(entry.thread !== undefined ? { thread: entry.thread } : {}),
         });
+        yield;
       }
 
       // Check `.pending` held drops in the seat's drop folder.
@@ -267,152 +485,192 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
             });
           }
         }
+        yield;
       }
 
-      // Check receipts (`.delivered`, `.read`, `.replied`) beside drops.
+      // Check receipts (`.delivered`, `.read`, `.replied`) beside drops. A receipt's stat stamp
+      // is enough to raise it; only a new or touched file is stamped again, and the sender comes
+      // from this listing or, for a receipt that arrived after its record was taken, the map the
+      // previous pass left.
       for (const file of files) {
         if (file.startsWith('.')) continue;
         const fullPath = join(seatDir, file);
-        if (!isRegularFile(fullPath)) continue;
-        let mtimeIso = nowIso;
-        try {
-          mtimeIso = new Date(statSync(fullPath).mtimeMs).toISOString();
-        } catch {
-          continue;
+        const receipt = receiptOf(file);
+        if (receipt === null || !RECORD_NAME.test(receipt.id)) continue;
+        const fresh = fileStampOf(fullPath);
+        if (fresh === null) continue;
+        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        if (entry === null || entry.kind !== 'receipt') {
+          entry = { kind: 'receipt', receipt: receipt.receipt, id: receipt.id, at: fresh.mtimeIso };
+          storeEntry(state, seatDir, file, fresh.stamp, entry);
+        } else {
+          stats.filesReused += 1;
         }
-        const matchReceipt = (suffix: string): string | null =>
-          file.endsWith(suffix) ? file.slice(0, -suffix.length) : null;
-
-        const deliveredId = matchReceipt('.delivered.json') ?? matchReceipt('.delivered');
-        if (deliveredId !== null && RECORD_NAME.test(deliveredId)) {
-          const from = sendersById.get(deliveredId);
-          raise({
-            ts: mtimeIso,
-            kind: 'message.delivered',
-            session,
-            record_id: `${deliveredId}:delivered`,
-            to: seat,
-            ...(from !== undefined ? { from } : {}),
-          });
-          continue;
-        }
-
-        const readId = matchReceipt('.read.json') ?? matchReceipt('.read');
-        if (readId !== null && RECORD_NAME.test(readId)) {
-          const from = sendersById.get(readId);
-          raise({
-            ts: mtimeIso,
-            kind: 'message.read',
-            session,
-            record_id: `${readId}:read`,
-            to: seat,
-            ...(from !== undefined ? { from } : {}),
-          });
-          continue;
-        }
-
-        const repliedId = matchReceipt('.replied.json') ?? matchReceipt('.replied');
-        if (repliedId !== null && RECORD_NAME.test(repliedId)) {
-          const from = sendersById.get(repliedId);
-          raise({
-            ts: mtimeIso,
-            kind: 'message.replied',
-            session,
-            record_id: `${repliedId}:replied`,
-            to: seat,
-            ...(from !== undefined ? { from } : {}),
-          });
-        }
+        const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id);
+        raise({
+          ts: entry.at,
+          kind: entry.receipt === 'delivered' ? 'message.delivered' : entry.receipt === 'read' ? 'message.read' : 'message.replied',
+          session,
+          record_id: `${entry.id}:${entry.receipt}`,
+          to: seat,
+          ...(from !== undefined ? { from } : {}),
+        });
+        yield;
       }
+
+      state.senders.set(seatDir, sendersById);
     }
   }
 
   // 2. Scan signed `.agents/messages/<seat>` records and `.read.json` receipts.
   const messagesDir = join(root, '.agents', 'messages');
   const keyState = messageKeyState(home);
-  if (isRealDir(messagesDir) && keyState.kind === 'key') {
-    let seats: string[] = [];
-    try {
-      seats = readdirSync(messagesDir).sort(compareSeatNames);
-    } catch {
-      seats = [];
-    }
+  const signedSeatNames = listDir(state, messagesDir, visited);
+  if (signedSeatNames !== null && keyState.kind === 'key') {
+    const keyPrint = keyPrintOf(keyState);
+    const seats = [...signedSeatNames].sort(compareSeatNames);
     for (const seat of seats) {
       if (!RECORD_NAME.test(seat)) continue;
       const seatDir = join(messagesDir, seat);
       if (!isRealDir(seatDir)) continue;
-      let files: string[] = [];
-      try {
-        files = readdirSync(seatDir).sort();
-      } catch {
-        files = [];
-      }
+      visited.add(seatDir);
+      const files = listDir(state, seatDir, visited) ?? [];
       const messageSenders = new Map<string, string>();
+      const previousSenders = state.signedSenders.get(seatDir);
       for (const file of files) {
         if (!file.endsWith('.json') || file.endsWith('.read.json')) continue;
         const id = file.slice(0, -'.json'.length);
         if (!RECORD_NAME.test(id)) continue;
         const fullPath = join(seatDir, file);
-        if (!isRegularFile(fullPath)) continue;
-        try {
-          const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
-          const payload = parsed.payload as Record<string, unknown> | undefined;
-          const sig = parsed.signature;
-          if (!payload || typeof sig !== 'string') continue;
-          if (payload.kind !== 'message' || payload.id !== id || payload.to !== seat || payload.session !== session) continue;
-          if (!verifyDomain(MESSAGE_DOMAIN, payload as unknown as Json, sig, keyState.key)) continue;
-          const from = typeof payload.from === 'string' ? payload.from : undefined;
-          const at = typeof payload.at === 'string' ? payload.at : nowIso;
-          if (from !== undefined) messageSenders.set(id, from);
-          // The Runtime writes its own owner delivery summaries into the same mailbox. A digest is
-          // a summary of events already in the log, not a message: raising `message.arrived` for it
-          // would deliver it again, and the next pass would summarize that summary, forever.
-          if (isOwnerDigestRecord(id, from)) continue;
-          raise({
-            ts: at,
-            kind: 'message.arrived',
-            session,
-            record_id: id,
-            to: seat,
-            ...(from !== undefined ? { from } : {}),
-          });
-        } catch {
-          continue;
+        const fresh = fileStampOf(fullPath);
+        if (fresh === null) continue;
+        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        if (entry === null || entry.kind !== 'message' || entry.keyPrint !== keyPrint) {
+          let next: MessageEntry = { kind: 'message', keyPrint, verified: false, at: nowIso, ownerDigest: false };
+          try {
+            const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
+            const payload = parsed.payload as Record<string, unknown> | undefined;
+            const sig = parsed.signature;
+            if (payload && typeof sig === 'string') {
+              stats.verifies += 1;
+              if (
+                payload.kind === 'message' &&
+                payload.id === id &&
+                payload.to === seat &&
+                payload.session === session &&
+                verifyDomain(MESSAGE_DOMAIN, payload as unknown as Json, sig, keyState.key)
+              ) {
+                const from = typeof payload.from === 'string' ? payload.from : undefined;
+                const at = typeof payload.at === 'string' ? payload.at : nowIso;
+                next = {
+                  kind: 'message',
+                  keyPrint,
+                  verified: true,
+                  at,
+                  ownerDigest: isOwnerDigestRecord(id, from),
+                  ...(from !== undefined ? { from } : {}),
+                };
+              }
+            }
+          } catch {
+            // An unreadable record stayed unraised before; the cached verdict keeps it that way
+            // until its bytes change.
+          }
+          entry = next;
+          stats.filesRead += 1;
+          storeEntry(state, seatDir, file, fresh.stamp, entry);
+        } else {
+          stats.filesReused += 1;
+          stats.verifiesReused += 1;
         }
+        if (!entry.verified) continue;
+        const from = entry.from;
+        if (from !== undefined) messageSenders.set(id, from);
+        // The Runtime writes its own owner delivery summaries into the same mailbox. A digest is
+        // a summary of events already in the log, not a message: raising `message.arrived` for it
+        // would deliver it again, and the next pass would summarize that summary, forever.
+        if (entry.ownerDigest) continue;
+        raise({
+          ts: entry.at,
+          kind: 'message.arrived',
+          session,
+          record_id: id,
+          to: seat,
+          ...(from !== undefined ? { from } : {}),
+        });
+        yield;
       }
       for (const file of files) {
         if (!file.endsWith('.read.json')) continue;
         const id = file.slice(0, -'.read.json'.length);
         if (!RECORD_NAME.test(id)) continue;
         const fullPath = join(seatDir, file);
-        if (!isRegularFile(fullPath)) continue;
-        try {
-          const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
-          const payload = parsed.payload as Record<string, unknown> | undefined;
-          const sig = parsed.signature;
-          if (!payload || typeof sig !== 'string') continue;
-          if (payload.kind !== 'receipt' || payload.id !== id || payload.to !== seat || payload.session !== session) continue;
-          if (!verifyDomain(RECEIPT_DOMAIN, payload as unknown as Json, sig, keyState.key)) continue;
-          const at = typeof payload.at === 'string' ? payload.at : nowIso;
-          const from = messageSenders.get(id);
-          raise({
-            ts: at,
-            kind: 'message.read',
-            session,
-            record_id: `${id}:read`,
-            to: seat,
-            ...(from !== undefined ? { from } : {}),
-          });
-        } catch {
-          continue;
+        const fresh = fileStampOf(fullPath);
+        if (fresh === null) continue;
+        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+        if (entry === null || entry.kind !== 'signed-receipt' || entry.keyPrint !== keyPrint) {
+          let next: SignedReceiptEntry = { kind: 'signed-receipt', keyPrint, verified: false, id, at: nowIso };
+          try {
+            const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
+            const payload = parsed.payload as Record<string, unknown> | undefined;
+            const sig = parsed.signature;
+            if (payload && typeof sig === 'string') {
+              stats.verifies += 1;
+              if (
+                payload.kind === 'receipt' &&
+                payload.id === id &&
+                payload.to === seat &&
+                payload.session === session &&
+                verifyDomain(RECEIPT_DOMAIN, payload as unknown as Json, sig, keyState.key)
+              ) {
+                next = {
+                  kind: 'signed-receipt',
+                  keyPrint,
+                  verified: true,
+                  id,
+                  at: typeof payload.at === 'string' ? payload.at : nowIso,
+                };
+              }
+            }
+          } catch {
+            // Same rule as a signed message: an unreadable record raises nothing.
+          }
+          entry = next;
+          stats.filesRead += 1;
+          storeEntry(state, seatDir, file, fresh.stamp, entry);
+        } else {
+          stats.filesReused += 1;
+          stats.verifiesReused += 1;
         }
+        if (!entry.verified) continue;
+        const from = messageSenders.get(id) ?? previousSenders?.get(id);
+        raise({
+          ts: entry.at,
+          kind: 'message.read',
+          session,
+          record_id: `${id}:read`,
+          to: seat,
+          ...(from !== undefined ? { from } : {}),
+        });
+        yield;
       }
+      state.signedSenders.set(seatDir, messageSenders);
     }
   }
 
   // 3. Scan `messages.jsonl` history entries for outcomes not yet reflected in `events.jsonl`.
-  const history = readHistory(project, root, home);
-  if (history.ok) {
+  if (state.history !== null) {
+    const stamp = retainedStamp(state.history.path, HISTORY_KEPT);
+    if (stamp !== state.history.stamp) state.history = null;
+  }
+  if (state.history === null) {
+    const read = readHistory(project, root, home);
+    if (read.ok) {
+      state.history = { path: read.path, stamp: retainedStamp(read.path, HISTORY_KEPT), entries: read.entries };
+    }
+  }
+  const history = state.history;
+  if (history !== null) {
     for (const entry of history.entries) {
       raise({
         ts: entry.ts,
@@ -483,12 +741,13 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
           subject: entry.to,
         });
       }
+      yield;
     }
   }
 
   // 4. Scan `.agents/team.state.json` for seat state transitions newer than their last event.
-  const state = readState(join(root, '.agents'));
-  const sessionState = state.sessions[session];
+  const stateFile = readState(join(root, '.agents'));
+  const sessionState = stateFile.sessions[session];
   if (sessionState !== undefined) {
     const seatNames = Object.keys(sessionState.seats).sort(compareSeatNames);
     for (const seatName of seatNames) {
@@ -508,6 +767,7 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
         subject: seatName,
       });
       lastSeatEventTs.set(seatName, activeTs);
+      yield;
     }
   }
 
@@ -559,9 +819,57 @@ export function reconcilePass(options: ReconcileOptions): ReconcileResult {
             options.onEvent?.(res.record);
           }
         }
+        yield;
       }
     }
   }
 
-  return { ok: true, raised, checked: existing.checked, full: existing.full };
+  // A folder that disappeared takes its caches with it; a sender map for a folder this pass did
+  // not list is no longer a fact about the current records.
+  for (const key of state.dirs.keys()) {
+    if (!visited.has(key)) state.dirs.delete(key);
+  }
+  for (const key of state.senders.keys()) {
+    if (!visited.has(key)) state.senders.delete(key);
+  }
+  for (const key of state.signedSenders.keys()) {
+    if (!visited.has(key)) state.signedSenders.delete(key);
+  }
+
+  return { ok: true, raised, checked: cachedLog.checked, full: cachedLog.full };
+}
+
+/** The whole pass, without giving the event loop a turn. */
+export function reconcilePass(options: ReconcileOptions): ReconcileResult {
+  const steps = reconcileSteps(options);
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+  }
+}
+
+/** One turn of the event loop: macrotasks (timers, socket I/O) and the microtask queue both get
+ *  to run before the next slice of the pass. */
+function yieldTurn(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/**
+ * The whole pass in slices. Between slices the event loop is free, so a heartbeat timer, a
+ * liveness probe or an incoming request is answered while a large store is being scanned. The
+ * result is the same pass `reconcilePass` returns; only the pacing differs.
+ */
+export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
+  const state = options.state ?? createReconcileState();
+  const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
+  const steps = reconcileSteps({ ...options, state });
+  let since = performance.now();
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+    if (sliceMs < 0 || performance.now() - since < sliceMs) continue;
+    state.stats.yields += 1;
+    await yieldTurn();
+    since = performance.now();
+  }
 }
