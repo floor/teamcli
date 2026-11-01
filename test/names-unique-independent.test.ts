@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -122,7 +123,8 @@ test('a label change appears in the next actual header without a relaunch', () =
   const after = result.after as Run;
   expect(before.code).toBe(0);
   expect(before.bodies?.some((body) => body.startsWith('from Lyra'))).toBe(true);
-  expect(result.edit?.code, result.edit?.out + result.edit?.err).toBe(0);
+  assert.ok(result.edit, 'the rename scene must return its edit result');
+  expect(result.edit.code, result.edit.out + result.edit.err).toBe(0);
   expect(after.code, after.out + after.err).toBe(0);
   expect(after.bodies?.some((body) => body.startsWith('from Kestrel'))).toBe(true);
   expect(result.beforeAgent?.id).toBe(result.afterAgent?.id);
