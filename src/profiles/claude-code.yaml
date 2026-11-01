@@ -32,18 +32,24 @@ exit_clear: ctrl+c
 # - `2.1.289/permission-plan-wide-plain.txt`: the plan-approval dialog, "Denied with Escape".
 # - `2.1.289/question-plain.txt` and `2.1.302/question.txt`: the question tool's choice screen,
 #   "Dismissed with Escape without selecting anything" and "Escape dismissed it".
-# A range claims only the versions whose captures were run: both endpoints were, and the
-# question screen's footer (`Esc to cancel`) is the same at each. The held cross-session frame
-# (`2.1.302/held.txt`) has no recorded dismissal, so no confirmation record is claimed.
+# The version the answer layer matches is what `claude --version` prints, which carries its own
+# suffix: `2.1.302 (Claude Code)` (`2.1.302/README.md`). A range compares whole versions and
+# would match neither print, so each record is one captured printed version exactly, as the
+# loader spells an exact record. The held cross-session frame (`2.1.302/held.txt`) has no
+# recorded dismissal, so no confirmation record is claimed.
 question_answer:
   - kind: plan approval
     key: escape
-    from: '2.1.289'
-    to: '2.1.289'
+    from: '2.1.289 (Claude Code)'
+    to: '2.1.289 (Claude Code)'
   - kind: question
     key: escape
-    from: '2.1.289'
-    to: '2.1.302'
+    from: '2.1.289 (Claude Code)'
+    to: '2.1.289 (Claude Code)'
+  - kind: question
+    key: escape
+    from: '2.1.302 (Claude Code)'
+    to: '2.1.302 (Claude Code)'
 # The measured way into the input box (2026-10-19, herdr 0.7.1, a 54-column pane, 2.1.303): at
 # idle one ctrl+c emptied a five-line draft and the screen returned to its idle prompt, the CLI
 # staying open; a ctrl+c on an already-empty idle box left it idle too. During a running turn

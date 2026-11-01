@@ -54,17 +54,24 @@ timeouts:
 # - `2026.10.01/question.txt` and `2026.10.16/question.txt`: the choice box, "Escape each time"
 #   and "Escape dismissed it".
 # - `2026.10.01/permission-plan.txt`: the mode switch, "then Escape rejected it".
-# The two question captures bracket the range; no confirmation capture exists past 2026.10.01,
-# so that record is exact.
+# Cursor prints its build suffix in the version (`cursor-agent --version` printed
+# `2026.10.16-e3cb207`), so each record is the
+# printed version exactly — a range compares whole versions and would match neither build. The
+# captures' READMEs name them: `2026.10.01-14929f9` and `2026.10.16-e3cb207`. No confirmation
+# capture exists past the first, so that record is the one version.
 question_answer:
   - kind: question
     key: escape
-    from: '2026.10.01'
-    to: '2026.10.16'
+    from: '2026.10.01-14929f9'
+    to: '2026.10.01-14929f9'
+  - kind: question
+    key: escape
+    from: '2026.10.16-e3cb207'
+    to: '2026.10.16-e3cb207'
   - kind: confirmation
     key: escape
-    from: '2026.10.01'
-    to: '2026.10.01'
+    from: '2026.10.01-14929f9'
+    to: '2026.10.01-14929f9'
 # The predicate, label and extractor come from the registered
 # cursor/2026.10.01/trust.txt capture. That capture was taken in an untrusted temporary
 # directory, not the lobby, so the record claims no lobby evidence.
