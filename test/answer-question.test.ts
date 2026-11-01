@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../src/approve/command.ts';
 import { runAnswer, type AnswerHost, type PaneReading } from '../src/commands/answer.ts';
+import type { PaneProcesses } from '../src/herdr.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { SendHost } from '../src/commands/send.ts';
@@ -267,6 +268,8 @@ type Seam = {
   /** The version the CLI prints, called with the run's 1-based version lookup, so a scene can
    *  make the lookup itself change the pane. Takes precedence over {@link printed}. */
   version?: (call: number) => string;
+  /** The process the pane reports; the default is the launched identity the `wait` fixture records. */
+  process?: () => PaneProcesses;
   /** The screen the pane shows once the key is pressed; the default is the cursor idle capture. */
   afterKey?: string;
   /** No reading and no profile seam: the shipped reader and the shipped profiles answer. */
@@ -328,7 +331,10 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     rename() { host.named = true; return true; },
     foreground() { return ['cursor-agent']; },
     foregroundCwd() { return lobbyDir(home); },
-    processInfo() { host.calls.push('processInfo'); return { shell: 4100, foreground: [4100, 4200] }; },
+    processInfo() {
+      host.calls.push('processInfo');
+      return seam.process ? seam.process() : { shell: 4100, foreground: [4100, 4200] };
+    },
     list(dir: string) { return listFolder(dir); },
     status() { return status; },
     type(_session: string, _pane: string, value: string) {
@@ -643,6 +649,31 @@ describe('team answer <seat> question', () => {
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
+  test('a pane whose foreground process is replaced during the version lookup is refused before the key', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // Builder-3's probe: the screen never changes — the question stays — and only the foreground
+    // process is replaced while the last version lookup runs. That lookup now runs before the
+    // process read, so the read sees the replacement and the key is refused; with the lookup
+    // between the process read and the capture, Escape would land on the new process.
+    let pid = 4200;
+    const host = fake(home, 'lead', 'Which name do you want to use?\n', {
+      process: () => ({ shell: 4100, foreground: [4100, pid] }),
+      version: (call) => {
+        if (call === 3) pid = 4300;
+        return VERSION;
+      },
+    });
+    const run = io(root);
+    expect(await runAnswer([...FILE, '--json', 'lead', 'question'], run, host)).toBe(1);
+    expect(JSON.parse(run.out)).toMatchObject({ error: { id: 'answer.process' } });
+    expect(host.keys).toEqual([]);
+    expect(host.versions).toBe(3);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
   test('no host read runs between the final pane capture and the key', async () => {
     const { root, home, lobby, sockets, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
@@ -653,14 +684,16 @@ describe('team answer <seat> question', () => {
     const run = io(root);
     expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(0);
     expect(host.keys).toEqual(['escape']);
-    // Between the last capture and the key there is nothing but the reading's own checks: the
-    // version lookup and the process check both run before it, so no subprocess started for the
-    // answer can outlive the capture the key was judged from.
+    // Between the final process read and the key there is the final capture and then nothing but
+    // the reading's own checks: the version lookup runs before both, so no subprocess started for
+    // the answer can outlive the process read and the capture the key was judged from.
     const key = host.calls.indexOf('sendKey');
     expect(key).toBeGreaterThan(0);
+    const proc = host.calls.lastIndexOf('processInfo', key - 1);
     const at = host.calls.lastIndexOf('pane', key - 1);
-    expect(at).toBeGreaterThanOrEqual(0);
-    expect(host.calls.slice(at + 1, key).filter((call) => call === 'version' || call === 'processInfo')).toEqual([]);
+    expect(proc).toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(proc);
+    expect(host.calls.slice(proc + 1, key).filter((call) => call === 'version' || call === 'processInfo')).toEqual([]);
   });
 
   test('a wrapped question is read to its end, so the two captures differing in the continuation row disagree', async () => {

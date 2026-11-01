@@ -673,15 +673,17 @@ function inspectQuestion(
   // record there is nothing to compare it with, so the reading cannot be proved this run's seat:
   // the word refuses instead of pressing a key into a pane it cannot identify.
   if (!launched) return say('identity', 'its launched identity was not recorded, so the process in its pane cannot be checked');
+  if (!profile) return say('version', 'this version has no question answer');
+  // Every slow or host lookup is resolved before the final process read. `host.version` runs the
+  // CLI's `--version`, which can take seconds, and a pane whose foreground process is replaced
+  // while it runs would be keyed from a process read taken before the replacement, exactly as a
+  // screen switched during it would be keyed from an earlier capture. The order the key path
+  // relies on is: version, then the final process check, then the final pane capture, then only
+  // pure checks, then the key. The refusal order is unchanged — the process and the screen are
+  // still judged before the version's record — only the host reads moved together.
+  const printed = host.version(profile.binary);
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
-  if (!profile) return say('version', 'this version has no question answer');
-  // Version eligibility is resolved before the pane is captured. The final reading's capture is
-  // the last thing before the key, and the checks after it are pure: `host.version` runs the
-  // CLI's `--version`, which can take seconds, and a pane switched to a permission prompt while
-  // it ran would be keyed by a reading taken before the switch. The refusal order is unchanged —
-  // the screen is judged first — only the host read moved to the near side of the capture.
-  const printed = host.version(profile.binary);
   const screen = host.pane(session, pane);
   const reading = host.reading
     ? host.reading(profile.cli, screen)
