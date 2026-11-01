@@ -266,6 +266,26 @@ describe('team peek', () => {
     expect(log.match(/refused peek\.no-screen: seat worker-1/g)).toHaveLength(3);
   });
 
+  test('a state record that does not read fails closed as no screen, and its error is not printed', async () => {
+    // The team file loaded, so this is after the point where every attempt is logged. A record
+    // that is not JSON and one that is not format 1 both mean no recorded pane can be named.
+    for (const broken of ['{"not":"a team state"', '{"format":2}']) {
+      const where = place();
+      checkFixture(where);
+      writeFileSync(join(where.root, '.agents', 'team.state.json'), broken);
+      const seen: Seen = {};
+      const io = owner(where);
+      expect(await peek(where, ['worker-1'], io, screen('secret screen text', seen))).toBe(2);
+      expect(io.out).toBe('');
+      expect(io.err).toBe('team peek: no screen is readable for seat "worker-1"\n');
+      expect(io.err).not.toContain('team.state.json');
+      expect(seen.pane).toBeUndefined();
+      expect(logOf(where).match(/refused peek\.no-screen: seat worker-1/g)).toHaveLength(1);
+      expect(logOf(where)).not.toContain('not valid JSON');
+      expect(logOf(where)).not.toContain('secret screen text');
+    }
+  });
+
   test('the owner reads the file\'s load failure; anyone else gets the one sentence and no log', async () => {
     const bare = place(false);
     const ownerIo = owner(bare);
