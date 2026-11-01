@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { renderSignature } from '../src/file/signature.ts';
+import { KEY_PREFIXES, maskSecretsLine } from '../src/file/secrets.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 
@@ -554,9 +555,10 @@ describe('secrets', () => {
     const singleSegment = `${minimal}tools:\n  chat: { kind: slack, channel: /abcdefghijklmnopqrstuvwxyz0123456789abcd }\n`;
     expect(valid(singleSegment).warnings).toEqual([notice, { line: 16, message: expect.stringMatching(/random-looking/) }]);
     // A path-shaped prefix over a credential-shaped word is not a directory either: what once
-    // silenced it silences nothing now, and the value warns like any other.
+    // silenced it silences nothing now. The word keeps its key shape through the path, so the
+    // file is refused — the same judgement that masks it on a screen, never a quieter warning.
     const inPathClothing = `${minimal}trust:\n  - /x/sk-Zx8Kq2Lm9Pv4Rt7Wy1Bn6Cd3Fg5Hj0QsAeUiOpXc\n`;
-    expect(valid(inPathClothing).warnings).toEqual([notice, { line: 16, message: expect.stringMatching(/random-looking/) }]);
+    expect(errors(inPathClothing)).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
   });
   test('a regular file, and a symlink to a directory, are not directories to the exemption', () => {
     // lstat, never stat: a regular file is not a directory, and a symlink is lstat's own kind —
@@ -582,6 +584,60 @@ describe('secrets', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe('a key framed by punctuation is still a key', () => {
+  // The team-file check finds a credential by the same token shape the screen masker masks: a
+  // known prefix is a token wherever a non-token character precedes it, so a backtick, a bracket
+  // or a colon frames rather than hides. One value per framing, every prefix.
+  const body = 'abcdefghijklmnop';
+  const toolValue = (value: string) => `${minimal}tools:\n  chat:\n    kind: slack\n    channel: ${value}\n`;
+  const framed: Array<{ where: string; value: (token: string) => string }> = [
+    { where: 'a backtick', value: (token) => `\`${token}\`` },
+    { where: 'a parenthesis', value: (token) => `(${token})` },
+    { where: 'a bracket', value: (token) => `[${token}]` },
+    { where: 'a brace', value: (token) => `{${token}}` },
+    { where: 'double quotes', value: (token) => `"${token}"` },
+    { where: 'single quotes', value: (token) => `'${token}'` },
+    { where: 'a colon', value: (token) => `:${token}` },
+    { where: 'an equals sign', value: (token) => `=${token}` },
+    { where: 'a comma', value: (token) => `,${token}` },
+    { where: 'a line start and end', value: (token) => token },
+  ];
+  for (const prefix of KEY_PREFIXES) {
+    const token = `${prefix}${body}`;
+    for (const { where, value } of framed) {
+      test(`${prefix} framed by ${where} is refused`, () => {
+        const found = errors(toolValue(JSON.stringify(value(token))));
+        expect(found.join('\n')).toMatch(/shaped like a key or token/);
+        // The same value is masked on a screen: one judgement, two readers, no drift.
+        expect(maskSecretsLine(value(token))).not.toContain(token);
+      });
+    }
+  }
+
+  test('a prefix inside a longer word, and one with a short body, are not refused', () => {
+    const accepted: string[] = [];
+    for (const prefix of KEY_PREFIXES) {
+      accepted.push(`x${prefix}${body}`);
+      accepted.push(`${prefix}${body.slice(0, 15)}`);
+    }
+    for (const value of accepted) {
+      expect({ value, found: errors(toolValue(JSON.stringify(value))) }).toEqual({ value, found: [] });
+    }
+    expect(errors(toolValue('"risk-assessment-strategy-document"'))).toEqual([]);
+  });
+
+  test('userinfo is refused in every URL, with or without a password', () => {
+    for (const url of [
+      'postgres://admin@db.example/acme',
+      'https://alice@example.test/page',
+      'https://alice:hunter2@example.test/repo.git',
+    ]) {
+      expect(errors(toolValue(JSON.stringify(url))).join('\n')).toMatch(/URL with credentials/);
+    }
+    expect(errors(toolValue('"https://db.example/acme"'))).toEqual([]);
   });
 });
 
