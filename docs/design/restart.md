@@ -58,6 +58,11 @@ Given `<seat>`:
 
 ## Pre-Close Facts and Stop Safety
 
+The first effect — typing an exit sequence, closing a workspace or launching — happens only
+under the session mutator lock, taken before anything is closed. A run that meets another
+run holding it stands aside for a bounded wait (the run's own counted sleep, 15 seconds) and
+then refuses with the holder named (`restart.run-lock`, exit 1), nothing stopped.
+
 ### Process identity (`restart.replaced`)
 
 Before typing an exit sequence or closing a live pane, `team restart` checks `seatProcessVerdict(recordedSeat, foreground)` against the pane's foreground processes:

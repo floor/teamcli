@@ -15,7 +15,7 @@ identity:
     - "\\bFLO-[0-9]+\\b"   # internal tracker ids: this repository's issues are #<number>
     - "^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:"   # no co-authorship trailer: a commit carries its one Agent line only
     - "\\bw[0-9A-Z]+:p[0-9]+\\b"   # pane ids the session prints (w2A:p1): an internal pane is not for a public log
-    - "\\bfloor-[0-9a-f]{2}\\b"   # internal session names (floor-3a): the public name is floor/teamcli
+    - "\\bfloor-[0-9a-f]{2}\\b"   # internal session names (session-3a): the public name is floor/teamcli
 
 trust:
   - ~/.config/team/lobby
@@ -332,6 +332,33 @@ seats:
 
   - role: orchestrator
     name: orchestrator-sol
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
+
+  - role: builder
+    name: builder-sol-6-1
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
+
+  - role: operator
+    name: operator-sol-6-1
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
+
+  - role: tester
+    name: tester-sol-6-1
     cli: codex
     vendor: openai
     model: GPT Sol

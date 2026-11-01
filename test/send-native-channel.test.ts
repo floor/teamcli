@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
 // since a word naming native is what puts it in the walk. A sender whose own file declares Claude
 // Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
@@ -26,7 +27,7 @@ import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
 import { recordBody, testIo, type TestIo } from './helpers.ts';
-import { NOW, dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -82,9 +83,9 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
-  expect(pane.typed[0]).toContain('hello');
-  expect(pane.enters).toBe(1);
+  expect(pane.typed.length).toBe(0);
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
@@ -119,6 +120,280 @@ test('a registered recipient with model drift is held before any send leg writes
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
 });
 
+test('a registered recipient behind a provider wrapper is not held for the family its screen shows', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const leadId = teamIdOf(made.root);
+  const pane = scripted(['idle', 'working'], `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`);
+  const host = fake(made, { native: pane });
+  // The record's reach names the pane the fixture's live agent holds, so the caller and the
+  // fixture agree without a hand-written pane shape.
+  const leadPane = host.agents('acme')?.find((one) => one.name === 'lead')?.pane ?? '';
+  registerAgent(made.home, {
+    name: 'lead',
+    // The launcher selects GLM; Claude Code's status footer still prints its own default family.
+    // That family is never the seat's model, so it is not a drift: the send walks its leg.
+    signing: { model: 'GLM 5', version: '5.3', role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-glm.sh',
+    reach: { team: leadId, seat: 'lead', session: 'acme', pane: leadPane, address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'up',
+  });
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.err).not.toContain('model drift');
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files.length).toBe(1);
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
+  expect(host.frames).toEqual([]);
+});
+
+/** The Claude Code screen these scenes read: the CLI's own default family, as a foreign signing
+ *  on a plain CLI launch contradicts. */
+const OPUS_SCREEN = `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
+
+/** The lead's registry record, with this signing and launch, on the pane the fixture's live agent
+ *  holds — so a scene never writes a pane shape by hand. */
+function registerLeadWith(made: World, host: Fake, signing: { model: string; version: string }, launch: string): void {
+  const leadPane = host.agents('acme')?.find((one) => one.name === 'lead')?.pane ?? '';
+  registerAgent(made.home, {
+    name: 'lead',
+    signing: { ...signing, role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch,
+    reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: leadPane, address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'up',
+  });
+}
+
+// A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a
+// model, so the Claude family its screen names is the contradiction the signing needs. (At the
+// round-1 head these three forms counted as wrappers and the send was delivered.)
+test('the CLI reached by a path, through env, or quoted is the CLI: a foreign signing is held on its screen', async () => {
+  for (const launch of ['/opt/fixture/bin/claude', 'env claude', '"claude"']) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], OPUS_SCREEN);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, { model: 'DeepSeek Flash', version: 'V4.1' }, launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
+// The family test is not a spelling test: `claude fable` is the CLI's own family in lower case,
+// read off the screen like any other Claude model, so the Opus screen is a drift.
+test('a Claude family spelled in lower case is read off the CLI screen, never as a foreign model', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], OPUS_SCREEN);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'claude fable', version: '5.1' }, '/opt/fixture/bin/claude');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(io.err).toContain('model drift: claude fable 5.1 vs Claude Opus 4.6');
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+// A launcher this reader cannot follow proves nothing about the model: the provider id on its
+// banner is not a measured reading, so the model is unread — and unread is never a drift.
+test('an unrecognized launcher leaves a foreign model unread: its banner is not a measured match', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], `glm-5.4 · API Usage Billing\n${OPUS_SCREEN}`);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'unknown-wrapper');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.err).not.toContain('model drift');
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files.length).toBe(1);
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
+});
+
+// A provider writes the model it selected its own way: the version's number may be inside the
+// model's name, a variant word may follow the version, and a version family may be alphanumeric.
+// An id naming the signed model in its own words is that model — the leg walks.
+test('a wrapper banner naming the signed model in its own words is not a drift', async () => {
+  const cases = [
+    { signing: { model: 'GLM 5', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-5.3' },
+    { signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh', banner: 'deepseek-v4.1-flash' },
+    { signing: { model: 'Kimi', version: 'K2.5' }, launch: 'claude-kimi.sh', banner: 'kimi-k2.5' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    const drops = dropDir(made.dir, 'lead');
+    const files = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(files.length).toBe(1);
+    made.cleanup();
+  }
+});
+
+// The control: a banner naming another version of the signed model is a real change, and is held.
+test('a wrapper banner naming another version is still held', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  glm-5.4 · API Usage Billing\n`);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'claude-glm.sh');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(io.err).toContain('model drift: GLM 5.3 vs glm 5.4');
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+// The provider's words are not a bag of tokens: a version is the order its parts are written in,
+// so a banner holding the signed version's parts in another order names another version. (At the
+// round-2 head the sorted comparison called these matches, and the send walked.)
+test('a wrapper banner holding the signed version in another order is held', async () => {
+  const cases = [
+    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'GLM 5.3 vs glm 3.5' },
+    {
+      signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh',
+      banner: 'deepseek-v1.4-flash', drift: 'DeepSeek Flash V4.1 vs deepseek v1.4.flash',
+    },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain(`model drift: ${one.drift}`);
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
+// A declaration may spell the family inside its model name as well as in its version — `Kimi
+// K2.5` with version `2.5`, `GLM 5.3` with version `5.3` — and the provider writes the model and
+// its version as one string: the same words, a version word repeated in the model counted once, so
+// the id names the declaration and the leg walks. (At the merged head `k2` was one word, which no
+// `kimi-k2.5` id carried, so this declaration held its own banner as a drift.)
+test('a declaration that spells the family inside its model matches the banner', async () => {
+  const cases = [
+    { signing: { model: 'Kimi K2.5', version: '2.5' }, launch: 'claude-kimi.sh', banner: 'kimi-k2.5' },
+    { signing: { model: 'GLM 5.3', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-5.3' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    const drops = dropDir(made.dir, 'lead');
+    expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    made.cleanup();
+  }
+});
+
+// The same declaration still holds another version: spelling the family in the model name does
+// not turn the version into a bag of words. The pair is the scene — `kimi-k2.5` names the
+// declaration and `kimi-k2.6` is another version — so at the merged head, where this declaration
+// drifted on every id, the matching half is red and the scene with it.
+test('a declaration that spells the family inside its model holds another version', async () => {
+  const cases = [
+    { banner: 'kimi-k2.5', held: false },
+    { banner: 'kimi-k2.6', held: true },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    if (one.held) {
+      expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
+      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    } else {
+      expect(io.err).not.toContain('model drift');
+      const drops = dropDir(made.dir, 'lead');
+      expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    }
+    made.cleanup();
+  }
+});
+
+// A version's words are a run across the id's tokens, never a licence to delete a number written
+// inside a model's own word: `2B` is one token of the model's identity, and a version `2.5` shares
+// only a `2` with it. `glm-2b-2.5` names the signed GLM 2B; `glm-b-2.5` is a GLM without its
+// capacity — another model. (At the round-1 head the word filter deleted the `2` of `2B` because
+// the version held a `2`, so the wrong banner walked and the send dropped.)
+test('a number inside a model word is model identity, never part of the version', async () => {
+  const cases = [
+    { signing: { model: 'GLM 2B', version: '2.5' }, banner: 'glm-2b-2.5', held: false },
+    { signing: { model: 'GLM 2B', version: '2.5' }, banner: 'glm-b-2.5', held: true },
+    { signing: { model: 'GLM 2B', version: '3.5' }, banner: 'glm-2b-3.5', held: false },
+    { signing: { model: 'GLM 2B', version: '3.5' }, banner: 'glm-b-3.5', held: true },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, 'claude-glm.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    if (one.held) {
+      expect(io.err).toContain('model drift: GLM 2B');
+      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    } else {
+      expect(io.err).not.toContain('model drift');
+      const drops = dropDir(made.dir, 'lead');
+      expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    }
+    made.cleanup();
+  }
+});
+
+// The words of a version stay inside their token: `K2.5` is the words `k 2 5`, `K25` is `k 25`,
+// so an id spelling the other one names another version — held in both directions.
+test('a version the id spells with a different run is another version', async () => {
+  const cases = [
+    { signing: { model: 'Kimi', version: 'K2.5' }, banner: 'kimi-k25' },
+    { signing: { model: 'Kimi', version: 'K25' }, banner: 'kimi-k2.5' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, 'claude-kimi.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: Kimi');
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
@@ -128,7 +403,7 @@ test('the direct typed leg names the signed sender and the team it wrote from', 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
+  expect(pane.typed).toEqual([]);
 });
 
 test('--wait to a claude-code seat walks the typed leg without dialing the socket and waits on the thread', async () => {
@@ -142,8 +417,8 @@ test('--wait to a claude-code seat walks the typed leg without dialing the socke
 
   expect(code).toBe(1);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
-  expect(pane.enters).toBe(1);
+  expect(pane.typed.length).toBe(0);
+  expect(pane.enters).toBe(0);
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
@@ -179,7 +454,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     delivery: [
       { leg: 'native', state: 'attempted' },
       { leg: 'mcp-inbox', state: 'not-reached' },
-      { leg: 'typed', state: 'not-reached' },
+      { leg: 'drop', state: 'not-reached' },
     ],
     ids: { sent: ID, reply: null },
   });
@@ -287,7 +562,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -313,7 +588,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
     format: 1,
     dry_run: false,
     status: 'sent (unconfirmed)',
-    action_summary: 'lead: sent (unconfirmed) (native, 0 ms)',
+    action_summary: 'lead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)',
     project: 'acme',
     session: 'acme',
     seat: 'lead',
@@ -335,7 +610,7 @@ test('a nonce from another handoff in the recipient transcript does not count as
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -386,8 +661,8 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
-  expect(pane.typed.length).toBe(1);
+  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+  expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
   const history = readHistory('acme', made.root, made.home);
@@ -401,10 +676,10 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       id: expect.any(String),
       thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
       ms: 0,
-      via: 'typed',
+      via: 'drop',
       failed: [
+        `typed: ${NO_PANE_MESSAGING}`,
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
         'mcp-inbox: no live inbox listener',
       ],
@@ -866,7 +1141,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   ]);
 });
 
-test('expiry typed leg refuses a pane back at its shell with no drop file and no pane write', async () => {
+test('an expired handoff with no inbox listener lands in the bus inbox, and its history names every refused leg', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -882,32 +1157,50 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
   scene.sources.processes = () => ({ shell: 50001, foreground: [50001] });
   await expirePendingNative(scene);
 
+  // The handoff is claimed, and the bus inbox keeps the message: the signed record, the
+  // drop-leg marker and the history line the walk leaves.
   expect(existsSync(pending(made))).toBe(false);
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
-  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
-  expect(said).toEqual(['lead: the seat is back at its shell; nothing was typed']);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
+
+  const drops = dropDir(made.dir, 'lead');
+  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
+  expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toEqual({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'drop',
+  });
 
   const history = readHistory('acme', made.root, made.home);
-  expect(history.ok && history.entries).toEqual([
-    {
-      ts: expiredAt.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      body: HANDOFF_BODY,
-      id: ID,
-      thread: ID,
-      outcome: 'unreachable',
-      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      failed: [
-        'native: unconfirmed after 10m',
-        'mcp-inbox: no live inbox listener',
-      ],
-    },
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({
+    ts: expiredAt.toISOString(),
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    id: ID,
+    thread: ID,
+    outcome: 'sent (unconfirmed)',
+    via: 'drop',
+  });
+  // The walk never carries the typed leg (the no pane messaging rule filters it out before the
+  // pending record is written), so the expiry names the inbox refusal and then the drop.
+  expect(history.entries[0]?.failed).toEqual([
+    'native: unconfirmed after 10m',
+    'mcp-inbox: no live inbox listener',
   ]);
 });
 
-test('cross-team expiry binds typing and read-back to record.session and verifies pane process identity', async () => {
+test('an expired handoff writes its record, marker and history under the record\'s own session, and reads no pane', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -965,16 +1258,46 @@ test('cross-team expiry binds typing and read-back to record.session and verifie
 
   await expirePendingNative(scene);
 
-  // Every read and write targeted `other`, never `acme` (`scene.session`).
-  expect(processSessions).toEqual(['other']);
-  expect(typedSessions).toEqual(['other']);
-  expect(enterSessions).toEqual(['other']);
-  expect(statusSessions.every((s) => s === 'other')).toBe(true);
-  expect(screenSessions.every((s) => s === 'other')).toBe(true);
-  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; sent on fallback (trigger taken, no read receipt yet)']);
+  // The typed leg is refused before any pane surface is read: no status, no screen, no process
+  // identity check, no keystroke. The record, marker and history follow `record.session`.
+  expect(existsSync(pending(made))).toBe(false);
+  expect(screenSessions).toEqual([]);
+  expect(statusSessions).toEqual([]);
+  expect(processSessions).toEqual([]);
+  expect(typedSessions).toEqual([]);
+  expect(enterSessions).toEqual([]);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
+
+  const drops = join(made.dir, 'send-drops', 'other', 'lead');
+  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
+  expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'drop',
+  });
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({
+    ts: expiredAt.toISOString(),
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    id: ID,
+    outcome: 'sent (unconfirmed)',
+    via: 'drop',
+  });
 });
 
-test('expiry typed leg whose trigger writes the read receipt is delivered (read), not sent', async () => {
+test('an expiry whose typed trigger never runs writes no receipt: the drop stays unconfirmed in the bus inbox', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1006,34 +1329,40 @@ test('expiry typed leg whose trigger writes the read receipt is delivered (read)
     return watchPane.pressEnter('acme', 'w1:p1');
   };
   await expirePendingNative(scene);
-
   expect(existsSync(pending(made))).toBe(false);
-  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: 'hello' }) as string]);
-  expect(watchPane.enters).toBe(1);
-  expect(receipt.at).toBe(join(drops, `${ID}.read.json`));
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.read.json`]);
-  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; read on fallback (receipt)']);
+  // The trigger that would have written the read receipt is the retired typed leg: nothing ran
+  // it, so no receipt exists, the drop stays unconfirmed, and the marker still waits for one.
+  expect(receipt.at).toBeNull();
+  expect(existsSync(join(drops, `${ID}.read.json`))).toBe(false);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
+  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
+  expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'drop',
+  });
   const history = readHistory('acme', made.root, made.home);
-  expect(history.ok && history.entries).toEqual([
-    {
-      ts: expiredAt.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      body: HANDOFF_BODY,
-      id: ID,
-      thread: ID,
-      outcome: 'delivered (read)',
-      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      via: 'typed',
-      failed: [
-        'native: unconfirmed after 10m',
-        'mcp-inbox: no live inbox listener',
-      ],
-    },
-  ]);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({
+    ts: expiredAt.toISOString(),
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    id: ID,
+    outcome: 'sent (unconfirmed)',
+    via: 'drop',
+  });
 });
 
-test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {
+test('an expired handoff whose recorded pane was replaced still writes its record under the record\'s session, reading no pane', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1080,11 +1409,41 @@ test('expiry typed leg refuses to type when the recipient pane process identity 
 
   await expirePendingNative(scene);
 
-  expect(processSessions).toEqual(['other']);
+  // No process identity is read and nothing is typed; the record, marker and history still land
+  // under the record's session, so a replaced pane changes no part of the bus record.
+  expect(existsSync(pending(made))).toBe(false);
+  expect(processSessions).toEqual([]);
   expect(typedSessions).toEqual([]);
   expect(enterSessions).toEqual([]);
-  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
-  expect(said).toEqual(['lead: the pane no longer holds the process team launched for this seat; nothing was typed']);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
+
+  const drops = join(made.dir, 'send-drops', 'other', 'lead');
+  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.pending`]);
+  expect(statSync(join(drops, ID)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, ID))).toBe(HANDOFF_BODY);
+  expect(JSON.parse(readFileSync(join(drops, `${ID}.pending`), 'utf8'))).toMatchObject({
+    id: ID,
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    ts: expiredAt.toISOString(),
+    tries: 0,
+    leg: 'drop',
+  });
+
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({
+    ts: expiredAt.toISOString(),
+    from: 'helper',
+    to: 'lead',
+    body: HANDOFF_BODY,
+    id: ID,
+    outcome: 'sent (unconfirmed)',
+    via: 'drop',
+  });
 });
 
 test('a [native, drop] fallback and a human-marked seat never type into the pane across send and watch expiry', async () => {
@@ -1108,7 +1467,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
   expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
@@ -1136,7 +1495,6 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
     "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
-    "typed: the pane is a human's, and nothing is typed into it",
   ]);
 });
 
@@ -1198,7 +1556,6 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       failed: [
         'native: unconfirmed after 10m',
         "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
-        "typed: the pane is a human's, and nothing is typed into it",
       ],
     },
   ]);

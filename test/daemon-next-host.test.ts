@@ -255,6 +255,9 @@ describe('one machine daemon: a proved next request reaches the handler on its r
         caller: { seat: 'clerk', pane: 'pane-7' },
         action: 'release',
         mine: true,
+        // The daemon's own registry home, so the handler reads the seat's agent record from the
+        // home the route's team was read in.
+        home,
       });
       expect(typeof calls[0]?.now).toBe('number');
 

@@ -87,9 +87,15 @@ export function teamsFile(home: string): string {
   return join(home, '.config', 'team', 'teams.yaml');
 }
 
+/** How a reader takes the registry. `strictRoster` refuses a `roster: null` instead of reading
+ *  it as the empty roster a lenient reader takes it to be: a command that retires a record on the
+ *  strength of "no roster names it" must never read an unreadable roster as naming nobody. A
+ *  record with the field absent reads as it always did — a team with no roster lines. */
+export type ReadTeamsOptions = { strictRoster?: boolean };
+
 /** Every registered team, by team ID. A missing file is no teams. A file that does not read as
  *  a team registry throws `TeamsError`, so a writer never replaces a file it could not read. */
-export function readTeams(home: string): Record<string, TeamRecord> {
+export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<string, TeamRecord> {
   const path = teamsFile(home);
   if (!existsSync(path)) return {};
   let text: string;
@@ -106,7 +112,7 @@ export function readTeams(home: string): Record<string, TeamRecord> {
     if (error instanceof YamlError) throw new TeamsError(`${path}: line ${error.line}: ${error.message}`);
     throw error;
   }
-  return teamsOf(value, path);
+  return teamsOf(value, path, options);
 }
 
 export function getTeam(home: string, id: string): TeamRecord | null {
@@ -195,13 +201,19 @@ export function setTeamLifecycle(home: string, id: string, state: TeamLifecycle)
   return upsertTeam(home, id, { lifecycle: state });
 }
 
-/** The teams a key names: the team with that ID, else every team whose project or session is
- *  that word. More than one is ambiguous, and the caller decides what to say about it. */
+/** The teams a key names, in the order a written address may mean it: the team with that id,
+ *  else every team whose own name (the file's `project:`) is that word, else every team whose
+ *  session is. A class with any answer is taken whole, so a second team that only shares a
+ *  session never takes a name, and more than one record in the answering class stays ambiguous
+ *  for the caller to name. */
 export function findTeams(home: string, key: string): TeamRecord[] {
   const teams = readTeams(home);
   const byId = teams[key];
   if (byId) return [byId];
-  return Object.values(teams).filter((team) => team.project === key || team.session === key);
+  const all = Object.values(teams);
+  const named = all.filter((team) => team.project === key);
+  if (named.length > 0) return named;
+  return all.filter((team) => team.session === key);
 }
 
 /** The one team a key names, or null when none does or when the key is ambiguous. */
@@ -344,6 +356,13 @@ function definedOnly<T extends object>(fields: T): Partial<T> {
 const LOCK_WAIT_MS = 5000;
 const LOCK_STALE_MS = 15000;
 
+/** Holds the registry's write lock — the one every roster and team-record write takes — while
+ *  `work` runs. A command that decides from one reading and then writes from that decision must
+ *  hold it across both, so no write lands between them. */
+export function withTeamsLock<T>(home: string, work: () => T): T {
+  return locked(home, work);
+}
+
 function locked<T>(home: string, work: () => T): T {
   const path = `${teamsFile(home)}.lock`;
   mkdirSync(dirname(path), { recursive: true });
@@ -385,17 +404,17 @@ function write(home: string, teams: Record<string, TeamRecord>): void {
 
 // --- reading the file's value into records ---------------------------------------------------
 
-function teamsOf(value: YamlValue, path: string): Record<string, TeamRecord> {
+function teamsOf(value: YamlValue, path: string, options: ReadTeamsOptions): Record<string, TeamRecord> {
   if (!isMap(value)) throw new TeamsError(`${path}: expected a map with a "teams" key`);
   const section = value.teams;
   if (section === null || section === undefined) return {};
   if (!isMap(section)) throw new TeamsError(`${path}: "teams" must be a map of team IDs`);
   const out: Record<string, TeamRecord> = {};
-  for (const [id, raw] of Object.entries(section)) out[id] = recordOf(id, raw, path);
+  for (const [id, raw] of Object.entries(section)) out[id] = recordOf(id, raw, path, options);
   return out;
 }
 
-function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
+function recordOf(id: string, raw: YamlValue, path: string, options: ReadTeamsOptions): TeamRecord {
   const bad = (what: string): never => {
     throw new TeamsError(`${path}: team ${id}: ${what}`);
   };
@@ -409,6 +428,9 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   if (entity !== null && typeof entity !== 'string') bad('"entity" must be text or null');
   const projectId = raw.project_id ?? null;
   if (projectId !== null && typeof projectId !== 'string') bad('"project_id" must be a project ID or null');
+  // A lenient reader takes a null roster as no roster lines; a strict one refuses it, because a
+  // command must not read "I cannot see this roster" as "this roster names nobody".
+  if (options.strictRoster === true && raw.roster === null) bad('"roster" must be a list');
   const roster = raw.roster ?? [];
   if (!Array.isArray(roster)) bad('"roster" must be a list');
   const entries = (roster as YamlValue[]).map((entry, i): RosterEntry => {

@@ -36,10 +36,10 @@ function delivery() {
 const ROGUE = '─'.repeat(40);
 
 describe('Claude Code rules delivery', () => {
-  test('recognised idle, pasted text, then observed working with empty input', async () => {
+  test('no pane messaging, the rules line is never typed; was: recognised idle, pasted text, then observed working with empty input', async () => {
     const d = delivery();
-    expect(await deliverRules('claude-code', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('claude-code', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the captured typed box reads back as its text and is entered', () => {
@@ -49,7 +49,7 @@ describe('Claude Code rules delivery', () => {
     expect(boxHoldsText('claude-code', 'Fix the', fixture('unsent-typed-ansi'))).toBe(true);
   });
 
-  test('a rule-looking row after the wrapped text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a rule-looking row after the wrapped text gets no Enter', async () => {
     // The round-5 reproduction: the box shows the two text rows, then one more indented row
     // of forty ─ before its closing rule. The pane draws content rows at the text's own
     // column, and the box's closing rule is the window's last rule row — an unbroken run from
@@ -60,11 +60,11 @@ describe('Claude Code rules delivery', () => {
     expect(boxHoldsText('claude-code', typed, screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('claude-code', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('claude-code', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a rule-looking row between two text rows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a rule-looking row between two text rows gets no Enter', async () => {
     // The box shows the typed row, then a rule-looking row, then another text row. However the
     // row under the rule-looking one reads, that row is content the typed text does not have.
     const typed = 'alpha beta';
@@ -75,11 +75,11 @@ describe('Claude Code rules delivery', () => {
     expect(boxHoldsText('claude-code', 'alpha beta\ngamma delta', screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('claude-code', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('claude-code', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a rule-shaped row at the content column is content, and a newline never reads back', async () => {
+  test('no pane messaging, the rules line is never typed; was: a rule-shaped row at the content column is content, and a newline never reads back', async () => {
     // The pane draws a second line at the content column — two spaces, the prompt row's own
     // width — and a rule-looking row there is content, told from the box's closing rule by its
     // column (unsent-typed-ansi.txt: both rules start at the pane's first column). The
@@ -91,16 +91,15 @@ describe('Claude Code rules delivery', () => {
     expect(boxHoldsText('claude-code', typed, screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('claude-code', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
-    expect(refusalReport(d.refusals.at(-1)!)).toContain("the read-back didn't match");
+    const retired = await deliverRules('claude-code', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box holding a person\'s own text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(claudeBox('Other rules.')); return true; };
-    expect(await deliverRules('claude-code', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('claude-code', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 

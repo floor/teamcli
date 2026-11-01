@@ -29,7 +29,7 @@ const OTHER_TEAM = 'bbbbbbbbbbbb';
 const AGENT = 'agt_0123456789ab';
 const OTHER_AGENT = 'agt_ffffffffffff';
 const NOW = new Date('2026-10-17T12:00:00.000Z');
-const ROOTS = ['/Users/x/Code/acme'];
+const ROOTS = ['/home/x/Code/acme'];
 const TARGET = { root: ROOTS[0] as string };
 
 type Seat = Extract<CallerRecord, { kind: 'seat' }>;
@@ -454,7 +454,7 @@ describe('records: the fresh read every gate makes', () => {
 
   test('envelope revocation stays durable across envelope overwrite, removal, replay, and exact-generation legacy records', () => {
     const home = makeHome();
-    const otherRoot = '/Users/x/Code/other';
+    const otherRoot = '/home/x/Code/other';
     granted(home, { name: 'seat-gate', kind: 'seat', grantee: AGENT, capabilities: ['gate'] });
     granted(
       home,
@@ -559,8 +559,8 @@ describe('records: the fresh read every gate makes', () => {
 
   test('revoking an envelope that covers part of a multi-scope, multi-capability seat grant preserves its uncovered capabilities and scopes', () => {
     const home = makeHome();
-    const rootA = '/Users/x/Code/acme';
-    const rootB = '/Users/x/Code/beta';
+    const rootA = '/home/x/Code/acme';
+    const rootB = '/home/x/Code/beta';
     granted(home, {
       name: 'seat-multi',
       kind: 'seat',

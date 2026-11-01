@@ -46,7 +46,7 @@ const CODEX_DRIFT = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', im
 const CLAUDE_IDLE = readFileSync(new URL('./fixtures/claude-code/2.1.289/idle-suggestion-plain.txt', import.meta.url), 'utf8');
 const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.16/idle.txt', import.meta.url), 'utf8');
 // A synthetic pane this build's Cursor profile does not read: the honest unknown the live
-// reviewer-cursor seat showed, with no capture copied here.
+// reviewer-agent seat showed, with no capture copied here.
 const CURSOR_UNREAD = 'Cursor Agent is starting in this pane.\n';
 
 let base: string;
@@ -92,8 +92,8 @@ seats:
     version: "6.1"
     launch: codex -m gpt-6.1-sol
   - role: reviewer
-    name: reviewer-cursor
-    label: reviewer-cursor
+    name: reviewer-agent
+    label: reviewer-agent
     cli: cursor
     vendor: cursor
     model: Grok
@@ -119,8 +119,8 @@ function recordState(extra: { cursorSession?: string } = {}): void {
       stage: 'ready', pane: 'w3:p1', workspace: 'w3', id: 'seat_333333333333',
       launched: { shell: 120, cli: [220] }, agent_session: 'ses_codex_recorded',
     } as never;
-    session.seats['reviewer-cursor'] = {
-      stage: 'ready', pane: 'w4:p1', workspace: 'w4', id: 'seat_444444444444',
+    session.seats['reviewer-agent'] = {
+      stage: 'ready', pane: 'fixture:reviewer', workspace: 'fixture-reviewer', id: 'seat_444444444444',
       launched: { shell: 130, cli: [230] },
       ...(extra.cursorSession === undefined ? {} : { agent_session: extra.cursorSession }),
     } as never;
@@ -165,7 +165,7 @@ function live(over: { cursorSession?: string; cursorScreen?: string } = {}): Liv
       { name: 'writer-06', agent: 'codex', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null, session: 'ses_writer06' },
       { name: 'codex-reviewer', agent: 'codex', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null, session: 'ses_codex_live' },
       {
-        name: 'reviewer-cursor', agent: 'cursor', pane: 'w4:p1', workspace: 'w4', status: 'idle', cwd: null,
+        name: 'reviewer-agent', agent: 'cursor', pane: 'fixture:reviewer', workspace: 'fixture-reviewer', status: 'idle', cwd: null,
         ...(over.cursorSession === undefined ? {} : { session: over.cursorSession }),
       },
     ],
@@ -173,19 +173,19 @@ function live(over: { cursorSession?: string; cursorScreen?: string } = {}): Liv
       { id: 'w1', label: 'writer-06' },
       { id: 'w2', label: 'architect' },
       { id: 'w3', label: 'codex-reviewer' },
-      { id: 'w4', label: 'reviewer-cursor' },
+      { id: 'fixture-reviewer', label: 'reviewer-agent' },
     ],
     screens: {
       'w1:p1': CODEX_IDLE,
       'w2:p1': CLAUDE_IDLE,
       'w3:p1': CODEX_DRIFT,
-      'w4:p1': over.cursorScreen ?? CURSOR_IDLE,
+      'fixture:reviewer': over.cursorScreen ?? CURSOR_IDLE,
     },
     processes: {
       'w1:p1': { shell: 101, foreground: [201] },
       'w2:p1': { shell: 111, foreground: [211] },
       'w3:p1': { shell: 121, foreground: [221] },
-      'w4:p1': { shell: 131, foreground: [231] },
+      'fixture:reviewer': { shell: 131, foreground: [231] },
     },
   };
 }
@@ -298,9 +298,9 @@ describe('a Codex seat whose live conversation is not the recorded one', () => {
   });
 });
 
-describe('reviewer-cursor: a Cursor seat the registry does not bind', () => {
+describe('reviewer-agent: a Cursor seat the registry does not bind', () => {
   test('stays a doubt: nothing ties the restored pane to a conversation', async () => {
-    const { code, doc } = await readSeat('reviewer-cursor');
+    const { code, doc } = await readSeat('reviewer-agent');
     expect(code).toBe(0);
     const status = doc.status as Record<string, unknown>;
     expect(status.status).toBe(DOUBT);
@@ -311,10 +311,10 @@ describe('reviewer-cursor: a Cursor seat the registry does not bind', () => {
   test('status reports it as a doubt and offers the look, never a command that refuses', async () => {
     const { code, doc } = await readStatus(live({ cursorScreen: CURSOR_UNREAD }));
     expect(code).toBe(1);
-    expect(rowOf(doc, 'reviewer-cursor')?.state).toBe(DOUBT);
-    const difference = doc.differences.find((entry) => entry.what.startsWith('reviewer-cursor:'));
+    expect(rowOf(doc, 'reviewer-agent')?.state).toBe(DOUBT);
+    const difference = doc.differences.find((entry) => entry.what.startsWith('reviewer-agent:'));
     expect(difference).toBeDefined();
-    expect(difference?.what).toBe('reviewer-cursor: its pane holds a process this record cannot tie to the launch');
+    expect(difference?.what).toBe('reviewer-agent: its pane holds a process this record cannot tie to the launch');
     expect(difference?.repair).toBe('look at the pane');
   });
 
@@ -322,13 +322,13 @@ describe('reviewer-cursor: a Cursor seat the registry does not bind', () => {
     // The Cursor profile keeps no session id of its own at launch, so the registry is the only
     // record that can tie this restored pane to the seat. When it does, the seat is the seat: the
     // Cursor idle screen is read as idle, not as a doubt.
-    registerSeat('reviewer-cursor', 'cursor', 'seat_444444444444', 'w4:p1', 'ses_cursor');
-    const { code, doc } = await readSeat('reviewer-cursor', live({ cursorSession: 'ses_cursor' }));
+    registerSeat('reviewer-agent', 'cursor', 'seat_444444444444', 'fixture:reviewer', 'ses_cursor');
+    const { code, doc } = await readSeat('reviewer-agent', live({ cursorSession: 'ses_cursor' }));
     expect(code).toBe(0);
     const status = doc.status as Record<string, unknown>;
     expect(status.cli).toBe('cursor');
     expect(status.status).toBe('idle');
     expect(status.state).toBe('idle');
-    expect(status.pane).toBe('w4:p1');
+    expect(status.pane).toBe('fixture:reviewer');
   });
 });

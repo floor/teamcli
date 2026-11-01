@@ -25,20 +25,13 @@ test('a multi-line body is filed whole and the pane gets one short line', async 
   const code = await runSend(['native', body], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(pane.typed.length).toBe(1);
-  const trigger = pane.typed[0] as string;
-  expect(trigger.includes('\n')).toBe(false);
-  expect(trigger.length).toBeLessThanOrEqual(MESSAGE_LINE_MAX);
+  expect(pane.typed.length).toBe(0);
   // The first content line is the summary; the rest of the body stays in the drop.
-  expect(trigger).toContain('HEAD-LINE');
-  expect(trigger).not.toContain('TAIL-LINE');
   const drops = dropDir(made.dir);
   const names = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
   const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body });
-  if (line === null) throw new Error('the trigger line did not fit');
-  expect(trigger).toBe(line);
   expect(recordBody(path)).toBe(filed(body));
   expect(host.frames).toEqual([]);
 });

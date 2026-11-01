@@ -1,5 +1,11 @@
-// `team brief rollout`: delivers this build's general seat brief to the seats a launch is not
-// about to deliver it to itself.
+// `team brief`: the two things a seat's launch-brief record needs outside a launch.
+//
+// `rollout` delivers this build's general seat brief to the seats a launch is not about to
+// deliver it to itself. `prune` retires the calling seat's own launch-brief retry markers — the
+// `<id>.pending` sidecars a held delivery left beside its record — when the retry can never be
+// right: the seat's claim has moved past that delivery, or has read it. Prune applies the retry
+// pass's own rules, prints what it would retire, and removes only those markers; a signed record,
+// a receipt, an unread delivery and every ordinary send's marker are left untouched.
 //
 // A delivery is a claim in the session's state (`briefs`) and a signed record at the claim's
 // expected id in the seat's drop folder, and the two are written by the same boundary every
@@ -19,13 +25,23 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import {
+  anotherPaneRefusal,
+  callerVerdict,
+  describeCaller,
+  judgeCallerOf,
+  noPaneRefusal,
+  standingOf,
+} from '../caller.ts';
 import type { Current } from '../file/current.ts';
-import { isParseError } from '../file/load.ts';
+import { isParseError, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { mintBriefIncarnation } from '../launch/brief-id.ts';
 import {
+  GENERAL_BRIEF_FROM,
   GENERAL_BRIEF_SHA256,
+  briefBindingOf,
   currentBriefClaim,
   deliverBriefForAttribution,
   generalBriefBody,
@@ -37,16 +53,19 @@ import {
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { inboxLive, NO_INBOX_LISTENER } from '../mcp/inbox.ts';
-import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
+import { currentClaimIn, inboxLive, NO_INBOX_LISTENER, receiptHeld } from '../mcp/inbox.ts';
+import { hasJsonFlag, pluralCount, writeJson, writeJsonError } from '../output/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { recordHolds } from '../send/record.ts';
+import { clearPending, pendingDropPath, readPending } from '../send/pending.ts';
+import { recordHolds, type StatusContext } from '../send/record.ts';
+import { dropFolderReadable } from './drops.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 
 export const USAGE = `Usage: team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
+       team brief prune [--apply] [--json]
 
 Delivers this build's general seat brief to every declared seat that is live
 or human. The plan reads each seat's claim and the signed record the claim
@@ -60,23 +79,39 @@ written to: that server keeps the parsers it started with, and restarting the
 seat's CLI host is what reloads the installed build. Without --apply the plan
 is printed and nothing is written: no state, no drop, no receipt.
 
-Options:
-  --apply    run the plan; each seat is reported as delivered, recovered or
-             failed, and a seat already current is reported current
-  --seat     one declared seat to plan or deliver for; the others are left
-             untouched
-  --session  the session to deliver in, the team file's own unless the owner
-             names another
-  --file     the team file to read, the owner's alone
-  --json     one team.brief document ({format, project, session, apply, seats,
-             counts}) instead of the per-seat lines
+The launch-brief retry sidecars in the calling seat's own folder are what
+\`prune\` retires: a launch delivery that a held send left a try marker for, and
+whose retry can no longer be right because the seat's claim names a newer
+delivery, or because the seat has read the one it names. It prints one row per
+file and, without --apply, removes nothing. It never removes a signed record, a
+receipt, the marker of a delivery the seat has not read, or any other send's
+marker; a claim it cannot read retires nothing; and a caller that is not a seat
+of this team on its recorded pane is refused.
 
-Exits 0 when the dry run finds every live or human seat current (brief.plan)
-or --apply leaves every one of them current (brief.current); 1 when the dry
-run finds delivery work (brief.stale), --apply leaves a seat stale or failed
-(brief.incomplete), or a caller who is not the owner aims --file or --session
-(brief.file-owner, brief.session-owner); 2 when the invocation can't be read
-(brief.invocation), a caller who may not read this team asks
+Options:
+  --apply    rollout: run the plan; each seat is reported as delivered,
+             recovered or failed, and a seat already current is reported
+             current. prune: remove the files the dry run listed
+  --seat     rollout only: one declared seat to plan or deliver for; the
+             others are left untouched
+  --session  rollout only: the session to deliver in, the team file's own
+             unless the owner names another
+  --file     rollout only: the team file to read, the owner's alone
+  --json     one document instead of the per-command lines: team.brief
+             ({format, project, session, apply, seats, counts}) for rollout,
+             team.brief-prune ({format, project, session, seat, apply, files,
+             counts}) for prune
+
+Exits 0 when the dry run finds every live or human seat current (brief.plan),
+--apply leaves every one of them current (brief.current), prune has nothing to
+retire (brief.prune-clean), or prune's --apply removes every file it listed
+(brief.prune-applied); 1 when the dry run finds delivery work (brief.stale),
+--apply leaves a seat stale or failed (brief.incomplete), prune's dry run lists
+files to retire (brief.prune-due), prune's --apply leaves one unremoved
+(brief.prune-incomplete), a caller who is not the seat's own pane asks prune
+(brief.prune-refused), or a caller who is not the owner aims --file or
+--session (brief.file-owner, brief.session-owner); 2 when the invocation can't
+be read (brief.invocation), a caller who may not read this team asks
 (brief.not-yours), or the team file can't be read (brief.file,
 brief.file-invalid).
 `;
@@ -123,6 +158,31 @@ export type BriefDocument = {
   };
 };
 
+/** One launch-brief retry marker `prune` looked at: where it is, which delivery it names, why
+ *  the retry cannot be right, and what the run did with it. */
+export type BriefPruneFile = {
+  path: string;
+  id: string;
+  from: string;
+  reason: 'read' | 'superseded';
+  outcome: 'would-retire' | 'retired' | 'failed';
+  error: string | null;
+};
+
+export type BriefPruneDocument = {
+  format: 1;
+  project: string;
+  session: string;
+  seat: string;
+  apply: boolean;
+  files: BriefPruneFile[];
+  counts: {
+    files: number;
+    retired: number;
+    failed: number;
+  };
+};
+
 export const brief: Command = (argv, io) => runBrief(argv, io, realSources);
 export default brief;
 
@@ -152,6 +212,13 @@ function unreadable(io: Io, json: boolean, id: 'brief.file' | 'brief.file-invali
   // exit: brief.file
   // exit: brief.file-invalid
   return 2;
+}
+
+function pruneRefused(io: Io, json: boolean, message: string): number {
+  if (json) writeJsonError(io, 'brief.prune-refused', message, null);
+  else io.stderr(`team brief prune: ${message}\n`);
+  // exit: brief.prune-refused
+  return 1;
 }
 
 /** The record a delivery at one lifetime posts: the delivered body's id and the digest it
@@ -357,12 +424,21 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
   const json = hasJsonFlag(argv);
   const apply = args.flags.has('apply');
   const sub = args.rest[0];
-  if (args.error !== undefined || sub !== 'rollout' || args.rest.length > 1) {
+  if (args.error !== undefined || (sub !== 'rollout' && sub !== 'prune') || args.rest.length > 1) {
     const problem = args.error
-      ?? (sub === undefined ? 'a subcommand is required: rollout'
-        : sub !== 'rollout' ? `unexpected "${sub}"`
+      ?? (sub === undefined ? 'a subcommand is required: rollout or prune'
+        : sub !== 'rollout' && sub !== 'prune' ? `unexpected "${sub}"`
           : `unexpected "${args.rest[1] ?? ''}"`);
     return invocation(io, json, problem);
+  }
+  if (sub === 'prune') {
+    // Prune works in the caller's own folder: a seat is not aimed, and `--file`/`--session`
+    // aim another team's records, so all three are an invocation error here.
+    const stray = args.values.seat !== undefined ? 'seat'
+      : args.values.session !== undefined ? 'session'
+        : args.values.file !== undefined ? 'file' : null;
+    if (stray !== null) return invocation(io, json, `unknown option --${stray}`);
+    return runBriefPrune({ io, json, apply, sources });
   }
   const walked = walkCaller(io);
   const owner = isOwner(walked);
@@ -548,5 +624,143 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
     return 1;
   }
   // exit: brief.plan
+  return 0;
+}
+
+/** One prune row's line: what the run did with the marker, where it is, and why the retry can
+ *  no longer be right. */
+function pruneLineOf(file: BriefPruneFile): string {
+  const why = file.reason === 'read'
+    ? 'the delivery was read'
+    : "the seat's current claim names a newer delivery";
+  if (file.outcome === 'failed') return `failed ${file.path}: ${file.error ?? 'the file could not be removed'}\n`;
+  if (file.outcome === 'retired') return `retired ${file.path}: ${why}\n`;
+  return `would retire ${file.path}: ${why}\n`;
+}
+
+/**
+ * `team brief prune`: retires the calling seat's own launch-brief retry markers, applying the
+ * retry pass's own rules without typing anything. A launch marker is retired when its delivery is
+ * not the seat's current claim — the claim names a newer delivery, and the seat's reader refuses
+ * the old record as superseded — or when a signed receipt bound to the current claim says the
+ * seat read it, which a typed marker has no leg of its own to show. A marker of the current claim
+ * that is not read is never touched, and neither is any other file in the folder. The dry run is
+ * the default.
+ */
+function runBriefPrune(input: { io: Io; json: boolean; apply: boolean; sources: BriefSources }): number {
+  const { io, json, apply } = input;
+  // The folder is the seat's own, resolved the way every command resolves it. Prune takes no
+  // `--file`, so the shared no-repository sentence must not offer one.
+  const loaded = readTeamConfig(io.cwd, { home: input.sources.home });
+  if (!loaded.ok) {
+    const message = loaded.errors[0]?.message ?? "the team file can't be read";
+    if (message.startsWith(NOT_A_REPO)) return unreadable(io, json, 'brief.file', withoutFileOffer(message));
+    if (loaded.errors.some(isParseError)) return unreadable(io, json, 'brief.file-invalid', message);
+    return unreadable(io, json, 'brief.file', message);
+  }
+  const dir = dirname(loaded.path);
+  const session = loaded.team.session;
+  // A retry marker is one seat's mailbox: the caller must be that seat, placed on the pane the
+  // state records for it. The owner and a delegate pane are not a seat and retire nothing.
+  const { caller, shown } = judgeCallerOf(io, session);
+  const named = caller.kind === 'seat' && loaded.team.seats.some((seat) => seat.name === caller.name) ? caller : null;
+  if (named === null) {
+    return pruneRefused(io, json, `only a seat of this team retires its own launch-brief retry markers; this call is ${describeCaller(shown)}`);
+  }
+  const verdict = callerVerdict(named, named.name, standingOf(dir, session, named));
+  if (verdict.kind === 'no-pane') return pruneRefused(io, json, noPaneRefusal(verdict.name));
+  if (verdict.kind === 'another-pane') return pruneRefused(io, json, anotherPaneRefusal(verdict.name, verdict.recordedPane));
+  if (verdict.kind !== 'ok') {
+    return pruneRefused(io, json, `only a seat of this team retires its own launch-brief retry markers; this call is ${describeCaller(shown)}`);
+  }
+  const seat = named.name;
+  const dropDir = join(dir, 'send-drops', session, seat);
+  if (!dropFolderReadable(dir, session, seat)) {
+    return pruneRefused(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
+  }
+  // The retry's own two questions are asked against what the state holds now: which delivery is
+  // the seat's current claim, and has a receipt bound to that claim said it was read. A claim
+  // this build cannot read answers neither, so nothing is retired.
+  const claim = currentClaimIn(loaded.root, session, seat);
+  if (claim === null) {
+    return pruneRefused(io, json, "the seat's current brief claim can't be read, so nothing was retired");
+  }
+  const context: StatusContext = { to: seat, root: loaded.root, session };
+  const read = receiptHeld(dropDir, claim.id, context, input.sources.home, briefBindingOf(claim));
+  const files: BriefPruneFile[] = [];
+  for (const drop of readPending(dropDir)) {
+    if (drop.from !== GENERAL_BRIEF_FROM || drop.to !== seat) continue;
+    const reason = drop.id === claim.id ? (read ? 'read' as const : null) : 'superseded' as const;
+    if (reason === null) continue;
+    files.push({
+      path: pendingDropPath(dropDir, drop.id),
+      id: drop.id,
+      from: drop.from,
+      reason,
+      outcome: apply ? 'retired' : 'would-retire',
+      error: null,
+    });
+  }
+  // The claim is read again after the markers are listed. A delivery may publish a newer claim
+  // between the first read and the listing, and the marker it writes right after is already in
+  // that listing: calling that marker superseded would remove the one marker a retry still owes.
+  // A claim that did not hold across the whole read retires nothing and says so. A claim
+  // published after this check cannot slip a marker into the listing, because a claim is written
+  // before its marker.
+  if (files.length > 0) {
+    const after = currentClaimIn(loaded.root, session, seat);
+    if (after === null) {
+      return pruneRefused(io, json, "the seat's current brief claim can't be read, so nothing was retired");
+    }
+    if (after.id !== claim.id) {
+      return pruneRefused(io, json, "the seat's current brief claim changed while the run read its markers, so nothing was retired; run it again");
+    }
+  }
+  if (apply) {
+    for (const file of files) {
+      clearPending(dropDir, file.id);
+      // The removal is verified: a marker that is still at its name was not removed, and the
+      // run says so rather than claiming a retirement that did not happen.
+      if (heldAt(file.path).kind !== 'missing') {
+        file.outcome = 'failed';
+        file.error = 'the file could not be removed';
+      }
+    }
+  }
+  const retired = files.filter((file) => file.outcome === 'retired').length;
+  const failed = files.filter((file) => file.outcome === 'failed').length;
+  if (json) {
+    const document: BriefPruneDocument = {
+      format: 1,
+      project: loaded.team.project,
+      session,
+      seat,
+      apply,
+      files,
+      counts: { files: files.length, retired, failed },
+    };
+    writeJson(io, 'team.brief-prune', document);
+  } else {
+    io.stdout(files.map(pruneLineOf).join(''));
+    if (apply) {
+      io.stdout(`${pluralCount(retired, 'file')} retired\n`);
+      if (failed > 0) io.stdout(`${pluralCount(failed, 'file')} not removed\n`);
+    } else {
+      io.stdout(`${pluralCount(files.length, 'file')} to retire\n`);
+    }
+  }
+  if (apply) {
+    if (failed > 0) {
+      // exit: brief.prune-incomplete
+      return 1;
+    }
+    // exit: brief.prune-applied
+    return 0;
+  }
+  if (files.length > 0) {
+    // exit: brief.prune-due
+    return 1;
+  }
+  // exit: brief.prune-clean
   return 0;
 }

@@ -21,8 +21,8 @@ must sit under ~/.config/team-client, outside every project, lobby and the OS te
 key isolation: enforced against team panes (key file still readable by same-user processes).
 
 general-grant issues a general grant: every entity (or the listed ones) and every op (or the listed
-ones: config, restart, up, down, abandon, send, messages, reply, init), applied with no per-action
-request. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
+ones: any command's name, or abandon for down --abandon), applied with no per-action request: every
+command but this one takes --general <grant.json> --key <client.key>. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
 The owner issues one through the owner seat (--request, Touch ID); a holder whose grant may issue
 gives another principal a grant within its own (--via, --key): never to itself, never wider.
 
@@ -54,13 +54,12 @@ function runKeygen(args: Args, rawIo: Io, io: Io, home: string): number {
     return 2; // exit: client.keygen.invocation
   }
   // The pane guard, before any directory is checked or written: a seat never mints a client key.
-  const pane = clientPaneGuard(rawIo, 'client keygen', home);
+  const pane = clientPaneGuard(rawIo);
   if (!pane.ok) {
     if (json) writeJsonError(rawIo, 'client.keygen.pane', plainText(pane.why), null);
     else io.stderr(`team client keygen: refused: ${pane.why}\n`);
     return 1; // exit: client.keygen.pane
   }
-  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
   const dir = resolve(io.cwd, args.values.out as string);
   const placement = clientKeyPlacementProblem(home, dir);
   if (placement !== null) {
@@ -121,7 +120,13 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
   if (held) {
     if (args.values.via === undefined || args.values.key === undefined) return bad('--via and --key go together');
     if (args.flags.has('request') || args.values.approval !== undefined) return bad('--via issues from a held grant; it takes no owner-seat flags');
-    out = issueHeldGeneralGrant(home, resolve(io.cwd, args.values.via), resolve(io.cwd, args.values.key), input, now);
+    // The pane guard, judged before the parent grant or the holder's key is opened (see
+    // ../client/pane-guard.ts): a caller inside a team pane never issues from a client key. It is a
+    // machine guard: no dev-mode setting lifts it (OD-20261019-49).
+    const pane = clientPaneGuard(io);
+    out = pane.ok
+      ? issueHeldGeneralGrant(home, resolve(io.cwd, args.values.via), resolve(io.cwd, args.values.key), input, now)
+      : { ok: false, why: pane.why };
   } else {
     if (!args.flags.has('request') && args.values.approval === undefined) return bad('the owner issues through the owner seat (--request), or a holder issues with --via and --key');
     const step = ownerSeatStep('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home });

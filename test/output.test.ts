@@ -66,11 +66,11 @@ describe('src/output/ — context line and tables', () => {
     expect(pluralCount(4, 'seat')).toBe('4 seats');
     expect(pluralCount(1, 'task')).toBe('1 task');
 
-    expect(displayPath('/Users/alice/.config/team/lobbies/acme', '/Users/alice')).toBe('~/.config/team/lobbies/acme');
-    expect(displayPath('the lobby /Users/alice/.config/team/lobby is not in trust', '/Users/alice')).toBe(
+    expect(displayPath('/home/alice/.config/team/lobbies/acme', '/home/alice')).toBe('~/.config/team/lobbies/acme');
+    expect(displayPath('the lobby /home/alice/.config/team/lobby is not in trust', '/home/alice')).toBe(
       'the lobby ~/.config/team/lobby is not in trust',
     );
-    expect(displayPath('/Users/alice_other/work', '/Users/alice')).toBe('/Users/alice_other/work');
+    expect(displayPath('/home/alice_other/work', '/home/alice')).toBe('/home/alice_other/work');
   });
 
   test('renderTable prints uppercase headers, aligns on cleaned text, uses "-" for empty cells, and supports indent: ""', () => {
@@ -162,7 +162,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
     expect(renderNotes(['codex-acme: version unread'])).toEqual(['note: codex-acme: version unread']);
-    expect(renderNotes(['lobby at /Users/alice/.config/team/lobby'], { home: '/Users/alice' })).toEqual([
+    expect(renderNotes(['lobby at /home/alice/.config/team/lobby'], { home: '/home/alice' })).toEqual([
       'note: lobby at ~/.config/team/lobby',
     ]);
   });
@@ -236,7 +236,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
     expect(renderFinding({ level: 'note', text: 'session beacon is running' })).toBe('note  session beacon is running');
     expect(renderFinding({ level: 'warn', text: 'older herdr' })).toBe('warn  older herdr');
     expect(renderFinding({ level: 'miss', text: 'install herdr' })).toBe('MISS  install herdr');
-    assertCleanHumanOutput('note  session beacon is running\nno differences\n', { home: '/Users/alice' });
+    assertCleanHumanOutput('note  session beacon is running\nno differences\n', { home: '/home/alice' });
 
     expect(formatDeprecationWarning({ line: 3, message: '`coordinator:` is now `leads: true`' })).toBe(
       'warning: the file, line 3: `coordinator:` is now `leads: true`',
@@ -535,6 +535,52 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           resumed: { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [{ seat: 'lead' }] },
         }),
       ],
+      'team.agents': [
+        jsonEnvelope('team.agents', {
+          format: 1 as const,
+          apply: false,
+          records: [
+            {
+              id: 'agt_000000000001',
+              name: 'worker',
+              team: '0123456789ab',
+              project: 'beacon',
+              seat: 'worker',
+              session: 'beacon',
+              lifecycle: 'stopped',
+              state: 'orphaned',
+              action: 'retire',
+              orphaned_at: null,
+              reason: 'no roster line names it and the team declares no seat by that name',
+            },
+            {
+              id: 'agt_000000000002',
+              name: 'reviewer',
+              team: 'aaaaaaaaaaaa',
+              project: null,
+              seat: 'reviewer',
+              session: 'other',
+              lifecycle: 'retired',
+              state: 'unregistered',
+              action: 'none',
+              orphaned_at: '2026-10-17T10:00:00Z',
+              reason: 'the team registry holds no record of this team',
+            },
+          ],
+          counts: {
+            listed: 2,
+            orphaned: 1,
+            superseded: 0,
+            declared: 0,
+            unverified: 0,
+            unregistered: 1,
+            to_retire: 1,
+            retired: 0,
+            unchanged: 1,
+            failed: 0,
+          },
+        }),
+      ],
       'team.sessions': [
         jsonEnvelope('team.sessions', {
           format: 1 as const,
@@ -756,6 +802,28 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           counts: { current: 0, deliver: 1, recover: 0, not_running: 0, human: 0, stale_listener: 0, failed: 0 },
         }),
       ],
+      // The prune's dry run: one marker a read receipt would retire, with the counts. The
+      // `retired` and `failed` outcomes are exercised by the command's own scenes.
+      'team.brief-prune': [
+        jsonEnvelope('team.brief-prune', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          seat: 'worker',
+          apply: false,
+          files: [
+            {
+              path: '/work/beacon/.agents/send-drops/beacon/worker/5e4d3c2b-1a0f-4e6d-8c7b-6a5f4e3d2c1b.pending',
+              id: '5e4d3c2b-1a0f-4e6d-8c7b-6a5f4e3d2c1b',
+              from: 'the launch',
+              reason: 'read',
+              outcome: 'would-retire',
+              error: null,
+            },
+          ],
+          counts: { files: 1, retired: 0, failed: 0 },
+        }),
+      ],
       'team.down': [
         jsonEnvelope('team.down', {
           format: 1 as const,
@@ -796,7 +864,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
         jsonEnvelope('team.reply', {
           format: 1 as const,
           status: 'replied',
-          action_summary: 'worker: replied',
+          action_summary: 'worker: delivered (drop)',
           project: 'beacon',
           session: 'beacon',
           record: '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',
@@ -1218,14 +1286,14 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           format: 1 as const,
           dry_run: false,
           status: 'updated' as const,
-          action_summary: 'settings: set nickname=Atlas at seat (claude-keeper)',
+          action_summary: 'settings: set nickname=Reviewer at seat (claude-keeper)',
           project: 'beacon',
           session: 'beacon',
           level: 'seat' as const,
           target: 'agt_000000000000',
           seat: 'claude-keeper',
           settings: [
-            { key: 'nickname', value: 'Atlas', old: null, applies: 'at-once' },
+            { key: 'nickname', value: 'Reviewer', old: null, applies: 'at-once' },
           ],
         }),
       ],

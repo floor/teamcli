@@ -78,13 +78,16 @@ export function actionArgsHash(action: OwnerAction, words: readonly string[]): s
 }
 
 export function ownerActionHash(p: OwnerActionParams): string {
-  const args: Record<string, string> = {};
+  // No prototype on either map: an entry the record names `__proto__` is an ordinary own key
+  // and its value is part of the hash. On a plain object the write would replace the map's
+  // prototype instead, and two records that differ only in that entry would share one hash.
+  const args: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const key of Object.keys(p.args).sort()) args[key] = p.args[key as OwnerAction]!;
   // `words` is part of the hash when the request carries it, so one signature binds each
   // action's argument list. A record written before the field existed hashes as it did then.
   const body: Record<string, unknown> = { kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by };
   if (p.words !== undefined) {
-    const words: Record<string, string[]> = {};
+    const words: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
     for (const key of Object.keys(p.words).sort()) words[key] = [...(p.words[key as OwnerAction] ?? [])];
     body.words = words;
   }
@@ -384,7 +387,9 @@ export function createOwnerActionRequest(
 }
 
 function inputsOf(record: OwnerActionRecord): OwnerActionRequestInput[] {
-  const args: OwnerActionRequestInput['args'] = {};
+  // No prototype: a record read back from disk is not checked here, and an entry named
+  // `__proto__` must stay an ordinary own key rather than replace the map's prototype.
+  const args: OwnerActionRequestInput['args'] = Object.create(null) as OwnerActionRequestInput['args'];
   for (const action of record.params.actions) args[action] = record.params.words?.[action] ?? [];
   const names = record.params.requesters ?? [record.params.requested_by];
   return names.map((requestedBy, index) => ({
@@ -404,6 +409,10 @@ export function readOwnerActionRecord(home: string, id: string): OwnerActionReco
     if (!lstatSync(path).isFile()) return `request ${id} is not a plain file`;
     const record = JSON.parse(readFileSync(path, 'utf8')) as OwnerActionRecord;
     if (record.request_id !== id || record.params?.kind !== 'owner-action') return `request ${id} is not an owner-seat request`;
+    const actions: unknown = record.params.actions;
+    if (!Array.isArray(actions) || actions.length === 0 || !actions.every((action) => typeof action === 'string' && (OWNER_ACTIONS as readonly string[]).includes(action))) {
+      return `request ${id} names an action this build does not know`;
+    }
     if (ownerActionHash(record.params) !== record.params_sha256) return `request ${id}'s parameters do not match its hash`;
     return record;
   } catch {

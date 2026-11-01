@@ -73,6 +73,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
+| `agents.plan` | `agents` | 0 | the dry run found no record to retire | `team agents prune` |
+| `agents.retired` | `agents` | 0 | every listed record that needed retiring was retired | `team agents prune --apply` |
+| `agents.incomplete` | `agents` | 1 | --apply left a record unretired because it could not be written | `team agents prune --apply` |
+| `agents.owner` | `agents` | 1 | --apply was aimed by a caller who is not the owner | `team agents prune --apply` |
+| `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
+| `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
+| `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |
@@ -120,8 +127,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `batch.invocation` | `batch` | 2 | the invocation can't be read | `team batch` |
 | `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
 | `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
+| `brief.prune-applied` | `brief` | 0 | prune's --apply removed every launch-brief retry marker it listed | `team brief prune --apply` |
+| `brief.prune-clean` | `brief` | 0 | prune's dry run found no launch-brief retry marker to retire | `team brief prune` |
 | `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
 | `brief.incomplete` | `brief` | 1 | --apply left a seat stale or failed | `team brief rollout --apply` |
+| `brief.prune-due` | `brief` | 1 | prune's dry run listed launch-brief retry markers to retire | `team brief prune` |
+| `brief.prune-incomplete` | `brief` | 1 | prune's --apply left a launch-brief retry marker unremoved | `team brief prune --apply` |
+| `brief.prune-refused` | `brief` | 1 | the caller is not a seat of this team on the pane the state records for it, the drop folder is not a real folder, or the seat's current brief claim can't be read or changed while the run read its markers | `team brief prune` |
 | `brief.session-owner` | `brief` | 1 | --session is the owner's | `team brief rollout --session other` |
 | `brief.stale` | `brief` | 1 | the dry run found a live or human seat that needs delivery | `team brief rollout` |
 | `brief.file` | `brief` | 2 | the team file can't be read | `team brief rollout` |
@@ -491,6 +503,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.detached` | `register` | 1 | a run with no terminal | `team register worker` |
 | `register.grant` | `register` | 1 | the caller is not the seat the file's grant names for up | `team register worker` |
 | `register.grant-flag` | `register` | 1 | --session is the owner's for a granted seat | `team register worker --session other` |
+| `register.handle-held` | `register` | 1 | the id its record holds is another seat's handle | `team register worker` |
 | `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
@@ -503,6 +516,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.pane-named` | `register` | 1 | --pane named a pane herdr already names as another agent | `team register worker --pane w2:p2` |
 | `register.pane-taken` | `register` | 1 | another seat of the session holds that pane | `team register worker --pane w2:p2` |
 | `register.recorded` | `register` | 1 | the state records another pane for that seat | `team register worker` |
+| `register.replaced` | `register` | 1 | the pane holds a process its record's launch did not start | `team register worker` |
 | `register.screen` | `register` | 1 | the pane is not the seat at its prompt | `team register worker` |
 | `register.session-file` | `register` | 1 | the session was launched from another team file | `team register worker --session other` |
 | `register.stopped` | `register` | 1 | the seat is stopped in the file | `team register worker` |
@@ -742,10 +756,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.presence-hook-staged` | `team` | 0 | the presence event was staged | `team presence-hook --event turn-end` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
+| `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
+| `team.general-usage` | `team` | 2 | --general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes) | `team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |

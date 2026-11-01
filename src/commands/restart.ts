@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
-import { stripSgr } from '../ansi.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
@@ -56,7 +55,10 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
+import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
+import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -67,20 +69,21 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
-import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { acquireRunLockWithin, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
-import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { nativePushBindingFor } from '../send/push.ts';
+import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { modelDiffers, seatModel } from '../status/statusline.ts';
+import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -110,6 +113,9 @@ export type RestartSources = RemoveSources & {
   machine?: (root: string) => Machine;
   standing?: (root: string) => Standing;
   seatBudget?: typeof seatBudget;
+  /** Reads the threads a managed Codex endpoint holds, for the seat state and record a fresh
+   *  pane could not fill. Absent: this run reads no endpoint and the seat stays pull-only. */
+  codexThreads?: (endpoint: string) => Promise<CodexLoadedThreadsRead>;
 };
 
 function aim(session: string): string | undefined {
@@ -117,6 +123,7 @@ function aim(session: string): string | undefined {
 }
 
 const realUpLaunch: Launch = {
+  conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
   sessionState,
   startServer,
   sessionUp: sessionRunning,
@@ -125,7 +132,7 @@ const realUpLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
@@ -162,6 +169,7 @@ export const realSources: RestartSources = {
   upLaunch: realUpLaunch,
   doctor: doctorSources,
   machine: readMachine,
+  codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
 };
 
 const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
@@ -509,6 +517,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         team.project,
         session,
         notes,
+        performed.pullOnly,
       );
     default: {
       // Every result the launch sequence returns is handled above. This arm is the contract the
@@ -571,9 +580,9 @@ export type PerformInput = {
   continuity?: string;
   /** Registry recipe bound to the resume id. */
   registryLaunch?: string;
-  /** The handover the new conversation reads first: the seat is asked to write this path before
-   *  the stop, and the wait is bounded. */
-  handover?: { path: string; waitMs: number };
+  /** The handover path the new conversation reads first. Only a file already written there is
+   *  used: nothing is typed into the old conversation to ask for one. */
+  handover?: { path: string };
   /** Writes the team file's new declaration, after the old pane is closed and before the hooks
    *  and the launch — the launch reads the file's own words. A failure is a truthful abort: the
    *  sequence ends before the hooks, the brief and the launch, and the caller reports it as a
@@ -603,9 +612,12 @@ export type PerformResult =
       oldPane: string;
       pane: string;
       readBack: ReadBack;
-      /** The handover file the launch was actually given. Absent when the bounded wait ended
-       *  without one, so a caller never reports a handover that was only asked for. */
+      /** The handover file the launch was actually given. Absent when no file was there to read,
+       *  so a caller never reports a handover the launch did not get. */
       handover?: string;
+      /** Why the registry holds no record binding this seat, when it does not: the seat runs,
+       *  but native delivery cannot resolve it and only pull reaches it. */
+      pullOnly?: string;
     };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
@@ -751,6 +763,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      // The home and the team let the plan read the seat's codex-daemon policy, as `team up` does.
+      home,
+      team,
     });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
     const stopPlan: PlanStep[] = inspected.agent
@@ -763,7 +778,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
   }
 
-  const runLock = acquireRunLock(dir, session);
+  // The stop below is this run's first effect, so the session mutator lock is taken before it —
+  // standing aside while another run (the watch's restore, a launch) holds it, and refusing with
+  // the holder named and nothing stopped once the wait is spent.
+  const runLock = await acquireRunLockWithin(dir, session, { sleep: (ms) => sources.upLaunch.sleep(ms) });
   if ('held' in runLock) {
     return { kind: 'run-lock', held: runLock.held };
   }
@@ -857,17 +875,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
-      // The handover is asked at the boundary, as the last step of the old conversation's task,
-      // and before the stop. The request starts a turn; the pane is read again before the stop,
-      // so what the stop acts on is the screen after that turn, never the one it was asked at.
+      // The handover is read at the boundary, before the stop: the new conversation is given the
+      // file a previous attempt already wrote. Nothing is typed into the old conversation to ask
+      // for one. The pane is read again after this, so the stop acts on the screen it is about
+      // to close, never the one the preflight read.
       if (input.handover !== undefined) {
-        handoverPath = await askForHandover({
-          session,
+        handoverPath = askForHandover({
           name,
-          pane: rechecked.agent.pane,
           path: input.handover.path,
-          waitMs: input.handover.waitMs,
-          sources,
           log: (said) => logLine(dir, input.command, who, said, sources.now()),
         });
         const fresh = sources.agents(session);
@@ -1001,7 +1016,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       team,
       state: readState(dir).sessions[session] ?? emptySession(),
       attributed: [planSeat.name],
-      broadcast: true,
+      // A single-seat restart briefs that seat alone, never the whole team.
+      onlyAttributed: true,
       ...(handoverSentence === undefined ? {} : { handover: handoverSentence }),
     });
     await walkBriefDeliveries(briefs, { dir, home });
@@ -1031,7 +1047,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, ...(team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: team.project, root, home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, input.command, who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
@@ -1045,6 +1061,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      // The home lets the plan read the seat's codex-daemon policy, so a restarted Codex seat is
+      // attached to its managed endpoint exactly as `team up` attaches it.
+      home,
+      team,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this
@@ -1080,7 +1100,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
     const report = await executePlan(plan, session, host);
-    const afterwards = readState(dir).sessions[session]?.seats[name];
+    let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
       logLine(dir, input.command, who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
@@ -1102,26 +1122,76 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         logLine(dir, input.command, who, said, sources.now());
       }
     }
+    // A managed Codex seat's conversation is owned by the app-server its launch started: herdr
+    // names no session for a fresh managed pane, so the state and the seat's record can both name
+    // none while the endpoint holds the thread its runtime queue is addressed by. When the
+    // records do not bind a conversation, read the endpoint's own loaded threads and bind the one
+    // it proves to both records, so a send right after the restart is addressed to a real
+    // conversation rather than falling to a pull. A read that proves nothing — no thread, several,
+    // or an endpoint that does not answer — leaves the records as they were, and the result below
+    // says pull-only with the reason the record gives.
+    if (
+      afterwards !== undefined
+      && nativePushBindingFor(launching.cli) === 'conversation'
+      && inspectRecordedCodexEndpoint(afterwards.codex_endpoint, afterwards.presence_binding).kind === 'ok'
+      && recordedSeatSession({
+        home,
+        root,
+        herdrSession: session,
+        seat: launching,
+        state: afterwards,
+      }).kind !== 'bound'
+      && sources.codexThreads !== undefined
+    ) {
+      const bound = await bindCodexSeatThread({
+        home,
+        root,
+        dir,
+        session,
+        seat: launching,
+        state: afterwards,
+        read: sources.codexThreads,
+      });
+      if (bound.kind === 'bound') {
+        afterwards = readState(dir).sessions[session]?.seats[name] ?? afterwards;
+        logLine(dir, input.command, who, `${name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, sources.now());
+      } else {
+        logLine(dir, input.command, who, `${name}: no thread was bound from its Codex endpoint (${bound.why})`, sources.now());
+      }
+    }
+    if (afterwards === undefined || afterwards.pane === undefined) {
+      // The ready check above returned for a seat whose state was already gone; a state that
+      // vanished while the binding read ran is the same shape, and the result says so.
+      logLine(dir, input.command, who, `${name}: launch did not reach ready; its state is gone`, sources.now());
+      return { kind: 'not-ready', message: `${name} did not reach a ready prompt` };
+    }
+    // The state this run wrote is ready; the registry write that binds the seat to it may not
+    // have landed. The record is read back with the binding the seat's native route needs: a
+    // route addressed by the conversation the CLI holds needs the recorded agent session as well,
+    // so a pane that has not reported one yet is pull-only; where the seat record is enough, a
+    // missing or refused record alone says so. The result names the reason rather than calling a
+    // restart done whose record was never written.
+    const lookedUp = {
+      home,
+      root,
+      herdrSession: session,
+      seat: launching,
+      state: afterwards,
+    };
+    const record = nativePushBindingFor(launching.cli) === 'conversation'
+      ? recordedSeatSession(lookedUp)
+      : recordedSeatRecord(lookedUp);
     return {
       kind: 'ready',
       oldPane,
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+      ...(record.kind === 'bound' ? {} : { pullOnly: record.why }),
     };
   } finally {
     runLock.release();
   }
-}
-
-/** How often the handover wait looks for the file. The wait is bounded by the caller; this is
- *  the poll inside it. */
-const HANDOVER_POLL_MS = 2_000;
-
-/** The line typed into the old conversation to ask for its handover. One line: it is typed into
- *  an empty input box and sent with Enter. */
-export function handoverRequest(path: string): string {
-  return `Before this conversation ends, write a handover for your successor to ${path}: what you were doing, what is done, what is left, and anything the next conversation must not redo. Write the file as the last thing you do.`;
 }
 
 function fileHasText(path: string): boolean {
@@ -1133,67 +1203,17 @@ function fileHasText(path: string): boolean {
 }
 
 /**
- * Asks the old conversation for its handover and waits, bounded, for the file. A file a previous
- * attempt already wrote is used without asking again. A request that cannot be typed is said and
- * the launch goes on; one that is chosen but not answered before the wait is the caller's to log.
+ * The handover the new conversation is given: the file a previous attempt already wrote at the
+ * recorded path. The old conversation is never asked to write one — a request is a message, and
+ * nothing is typed into a pane — so without a file already there the launch goes on without one.
  */
-async function askForHandover(input: {
-  session: string;
-  name: string;
-  pane: string;
-  path: string;
-  waitMs: number;
-  sources: RestartSources;
-  log(said: string): void;
-}): Promise<string | undefined> {
+function askForHandover(input: { name: string; path: string; log(said: string): void }): string | undefined {
   if (fileHasText(input.path)) {
     input.log(`${input.name}: using the handover already at ${input.path}`);
     return input.path;
   }
-  try {
-    mkdirSync(dirname(input.path), { recursive: true });
-  } catch {
-    input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
-    return undefined;
-  }
-  const typed = input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false;
-  const entered = typed && (input.sources.upLaunch.pressEnter?.(input.session, input.pane) ?? false);
-  if (!entered) {
-    input.log(`${input.name}: the handover request was not typed; the launch goes on`);
-    return undefined;
-  }
-  const started = input.sources.now().getTime();
-  // The file landing is not the end of the turn: the conversation may still be finishing its
-  // final response, and the stop's recheck would refuse the seat as mid-turn. The wait is the
-  // bound: it goes on until the seat is no longer working. A file written by a turn that ran
-  // past the wait is still used — the launch reads it, and the recheck decides the stop.
-  for (;;) {
-    if (fileHasText(input.path)) {
-      if (!workingNow(input.sources, input.session, input.pane)) {
-        input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
-        return input.path;
-      }
-    }
-    if (input.sources.now().getTime() - started >= input.waitMs) {
-      if (fileHasText(input.path)) {
-        input.log(
-          `${input.name}: the old conversation wrote the handover at ${input.path} and its turn is still running; the launch goes on`,
-        );
-        return input.path;
-      }
-      input.log(`${input.name}: no handover was written before the wait ended; the launch goes on`);
-      return undefined;
-    }
-    await input.sources.upLaunch.sleep(HANDOVER_POLL_MS);
-  }
-}
-
-/** Whether herdr still reports the pane mid-turn. An unreadable herdr is not called working: the
- *  stop's own recheck reads the same source and decides. */
-function workingNow(sources: RestartSources, session: string, pane: string): boolean {
-  const agents = sources.agents(session);
-  const agent = agents?.find((candidate) => candidate.pane === pane);
-  return agent?.status === 'working';
+  input.log(`${input.name}: the handover request was not typed; the launch goes on`);
+  return undefined;
 }
 
 /** The words a model id is compared by: lowercased, split where a CLI or a file may spell the
@@ -1208,17 +1228,6 @@ function launchModelId(launch: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
- *  one. This is the reading for a CLI the profile cannot show a model for. */
-export function bannerModel(screen: string | undefined): string | null {
-  if (screen === undefined) return null;
-  for (const line of stripSgr(screen).split('\n')) {
-    const match = /([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing/.exec(line);
-    if (match) return match[1] ?? null;
-  }
-  return null;
-}
-
 /**
  * What the new pane says the conversation is, compared with the declaration it was launched
  * from. The profile's own model reading comes first (`modelDiffers`); a model it cannot show is
@@ -1227,7 +1236,9 @@ export function bannerModel(screen: string | undefined): string | null {
  * `unread`, and `unread` never claims a match.
  */
 export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
-  const shown = seatModel(seat, screen);
+  // A wrapper's declaration is not a reading: the read-back asks what the new pane says, and
+  // the banner below is the only thing a window into this CLI can add.
+  const shown = wrapperSeat(seat) ? null : seatModel(seat, screen);
   if (shown !== null) {
     const want = `${seat.model} ${seat.version}`;
     const got = `${shown.model} ${shown.version}`;
@@ -1529,7 +1540,7 @@ function hostOf(input: {
     ...(launch.codexEndpoint === undefined
       ? {}
       : {
-          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
@@ -1546,6 +1557,8 @@ function hostOf(input: {
       if (!typeablePath(file.path)) {
         return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
       }
+      // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+      if (file.writeOnly === true) return true;
       const stopped: { why: Refusal | null } = { why: null };
       const delivered = await deliverRules(cli, file.line, seconds, {
         screen: () => launch.paneText(s, pane) ?? undefined,
@@ -1672,7 +1685,12 @@ function hostOf(input: {
           // the same agent session, never a second derivation of either.
           const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
+            {
+              home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
+              // This run launched the seat standing on the state id it just wrote: a record left
+              // holding another incarnation's handle is bound to the live seat here.
+              rebindSeatHandle: true,
+            },
             seat,
             patch.pane,
             kept?.id,
@@ -2029,9 +2047,10 @@ function readyExit(
   project: string,
   session: string,
   notes: readonly string[],
+  pullOnly?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
-  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}`;
+  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}`;
   if (json) {
     writeJson(out, 'team.restart', {
       format: 1 as const,
@@ -2043,6 +2062,7 @@ function readyExit(
       seat: name,
       pane: toPane,
       notes,
+      ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
     });
   } else {
     out.stdout(`${summary}\n`);

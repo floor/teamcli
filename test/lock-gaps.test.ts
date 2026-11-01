@@ -5,7 +5,7 @@
 // and holder rewrite both fail, and an unreadable holder under --wait. Two takers in the same
 // instant stay untested on purpose: mutual exclusion rests on mkdir's atomicity, a documented
 // assumption of the design, not a property this suite could pin without racing.
-import { afterEach, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as realFs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,6 +41,10 @@ function sources(home: string, identity: LockIdentity, clock: { at: number } = {
 // patch that never fires must never be believed.
 let secondRead: { path: string; reads: number; bytes: string } | null = null;
 
+// Captured by value before the beforeAll registers the wrapper, so the restore at file end names
+// the module's own read rather than the wrapper.
+const realReadFileSync = realFs.readFileSync;
+
 let machine: typeof import('../src/lock/machine.ts');
 let runLock: typeof import('../src/commands/lock.ts').runLock;
 let runUnlock: typeof import('../src/commands/unlock.ts').runUnlock;
@@ -62,6 +66,9 @@ beforeAll(async () => {
   ({ runLock } = await import('../src/commands/lock.ts'));
   ({ runUnlock } = await import('../src/commands/unlock.ts'));
 });
+// Bun's module mocks are process-wide, and every test file of a run shares one process: put the
+// captured real read back when this file ends, so a later file's reads are the plain module's.
+afterAll(() => { mock.module('node:fs', () => ({ ...realFs, readFileSync: realReadFileSync })); });
 
 function whoPath(home: string): string {
   return join(machine.lockDirectory(home, 'heavy-run'), 'who');

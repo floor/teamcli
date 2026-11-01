@@ -23,7 +23,7 @@ import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
-import { placedProblems } from '../file/load.ts';
+import { findRoot, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -41,7 +41,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -107,7 +107,7 @@ const realLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
@@ -246,9 +246,13 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
   // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
   // returns; `--approval <id>` admits this run when the owner seat signed for exactly it.
+  // The root it records and admits is the one the record's readers resolve: a checkout's root, or
+  // the plain folder itself (the registry record is keyed by that folder). The step's own
+  // findRoot alone refused every team whose folder is not a repository.
+  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, sources);
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, { ...sources, root: seatRoot });
   if (seatStep.kind === 'requested') {
     // exit: add.approval-requested
     return 0;
@@ -1149,11 +1153,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // launch only if the plan runs the seat's line, and a refusal before that puts this back.
     const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: prepared.team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };
@@ -1505,7 +1509,7 @@ function hostOf(input: {
     ...(launch.codexEndpoint === undefined
       ? {}
       : {
-          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+          managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
@@ -1525,6 +1529,8 @@ function hostOf(input: {
       if (!typeablePath(file.path)) {
         return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
       }
+      // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+      if (file.writeOnly === true) return true;
       const stopped: { why: Refusal | null } = { why: null };
       const delivered = await deliverRules(cli, file.line, seconds, {
         screen: () => launch.paneText(session, pane) ?? undefined,

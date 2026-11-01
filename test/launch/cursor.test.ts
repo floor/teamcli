@@ -488,13 +488,13 @@ function delivery(initial = 'idle') {
 }
 
 describe('Cursor rules delivery', () => {
-  test('recognised idle, pasted text, then observed working with empty input', async () => {
+  test('no pane messaging, the rules line is never typed; was: recognised idle, pasted text, then observed working with empty input', async () => {
     const d = delivery();
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the captured wrapped paste reads back through the profile\'s wrap and is entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: the captured wrapped paste reads back through the profile\'s wrap and is entered', async () => {
     // unsent.txt is this sentence word-wrapped on the pane's 51 columns: the words that fit on
     // the first row (45 characters; the next word would not), the rest continued at the text
     // column. The profile's wrap rule joins the rows back into the typed line, so the box is
@@ -510,8 +510,8 @@ describe('Cursor rules delivery', () => {
     expect([box.first, ...box.rows.map((row) => row.trim())]).toEqual(rows);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('unsent'); return true; };
-    expect(await deliverRules('cursor', message, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([message, 'Enter']);
+    const retired = await deliverRules('cursor', message, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each([40, 51, 80])('the rules sentence wrapped on a %s-column pane still gets its Enter', async (pane) => {
@@ -519,8 +519,8 @@ describe('Cursor rules delivery', () => {
     // joins them all, and every pane that shows the whole sentence gets the Enter.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(wrapped(text, pane)); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([CAPTURED_WRAP, 'Enter']);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the nudge, wrapped on the same pane, reads back and is entered', async () => {
@@ -532,40 +532,40 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', NUDGE_TEXT, wrapped(person, 51))).toBe(false);
   });
 
-  test('a wrapped box holding a person\'s own text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a wrapped box holding a person\'s own text gets no Enter', async () => {
     // The same wrap, a different sentence: joined it is not the typed text.
     const d = delivery();
     const person = 'Someone else wrote this sentence on the pane and its words are not ours.';
     d.io.type = (text) => { d.calls.push(text); d.showText(wrapped(person, 51)); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_WRAP]);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a wrapped box with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a wrapped box with one character changed gets no Enter', async () => {
     const d = delivery();
     const changed = CAPTURED_WRAP.replace('RULES_RECEIVED', 'RULES_RECEIVFD');
     d.io.type = (text) => { d.calls.push(text); d.showText(wrapped(changed, 51)); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_WRAP]);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a wrapped box with an extra row below it gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a wrapped box with an extra row below it gets no Enter', async () => {
     const d = delivery();
     const extra = [...wordWrap(CAPTURED_WRAP, 51 - 4), 'and a line of their own'];
     d.io.type = (text) => { d.calls.push(text); d.showText(box(extra)); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_WRAP]);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a wrapped box with a blank row between its rows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a wrapped box with a blank row between its rows gets no Enter', async () => {
     // An empty continuation row is not part of a wrapped text: the pane draws one only where
     // the text itself has a blank line, and this sentence has none.
     const rows = wordWrap(CAPTURED_WRAP, 51 - 4);
     const [firstRow = '', ...rest] = rows;
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(box([firstRow, '', ...rest])); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_WRAP]);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the nudge wrapped with a blank row gets no Enter', async () => {
@@ -575,18 +575,18 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', NUDGE_TEXT, box([firstRow, '', ...rest]))).toBe(false);
   });
 
-  test('a blank row the typed text itself has is refused: a blank row is never the text\'s', async () => {
+  test('no pane messaging, the rules line is never typed; was: a blank row the typed text itself has is refused: a blank row is never the text\'s', async () => {
     // A blank row was the pane's drawing of a blank line the text had, when texts could hold
     // newlines. A row break may stand for at most one space, never a newline, so the blank row
     // never reads back and there is no Enter.
     const typed = 'alpha beta\n\ngamma delta';
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(typed)); return true; };
-    expect(await deliverRules('cursor', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('cursor', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('two spaces typed, one shown, gets no Enter — the delivery path and the gate', async () => {
+  test('no pane messaging, the rules line is never typed; was: two spaces typed, one shown, gets no Enter — the delivery path and the gate', async () => {
     // The typed text has a run of two spaces; the box shows one. The wrap did not add or drop
     // that space, so the box is not the typed text, and nothing presses Enter on it. The watch's
     // nudge and the typed exit gate on the same read.
@@ -594,8 +594,8 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', typed, box(['alpha beta']))).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(box(['alpha beta'])); return true; };
-    expect(await deliverRules('cursor', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('cursor', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the same collapse inside a wrapped row gets no Enter', async () => {
@@ -606,15 +606,15 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', typed, box(collapsed))).toBe(false);
   });
 
-  test('two spaces shown as two are the text and are entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: two spaces shown as two are the text and are entered', async () => {
     const typed = 'alpha  beta';
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(box(['alpha  beta'])); return true; };
-    expect(await deliverRules('cursor', typed, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([typed, 'Enter']);
+    const retired = await deliverRules('cursor', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a trailing blank row after the wrapped text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trailing blank row after the wrapped text gets no Enter', async () => {
     // The probe: the correctly wrapped text, then one more empty row inside the box. Cursor
     // draws two empty rows of its own under the text — idle.txt and unsent.txt show them, the
     // drop before the status line — and those rows are the box's frame, not its content. A row
@@ -626,11 +626,11 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', CAPTURED_WRAP, screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('cursor', CAPTURED_WRAP, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_WRAP]);
+    const retired = await deliverRules('cursor', CAPTURED_WRAP, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a typed text whose own last line is empty: no Enter, with the row or without it', async () => {
+  test('no pane messaging, the rules line is never typed; was: a typed text whose own last line is empty: no Enter, with the row or without it', async () => {
     // The text ends with a newline, so its last line is empty and the pane once drew a row for
     // it. A row break may stand for at most one space, never a newline, and a blank row is
     // never the text's own: the trailing newline is unaccounted for either way, and the box
@@ -645,47 +645,47 @@ describe('Cursor rules delivery', () => {
     expect(boxHoldsText('cursor', typed, withoutRow)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(withoutRow); return true; };
-    expect(await deliverRules('cursor', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('cursor', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box holding a person\'s own text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     // The captured rules box against a shorter first message: the box is not the typed text.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('unsent'); return true; };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the typed text with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with one character changed gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules!')); return true; };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the typed text with more below it gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with more below it gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules.\nand a line of their own')); return true; };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a boxed multi-line paste no longer reads back: typed, not sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a boxed multi-line paste no longer reads back: typed, not sent', async () => {
     // A row break may stand for at most one space, never the newline between the lines, so a
     // multi-line text never verifies and the Enter is never the delivery's to send.
     const d = delivery();
-    expect(await deliverRules('cursor', 'Rules.\nOne more line.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.\nOne more line.']);
+    const retired = await deliverRules('cursor', 'Rules.\nOne more line.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the typed exit read back from the captured completion frame is entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed exit read back from the captured completion frame is entered', async () => {
     // exit-typed.txt: `/exit` in the box with the suggestion menu below it. The box's own row
     // is the typed text, so the exit's Enter may be sent.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('exit-typed'); return true; };
-    expect(await deliverRules('cursor', '/exit', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['/exit', 'Enter']);
+    const retired = await deliverRules('cursor', '/exit', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each(['trust', 'unsent', 'exit', 'working', 'thinking'])('types nothing at %s', async (screen) => {
@@ -701,19 +701,19 @@ describe('Cursor rules delivery', () => {
     expect(d.calls).toEqual([]);
   });
 
-  test('a trust question appearing after paste gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trust question appearing after paste gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('trust'); return true; };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a dialog arriving at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a dialog arriving at the final re-read gets no Enter', async () => {
     const d = delivery();
     let reads = 0;
     d.io.screen = () => fixture(++reads === 3 ? 'trust' : reads === 1 ? 'idle' : 'unsent');
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('a swallowed Enter, working with pasted input, and a failed Enter are not delivery', async () => {
@@ -724,13 +724,14 @@ describe('Cursor rules delivery', () => {
     }
   });
 
-  test('a paste that has not rendered is awaited, never submitted blind', async () => {
+  test('no pane messaging, the rules line is never typed; was: a paste that has not rendered is awaited, never submitted blind', async () => {
     const d = delivery();
     let clock = 0;
     d.io.type = () => true;
     d.io.now = () => clock;
     d.io.sleep = async (ms) => { clock += ms; d.showText(boxed('Rules.')); };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(true);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -801,7 +802,7 @@ describe('the box\'s top frame (Cursor)', () => {
   // shipped capture shows the direct echo layout; the constructed screens below stand in.
   const shaped = (body: string) => fixture('idle').replace('  → Plan, search, build anything', body);
 
-  test('the transcript\'s echo over the gap leaves the empty box idle, and the typed text reads back exactly', async () => {
+  test('no pane messaging, the rules line is never typed; was: the transcript\'s echo over the gap leaves the empty box idle, and the typed text reads back exactly', async () => {
     // The routine post-send layout, settled by typed-blank-middle.txt: the person's sent
     // message echoed at the prompt column, the captured blank frame, the empty input row. It
     // reads `idle` on every reader and rules delivery types and enters; the read-back holds
@@ -815,8 +816,8 @@ describe('the box\'s top frame (Cursor)', () => {
     const d = delivery();
     d.showText(at());
     d.io.type = (text) => { d.calls.push(text); d.showText(at(text)); return true; };
-    expect(await deliverRules('cursor', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('cursor', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('two and three blank rows above the input read the same', () => {
@@ -1030,10 +1031,10 @@ describe('Cursor rules delivery of the one line (2026.10.01 capture)', () => {
     expect(boxHoldsText('cursor', rulesLine(CAPTURED_PATH, '4d0c9f8b3a2e'), screen)).toBe(false);
   });
 
-  test('the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
     const d = lineDelivery();
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each([
@@ -1044,33 +1045,27 @@ describe('Cursor rules delivery of the one line (2026.10.01 capture)', () => {
   ] as const)('one character changed %s gets no Enter', async (what, [from, to]) => {
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(fixture('rules-line').replace(from, to)); return true; };
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.typed).toBe(true);
-    expect(why?.sent).toBe(false);
-    expect(why?.row).not.toBeNull();
-    expect(refusalReport(why!)).toContain("the read-back didn't match");
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a row of the line with one character more than the line has gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a row of the line with one character more than the line has gets no Enter', async () => {
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(fixture('rules-line').replace('wait for your brief.', 'wait for your brief. x')); return true; };
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the line with one character more than the box shows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line with one character more than the box shows gets no Enter', async () => {
     // The other way round: the box draws the line's own four rows, and the text claims a
     // fifth the pane never drew.
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(fixture('rules-line')); return true; };
-    expect(await deliverRules('cursor', `${capturedLine} x`, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([`${capturedLine} x`]);
+    const retired = await deliverRules('cursor', `${capturedLine} x`, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('two spaces in the line where the row break hides one get no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: two spaces in the line where the row break hides one get no Enter', async () => {
     // The captured break after `):` hides the line's single space before `your`. A line with
     // two spaces there draws the same rows — the read-back refuses it: a break may stand for
     // exactly one space, never a run of them.
@@ -1078,20 +1073,20 @@ describe('Cursor rules delivery of the one line (2026.10.01 capture)', () => {
     expect(boxHoldsText('cursor', doubled, fixture('rules-line'))).toBe(false);
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(fixture('rules-line')); return true; };
-    expect(await deliverRules('cursor', doubled, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([doubled]);
+    const retired = await deliverRules('cursor', doubled, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a tab in the line gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a tab in the line gets no Enter', async () => {
     const tabbed = capturedLine.replace('Read ', 'Read\t');
     expect(boxHoldsText('cursor', tabbed, fixture('rules-line'))).toBe(false);
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(fixture('rules-line')); return true; };
-    expect(await deliverRules('cursor', tabbed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([tabbed]);
+    const retired = await deliverRules('cursor', tabbed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a trust dialog at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trust dialog at the final re-read gets no Enter', async () => {
     // The other way round: the line reads back in the loop, and the re-read that immediately
     // precedes the Enter sees the dialog. Without that re-read the Enter goes to the dialog's
     // first choice.
@@ -1102,67 +1097,52 @@ describe('Cursor rules delivery of the one line (2026.10.01 capture)', () => {
       d.io.screen = () => (++reads <= 1 ? fixture('rules-line') : fixture('trust'));
       return true;
     };
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.sent).toBe(false);
-    expect(why?.kind).toBe('trust');
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the file changing after it was written gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the file changing after it was written gets no Enter', async () => {
     // The line read back as its own rows; between that and the key, the file at its path no
     // longer holds the text whose hash the line names. Nothing is sent, and the report says
     // the file changed — the seat is never pointed at a file team cannot vouch for.
     const d = lineDelivery();
     d.io.file = () => false;
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('file-changed');
-    expect(why?.sent).toBe(false);
-    expect(refusalReport(why!)).toBe('rules typed, not sent: the rules file changed after it was written');
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a seat mid-turn is reported as working; nothing is typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a seat mid-turn is reported as working; nothing is typed', async () => {
     const d = lineDelivery();
     d.status('working');
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('working');
-    expect(refusalReport(why!)).toBe('rules not confirmed: the seat is working; run up again when it is idle');
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box already holding the person\'s own text is left alone', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box already holding the person\'s own text is left alone', async () => {
     const d = lineDelivery();
     d.show(fixture('idle').replace('  → Plan, search, build anything', drawnAt('the person\'s own message')));
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('leftover');
-    expect(refusalReport(why!)).toContain('its box already holds text that is not the rules line');
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
     const d = lineDelivery();
     d.show(fixture('rules-line'));
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Enter']);
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
     const d = lineDelivery();
     d.show(fixture('rules-line').replace('implementer', 'scribe'));
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals.at(-1)?.stop).toBe('leftover');
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat with an empty box is typed once, verified and sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat with an empty box is typed once, verified and sent', async () => {
     const d = lineDelivery();
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -1725,7 +1705,7 @@ describe('a border anywhere else stays unknown (Cursor)', () => {
     unknown(text(twoLeadingBoth));
   });
 
-  test('a shell transcript catting the complete idle frame with no shell prompt after it reads idle as an accepted boundary', async () => {
+  test('no pane messaging, the rules line is never typed; was: a shell transcript catting the complete idle frame with no shell prompt after it reads idle as an accepted boundary', async () => {
     const idleLines = fixture('bordered-idle').replace(/\n+$/, '').split('\n');
     const screen = [
       '❯ cat frame.txt',
@@ -1754,10 +1734,8 @@ describe('a border anywhere else stays unknown (Cursor)', () => {
       now: () => clock,
       sleep: async (ms) => { clock += ms; },
     };
-    expect(await deliverRules('cursor', 'Rules.', 1, shellIo)).toBe(false);
-    expect(refusals).toEqual([{ stop: 'launch', typed: false, sent: false, kind: 'idle', row: null, clearKey: 'ctrl+u' }]);
-    expect(typed).toEqual([]);
-    expect(clock).toBe(1000);
+    const retired = await deliverRules('cursor', 'Rules.', 1, shellIo);
+    expect(retired).toBe(false);
   });
 });
 
@@ -2171,26 +2149,25 @@ describe('the bordered box read back (Cursor)', () => {
     expect(boxHoldsText('cursor', NUDGE_TEXT, fixture('bordered-typed-three'))).toBe(false);
   });
 
-  test('rules delivery types the one line into the bordered box, reads it back and enters', async () => {
+  test('no pane messaging, the rules line is never typed; was: rules delivery types the one line into the bordered box, reads it back and enters', async () => {
     const d = delivery('bordered-idle');
     d.io.type = (text) => {
       d.calls.push(text);
       d.showText(borderedBox(wordWrap(text, 47)));
       return true;
     };
-    expect(await deliverRules('cursor', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('cursor', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a multi-row paste is refused at the read-back, typed and not sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a multi-row paste is refused at the read-back, typed and not sent', async () => {
     const d = delivery('bordered-idle');
     d.io.type = (text) => {
       d.calls.push(text);
       d.showText(borderedBox(text.split('\n')));
       return true;
     };
-    expect(await deliverRules('cursor', TEXT, 1, d.io)).toBe(false);
-    expect(d.refusals).toEqual([{ stop: 'read-back', typed: true, sent: false, kind: 'unsent', row: 'beta bordered line two', clearKey: 'ctrl+u' }]);
-    expect(d.calls).toEqual([TEXT]);
+    const retired = await deliverRules('cursor', TEXT, 1, d.io);
+    expect(retired).toBe(false);
   });
 });

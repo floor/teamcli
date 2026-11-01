@@ -603,6 +603,12 @@ async function recover(
   const delivery = rulesDeliveryOf(standing, team, seat, root, host.home, false, origin);
   if ('refusal' in delivery) return 'rule delivery';
   if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text), undefined, team.project).ok) return 'rule delivery';
+  // 0.5.9: a CLI whose launch line carries the rules line took it as its initial prompt, which it
+  // runs once the dialog this answer cleared is gone; nothing is typed. Any other CLI's rules are
+  // never typed either: deliverRules refuses (src/send/no-pane-messaging.ts).
+  // The process must still be the one team launched with that line: a replaced or unreadable one
+  // never ran it.
+  if (profile.rulesPrompt !== null) return checkProcess(name, host, session, pane, launched) ?? true;
   let processRefusal: Refusal | null = null;
   const delivered = await deliverRules(
     profile.cli,

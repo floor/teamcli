@@ -267,7 +267,7 @@ describe('the strict endpoint reader behind the opt-in', () => {
 
     const binding = mintPresenceBinding();
     const predecessor = mintPresenceBinding();
-    const url = `unix:///private/tmp/launch/${binding}.sock`;
+    const url = `unix://${join(realpathSync(tmpdir()), 'launch')}/${binding}.sock`;
     const record = (fields: Record<string, unknown>): Record<string, unknown> => ({
       url, binding, pid: 4242, started_at: '2026-10-20T05:00:00.000Z', ...fields,
     });
@@ -414,11 +414,9 @@ describe('the hosted send server per-seat proof', () => {
       await ingestOnce(w.dir, 'clerk');
       await waitFor(async () => (await projectionState(w.dir, 'clerk')) === 'working');
       const io = testIo(w.root, owner);
-      expect(await runSend(['clerk', 'do not clobber the unproven turn', '--json'], io, host)).toBe(1);
-      const refused = JSON.parse(io.out.trim()) as { error: { id: string; message: string } };
-      expect(refused.error.id).toBe('send.held');
-      expect(refused.error.message).toContain('the seat\'s native presence does not allow typing');
-      expect(refused.error.message).toContain('the presence channel is not known healthy this pass');
+      // No pane messaging: an unproven turn is never typed at; the message waits in the bus inbox.
+      expect(await runSend(['clerk', 'do not clobber the unproven turn', '--json'], io, host)).toBe(0);
+      expect(io.err).toContain('clerk: queued, no event adapter');
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {
@@ -437,30 +435,27 @@ describe('the hosted send server per-seat proof', () => {
       // The proven channel still holds the running turn: the runtime record outranks the idle
       // screen, and the message names the turn as the reason.
       const working = testIo(w.root, owner);
-      expect(await runSend(['clerk', 'still do not clobber', '--json'], working, host)).toBe(1);
-      const held = JSON.parse(working.out.trim()) as { error: { id: string; message: string } };
-      expect(held.error.id).toBe('send.held');
-      expect(held.error.message).toContain('the seat\'s native presence does not allow typing');
-      expect(held.error.message).toContain('working');
+      expect(await runSend(['clerk', 'still do not clobber', '--json'], working, host)).toBe(0);
+      expect(working.err).toContain('clerk: queued, no event adapter');
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
 
-      // The projected turn ends: the last mile may now type once.
+      // The projected turn ends: no pane messaging, so nothing is typed even at an idle box.
       stageEvent(w, 'clerk', 'turn-end', binding, t0 + 1000);
       await waitFor(async () => (await projectionState(w.dir, 'clerk')) === 'idle');
       const idle = testIo(w.root, owner);
       expect(await runSend(['clerk', 'the projected turn ended'], idle, host)).toBe(0);
       expect(idle.out).toContain('clerk: sent (unconfirmed)');
-      expect(host.typed).toHaveLength(1);
-      expect(host.enters).toHaveLength(1);
+      expect(host.typed).toEqual([]);
+      expect(host.enters).toEqual([]);
 
       // A seat with no binding and no projection keeps the labelled fallback: the legacy path
       // exists only where there is no native record to prove.
       const fallback = testIo(w.root, owner);
       expect(await runSend(['op-1', 'legacy unbound seat'], fallback, host)).toBe(0);
       expect(fallback.out).toContain('op-1: sent (unconfirmed)');
-      expect(host.typed).toHaveLength(2);
-      expect(host.enters).toHaveLength(2);
+      expect(host.typed).toEqual([]);
+      expect(host.enters).toEqual([]);
     } finally {
       await on.daemon.close();
     }

@@ -201,19 +201,20 @@ the signed receipt a running watch records as one more line, `delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
+team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn (pull-only)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                    SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                    SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```

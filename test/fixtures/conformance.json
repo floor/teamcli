@@ -1,27 +1,6 @@
 {
   "screens": [
     {
-      "file": "cursor/2026.10.22/rules-unsent-reviewer-cursor.txt",
-      "cli": "cursor",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "codex/0.161.0/rules-unsent-orchestrator.txt",
-      "cli": "codex",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
-      "file": "codex/0.161.0/rules-unsent-builder-3.txt",
-      "cli": "codex",
-      "classify": "unsent",
-      "composer": "unsent",
-      "provenance": "capture"
-    },
-    {
       "file": "antigravity/1.2.16/exit-typed.txt",
       "cli": "antigravity",
       "classify": "unsent",
@@ -2117,6 +2096,27 @@
     {
       "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
       "cli": "claude-code",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-builder-3.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-orchestrator.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/rules-unsent-reviewer-agent.txt",
+      "cli": "cursor",
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"

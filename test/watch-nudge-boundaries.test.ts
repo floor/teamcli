@@ -414,7 +414,9 @@ describe('the watch `up` starts', () => {
     // The recorded pane's own call starts in `root` — a different folder from the team file's —
     // and finds the file the record names. Only that file can load: no `team.yaml` is in
     // `.agents`, so a run reading `root` alone would stop at "no team file here".
-    let held: { pid?: number; heartbeat?: string; pane?: string; workspace?: string } | undefined;
+    // What `up` recorded for the pane whose call this is: the pass keeps its pane and workspace.
+    const handOver = readState(join(root, '.agents')).sessions[SESSION]?.watch;
+    let held: { pid?: number; heartbeat?: string; pane?: string; workspace?: string; started_at?: string } | undefined;
     const pane = testIo(root, { kind: 'pane', pane: 'w3:p1' });
     const ran = await runWatch(['--session', SESSION], pane, watchSources(home, {
       ownPane: () => ({ pane: 'w3:p1', workspace: 'w3' }),
@@ -425,8 +427,16 @@ describe('the watch `up` starts', () => {
     }));
     expect(ran, pane.err + pane.out).toBe(0);
     expect(pane.err).toBe('');
-    // Its pass writes where `up` wrote: the team file's folder, the state the record came from.
-    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w3:p1', workspace: 'w3' });
+    // Its pass writes where `up` wrote: the team file's folder, and the pane and workspace the
+    // hand-over recorded. The first beat also carries the instant this watch reached its loop,
+    // kept for as long as that pid owns the record.
+    expect(held).toEqual({
+      pid: 4242,
+      heartbeat: NOW.toISOString(),
+      pane: handOver?.pane,
+      workspace: handOver?.workspace,
+      started_at: NOW.toISOString(),
+    });
   });
 
   test('a watch whose pid is alive is never started over', async () => {

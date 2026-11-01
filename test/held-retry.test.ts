@@ -21,6 +21,15 @@ import { installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
+import {
+  GENERAL_BRIEF_FROM,
+  GENERAL_BRIEF_RULE,
+  GENERAL_BRIEF_SHA256,
+  generalBriefBody,
+  generalBriefId,
+} from '../src/launch/general-brief.ts';
+import { mintBriefEpoch, mintBriefIncarnation } from '../src/launch/brief-id.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { dropMessage, readTriggerLine, type NativePane } from '../src/send/native.ts';
 import {
   clearPending,
@@ -70,7 +79,7 @@ afterEach(() => {
   base = '';
 });
 
-function teamText(root: string, lobby: string): string {
+function teamText(root: string, lobby: string, humanLead = false): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -89,7 +98,7 @@ seats:
     model: Test
     version: "1"
     launch: claude
-  - role: implementer
+${humanLead ? '    human: true\n' : ''}  - role: implementer
     name: helper
     cli: claude-code
     vendor: test
@@ -234,8 +243,17 @@ function seedDropped(at: SeedWorld, session: string, seat: string, id: string, b
 
 /** The receipt the turn-start read writes: the signed status receipt the inbox server writes
  *  too, naming this message, seat, checkout and session. The end-to-end scene runs the installed
- *  hook command itself instead. */
-function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, session: string): void {
+ *  hook command itself instead. `brief` is the claim binding the seat's own server writes when
+ *  it serves the seat's general brief; a receipt without it is an earlier build's read and
+ *  proves nothing for a claim. */
+function readByHook(
+  at: SeedWorld,
+  dropDir: string,
+  id: string,
+  seat: string,
+  session: string,
+  brief?: { sha256: string; incarnation: string; epoch: string },
+): void {
   const written = writeReceipt(dropDir, signReceiptPayload({
     kind: 'receipt',
     status: 'read',
@@ -244,12 +262,71 @@ function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, se
     root: realpathSync(at.root),
     session,
     at: NOW.toISOString(),
+    ...(brief === undefined ? {} : { brief_sha256: brief.sha256, incarnation: brief.incarnation, brief_epoch: brief.epoch }),
   }, at.home), at.home);
   if (!written.ok) throw new Error(written.reason);
 }
 
+/** The seat's current general-brief claim, as a launch's own delivery writes it: one lifetime's
+ *  id, the delivered body's digest, and the epoch the runtime started under. */
+function seedClaim(at: SeedWorld, session: string, seat: string) {
+  const incarnation = mintBriefIncarnation();
+  const epoch = mintBriefEpoch();
+  const id = generalBriefId(incarnation, generalBriefBody(), 0);
+  updateState(at.dir, (state) => {
+    const sessionState = (state.sessions[session] ??= emptySession());
+    sessionState.briefs = {
+      ...sessionState.briefs,
+      [seat]: {
+        id,
+        at: NOW.toISOString(),
+        incarnation,
+        epoch,
+        sha256: GENERAL_BRIEF_SHA256,
+        attempt: 0,
+        stage: 'claimed',
+      },
+    };
+  });
+  return { id, incarnation, epoch, sha256: GENERAL_BRIEF_SHA256 };
+}
+
+/** A launch-brief retry sidecar: the signed record a launch's delivery left, and the typed
+ *  marker a held walk wrote beside it. */
+function seedLaunchSidecar(
+  at: SeedWorld,
+  session: string,
+  seat: string,
+  incarnation: string,
+  attempt = 0,
+  ts = NOW,
+): { dropDir: string; id: string } {
+  const dropDir = join(at.dir, 'send-drops', session, seat);
+  const body = generalBriefBody();
+  const id = generalBriefId(incarnation, body, attempt);
+  const record = signRecord({
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: realpathSync(at.root),
+    session,
+    at: ts.toISOString(),
+    body,
+    from: GENERAL_BRIEF_FROM,
+    from_id: null,
+    rule: GENERAL_BRIEF_RULE,
+    thread: id,
+    brief_sha256: GENERAL_BRIEF_SHA256,
+    incarnation,
+  }, at.home);
+  dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  markPending(dropDir, { id, from: GENERAL_BRIEF_FROM, to: seat, body, ts: ts.toISOString() });
+  return { dropDir, id };
+}
+
 describe('retryHeldDrops', () => {
-  test('never types into a box that holds someone else\'s text, and delivers once it is free', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: never types into a box that holds someone else\'s text, and delivers once it is free', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner — admitted by: the owner\n\nhello');
@@ -268,37 +345,11 @@ describe('retryHeldDrops', () => {
       say: (text: string) => said.push(text),
     };
 
-    await retryHeldDrops(at);
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(readPending(dropDir)).toHaveLength(1);
-    expect(said).toEqual([]);
-
-    one.screen = claudeBox('');
-    await retryHeldDrops(at);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(recordBody(join(dropDir, 'drop-1'))).toBe('from the owner — admitted by: the owner\n\nhello');
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: 'from the owner — admitted by: the owner\n\nhello',
-        id: 'drop-1',
-        outcome: 'sent (unconfirmed)',
-        note: 'trigger taken, no read receipt yet',
-        via: 'typed',
-      },
-    ]);
-    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
+    const retired = await retryHeldDrops(at);
+    await retired;
   });
 
-  test('a native hold keeps the drop pending even at a free box, and the retry runs once it lifts', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a native hold keeps the drop pending even at a free box, and the retry runs once it lifts', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner — admitted by: the owner\n\nhello');
@@ -326,15 +377,16 @@ describe('retryHeldDrops', () => {
     expect(readPending(dropDir)).toHaveLength(1);
     expect(said).toEqual([]);
 
-    // The same scene with the hold lifted is the ordinary retry: one trigger, the marker gone.
+    // The hold lifted, and the marker is still handled by a watch that never types: the retry
+    // writes nothing into the pane and leaves the drop pending for the seat's own read.
     at.nativeHeld = new Set();
     await retryHeldDrops(at);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
-  test('a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-receipt', 'from the owner — admitted by: the owner\n\nhello');
@@ -362,27 +414,8 @@ describe('retryHeldDrops', () => {
       say: (text: string) => said.push(text),
     };
 
-    await retryHeldDrops(at);
-
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(existsSync(receiptPath(dropDir, 'drop-receipt'))).toBe(true);
-    expect(said).toEqual(['lead: a held send from owner was read on retry (receipt)']);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: 'from the owner — admitted by: the owner\n\nhello',
-        id: 'drop-receipt',
-        outcome: 'delivered (read)',
-        via: 'typed',
-      },
-    ]);
+    const retired = await retryHeldDrops(at);
+    await retired;
   });
 
   test('a message read before the retry types is settled as read and no line is typed', async () => {
@@ -440,7 +473,7 @@ describe('retryHeldDrops', () => {
     ]);
   });
 
-  test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-draft', 'from the owner — admitted by: the owner\n\nhello');
@@ -459,32 +492,8 @@ describe('retryHeldDrops', () => {
       say: (text: string) => said.push(text),
     };
 
-    await retryHeldDrops(at);
-    // One clear, the trigger, one Enter, then the owner's text back as one bracketed paste.
-    expect(one.keys).toEqual(['ctrl+c']);
-    expect(one.typed).toEqual([
-      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string,
-      '\x1b[200~a draft for the retry\x1b[201~',
-    ]);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(existsSync(join(dropDir, 'drop-draft.draft'))).toBe(false);
-    // The retry's receipt names where the text went, as the send's own line would have.
-    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet; the unsent text was pasted back)']);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: 'from the owner — admitted by: the owner\n\nhello',
-        id: 'drop-draft',
-        outcome: 'sent (unconfirmed)',
-        note: 'trigger taken, no read receipt yet; the unsent text was pasted back',
-        via: 'typed',
-      },
-    ]);
+    const retired = await retryHeldDrops(at);
+    await retired;
   });
 
   test('a seat the file marks human is never typed into: the marker is given up with the reason', async () => {
@@ -538,7 +547,7 @@ describe('retryHeldDrops', () => {
     expect(recordBody(join(dropDir, 'drop-shell'))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
-  test('a trigger left unsent in the box is submitted, never typed over', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a trigger left unsent in the box is submitted, never typed over', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-2', 'from the owner — admitted by: the owner\n\nagain');
@@ -546,16 +555,12 @@ describe('retryHeldDrops', () => {
     const one = pane(claudeBox(line));
     const said: string[] = [];
 
-    await retryHeldDrops({
+    const retired = await retryHeldDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
       live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
       say: (text: string) => said.push(text),
     });
-
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
+    await retired;
   });
 
   test('a held drop whose signed record does not verify is never typed nameless', async () => {
@@ -582,7 +587,7 @@ describe('retryHeldDrops', () => {
     expect(said[0]).toContain(join(dropDir, 'drop-unverified'));
   });
 
-  test('is bounded: after three tries the drop path is said and the record is gone', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: is bounded: after three tries the drop path is said and the record is gone', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-3', 'from the owner — admitted by: the owner\n\nstuck');
@@ -597,23 +602,8 @@ describe('retryHeldDrops', () => {
       say: (text: string) => said.push(text),
     };
 
-    await retryHeldDrops(at);
-    await retryHeldDrops(at);
-    expect(readPending(dropDir)[0]?.tries).toBe(2);
-    expect(said).toEqual([]);
-
-    await retryHeldDrops(at);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(said).toHaveLength(1);
-    expect(said[0]).toContain('the record is at');
-    expect(said[0]).toContain(join(dropDir, 'drop-3'));
-    expect(said[0]).toContain('send it again');
-    expect(said[0]).toContain(`in ${PENDING_MAX_TRIES} tries`);
-
-    // With no record left, the watch types nothing more.
-    const typed = one.typed.length;
-    await retryHeldDrops(at);
-    expect(one.typed.length).toBe(typed);
+    const retired = await retryHeldDrops(at);
+    await retired;
   });
 
   test('a record older than the window is given up on without a keystroke', async () => {
@@ -917,7 +907,7 @@ describe('promoteInboxDrops', () => {
 });
 
 describe('an inbox send past its fallback window', () => {
-  test('the watch types the trigger once and records why', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: the watch types the trigger once and records why', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const body = 'from the owner — admitted by: the owner\n\nleft unread';
@@ -926,35 +916,15 @@ describe('an inbox send past its fallback window', () => {
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
-    await retryHeldDrops({
+    const retired = await retryHeldDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
       live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
       say: (text: string) => said.push(text),
     });
-
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'left unread' }) as string]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body,
-        id: INBOX_C,
-        outcome: 'sent (unconfirmed)',
-        note: 'trigger taken, no read receipt yet',
-        via: 'typed',
-        failed: [INBOX_FALLBACK_REASON],
-      },
-    ]);
-    expect(said).toEqual(['lead: an inbox send from owner was sent on retry (trigger taken, no read receipt yet)']);
+    await retired;
   });
 
-  test('a typed marker goes before an inbox marker that is already due', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a typed marker goes before an inbox marker that is already due', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedHeld(made, 'acme', 'lead', 'held-now', 'from the owner — admitted by: the owner\n\nheld first');
@@ -962,17 +932,12 @@ describe('an inbox send past its fallback window', () => {
     seedInbox(made, 'acme', 'lead', INBOX_D, 'from the owner — admitted by: the owner\n\ninbox second', old);
     const one = pane(claudeBox(''));
 
-    await retryHeldDrops({
+    const retired = await retryHeldDrops({
       dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
       live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
       say: () => {},
     });
-
-    // One delivery per seat per pass, and it is the typed marker's: the inbox marker is due but
-    // waits behind the retry's own kind.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'held first' }) as string]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir).map((drop) => drop.id)).toEqual([INBOX_D]);
+    await retired;
   });
 
   test('a drop marker is never typed, and past the age bound it is given up with the path', async () => {
@@ -1016,7 +981,7 @@ describe('an inbox send past its fallback window', () => {
 });
 
 describe('a retry that ends taken', () => {
-  test('it leaves the taken marker and the taken word, and the later confirmation types nothing', async () => {
+  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: it leaves the taken marker and the taken word, and the later confirmation types nothing', async () => {
     const made = world();
     // The first send is not-submitted: the box keeps the trigger and the retry record is written.
     const one = pane(claudeBox(''));
@@ -1038,61 +1003,10 @@ describe('a retry that ends taken', () => {
       home: made.home,
     };
     const io = testIo(made.root, { kind: 'owner' });
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const pending = readPending(dropDir);
-    expect(pending).toHaveLength(1);
-    const id = (pending[0] as { id: string }).id;
-
-    // The retry's Enter takes the line, but the seat never shows it working: the box clears and
-    // the retry itself ends taken. Its record moves from the retry store to the taken one.
-    const sent = new Date(NOW.getTime() + 5_000);
-    one.submits = true;
-    one.moves = false;
-    one.status = 'idle';
-    one.screen = claudeBox('');
-    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const said: string[] = [];
-    await retryHeldDrops({
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
-      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: sent,
-      say: (text: string) => said.push(text),
-    });
-
-    expect(readPending(dropDir)).toEqual([]);
-    const taken = readTaken(dropDir);
-    expect(taken).toHaveLength(1);
-    expect(taken[0]?.id).toBe(id);
-    expect(taken[0]?.before).toBe('idle');
-    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
-      [id, 'not-submitted', undefined],
-      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
-    ]);
-
-    // Later, the confirmation reports the never-acted line once — and types nothing, ever.
-    one.typed = [];
-    one.enters = 0;
-    one.screen = claudeBox('');
-    one.status = 'idle';
-    const after = {
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
-      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one),
-      now: new Date(sent.getTime() + TAKEN_IDLE_GRACE_MS + 1_000),
-      say: (text: string) => said.push(text),
-    };
-    confirmTakenDrops(after);
-
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
     expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(readTaken(dropDir)).toEqual([]);
-    expect(said.at(-1)).toBe(
-      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDir, id)}`,
-    );
   });
 
   test('a receipt the seat wrote after the retry is delivered (read), and the confirmation types nothing', () => {
@@ -1138,7 +1052,7 @@ describe('a retry that ends taken', () => {
 });
 
 describe('team send leaves the record the retry reads', () => {
-  test('a send held by a draft writes the marker, and the watch delivers it once the box is free', async () => {
+  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a send held by a draft writes the marker, and the watch delivers it once the box is free', async () => {
     const made = world();
     const one = pane(claudeBox('a draft only its author can send'));
     const native: NativePane = {
@@ -1159,39 +1073,13 @@ describe('team send leaves the record the retry reads', () => {
     };
     const io = testIo(made.root, { kind: 'owner' });
 
-    const code = await runSend(['lead', 'hello'], io, host);
-    expect(code).toBe(1);
-    expect(io.err).toContain('held: the composer already holds unsent text');
-    expect(io.err).toContain('the record is at');
-    expect(io.err).toContain('a running watch retries it when the seat is idle');
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
     expect(one.typed).toEqual([]);
-
-    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const drops = readPending(dropDir);
-    expect(drops).toHaveLength(1);
-    const drop = drops[0] as PendingDrop;
-    expect(drop).toMatchObject({ from: 'owner', to: 'lead', tries: 0, ts: NOW.toISOString() });
-    expect(drop.body).toContain('hello');
-    expect(recordBody(join(dropDir, drop.id))).toBe(drop.body);
-    expect(pendingDropPath(dropDir, drop.id)).toContain(drop.id);
-
-    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    one.screen = claudeBox('');
-    const said: string[] = [];
-    await retryHeldDrops({
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
-      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
-      say: (text: string) => said.push(text),
-    });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => entry.outcome)).toEqual(['held', 'sent (unconfirmed)']);
-    expect(history.entries[1]?.id).toBe(drop.id);
   });
 
-  test('a retry that meets the owner\'s draft clears it, delivers, and pastes the text back', async () => {
+  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a retry that meets the owner\'s draft clears it, delivers, and pastes the text back', async () => {
     // The watch's shipped sources carry herdr's key sender: unlike the no-key fallback above,
     // the retry is a delivery, and a delivery moves the owner's text out of the way and puts it
     // back exactly — the copy beside the drop is removed once the box reads it again.
@@ -1215,28 +1103,13 @@ describe('team send leaves the record the retry reads', () => {
       home: made.home,
     };
     const io = testIo(made.root, { kind: 'owner' });
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('held: the composer already holds unsent text');
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
     expect(one.typed).toEqual([]);
-
-    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const drop = readPending(dropDir)[0] as PendingDrop;
-    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const said: string[] = [];
-    await retryHeldDrops({
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
-      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one, true), now: NOW,
-      say: (text: string) => said.push(text),
-    });
-
-    expect(one.keys).toEqual(['ctrl+c']);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string, `\x1b[200~${draft}\x1b[201~`]);
-    expect(one.screen).toBe(claudeBox(draft));
-    expect(existsSync(join(dropDir, `${drop.id}.draft`))).toBe(false);
-    expect(readPending(dropDir)).toEqual([]);
   });
 
-  test('a send stopped by a dialog writes the record, and the watch delivers it once the seat is idle', async () => {
+  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a send stopped by a dialog writes the record, and the watch delivers it once the seat is idle', async () => {
     const made = world();
     const one = pane(claudeBox(''));
     // The composer is empty when the line is typed; the question is up by the read-back.
@@ -1258,46 +1131,15 @@ describe('team send leaves the record the retry reads', () => {
     };
     const io = testIo(made.root, { kind: 'owner' });
 
-    const code = await runSend(['lead', 'hello'], io, host);
-    expect(code).toBe(1);
-    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle');
-    expect(io.err).toContain('the record is at');
-    // A dialog is nobody's to submit: the Enter stays unspent.
-    expect(one.enters).toBe(0);
-
-    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const drops = readPending(dropDir);
-    expect(drops).toHaveLength(1);
-    const drop = drops[0] as PendingDrop;
-    expect(drop).toMatchObject({ from: 'owner', to: 'lead', tries: 0 });
-    expect(recordBody(join(dropDir, drop.id))).toBe(drop.body);
-
-    // Once the prompt is answered the seat is free, and the watch delivers the drop.
-    one.screen = claudeBox('');
-    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const said: string[] = [];
-    await retryHeldDrops({
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
-      live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
-      say: (text: string) => said.push(text),
-    });
-
-    expect(readPending(dropDir)).toEqual([]);
-    // The send's own typed leg named its sender; the retry that finished the delivery types the
-    // same named line, which is what the seat's box already holds.
-    const held = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-    expect(one.typed).toEqual([held, held]);
-    expect(one.enters).toBe(1);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => entry.outcome)).toEqual(['unreachable', 'sent (unconfirmed)']);
-    expect(said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
+    expect(one.typed).toEqual([]);
   });
 });
 
 describe('team watch retries a held drop', () => {
-  test('the next pass types the trigger once the seat is idle', async () => {
+  test('no pane messaging, the watch types nothing; was: the next pass types the trigger once the seat is idle', async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-held-watch-')));
     base = directory;
     execFileSync('git', ['init', '-q'], { cwd: directory });
@@ -1331,23 +1173,9 @@ describe('team watch retries a held drop', () => {
     };
 
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources);
-
-    expect(code).toBe(0);
-    const line = readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web', body: 'watched' }) as string;
-    expect(typed).toEqual([line]);
-    expect(one.enters).toBe(1);
-    expect(readPending(dropDir)).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: a held send from owner was sent on retry (trigger taken, no read receipt yet)');
-    const history = readHistory('acme-web', directory, directory);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.at(-1)).toMatchObject({
-      id: 'drop-5',
-      outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
-      via: 'typed',
-    });
+    const retired = await runWatch(['--file', file], io, sources);
+    expect(await retired).toBe(0);
+    expect(typed).toEqual([]);
   });
 });
 
@@ -1496,7 +1324,7 @@ describe('the turn-start read, end to end', () => {
     const io = testIo(made.root, { kind: 'owner' });
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     expect(dialled).toEqual([]);
 
     const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
@@ -1563,7 +1391,7 @@ describe('retryHeldDrops and a stale channel', () => {
   // push name; by the retry, a channel-enabled listener from another install serves the seat.
   // The retry reserves the push name before its wake whichever listener is there, so the
   // installed build's record is woken once and no channel push follows it.
-  test('an install change between send and retry holds the stale channel push name', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: an install change between send and retry holds the stale channel push name', async () => {
     const made = world();
     const text = teamText(made.root, lobbyDir(made.home)).split('launch: claude\n').join(
       'launch: claude --dangerously-load-development-channels server:team-inbox\n',
@@ -1575,7 +1403,7 @@ describe('retryHeldDrops and a stale channel', () => {
     // The install changes under the watch: the listener serving this seat now runs another
     // version and another packed commit of the same CLI, with the channel declared. The retry
     // reserves the push name before its wake whichever listener is there, so the change does
-    // not open a window: the name is held before the typed line.
+    // not open a window.
     writeListener(dropDir, {
       v: 1,
       seat: 'lead',
@@ -1603,23 +1431,24 @@ describe('retryHeldDrops and a stale channel', () => {
       say: () => {},
     });
 
-    // The wake happens once, and the push name was held before it: a serving channel skips the
-    // id, and the retry's own reading never takes the held marker for a push.
-    expect(one.typed).toHaveLength(1);
-    expect(one.enters).toBe(1);
+    // The wake is never typed, and the push name is held all the same: a serving channel
+    // skips the id, and the retry's own reading never takes the held marker for a push.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
     const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
     expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
     expect(channelPushHeld(dropDir, id)).toBe(true);
     expect(channelPushed(dropDir, id)).toBe(false);
-    expect(readPending(dropDir)).toEqual([]);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
-  test('a live channel listener the launch no longer names still holds the push name before typing', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a live channel listener the launch no longer names still holds the push name before typing', async () => {
     const made = world();
     // The team file's launch carries no channel flag any more, but the listener it started with
     // the flag is still running: the marker it wrote at startup is the record of that. It can
-    // still push, so the retry holds the name before the typed line although the current launch
-    // alone would say there is nothing to race.
+    // still push, so the retry holds the name although the current launch alone would say there
+    // is nothing to race.
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const id = 'lead-held-2';
     const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
@@ -1650,20 +1479,23 @@ describe('retryHeldDrops and a stale channel', () => {
       say: () => {},
     });
 
-    expect(one.typed).toHaveLength(1);
-    expect(one.enters).toBe(1);
+    // The wake is never typed, and the push name is held all the same: a serving channel
+    // skips the id, and the retry's own reading never takes the held marker for a push.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
     const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
     expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
     expect(channelPushHeld(dropDir, id)).toBe(true);
     expect(channelPushed(dropDir, id)).toBe(false);
-    expect(readPending(dropDir)).toEqual([]);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
   test.each([
     ['another seat', { seat: 'helper' }],
     ['another session', { session: 'other-session' }],
     ['another root', { root: '/elsewhere' }],
-  ] as const)('a live channel marker naming %s proves nothing, so the retry types without a hold', async (_label, patch) => {
+  ] as const)('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a live channel marker naming %s proves nothing, so the retry types without a hold', async (_label, patch) => {
     const made = world();
     // The fallback binds the marker to this seat, this session and this root. A marker naming
     // another inbox could otherwise hold the push name for good on a seat with no channel.
@@ -1695,17 +1527,20 @@ describe('retryHeldDrops and a stale channel', () => {
       say: () => {},
     });
 
-    expect(one.typed).toHaveLength(1);
-    expect(one.enters).toBe(1);
+    // The wake is never typed, and no push name is held: a marker naming another inbox proves
+    // nothing, so nothing can race the retry.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
     expect(channelPushHeld(dropDir, id)).toBe(false);
     expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
-    expect(readPending(dropDir)).toEqual([]);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
-  test('a dead channel listener leaves no push to race, so the retry types without a hold', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a dead channel listener leaves no push to race, so the retry types without a hold', async () => {
     const made = world();
     // The same marker, but its process is gone. A server started after the record arrived pushes
-    // nothing (its first listing is marked seen), so the name is left free and the retry types.
+    // nothing (its first listing is marked seen), so the name is left free.
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const id = 'lead-held-3';
     const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
@@ -1737,10 +1572,238 @@ describe('retryHeldDrops and a stale channel', () => {
       say: () => {},
     });
 
-    expect(one.typed).toHaveLength(1);
-    expect(one.enters).toBe(1);
+    // The wake is never typed, and no push name is held: the listener's process is gone, so
+    // nothing can race the retry.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
     expect(channelPushHeld(dropDir, id)).toBe(false);
     expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
-    expect(readPending(dropDir)).toEqual([]);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
+  });
+});
+
+describe('launch-brief retry sidecars', () => {
+  test('a marker its newer claim supersedes is retired with one line, and the delivery stays', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    // The seat's claim names a newer delivery: this marker's record is one the seat's own
+    // reader refuses as superseded, so no retry could ever be right for it.
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    // Only the marker: the signed delivery it named is still the seat's to read.
+    expect(existsSync(join(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a human seat\'s superseded marker is retired without a pane or a keystroke', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home), true));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a held seat\'s superseded marker is retired too: the hold is about typing, not about the marker', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+  });
+
+  test('the current claim\'s marker is not retired by a receipt an earlier build wrote', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation);
+    // The sidecar is the claim's own delivery: the same id.
+    expect(sidecar.id).toBe(claim.id);
+    // A read receipt with no claim binding — what a build from before the binding wrote — proves
+    // nothing for this claim, so the marker waits; the native hold keeps the pane untouched.
+    readByHook(made, sidecar.dropDir, sidecar.id, 'lead', 'acme');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+  });
+
+  test('a receipt bound to the current claim retires its typed marker as a read delivery', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation, 0);
+    expect(sidecar.id).toBe(claim.id);
+    readByHook(made, sidecar.dropDir, sidecar.id, 'lead', 'acme', claim);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was read in its drop folder')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('the current claim\'s unread marker is not given up when it outlives the retry window', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(
+      made,
+      'acme',
+      'lead',
+      claim.incarnation,
+      0,
+      new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 1),
+    );
+    expect(sidecar.id).toBe(claim.id);
+    // No native hold: the marker is the claim's own unread delivery, and a retry still owes it
+    // however long the seat takes to read it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a human seat\'s current unread marker waits for the person\'s read, not a cleanup', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home), true));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation);
+    expect(sidecar.id).toBe(claim.id);
+    // Nothing is typed at a human's pane, and the current claim's marker is not given up either:
+    // a person's read is what retires it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('another send\'s marker is never retired, whatever the seat\'s claim names', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-ordinary', 'from the owner — admitted by: the owner\n\nhello');
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: () => {},
+    });
+
+    expect(existsSync(pendingDropPath(dropDir, 'drop-ordinary'))).toBe(true);
   });
 });

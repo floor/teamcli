@@ -180,6 +180,18 @@ describe('the embedded general brief', () => {
 });
 
 describe('the delivery', () => {
+  test('a single-seat restart delivers to that seat alone, even with another seat behind', () => {
+    const report = deliverBriefForAttribution({
+      dir, root, session: 'acme', home, now: NOW, team,
+      state: readState(dir).sessions.acme ?? emptySession(),
+      attributed: ['lead'],
+      onlyAttributed: true,
+    });
+    // The same run without the restriction would also reach desk (behind this build's brief).
+    expect(report.deliveries.map((delivery) => delivery.seat)).toEqual(['lead']);
+    expect(claimOf('desk')).toBeNull();
+  });
+
   test('writes a signed drop for a CLI seat, records the claim, and the read leaves a bound receipt', async () => {
     const report = deliver({ seats: ['lead'] });
     const claim = claimOf('lead');
@@ -576,7 +588,8 @@ seats:
     expect(quiet.text).toBe(`Rule one.\n\n${QUIET_START_NOTE}\n`);
     expect(quiet.line).toBe(rulesLine('/x/rules/lead.md', rulesFileHash(quiet.text)));
     expect(quiet.line.length).toBe(plain.line.length);
-    expect(QUIET_START_NOTE).toContain('do not continue any earlier work and do not read drops');
+    expect(QUIET_START_NOTE).toContain('read your inbox, act on what is addressed to you');
+    expect(QUIET_START_NOTE).toContain('do not continue any earlier work unless a message asks for it');
   });
 
   test('the usage names --no-launch for the owner and the --client form', () => {
@@ -699,4 +712,21 @@ describe('team check', () => {
     expect(said).toContain('difference: lead: the general seat brief has been delivered and not read\n');
     expect(code).toBe(1);
   });
+});
+
+test('team restart briefs only the seat it restarts', () => {
+  const source = readFileSync(new URL('../src/commands/restart.ts', import.meta.url), 'utf8');
+  const call = source.slice(source.indexOf('deliverBriefForAttribution('), source.indexOf('deliverBriefForAttribution(') + 600);
+  expect(call).toContain('onlyAttributed: true');
+  expect(call).not.toContain('broadcast: true');
+});
+
+test('team register briefs only the seat it registers, on both its paths', () => {
+  const source = readFileSync(new URL('../src/commands/register.ts', import.meta.url), 'utf8');
+  const calls = source.split('deliverBriefForAttribution(').slice(1).map((rest) => rest.slice(0, 600));
+  expect(calls.length).toBe(2);
+  for (const call of calls) {
+    expect(call).toContain('onlyAttributed: true');
+    expect(call).not.toContain('broadcast: true');
+  }
 });

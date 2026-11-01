@@ -14,6 +14,8 @@ const TEAM_FILE = fileURLToPath(new URL('../../.github/team.yaml', import.meta.u
 /** The rules as `check` prints them: each pattern's source, byte for byte. */
 const PANE = 'forbidden pattern \\bw[0-9A-Z]+:p[0-9]+\\b';
 const SESSION = 'forbidden pattern \\bfloor-[0-9a-f]{2}\\b';
+/** A session-shaped value that the declared pattern refuses, built from parts like the pattern. */
+const NAMED = ['floor', '-', '1a'].join('');
 
 /** A signature of the file's coordinator seat, which passes the signature rule. */
 const SIGNATURE = 'Agent: Claude Opus 5.5 · coordinator';
@@ -39,7 +41,7 @@ ${SIGNATURE}`);
 
   hash.session = repo.commit(`feat: a session name in the message
 
-The run came from floor-3a.
+The run came from ${NAMED}.
 
 ${SIGNATURE}`);
 
@@ -146,7 +148,7 @@ describe('an internal session name in this repository', () => {
       stdout: [
         'COMMIT      STATUS   DETAIL',
         `${hash.session.slice(0, 10)}  refused  feat: a session name in the message`,
-        `difference: commit ${hash.session.slice(0, 10)} "feat: a session name in the message", line 3: ${SESSION} — "The run came from floor-3a."`,
+        `difference: commit ${hash.session.slice(0, 10)} "feat: a session name in the message", line 3: ${SESSION} — "The run came from ${NAMED}."`,
         '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)',
         '  who: any seat',
         'team commits check: 1 commit checked: 1 commit refused',
@@ -157,7 +159,7 @@ describe('an internal session name in this repository', () => {
   });
 
   test('is refused in a pull request body beside a passing commit', async () => {
-    writeFileSync(join(repo.path, 'body.md'), `What this does.\n\nThe run came from floor-3a.\n\n${PR_SIGNATURE}\n`);
+    writeFileSync(join(repo.path, 'body.md'), `What this does.\n\nThe run came from ${NAMED}.\n\n${PR_SIGNATURE}\n`);
     const passing = await run([hash.misses, '--since', hash.old, '--file', TEAM_FILE]);
     expect(passing).toEqual({
       code: 0,
@@ -173,7 +175,7 @@ describe('an internal session name in this repository', () => {
     expect(result).toEqual({
       code: 1,
       stdout: [
-        `difference: pull request body, line 3: ${SESSION} — "The run came from floor-3a."`,
+        `difference: pull request body, line 3: ${SESSION} — "The run came from ${NAMED}."`,
         '  repair: edit the pull request body so the line no longer matches (its author can edit it on the pull request)',
         '  who: any seat',
         'team pr check: 1 pull request body checked: the pull request body refused',

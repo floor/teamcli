@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The channel leg as the sender and the watch see it: a Claude Code seat whose launch carries the
 // development channel, whose own inbox server is listening with `channel` declared, takes the
 // written record as a push. The server's `<id>.channel-push.json` marker is what ends the walk
@@ -279,7 +280,7 @@ describe('the channel leg', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms)\n`);
+    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
     // Nothing was typed and no pane was read: the push is the delivery.
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
@@ -304,6 +305,7 @@ describe('the channel leg', () => {
       outcome: 'sent (channel)',
       ms: 0,
       via: 'channel',
+      failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
   });
 
@@ -359,7 +361,7 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (mcp-inbox, 0 ms); woken through its event adapter\n`);
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);
@@ -380,13 +382,13 @@ describe('the channel leg', () => {
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'mcp-inbox',
-      failed: ['channel: no push receipt within 0 ms'],
+      failed: [`typed: ${NO_PANE_MESSAGING}`, 'channel: no push receipt within 0 ms'],
     });
   });
 });
 
 describe('the channel redelivery', () => {
-  test('a push with no ack waits out the window, then one typed redelivery ends it for good', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a push with no ack waits out the window, then one typed redelivery ends it for good', async () => {
     const made = channelWorld();
     const dir = seedChannel(made, REDELIVER_ID, BODY);
     const box = pane(claudeBox(''));
@@ -405,31 +407,33 @@ describe('the channel redelivery', () => {
     const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
     const scene = sceneOf(made, box, due, said);
     await retryHeldDrops(scene);
-    expect(box.typed).toHaveLength(1);
-    expect(box.typed[0]).toContain(TRIGGER);
-    expect(box.enters).toBe(1);
-    expect(readPending(dir)).toEqual([]);
-    expect(entries(made)).toEqual([
+    // The redelivery is recorded once, and it types nothing: no socket wake is configured and
+    // the retry never writes into a pane. The marker carries the reason and there is no history
+    // line — the send is neither confirmed nor given up on.
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([
       {
-        ts: due.toISOString(),
+        id: REDELIVER_ID,
         from: 'owner',
         to: 'lead',
         body: BODY,
-        id: REDELIVER_ID,
-        outcome: 'sent (unconfirmed)',
-        note: TRIGGER_TAKEN,
-        via: 'typed',
-        failed: [CHANNEL_UNCONFIRMED_REASON],
+        ts: NOW.toISOString(),
+        tries: 0,
+        leg: 'channel',
+        thread: REDELIVER_ID,
+        redelivered: CHANNEL_UNCONFIRMED,
       },
     ]);
-    expect(said).toEqual([`lead: a channel send from owner was sent on retry (${TRIGGER_TAKEN})`]);
+    expect(entries(made)).toEqual([]);
+    expect(said).toEqual([]);
 
     // The one redelivery is spent: a later pass types nothing, even though the send was never
     // confirmed as read.
     const later = sceneOf(made, box, new Date(due.getTime() + CHANNEL_CONFIRM_MS), said);
     await retryHeldDrops(later);
-    expect(box.typed).toHaveLength(1);
-    expect(box.enters).toBe(1);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
   });
 
   test('a redelivery the box cannot take stays marked once, and a later ack settles it without typing', async () => {
@@ -636,7 +640,7 @@ describe('the channel redelivery', () => {
     expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
   });
 
-  test('a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
     const made = channelWorld();
     const dir = seedChannel(made, SOCKET_ID, BODY);
     const box = pane(claudeBox(''));
@@ -648,20 +652,28 @@ describe('the channel redelivery', () => {
 
     await retryHeldDrops(scene);
 
-    expect(box.typed).toHaveLength(1);
-    expect(box.typed[0]).toContain(TRIGGER);
-    expect(box.enters).toBe(1);
-    expect(readPending(dir)).toEqual([]);
-    expect(said).toEqual([
-      `lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept), typing the trigger`,
-      `lead: a channel send from owner was sent on retry (${TRIGGER_TAKEN})`,
+    // The socket's refusal is the one word the watch gives, and the fallback types nothing:
+    // the box is untouched, the marker keeps the reason the channel is unconfirmed, and no
+    // history line claims either delivery or a retry.
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([
+      {
+        id: SOCKET_ID,
+        from: 'owner',
+        to: 'lead',
+        body: BODY,
+        ts: NOW.toISOString(),
+        tries: 0,
+        leg: 'channel',
+        thread: SOCKET_ID,
+        redelivered: CHANNEL_UNCONFIRMED,
+      },
     ]);
-    expect(lastEntry(made)).toMatchObject({
-      id: SOCKET_ID,
-      outcome: 'sent (unconfirmed)',
-      via: 'typed',
-      failed: [CHANNEL_UNCONFIRMED_REASON],
-    });
+    expect(entries(made)).toEqual([]);
+    expect(said).toEqual([
+      'lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept); the message waits in the bus inbox',
+    ]);
   });
 });
 

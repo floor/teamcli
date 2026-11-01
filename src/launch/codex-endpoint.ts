@@ -10,7 +10,11 @@
 // The endpoint is binding-scoped: the path carries the seat's current `presence_binding`, and the
 // record repeats the binding. A predecessor incarnation's server therefore can never serve a
 // successor's TUI or presence source, and a consumer that finds the two bindings disagree treats
-// the endpoint as unknown rather than reusing it (`daemon/presence/endpoint-record.ts`).
+// the endpoint as unknown rather than reusing it (`daemon/presence/endpoint-record.ts`). The
+// record also names the configuration the server was started with. The measurement recorded at
+// `codexEndpointConfig` is why: an attached TUI runs its turns under the app-server's
+// configuration, so a live endpoint is reused only when it was started with the configuration
+// this launch needs — another line's server is stopped and replaced, never attached to.
 //
 // The launch owns the process: it starts it detached, records the pid, and stops the previous
 // pid before starting a new one. Stopping is never done on a bare pid: the process at that pid
@@ -25,9 +29,10 @@
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
-import { lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
-import { isPresenceBinding } from '../daemon/presence/contract.ts';
+import { sessionList } from '../herdr.ts';
+import { lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
+import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import {
   codexEndpointPath,
   readCodexEndpointRecord,
@@ -149,9 +154,22 @@ function isPlainDir(path: string): boolean {
   }
 }
 
-function isSocketFile(path: string): boolean {
+/** The endpoint's socket is there: a socket at the path, or (measured on codex-cli 0.161.0, whose
+ *  `app-server --listen unix://PATH` hands the listen to its app-server daemon) a link this user
+ *  owns at the path, resolving to a socket this user owns in a folder only this user can enter. */
+export function isSocketFile(path: string, uid: number | undefined = process.getuid?.()): boolean {
   try {
-    return lstatSync(path).isSocket();
+    const at = lstatSync(path);
+    if (at.isSocket()) return true;
+    if (!at.isSymbolicLink() || (uid !== undefined && at.uid !== uid)) return false;
+    // One link, read rather than resolved: a resolver that opens the target refuses a socket.
+    const named = readlinkSync(path);
+    const target = isAbsolute(named) ? named : join(dirname(path), named);
+    const socket = statSync(target);
+    const folder = statSync(dirname(target));
+    if (!socket.isSocket()) return false;
+    if (uid !== undefined && (socket.uid !== uid || folder.uid !== uid)) return false;
+    return (folder.mode & 0o077) === 0;
   } catch {
     return false;
   }
@@ -194,7 +212,9 @@ function socketsLeftAlone(
 
 export type CodexEndpointDeps = {
   /** Starts `codex app-server --listen <url>` detached; null when the process did not start. */
-  spawn?: (input: { url: string; cwd?: string }) => { pid: number } | null;
+  spawn?: (input: { url: string; cwd?: string; config?: string[]; env?: Record<string, string> }) => { pid: number } | null;
+  /** The herdr hook environment for the seat's pane, or null when herdr cannot name it. */
+  herdrEnv?: (session: string, pane: string) => Record<string, string> | null;
   alive?: (pid: number) => boolean;
   /** The proof a signal requires: the pid's full command line, or null when its executable name
    *  is not `codex`. Injected in scenes so no test reads another process. */
@@ -211,10 +231,27 @@ export type CodexEndpointDeps = {
   waitMs?: number;
 };
 
-function spawnAppServer(input: { url: string; cwd?: string }): { pid: number } | null {
-  const child = nodeSpawn('codex', ['app-server', '--listen', input.url], {
+/**
+ * The environment herdr's Codex hook needs to report the seat's turns. Measured: with the TUI
+ * attached by `--remote`, Codex runs its hooks in the app-server process, and herdr's hook
+ * (`~/.codex/herdr-agent-state.sh`, integration 6) exits unless `HERDR_ENV=1`,
+ * `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` are set; an endpoint started outside the pane left the
+ * seat reading `working` after its first turn, so restart refused it. The values are herdr's own
+ * listing of the session's socket and the pane the launch placed the seat in.
+ */
+export function herdrHookEnv(session: string, pane: string): Record<string, string> | null {
+  const listed = sessionList()?.find((one) => one.name === session);
+  if (listed === undefined || typeof listed.socketPath !== 'string' || listed.socketPath === '') return null;
+  return { HERDR_ENV: '1', HERDR_SOCKET_PATH: listed.socketPath, HERDR_PANE_ID: pane };
+}
+
+function spawnAppServer(input: { url: string; cwd?: string; config?: string[]; env?: Record<string, string> }): { pid: number } | null {
+  // The seat's configuration follows the listen words, so the ownership proof's exact
+  // `app-server --listen <url>` still reads from the command line.
+  const child = nodeSpawn('codex', ['app-server', '--listen', input.url, ...(input.config ?? [])], {
     detached: true,
     stdio: 'ignore',
+    ...(input.env === undefined ? {} : { env: { ...process.env, ...input.env } }),
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
   });
   // A spawn failure arrives as an event, never as a thrown error from `spawn`; without a listener
@@ -248,10 +285,22 @@ function provenOwner(
   return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
 }
 
+/** Whether the configuration recorded beside an endpoint is the one this launch needs. A record
+ *  that names none — one an older build wrote — is never this launch's, so its endpoint is
+ *  stopped rather than reused. The words are compared as the launch passed them, order and
+ *  quoting included, because that is what the server was started with. */
+function sameEndpointConfig(recorded: readonly string[] | undefined, needed: readonly string[]): boolean {
+  if (recorded === undefined || recorded.length !== needed.length) return false;
+  return recorded.every((word, at) => word === needed[at]);
+}
+
 /** Stops the process a record names, only after proving it is the app-server the launch started:
  *  a live `codex` command line carrying the exact `app-server --listen <url>` of this record, a
- *  plain (non-symlink) seat folder, and a socket file (not a symlink) at the owned path. An
- *  unprovable pid is never signalled; the socket file is removed only when it is that socket. */
+ *  plain (non-symlink) seat folder, and — before anything is removed — a socket file (not a
+ *  symlink) at the owned path. An unprovable pid is never signalled. A missing socket file is no
+ *  proof the server is gone: an app-server that lost or could not create its socket still owns
+ *  the pid, so a live pid is proved and stopped by pid whether or not the socket is there, and
+ *  the socket file is removed only when it is that socket. */
 export function stopRecordedCodexEndpoint(
   input: {
     dir: string;
@@ -276,10 +325,6 @@ export function stopRecordedCodexEndpoint(
   if (!plainDir(dirname(path))) {
     return { stopped: false, why: 'the endpoint folder is not a plain directory; nothing was removed' };
   }
-  if (!socket(path)) {
-    // No socket file: there is no endpoint at the owned path to stop, and nothing else is touched.
-    return { stopped: true };
-  }
   const pid = input.record.pid;
   if (alive(pid)) {
     if (!provenOwner(input.record, { alive, commandOf, startOf })) {
@@ -289,7 +334,8 @@ export function stopRecordedCodexEndpoint(
     }
     terminate(pid);
   }
-  drop(path);
+  // Only the socket this record owns is removed; a path that holds something else is left as it is.
+  if (socket(path)) drop(path);
   return { stopped: true };
 }
 
@@ -297,7 +343,7 @@ export function stopRecordedCodexEndpoint(
  *  provably this launch's. The record is cleared only after the stop succeeded, so an unprovable
  *  predecessor stays visible rather than being erased on a refusal. */
 export function stopSeatCodexEndpoint(
-  input: { dir: string; session: string; seat: string },
+  input: { dir: string; session: string; seat: string; expectedUrl?: string },
   deps: CodexEndpointDeps = {},
 ): EndpointStopRead {
   let seatState;
@@ -306,8 +352,22 @@ export function stopSeatCodexEndpoint(
   } catch {
     return { stopped: false, why: 'the team state is unreadable; nothing was stopped' };
   }
-  const record = readRecordedCodexEndpoint(seatState?.codex_endpoint, seatState?.presence_binding);
-  if (record === null) return { stopped: false, why: 'the seat records no endpoint for its current binding' };
+  const value = seatState?.codex_endpoint;
+  const record = readRecordedCodexEndpoint(value, seatState?.presence_binding);
+  if (record === null) {
+    // A record that is present but unreadable is unproven, not absent: the process it names may
+    // be alive, so the stop says why it cannot act instead of reading as "nothing recorded".
+    if (value !== undefined && value !== null && readCodexEndpointRecord(value) === null) {
+      return {
+        stopped: false,
+        why: 'the seat’s endpoint record cannot be read; the process it names cannot be proved, so it was not stopped',
+      };
+    }
+    return { stopped: false, why: 'the seat records no endpoint for its current binding' };
+  }
+  if (input.expectedUrl !== undefined && record.url !== input.expectedUrl) {
+    return { stopped: false, why: 'the recorded endpoint is not the one this launch started; nothing was stopped' };
+  }
   const stopped = stopRecordedCodexEndpoint({ ...input, record }, deps);
   if (!stopped.stopped) return stopped;
   updateState(input.dir, (file) => {
@@ -320,6 +380,26 @@ export function stopSeatCodexEndpoint(
   return stopped;
 }
 
+/** Whether the seat records a managed endpoint it must account for: the strict read a stop acts
+ *  on for a record this build can read, and true for a record that is present but unreadable —
+ *  the same unproven state a stop reports, never "no record" — so the stop is attempted and says
+ *  why. A seat that records no value — every seat whose launch managed no endpoint — has nothing
+ *  to stop, and no notice is owed for it. A state that cannot be read answers true, so the stop
+ *  itself says why nothing was stopped. */
+export function seatRecordsCodexEndpoint(input: { dir: string; session: string; seat: string }): boolean {
+  let seatState;
+  try {
+    seatState = readState(input.dir).sessions[input.session]?.seats[input.seat];
+  } catch {
+    return true;
+  }
+  const value = seatState?.codex_endpoint;
+  if (value === undefined || value === null) return false;
+  // A record the shape reader cannot use is present all the same: unproven, not absent.
+  if (readCodexEndpointRecord(value) === null) return true;
+  return readRecordedCodexEndpoint(value, seatState?.presence_binding) !== null;
+}
+
 /** Starts (or reuses) the seat's managed app-server and records it on the seat state under the
  *  state lock, re-checking the binding the path was built from. The caller attaches the TUI only
  *  when this answers `up`; a `started` server the caller does not attach is its to stop. */
@@ -329,6 +409,10 @@ export async function ensureCodexEndpoint(
     session: string;
     seat: string;
     cwd?: string;
+    /** `-c key=value` words from the seat's line (`codexEndpointConfig`). */
+    config?: string[];
+    /** The herdr pane the seat runs in, for the hook environment. */
+    pane?: string;
     deps?: CodexEndpointDeps;
   },
 ): Promise<ManagedEndpointRead> {
@@ -364,10 +448,16 @@ export async function ensureCodexEndpoint(
   // A predecessor incarnation's record is read by shape (its binding is not the current one, by
   // definition); consumers read the current binding's record through the strict door.
   const prior = readCodexEndpointRecord(seatState?.codex_endpoint);
-  // The same incarnation, still ours and still listening: reuse it rather than start a second
-  // server on the same path. The proof is the same one a stop requires.
+  const config = input.config ?? [];
+  // The same incarnation, still ours, still listening, and started with this launch's
+  // configuration: reuse it rather than start a second server on the same path. The process
+  // proof is the same one a stop requires, and the config is the second half: the endpoint's
+  // configuration governs the attached TUI's turns (`codexEndpointConfig`), so a server started
+  // for another line would leave this seat without its own `-c` pairs and permissions. A record
+  // that names no config is never reused; the endpoint is stopped and a fresh one started.
   if (prior !== null && prior.binding === binding && prior.url === socketPath.url
-    && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })) {
+    && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })
+    && sameEndpointConfig(prior.config, config)) {
     return { kind: 'up', url: socketPath.url, started: false };
   }
 
@@ -411,7 +501,9 @@ export async function ensureCodexEndpoint(
   if (leftAlone.length > 0) {
     notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
   }
-  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }) });
+  const hookEnv = input.pane === undefined ? null : (deps.herdrEnv ?? herdrHookEnv)(input.session, input.pane);
+  if (input.pane !== undefined && hookEnv === null) notes.push('herdr did not name the session\'s socket, so its turn hooks cannot report this seat');
+  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), config, ...(hookEnv === null ? {} : { env: hookEnv }) });
   if (started === null) {
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
@@ -438,6 +530,9 @@ export async function ensureCodexEndpoint(
         binding,
         pid: started.pid,
         started_at: now().toISOString(),
+        // What this server was started with, so a later launch can tell whether this very
+        // incarnation can serve its line or must be replaced.
+        config,
       };
       return true;
     },
@@ -456,4 +551,74 @@ export async function ensureCodexEndpoint(
     started: true,
     ...(notes.length === 0 ? {} : { notes }),
   };
+}
+
+/**
+ * The launch side of a managed Codex seat: this launch is a new incarnation, so it mints and
+ * records the seat's presence binding first, then ensures the endpoint under it. A Claude seat
+ * gets its binding from the settings file its launch installs; a Codex seat has no such file,
+ * and without this it never held a binding, so no managed endpoint could ever start for it and
+ * its thread stayed out of the native queue's reach. A state that cannot be written mints
+ * nothing, and the launch fails managed: the binding the seat still records belongs to the
+ * predecessor incarnation, and reusing the endpoint under it would attach this launch's seat to
+ * a server started for the old pane's hook environment. The seat launches unmanaged instead,
+ * with the line saying why.
+ */
+export async function launchCodexEndpoint(
+  input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string; deps?: CodexEndpointDeps },
+): Promise<ManagedEndpointRead> {
+  if (isPresenceSeatName(input.seat)) {
+    try {
+      const binding = mintPresenceBinding();
+      updateState(input.dir, (state) => {
+        const one = state.sessions[input.session];
+        const current = one?.seats[input.seat];
+        if (current !== undefined) current.presence_binding = binding;
+      });
+    } catch {
+      return {
+        kind: 'unmanaged',
+        why: "the seat's fresh presence binding could not be recorded; the endpoint under an older binding is not reused",
+      };
+    }
+  }
+  return ensureCodexEndpoint(input);
+}
+
+/** The seat a recorded managed endpoint serves, read from the process at `pid`; null unless the
+ *  full ownership proof holds. With the TUI attached by `--remote`, a Codex seat's tools run as
+ *  children of its app-server, which the launch started outside the seat's pane, so the walk up
+ *  from a seat's own `team` call meets that app-server and no herdr server. The app-server is
+ *  placed as its seat only when its command line is `app-server --listen <url>` for a seat's
+ *  endpoint folder, the team state records that very url and pid for the seat's current presence
+ *  binding, and the process started in the window the record was written in (the proof a stop
+ *  needs). The socket's folder is the user's own 0700 run folder. */
+export function seatOfManagedEndpoint(
+  pid: number,
+  deps: Pick<CodexEndpointDeps, 'alive' | 'commandOf' | 'startOf'> = {},
+): { dir: string; session: string; seat: string; pane?: string } | null {
+  const commandOf = deps.commandOf ?? codexCommandOf;
+  const command = commandOf(pid);
+  if (command === null) return null;
+  const listen = /(?:^|\s)app-server --listen unix:\/\/(\/\S+)\/run\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\.sock(?:\s|$)/.exec(command);
+  if (listen === null) return null;
+  const [, dir, folder, seat, binding] = listen as unknown as [string, string, string, string, string];
+  if (!isPresenceBinding(binding) || !isPresenceSeatName(seat)) return null;
+  let state;
+  try {
+    state = readState(dir);
+  } catch {
+    return null;
+  }
+  for (const [session, one] of Object.entries(state.sessions)) {
+    if (presenceSessionFolder(session) !== folder) continue;
+    const seatState = one.seats[seat];
+    if (seatState?.presence_binding !== binding) continue;
+    const record = readCodexEndpointRecord(seatState.codex_endpoint);
+    const socket = codexEndpointSocket(dir, session, seat, binding);
+    if (record === null || socket === null || record.pid !== pid || record.url !== socket.url || record.binding !== binding) continue;
+    if (!provenOwner(record, { alive: deps.alive ?? pidAlive, commandOf, startOf: deps.startOf ?? processStartOf })) continue;
+    return { dir, session, seat, ...(typeof seatState.pane === 'string' ? { pane: seatState.pane } : {}) };
+  }
+  return null;
 }

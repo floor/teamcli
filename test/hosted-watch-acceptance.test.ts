@@ -28,6 +28,8 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { readRecord, verifyRecord, type SignedRecord } from '../src/send/record.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Live } from '../src/status/compare.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -248,7 +250,9 @@ function workerRuntime(): { pump: () => Promise<void>; claims: string[]; wake: (
   return { pump, claims, wake };
 }
 
-/** The worker's session accepts cross-session frames and exposes a socket for its pane. */
+/** The worker's session accepts cross-session frames and exposes a socket for its pane. The
+ *  registry record names that socket, as a launched seat's record does: the delivery class
+ *  proves a dialable route only from a recorded address. */
 function directRoute(): void {
   const settings = cliHookSettingsPath(join(root, '.agents'), SESSION, SEAT);
   if (settings === null) throw new Error(`${SEAT}: no settings path for the fixture`);
@@ -256,7 +260,21 @@ function directRoute(): void {
   writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
   const past = new Date(Date.now() - 60_000);
   utimesSync(settings, past, past);
-  writeFileSync(join(sockets, '222.sock'), '');
+  const socket = join(sockets, '222.sock');
+  writeFileSync(socket, '');
+  registerAgent(home, {
+    name: SEAT,
+    signing: { model: 'Test', version: '1', role: 'worker' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(root), seat: SEAT, session: SESSION, pane: PANE, address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
 }
 
 /** The push the hosted pass makes, wired to the REAL production direct sender and the watch's

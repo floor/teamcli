@@ -4,6 +4,8 @@
 // have written. A caller that reports what it found is told absent from invalid; nothing here
 // reads a process, a socket or a CLI home — the reader is pure, and so are these scenes.
 import { describe, expect, test } from 'bun:test';
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   codexEndpointPath,
   inspectRecordedCodexEndpoint,
@@ -15,7 +17,9 @@ import {
 const BINDING = 'prs_0123456789ab';
 const OTHER = 'prs_fedcba987654';
 const T0 = '2026-10-01T10:00:00.000Z';
-const URL = 'unix:///private/tmp/team/presence/teamcli/seat/builder-4/app.sock';
+// The record's URL is plain data to the pure reader; the fixture folder is this machine's own.
+const TEMP = realpathSync(tmpdir());
+const URL = `unix://${TEMP}/team/presence/teamcli/seat/builder-4/app.sock`;
 
 function record(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return { url: URL, binding: BINDING, pid: 4242, started_at: T0, ...extra };
@@ -32,7 +36,22 @@ describe('the endpoint record reader', () => {
   test('reads a record exactly as a managed launch writes it', () => {
     const one = ok(record());
     expect(one).toEqual({ url: URL, binding: BINDING, pid: 4242, started_at: T0 });
-    expect(codexEndpointPath(one)).toBe('/private/tmp/team/presence/teamcli/seat/builder-4/app.sock');
+    expect(codexEndpointPath(one)).toBe(`${TEMP}/team/presence/teamcli/seat/builder-4/app.sock`);
+  });
+
+  test('reads the start config a managed launch recorded, word for word', () => {
+    const config = ['-c', 'mcp_servers.team_inbox.command="team"', '-c', 'sandbox_mode="workspace-write"'];
+    expect(ok(record({ config }))).toEqual({ url: URL, binding: BINDING, pid: 4242, started_at: T0, config });
+    // An empty config is a server started with none, and reads back as one.
+    expect(ok(record({ config: [] })).config).toEqual([]);
+    // A record an older build wrote names none; it is still a record, and a stop can act on it.
+    expect(ok(record()).config).toBeUndefined();
+  });
+
+  test('a config a launch could not have written reads as none, and the record stays stoppable', () => {
+    for (const config of ['-c x', 42, { '-c': 'x' }, ['-c', 42], [null]]) {
+      expect(ok(record({ config }))).toEqual({ url: URL, binding: BINDING, pid: 4242, started_at: T0 });
+    }
   });
 
   test('tells an absent record from an invalid one', () => {
@@ -55,9 +74,9 @@ describe('the endpoint record reader', () => {
       'ws://127.0.0.1:4242',
       'unix://relative/app.sock',
       'unix://',
-      '/private/tmp/app.sock',
-      'unix:///private/tmp/a\u0000b.sock',
-      'unix:///private/tmp/a\nb.sock',
+      `${TEMP}/app.sock`,
+      `unix://${TEMP}/a\u0000b.sock`,
+      `unix://${TEMP}/a\nb.sock`,
     ]) {
       const read = inspectRecordedCodexEndpoint(record({ url }), BINDING);
       expect(read.kind).toBe('invalid');

@@ -5,7 +5,11 @@
 // not on, a line that already names its own `--remote` or `--no-daemon`, and a launcher whose
 // own binary is not the Codex CLI (its endpoint is not ours to bind or to speak for).
 import { describe, expect, test } from 'bun:test';
-import { upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
+import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readTeamConfig } from '../../src/file/team-config.ts';
+import { codexEndpointConfig, remoteCodexCommand, upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
 
 const REPAIR = '`team remove coder --keep` then `team add coder`';
 const STATE_DIR = '/tmp/acme/.agents';
@@ -74,6 +78,111 @@ describe('the managed Codex endpoint intent', () => {
   test('a wrapper’s endpoint is not ours to bind', () => {
     const launch = launchOp(upPlan(input({}, { launch: './tools/codex-wrapper --fast' })));
     expect(launch.do).not.toHaveProperty('codexEndpoint');
+  });
+
+  test('a shell running a pass-through script before codex is still a Codex launch, and is marked', () => {
+    // `zsh ~/tools/as-floor.sh codex …` execs codex with the remaining words, so the
+    // `--remote` the launch appends reaches codex and the seat's thread loads on its endpoint.
+    const launch = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex -m gpt' })));
+    expect(launch.do).toHaveProperty('codexEndpoint');
+    // A script that names --remote itself is still left alone.
+    const own = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex --remote unix:///tmp/own.sock' })));
+    expect(own.do).not.toHaveProperty('codexEndpoint');
+    // A script naming another program is not a Codex launch.
+    const other = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh ./tools/codex-wrapper' })));
+    expect(other.do).not.toHaveProperty('codexEndpoint');
+  });
+
+  test('a team read from the registry resolves the policy from the team, not a file it has no file at', () => {
+    // A registry team has no team.yaml under its checkout. Resolving the seat's codex-daemon
+    // policy through that path read as unresolved (off), so no endpoint was ever planned for it.
+    const base = mkdtempSync(join(tmpdir(), 'codex-plan-'));
+    const root = join(base, 'acme');
+    const home = join(base, 'home');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    copyFileSync(new URL('../fixtures/example.yaml', import.meta.url), join(root, 'team.yaml'));
+    const loaded = readTeamConfig(root, { home, file: join(root, 'team.yaml') });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    const over = { root, home, teamFile: join(root, '.agents', 'team.yaml') };
+    const seatOver = { name: 'codex-acme', codexDaemon: undefined };
+    expect(launchOp(upPlan(input(over, seatOver))).do).not.toHaveProperty('codexEndpoint');
+    expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
+  });
+
+  test('a resume carrying permission overrides is marked for the configured endpoint', () => {
+    const launch = launchOp(upPlan(input({}, { launch: 'codex resume 01a1 -a never -s danger-full-access' })));
+    expect(launch.do).toHaveProperty('codexEndpoint');
+    const fresh = launchOp(upPlan(input({}, { launch: 'codex -a never -s danger-full-access' })));
+    expect(fresh.do).toHaveProperty('codexEndpoint');
+  });
+
+  test('remoteCodexCommand keeps the selected thread and sheds only remote permission overrides', () => {
+    expect(remoteCodexCommand('AGENT_UNATTENDED=1 codex resume 01a1 -m gpt -a never -s danger-full-access'))
+      .toBe('AGENT_UNATTENDED=1 codex resume 01a1 -m gpt');
+    expect(remoteCodexCommand('codex resume --last --sandbox=workspace-write')).toBe('codex resume --last');
+    expect(remoteCodexCommand('codex resume 01a1 --dangerously-bypass-approvals-and-sandbox'))
+      .toBe('codex resume 01a1');
+    // No overrides: the thread is kept. A fresh line is unchanged.
+    expect(remoteCodexCommand('codex resume 01a1 -m gpt')).toBe('codex resume 01a1 -m gpt');
+    expect(remoteCodexCommand('codex -a never -s danger-full-access')).toBe('codex -a never -s danger-full-access');
+    // A quoted argument that holds the words is not touched.
+    expect(remoteCodexCommand(`codex -s danger-full-access 'Read /resume -s y.md'`))
+      .toBe(`codex -s danger-full-access 'Read /resume -s y.md'`);
+  });
+
+  test('permission config keys move to the endpoint while other config and prompt words stay', () => {
+    const line = `codex resume 01a1 --ask-for-approval never --sandbox danger-full-access -c 'approval_policy="never"' --config='sandbox_mode="danger-full-access"' -c 'sandbox_workspace_write.network_access=true' -c 'model_reasoning_effort="high"' 'Read resume -s y.md'`;
+    expect(remoteCodexCommand(line)).toBe(`codex resume 01a1 -c 'model_reasoning_effort="high"' 'Read resume -s y.md'`);
+    expect(codexEndpointConfig(line)).toEqual([
+      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'sandbox_workspace_write.network_access=true', '-c', 'model_reasoning_effort="high"',
+    ]);
+    expect(remoteCodexCommand('codex resume 01a1 --full-auto')).toBe('codex resume 01a1');
+    expect(remoteCodexCommand('codex resume 01a1 -- -s prompt')).toBe('codex resume 01a1 -- -s prompt');
+  });
+
+  test('codexEndpointConfig carries the line\'s config and permissions to the endpoint', () => {
+    // A TUI attached with --remote loads neither its own -c pairs nor its permissions: the
+    // endpoint's configuration is what its turns run under (measured on codex-cli 0.161.0).
+    const line = `AGENT_UNATTENDED=1 zsh as.sh codex resume 01a1 -m gpt -c model_reasoning_effort=high -a never -s danger-full-access --no-alt-screen -c 'mcp_servers.team_inbox.command="/bin/node"' -c 'mcp_servers.team_inbox.args=["cli.js","mcp","serve","--seat","w"]' 'Read /x -s y.md'`;
+    expect(codexEndpointConfig(line)).toEqual([
+      '-c', 'model_reasoning_effort=high',
+      '-c', 'approval_policy="never"',
+      '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'mcp_servers.team_inbox.command="/bin/node"',
+      '-c', 'mcp_servers.team_inbox.args=["cli.js","mcp","serve","--seat","w"]',
+    ]);
+    expect(codexEndpointConfig('codex --sandbox=workspace-write --ask-for-approval on-request'))
+      .toEqual(['-c', 'sandbox_mode="workspace-write"', '-c', 'approval_policy="on-request"']);
+    expect(codexEndpointConfig('codex --dangerously-bypass-approvals-and-sandbox'))
+      .toEqual(['-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"']);
+    expect(codexEndpointConfig('codex -m gpt')).toEqual([]);
+  });
+
+  test('words after the bare -- terminator are positional, whatever they look like', () => {
+    // A prompt word shaped like an attached short option is a prompt word: it must not reach
+    // the endpoint as a permission override beside the line's own explicit one.
+    const sandbox = 'codex -m gpt-6.1-sol -s read-only resume 01a1 -- -sdanger-full-access';
+    expect(codexEndpointConfig(sandbox)).toEqual(['-c', 'sandbox_mode="read-only"']);
+    expect(remoteCodexCommand(sandbox)).toBe('codex -m gpt-6.1-sol resume 01a1 -- -sdanger-full-access');
+    const approval = 'codex -m gpt-6.1-sol -a untrusted resume 01a1 -- -anever';
+    expect(codexEndpointConfig(approval)).toEqual(['-c', 'approval_policy="untrusted"']);
+    // The spaced form after `--` was read before the attached forms existed; it is positional too.
+    const spaced = 'codex -m gpt-6.1-sol -s read-only resume 01a1 -- -s danger-full-access';
+    expect(codexEndpointConfig(spaced)).toEqual(['-c', 'sandbox_mode="read-only"']);
+    // Every other spelling is positional after `--` as well.
+    const every = `codex -s read-only -- -m gpt --sandbox=danger-full-access --ask-for-approval never --full-auto --dangerously-bypass-approvals-and-sandbox -c 'sandbox_mode="danger-full-access"' --config approval_policy=never`;
+    expect(codexEndpointConfig(every)).toEqual(['-c', 'sandbox_mode="read-only"']);
+  });
+
+  test('an option before the terminator is still read, and only the first -- ends options', () => {
+    expect(codexEndpointConfig('codex -s read-only -c model_reasoning_effort=high -- -sworkspace-write'))
+      .toEqual(['-c', 'sandbox_mode="read-only"', '-c', 'model_reasoning_effort=high']);
+    // A second `--` after the first is an ordinary positional word.
+    expect(codexEndpointConfig('codex -s read-only -- -a never -- -s danger-full-access'))
+      .toEqual(['-c', 'sandbox_mode="read-only"']);
   });
 
   test('a non-Codex seat is never marked, whatever the policy value', () => {

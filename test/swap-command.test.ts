@@ -3,7 +3,7 @@
 // (Policies rules 10 and 11).
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type Caller } from '../src/caller.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -818,18 +818,28 @@ describe('team swap now and --run', () => {
     expect(world.did.typed.join('\n')).not.toContain('write a handover');
   });
 
-  test('a swap to another CLI asks for a handover, and the launch reads it first', async () => {
+  test('a swap to another CLI queues the target recipe and names the handover file', async () => {
     place();
     setRule('*=!anthropic');
-    await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    const world = fakeHerdr({ newScreen: CODEX_IDLE });
-    const ran = await swap(['--run'], OWNER, { sources: world.sources });
-    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
-    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('lead: the old conversation wrote the handover at');
-    expect(log).toContain('lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (handover passed from');
-    expect(world.did.runs.join('\n')).toContain('codex --model gpt-sol');
-    expect(world.did.runs.join('\n')).not.toContain('--resume');
+    const queued = await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
+    expect(queued.code).toBe(0);
+    // The record is what the queue keeps: the seat's words, the target recipe the launch will
+    // read, and the handover file named now, so a run retried later offers the same path.
+    const stamp = NOW.toISOString().replace(/[:.]/g, '-');
+    expect(queue().lead).toMatchObject({
+      from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+      to: {
+        cli: 'codex',
+        vendor: 'openai',
+        model: 'GPT Sol',
+        version: '5.0',
+        display: 'GPT Sol 5.0',
+        launch: 'codex --model gpt-sol',
+      },
+      reason: 'model-rule',
+      rule: '*=!anthropic',
+      handover: join(root, '.agents', 'handovers', `lead-${stamp}.md`),
+    });
   });
 
   test('the run writes the recipe into the seat and leaves the other seats alone', async () => {
@@ -915,34 +925,37 @@ describe('team swap now and --run', () => {
     }
   });
 
-  test('the handover wait runs until the conversation\'s turn ends, not just until its file lands', async () => {
+  test('no pane messaging, a handover a previous attempt wrote is the one the launch reads', async () => {
     place();
     setRule('*=!anthropic');
-    await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    // The old conversation writes the file inside its turn and is still working after it.
-    const world = fakeHerdr({ newScreen: CODEX_IDLE, slowHandover: true });
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    // The file a previous attempt's conversation wrote: nothing is typed to ask for another.
+    mkdirSync(dirname(named), { recursive: true });
+    writeFileSync(named, '# handover\n\nwhat is left\n');
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
     const ran = await swap(['--run'], OWNER, { sources: world.sources });
     expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('lead: the old conversation wrote the handover at');
-    expect(log).toContain('lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (handover passed from');
+    expect(log).toContain(`lead: using the handover already at ${named}`);
+    expect(log).toContain(`handover passed from ${named}`);
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
     expect(queue()).toEqual({});
   });
 
-  test('a handover that was never written is not reported as passed', async () => {
+  test('no pane messaging, a handover nothing wrote is not asked for; the launch goes on without one', async () => {
     place();
     setRule('*=!anthropic');
-    await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    // The old conversation takes the request and writes nothing before the bounded wait ends.
-    const world = fakeHerdr({ newScreen: CODEX_IDLE, handoverWritten: false });
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
     const ran = await swap(['--run'], OWNER, { sources: world.sources });
     expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('no handover was written before the wait ended; the launch goes on');
-    expect(log).toContain(
-      'lead: swapped anthropic Claude Opus 5.5 -> openai GPT Sol 5.0 (fresh conversation; no handover was written)',
-    );
-    expect(log).not.toContain('handover passed from');
+    expect(log).toContain('lead: the handover request was not typed; the launch goes on');
+    expect(log).not.toContain(`lead: using the handover already at ${named}`);
+    expect(log).toContain('fresh conversation; no handover was written');
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
     expect(queue()).toEqual({});
   });
 

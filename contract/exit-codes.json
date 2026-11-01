@@ -472,6 +472,55 @@
     },
     {
       "code": 0,
+      "command": "agents",
+      "id": "agents.plan",
+      "meaning": "the dry run found no record to retire",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 0,
+      "command": "agents",
+      "id": "agents.retired",
+      "meaning": "every listed record that needed retiring was retired",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.incomplete",
+      "meaning": "--apply left a record unretired because it could not be written",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.owner",
+      "meaning": "--apply was aimed by a caller who is not the owner",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.registry",
+      "meaning": "the team registry cannot be read",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.stale",
+      "meaning": "the dry run found records to retire",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 2,
+      "command": "agents",
+      "id": "agents.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team agents prune --nope"
+    },
+    {
+      "code": 0,
       "command": "answer",
       "id": "answer.ready",
       "meaning": "the trust dialog was answered and the seat is ready",
@@ -800,6 +849,20 @@
       "trigger": "team brief rollout"
     },
     {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.prune-applied",
+      "meaning": "prune's --apply removed every launch-brief retry marker it listed",
+      "trigger": "team brief prune --apply"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.prune-clean",
+      "meaning": "prune's dry run found no launch-brief retry marker to retire",
+      "trigger": "team brief prune"
+    },
+    {
       "code": 1,
       "command": "brief",
       "id": "brief.file-owner",
@@ -812,6 +875,27 @@
       "id": "brief.incomplete",
       "meaning": "--apply left a seat stale or failed",
       "trigger": "team brief rollout --apply"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-due",
+      "meaning": "prune's dry run listed launch-brief retry markers to retire",
+      "trigger": "team brief prune"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-incomplete",
+      "meaning": "prune's --apply left a launch-brief retry marker unremoved",
+      "trigger": "team brief prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-refused",
+      "meaning": "the caller is not a seat of this team on the pane the state records for it, the drop folder is not a real folder, or the seat's current brief claim can't be read or changed while the run read its markers",
+      "trigger": "team brief prune"
     },
     {
       "code": 1,
@@ -3399,6 +3483,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.handle-held",
+      "meaning": "the id its record holds is another seat's handle",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.herdr",
       "meaning": "herdr doesn't answer",
       "trigger": "team register worker"
@@ -3478,6 +3569,13 @@
       "command": "register",
       "id": "register.recorded",
       "meaning": "the state records another pane for that seat",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.replaced",
+      "meaning": "the pane holds a process its record's launch did not start",
       "trigger": "team register worker"
     },
     {
@@ -5156,6 +5254,20 @@
     {
       "code": 1,
       "command": "team",
+      "id": "team.general-refused",
+      "meaning": "the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.general-target",
+      "meaning": "the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key> (a grant that lists entities)"
+    },
+    {
+      "code": 1,
+      "command": "team",
       "id": "team.mcp-serve-restart-failed",
       "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
       "trigger": "team mcp serve"
@@ -5180,6 +5292,13 @@
       "id": "team.approve-removed",
       "meaning": "the approve command was removed in 0.5.0",
       "trigger": "team approve"
+    },
+    {
+      "code": 2,
+      "command": "team",
+      "id": "team.general-usage",
+      "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
+      "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
     },
     {
       "code": 2,

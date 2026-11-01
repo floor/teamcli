@@ -7,7 +7,7 @@
 // read-and-report commands get their first non-owner `--session` tests at all. The pairs and
 // their tests are tabulated in the pull request. `send --file` is not this flag (it names the
 // message's file), and `approve`, `commits`, `pr` and `release` reach no herdr.
-import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,14 @@ import { testIo } from '../helpers.ts';
 // command under test (and its load chain) is imported: the commands here are imported
 // dynamically, in the beforeAll below; every static import above loads no command.
 const realFs = await import('node:fs');
+// Captured by value before the wrapper stands: the restore below must name the module's own
+// functions even where the live namespace answers the wrapper.
+const realFsCalls = {
+  existsSync: realFs.existsSync,
+  lstatSync: realFs.lstatSync,
+  realpathSync: realFs.realpathSync,
+  readFileSync: realFs.readFileSync,
+};
 const touched: string[] = [];
 let watching: string | undefined;
 mock.module('node:fs', () => {
@@ -49,6 +57,10 @@ mock.module('node:fs', () => {
   }
   return wrapped as typeof realFs;
 });
+// Bun's module mocks are process-wide, and every test file of a run shares one process: put the
+// captured real functions back when this file ends, so a later file's fs calls are the plain
+// module's rather than this recording wrapper.
+afterAll(() => { mock.module('node:fs', () => ({ ...realFs, ...realFsCalls })); });
 
 let runAnswer: (typeof import('../../src/commands/answer.ts'))['runAnswer'];
 let runDoctor: (typeof import('../../src/commands/doctor.ts'))['runDoctor'];
@@ -281,7 +293,7 @@ describe('status: --session for a non-owner', () => {
     };
     const io = testIo(root);
     io.callerSources = underHerdr(calls);
-    const code = await runStatus(['--session', 'team-test'], io, sources);
+    const code = await runStatus(['--session', 'sandbox'], io, sources);
     expect(code).toBe(1);
     expect(io.out).toBe('');
     expect(io.err).toBe(
@@ -310,11 +322,11 @@ describe('doctor: --session for a non-owner', () => {
       home,
     };
     const io = testIo(root, { kind: 'seat', name: 'worker', pane: 'w3:p1' });
-    const code = await runDoctor(['--session', 'team-test'], io, sources);
+    const code = await runDoctor(['--session', 'sandbox'], io, sources);
     expect(code).toBe(0);
     // The aimed session is the one asked about, and the report names it.
-    expect(asked).toEqual(['team-test']);
-    expect(io.out).toContain('session team-test is not running');
+    expect(asked).toEqual(['sandbox']);
+    expect(io.out).toContain('session sandbox is not running');
     // Doctor writes nothing beside the file it read.
     expect(existsSync(stateFile)).toBe(false);
   });

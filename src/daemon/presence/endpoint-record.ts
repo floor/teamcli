@@ -18,6 +18,16 @@ export type CodexEndpointRecord = {
   binding: string;
   pid: number;
   started_at: string;
+  /**
+   * The configuration the server was started with: the `-c key=value` words handed to
+   * `codex app-server`, in the order the launch gave them. A launch reuses a live endpoint only
+   * when this is the configuration its own line needs. The measurement `codexEndpointConfig`
+   * records is why: an attached TUI runs its turns under the app-server's configuration, so a
+   * server started for another line would leave the seat without its own `-c` pairs and
+   * permissions. Absent on a record an older build wrote; that record is never reused, and its
+   * endpoint is stopped under the full proof before a fresh one starts.
+   */
+  config?: string[];
 };
 
 /** The absolute socket path a record's URL names, when it names one this build can use. */
@@ -61,11 +71,19 @@ function checkCodexEndpointRecord(value: unknown): RecordCheck {
   if (typeof one.started_at !== 'string' || !isPresenceTime(one.started_at)) {
     return { ok: false, why: 'the endpoint record’s start instant is not a contract timestamp' };
   }
+  // A config a launch could not have written is read as one it did not name: the record keeps
+  // naming a stoppable endpoint, so a stop still proves and ends the process it describes
+  // instead of leaving it running over one unreadable field. A record naming no config is never
+  // reused (`ensureCodexEndpoint`).
+  const config = Array.isArray(one.config) && one.config.every((word) => typeof word === 'string')
+    ? one.config
+    : undefined;
   const record: CodexEndpointRecord = {
     url: one.url,
     binding: one.binding,
     pid: one.pid,
     started_at: one.started_at,
+    ...(config === undefined ? {} : { config }),
   };
   if (codexEndpointPath(record) === null) {
     return { ok: false, why: 'the endpoint record’s URL is not an absolute unix endpoint' };

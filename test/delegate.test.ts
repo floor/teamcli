@@ -217,6 +217,41 @@ describe('a matching pane passes, and only that pane', () => {
     }).text).toBe('only the owner or the approved delegate runs `up`; this call is unplaced (it runs in a herdr pane without an agent)');
   });
 
+  test('a caller of the team\'s own session is named there, not by an entry\'s session', () => {
+    // The file's one entry is a pane of session other; the team's session is alpha, and this
+    // caller is a seat of alpha. Every entry session reads it unplaced, and that reading says
+    // only that it is not in that session: the refusal names it where it stands.
+    const callerSources = (session: string | undefined): CallerSources => {
+      const listed = session === 'alpha' ? [agent('maker', 'paneB')] : session === 'other' ? [agent('delegate', 'paneA')] : [];
+      const roots: Record<string, number> = session === 'alpha' ? { paneB: 100 } : session === 'other' ? { paneA: 999 } : {};
+      return {
+        ancestors: () => under,
+        agents: () => listed,
+        paneRootPid: (pane) => roots[pane] ?? null,
+        env: { HERDR_PANE_ID: 'paneB' },
+        stdinIsTTY: true,
+      };
+    };
+    expect(refused({ callerSources }).text).toBe('only the owner or the approved delegate runs `up`; this call is maker');
+  });
+
+  test('a caller whose pane root is not among its ancestors stays unplaced in the refusal', () => {
+    // The session lists the pane the environment names, and the reader can still not tie it to
+    // this process: the pane root is not above it. The refusal keeps saying so.
+    expect(refused({
+      callerSources: () => ({
+        ancestors: () => under,
+        agents: () => [agent('maker', 'paneB')],
+        paneRootPid: () => 999,
+        env: { HERDR_PANE_ID: 'paneB' },
+        stdinIsTTY: true,
+      }),
+    })).toEqual({
+      id: 'up.delegate',
+      text: 'only the owner or the approved delegate runs `up`; this call is unplaced (it runs in a herdr pane without an agent)',
+    });
+  });
+
   test('the owner, a caller without a terminal, and an agent outside herdr are not the pane', () => {
     expect(refused({ ancestors: terminal }).text).toBe('only the owner or the approved delegate runs `up`; this call is owner');
     expect(refused({ ancestors: terminal, stdinIsTTY: false }).text).toContain('this call is unplaced (it doesn\'t run on a terminal)');

@@ -1,5 +1,7 @@
-// The twelve transition signals (draft 6 §2.1) and the record selector each one reads.
-// A bus event kind is never a signal; the daemon's translation is out of slices 0-1.
+// The transition signals and the record selector each one reads. The first twelve are draft 6
+// §2.1's accepted set; the last eleven are the workflow MVP's seat interactions
+// (workflow-mvp-spec-draft-4 §2.1.1, docs b0f48b3). A bus event kind is never a signal; the
+// daemon's translation is out of slices 0-1.
 
 export const SIGNALS = [
   'pr-opened',
@@ -14,6 +16,17 @@ export const SIGNALS = [
   'goals-set',
   'diverged',
   'accepted',
+  'task-ready',
+  'acknowledged',
+  'step-done',
+  'step-blocked',
+  'seat-down',
+  'merge-observed',
+  'install-recorded',
+  'redispatch',
+  'lead-word',
+  'step-failed',
+  'lead-stop',
 ] as const;
 
 export type SignalName = (typeof SIGNALS)[number];
@@ -41,6 +54,17 @@ export const SIGNAL_RECORD_TYPES: Readonly<Record<SignalName, RecordSelector>> =
   'goals-set': { type: 'outcome', operation: 'goals-session', result: 'done' },
   'diverged': { type: 'review' },
   'accepted': { type: 'review' },
+  'task-ready': { type: 'task' },
+  'acknowledged': { type: 'message' },
+  'step-done': { type: 'step' },
+  'step-blocked': { type: 'step' },
+  'seat-down': { type: 'seat-state' },
+  'merge-observed': { type: 'outcome', operation: 'merge', result: 'done' },
+  'install-recorded': { type: 'outcome', operation: 'install', result: 'done' },
+  'redispatch': { type: 'dispatch' },
+  'lead-word': { type: 'message' },
+  'step-failed': { type: 'refusal' },
+  'lead-stop': { type: 'message' },
 };
 
 const SIGNAL_SET: ReadonlySet<string> = new Set<string>(SIGNALS);

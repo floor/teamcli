@@ -174,6 +174,7 @@ fields:
 | `tested.from`, `tested.to` | string | the tested range, both ends included |
 | `unattended` | string[] | options that run the CLI without approvals |
 | `rules` | `first-message` \| `prepend` \| `{ option: <flag> }` | the delivery: `first-message` reads as `message`, `{ option }` as `option` |
+| `delivery` | `push` \| `between-turns` \| `pull-on-turn` \| `none` | the measured way an idle seat of this CLI is reached: an event adapter that wakes it (the development channel, the cross-session socket), its runtime's own queue between turns, an MCP inbox read when it takes a turn, or nothing; the launch refines it (`src/launch/delivery-class.ts`) |
 | `standing_rules` | string[] | rules for every seat of this CLI, over the file's |
 | `login.check`, `login.hint` | string[] / string | the arguments that exit 0 only when logged in, and the login command |
 | `exit` | string | the text typed at an idle prompt to exit; absent when the CLI exits by key |
@@ -195,16 +196,16 @@ profile is refused (`src/profiles/profile.ts`).
 
 The shipped profiles at the tag:
 
-| CLI | Binary | Rules delivery | Tested |
-|---|---|---|---|
-| `claude-code` | `claude` | `option` (`--append-system-prompt`) | 2.1.288 to 2.1.302 |
-| `codex` | `codex` | `message` | 0.157.0 to 0.161.0 |
-| `cursor` | `cursor-agent` | `message` | 2026.10.01 to 2026.10.14 |
-| `antigravity` | `agy` | `message` | 1.2.16 to 1.4.1 |
-| `grok` | `grok` | `option` (`--rules`) | 1.0.50 to 1.0.52 |
-| `gemini` | `gemini` | `message` | 0.64.0 to 0.64.0 |
-| `muse` | `muse` | `message` | 1.4.9 to 1.4.9 |
-| `jules` | `jules` | `prepend` | 0.1.42 to 0.1.42 |
+| CLI | Binary | Rules delivery | Delivery | Tested |
+|---|---|---|---|---|
+| `claude-code` | `claude` | `option` (`--append-system-prompt`) | `push` | 2.1.288 to 2.1.302 |
+| `codex` | `codex` | `message` | `between-turns` | 0.157.0 to 0.161.0 |
+| `cursor` | `cursor-agent` | `message` | `pull-on-turn` | 2026.10.01 to 2026.10.14 |
+| `antigravity` | `agy` | `message` | `none` | 1.2.16 to 1.4.1 |
+| `grok` | `grok` | `option` (`--rules`) | `pull-on-turn` | 1.0.50 to 1.0.52 |
+| `gemini` | `gemini` | `message` | `pull-on-turn` | 0.64.0 to 0.64.0 |
+| `muse` | `muse` | `message` | `none` | 1.4.9 to 1.4.9 |
+| `jules` | `jules` | `prepend` | `none` | 0.1.42 to 0.1.42 |
 
 A version against a profile's range reads `tested`, `older`, `newer` or `unread`; `team doctor`
 warns for `older`, `newer` and `unread`, the last saying its version cannot be read. `team reload`

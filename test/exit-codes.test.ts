@@ -26,6 +26,7 @@ import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
+import { runAgents } from '../src/commands/agents.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -48,7 +49,7 @@ import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
-import { pendingPath } from '../src/send/pending.ts';
+import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
@@ -103,6 +104,7 @@ import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { GENERAL_BRIEF_FROM, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
@@ -112,13 +114,13 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
+import { analyze as analyzeSource, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
@@ -967,6 +969,54 @@ scene('brief.file', async (place) => show(await briefed(place, ['rollout', '--fi
 scene('brief.file-invalid', async (place) => {
   invalid(place);
   return show(await briefed(place, ['rollout', '--file', 'team.yaml'], owner), 'line');
+});
+
+/** A launch-brief retry marker beside a delivery: what a walk leaves when it is held. */
+function launchMarker(place: Place, seat: string, id: string): string {
+  const folder = join(place.root, '.agents', 'send-drops', 'acme', seat);
+  mkdirSync(folder, { recursive: true });
+  markPending(folder, { id, from: GENERAL_BRIEF_FROM, to: seat, body: 'the brief\n', ts: NOW.toISOString() });
+  return join(folder, `${id}.pending`);
+}
+
+/** A marker of a delivery the settled seat's claim no longer names. */
+function supersededMarker(place: Place, seat: string): string {
+  return launchMarker(place, seat, generalBriefId('inc_ffffffffffff', generalBriefBody()));
+}
+
+scene('brief.prune-clean', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], leadSeat), '0 files to retire');
+});
+scene('brief.prune-due', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune'], leadSeat), 'would retire');
+});
+scene('brief.prune-applied', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune', '--apply'], leadSeat), '1 file retired');
+});
+scene('brief.prune-incomplete', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  const marker = supersededMarker(place, 'lead');
+  // The folder without its write bit: the marker lists, and its removal fails.
+  chmodSync(dirname(marker), 0o555);
+  try {
+    return show(await briefed(place, ['prune', '--apply'], leadSeat), 'could not be removed');
+  } finally {
+    chmodSync(dirname(marker), 0o755);
+  }
+});
+scene('brief.prune-refused', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], owner), 'only a seat of this team');
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
@@ -2363,6 +2413,30 @@ scene('seats.not-yours', async (place) => {
   }
   scene('config.usage', async (place) => show(await recordRun(place, ['set', 'watch']), 'a value is required'));
   scene('config.no-team', async (place) => show(await recordRun(place, ['get', 'project']), 'no team is registered'));
+  scene('config.no-record', async (place) => {
+    // Two shapes the team file's reader refuses: a block scalar, and a flow map that continues
+    // on the next line. The command says the record cannot be read and leaves the file as it
+    // was; an uncaught parse error would end the run as a stack trace instead.
+    const block = `${TEAM}note: |\n  a block scalar the reader cannot take\n`;
+    write(place, block);
+    const getBlock = await recordRun(place, ['get', 'project']);
+    expect(getBlock.code, 'block scalar: get exit').toBe(2);
+    expect(getBlock.err, 'block scalar: get reason').toContain('cannot be read');
+    const readBlock = await recordRun(place, ['set', 'project', 'other']);
+    expect(readBlock.code, 'block scalar: exit').toBe(2);
+    expect(readBlock.err, 'block scalar: reason').toContain('block scalars ("|", ">") are not supported');
+    expect(readFileSync(place.file, 'utf8'), 'block scalar: nothing written').toBe(block);
+    const flow = `${TEAM}budgets: {\n  accounts: {}\n}\n`;
+    write(place, flow);
+    const getFlow = await recordRun(place, ['get', 'project']);
+    expect(getFlow.code, 'flow map: get exit').toBe(2);
+    expect(getFlow.err, 'flow map: get reason').toContain('cannot be read');
+    const readFlow = await recordRun(place, ['set', 'project', 'other']);
+    expect(readFlow.code, 'flow map: exit').toBe(2);
+    expect(readFlow.err, 'flow map: reason').toContain('"{" is not closed on its line');
+    expect(readFileSync(place.file, 'utf8'), 'flow map: nothing written').toBe(flow);
+    return show(readFlow, 'cannot be read');
+  });
   scene('config.unreadable', async (place) => {
     write(place, TEAM);
     await imported(place, 'migrate', []);
@@ -2527,12 +2601,12 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.set', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'settings: set nickname=Reviewer at seat (lead)');
   });
   scene('settings.unset', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']);
     if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
     return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
   });
@@ -2540,8 +2614,8 @@ function tamperedSeatSetting(place: Place): void {
     write(place, TEAM);
     registeredSeat(place);
     return show(
-      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
-      'settings: would set nickname=Atlas at seat (lead)',
+      await settingsRun(place, ['set', 'lead', 'nickname=Reviewer', '--dry-run']),
+      'settings: would set nickname=Reviewer at seat (lead)',
     );
   });
   scene('settings.key', async (place) => {
@@ -2565,7 +2639,7 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.not-owner', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer'], other), 'only the owner sets a seat');
   });
   scene('settings.no-agent', async (place) => {
     write(place, TEAM);
@@ -2573,7 +2647,7 @@ function tamperedSeatSetting(place: Place): void {
     // where the agent registry belongs cannot hold it, and the refusal names that instead.
     mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
     writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'has no registered agent record');
   });
   scene('settings.not-set', async (place) => {
     write(place, TEAM);
@@ -3271,6 +3345,24 @@ scene('worktree.remove-branch', async (place) => {
 scene('team.help', async (place) => show(await entry(['--help'], testIo(place.root, owner)), 'Usage:'));
 scene('team.no-command', async (place) => show(await entry([], testIo(place.root, owner)), 'Usage:'));
 scene('team.version', async (place) => show(await entry(['--version'], testIo(place.root, owner)), version()));
+scene('team.general-usage', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json')], testIo(place.root, owner)), '--general needs --key'));
+scene('team.general-refused', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], testIo(place.root, owner)), 'cannot be read as a general grant'));
+scene('team.general-target', async (place) => {
+  const home = clientHome('gg-target');
+  try {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const pair = newClientKeyPair();
+    const written = writeClientKeyFiles(clientKeyDir(home, 'a'), pair);
+    if (!written.ok) throw new Error(written.why);
+    const scoped = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['alpha'], ops: ['*'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
+    if (!scoped.ok) throw new Error(scoped.why);
+    const io = testIo(place.root, owner);
+    io.env.HOME = home;
+    return show(await entry(['status', '--general', scoped.path, '--key', written.keyPath], io), 'scoped general grants arrive in 0.5.11; use a wildcard grant or the owner path');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
 scene('team.approve-removed', async (place) => show(await entry(['approve'], testIo(place.root, owner)), 'team approve was removed in 0.5.0'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));
@@ -3670,13 +3762,16 @@ function startEvent(id: string, seat: string, ts: string): Record<string, unknow
   };
 }
 
-async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
-  const io = testIo(place.root);
+// The client-key guard judges the caller, so a scene that reads a client's own grant pins the
+// owner: the scene reads the same run from a seat (under herdr) and from CI, never as whatever
+// the suite itself happens to run as.
+async function sessionsRun(place: Place, argv: string[] = [], caller?: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runSessions(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
 }
 
 scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
-scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key']), 'no client grant can verify'));
+scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], owner), 'no client grant can verify'));
 scene('sessions.shown', async (place) => {
   const file = sessionsRegistry(place);
   mkdirSync(dirname(file), { recursive: true });
@@ -4986,7 +5081,7 @@ scene('messages.client-shown', async (place) => {
     plantClientRoot(place, world, CLIENT_ROOT);
     plantClientReply(place, world, CLIENT_ROOT, CLIENT_REPLY);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'shown',
     );
   } finally {
@@ -4999,7 +5094,7 @@ scene('messages.client-none', async (place) => {
   try {
     messageKeyOf(world.home);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'nothing is waiting',
     );
   } finally {
@@ -5009,10 +5104,11 @@ scene('messages.client-none', async (place) => {
 
 scene('messages.client-key', async (place) => {
   const world = clientWorld(place, { inbox: true });
+  const key = join(world.base, 'missing.key');
   try {
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
-      'team messages:',
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', key], owner),
+      `team messages: the key file "${key}" cannot be read`,
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -5033,14 +5129,14 @@ scene('messages.client-pane', async (place) => {
 
 scene('messages.client-refused', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
-    'team messages: refused:',
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')], owner),
+    'the owner signing key is absent or unreadable: no client grant can verify',
   );
 });
 
 scene('messages.client-usage', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0']),
+    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0'], owner),
     '--limit is a page bound',
   );
 });
@@ -5139,18 +5235,6 @@ scene('send.brief-memory', async (place) => {
   expect(wrote.ok).toBe(true);
   return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
 });
-scene('send.held', async (place) => {
-  write(place, TEAM);
-  // No socket file: a held message is the typed path's own refusal, and a taken frame on a
-  // present socket would deliver before the pane was ever read for a dialog.
-  const host = sendHost(place, { socket: false });
-  host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
-  return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
-});
-scene('send.unreachable', async (place) => {
-  write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
-});
 scene('send.stopped', async (place) => {
   write(place, TWO);
   // The dry run reports the real run's refusal: the file marks the seat stopped, and no leg is
@@ -5163,21 +5247,13 @@ scene('send.stopped', async (place) => {
   expect(existsSync(historyPath('acme', place.root, place.home))).toBe(false);
   return real;
 });
-scene('send.not-submitted', async (place) => {
-  write(place, TEAM);
-  // The trigger not being taken is the typed path's refusal: the seat is idle, so the send takes
-  // the drop-file route and types — and the pane never turns working.
-  const host = sendHost(place, { socket: false });
-  host.native.status = () => 'idle';
-  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
-});
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   // The typed leg took the trigger line: a trigger sent, and no signed receipt, so the words say
   // `sent (unconfirmed)` and never claim a read. The contract row's own meaning is unchanged.
   return show(
     await sent(place, ['lead', 'hello'], owner, sendHost(place)),
-    'lead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)',
+    'lead: sent (unconfirmed) (drop, 0 ms)',
   );
 });
 scene('send.sent-unconfirmed', async (place) => {
@@ -5209,43 +5285,9 @@ scene('send.sent-channel', async (place) => {
   };
   return show(await sent(place, ['lead', 'hello'], owner, host), 'lead: sent (channel)');
 });
-scene('send.queued', async (place) => {
-  write(place, TEAM);
-  // A daemon that answers `queued`: the receiver is busy, the signed copy is stored, and the
-  // sender is answered now. The id on the line is the one the daemon will deliver under.
-  const id = '55555555-5555-4555-8555-555555555555';
-  const sock = join(place.base, 'daemon.sock');
-  const server = createServer((socket) => {
-    socket.on('data', () => {
-      socket.end(`${JSON.stringify({
-        v: 1,
-        ok: true,
-        id,
-        seat: 'lead',
-        outcome: 'queued',
-        status: 'receiver busy',
-        detail: 'lead: queued (receiver busy)',
-      })}\n`);
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(sock, resolve);
-  });
-  try {
-    const host = sendHost(place);
-    host.daemonSocket = sock;
-    return show(await sent(place, ['lead', 'hello'], owner, host), `lead: queued (receiver busy) (typed, 0 ms; id ${id})`);
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
-  }
-});
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
@@ -5544,28 +5586,38 @@ scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { 
 scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
-// The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0.
+// The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0. It
+// starts in a lobby, which is no checkout's work tree, so the registry record that holds the seat
+// is the team it serves.
 scene('mcp.serve-ended', async (place) => {
   write(place, TEAM);
-  const io = testIo(place.root, owner);
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
+  });
+  const lobby = join(place.base, 'lobby');
+  mkdirSync(lobby, { recursive: true });
+  const io = testIo(lobby, owner);
   const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
     lines: (async function* () {
       // stdin is already closed
     })(),
     write: () => {},
-  });
+  }, { home: place.home });
   return { code, out: io.out, err: io.err };
 });
 // A seat the team file does not declare is refused before the server serves anything.
 scene('mcp.serve-refused', async (place) => {
   write(place, TEAM);
   const io = testIo(place.root, owner);
-  const code = await runMcpServe({ seat: 'ghost', session: undefined }, io, {
+  const code = await runMcpServe({ seat: 'ghost', session: undefined, file: place.file }, io, {
     lines: (async function* () {
       // the refusal leaves before any line is read
     })(),
     write: () => {},
-  });
+  }, { home: place.home });
   return show({ code, out: io.out, err: io.err }, 'declares no seat');
 });
 
@@ -5826,6 +5878,66 @@ scene('forget.approval-requested', async (place) => {
 });
 scene('forget.approval-refused', async (place) =>
   show(await forgetRun(place, ['abc123abc123', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
+async function agentsRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runAgents(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+/** An agent record for `seat` under this place's team id, and the registry record that names the
+ *  team, so the record's team is one the registry holds. */
+function agentUnderTeam(place: Place, seat: string): void {
+  registerAgent(place.home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: teamIdOf(place.root), seat, session: 'acme', pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'stopped',
+    by: 'test',
+  });
+  upsertTeam(place.home, teamIdOf(place.root), { project: 'acme', session: 'acme', root: place.root, by: 'test' });
+}
+
+scene('agents.invocation', async (place) => show(await agentsRun(place, ['nope']), 'unknown subcommand "nope"'));
+scene('agents.registry', async (place) => {
+  mkdirSync(dirname(teamsFile(place.home)), { recursive: true });
+  writeFileSync(teamsFile(place.home), 'teams: [\n');
+  return show(await agentsRun(place, ['prune']), 'teams.yaml');
+});
+scene('agents.plan', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'lead');
+  return show(await agentsRun(place, ['prune']), 'none to retire');
+});
+scene('agents.stale', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune']), '1 record to retire');
+});
+scene('agents.retired', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply']), '1 record retired');
+});
+scene('agents.incomplete', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  chmodSync(agentsDir(place.home), 0o555);
+  try {
+    return show(await agentsRun(place, ['prune', '--apply']), 'could not be retired');
+  } finally {
+    chmodSync(agentsDir(place.home), 0o755);
+  }
+});
+scene('agents.owner', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply'], detachedCaller), 'only the owner runs this');
+});
 async function batchRun(place: Place, argv: string[], caller: Caller = owner, store?: ReturnType<typeof seatOwner>): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runBatch(argv, io, { home: place.home, ...(store ? { ownerSeatStore: store } : {}) }), out: io.out, err: io.err };
@@ -6050,6 +6162,31 @@ scene('register.grant-flag', async (place) => {
   recordLead(place);
   return show(await registered(place, ['lead', '--session', 'other'], leadSeat, { agents: () => [agent('lead')] }), 'the granted seat cannot use it');
 });
+scene('register.handle-held', async (place) => {
+  write(place, TWO);
+  // The seat stands where its launch put it, and its id is already on another seat's live
+  // record: the refresh may not write one handle onto two seats.
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      stage: 'ready', pane: agent('lead').pane, id: 'seat_0123456789ab', launched: { shell: 400, cli: [401] },
+    };
+  });
+  registerAgent(place.home, {
+    name: 'worker',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: teamIdOf(place.root), seat: 'worker', session: 'acme', pane: 'pane-worker', address: null },
+    seat_handle: 'seat_0123456789ab',
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "the id its record holds (seat_0123456789ab) is worker's handle");
+});
 scene('register.no-seat', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['missing']), 'no seat "missing"');
@@ -6087,6 +6224,17 @@ scene('register.recorded', async (place) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w9:p1' };
   });
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'is already recorded on pane w9:p1');
+});
+scene('register.replaced', async (place) => {
+  write(place, TEAM);
+  // The record says which processes its launch started; the pane in front of the seat holds
+  // neither, so the refresh has no continuity to stand the handle on.
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      stage: 'ready', pane: agent('lead').pane, launched: { shell: 500, cli: [501] },
+    };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "holds a process other than the one its record's launch started");
 });
 scene('register.no-cli', async (place) => {
   write(place, TEAM);
@@ -6231,7 +6379,7 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.replied', async (place) => {
     write(place, FILE);
     plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
-    return show(await replied(place, [SENT, 'the answer']), 'worker: replied');
+    return show(await replied(place, [SENT, 'the answer']), 'worker: delivered (drop)');
   });
   scene('reply.refused', async (place) => {
     write(place, FILE);
@@ -6555,7 +6703,18 @@ scene('up.approval-refused', async (place) => {
   return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
 });
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed']);
+// The source probe reads every command file (~2 s); the tree does not change during a run.
+let analyzed: ReturnType<typeof analyzeSource> | undefined;
+function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof analyzeSource> {
+  if (args.length > 0) return analyzeSource(...args);
+  analyzed ??= analyzeSource();
+  return analyzed;
+}
+
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+  // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
+  // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
+  'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));
@@ -6565,6 +6724,13 @@ if (wanted !== null) {
     `exit-codes: selected ${String(runnable)} of ${String(scenes.size)} scenes; analyzer probes skipped (the checks against this repo still run)`,
   );
 }
+// Each scene row builds its own checkout before the scene runs: a repo layout spawns git init,
+// add and commit, and two scenes spawn a child bun. That work is tens of milliseconds on an
+// idle machine, but a loaded runner can hold a row past Bun's 5s default, and the lane's
+// full-file runs at load lost rows to it. The whole-tree rows above carry this file's 30s
+// margin for the same class of wait; the scene rows get it too, so load only makes a row
+// later, never wrong.
+const SCENE_ROW_TIMEOUT_MS = 30_000;
 for (const row of contract.rows) {
   if (defensive.has(row.id)) continue;
   if (skips(row.id)) continue;
@@ -6578,7 +6744,7 @@ for (const row of contract.rows) {
     } finally {
       rmSync(place.base, { recursive: true, force: true });
     }
-  });
+  }, SCENE_ROW_TIMEOUT_MS);
 }
 
 // A refusal whose return sits above the dry-run return is one the dry run reaches. One
@@ -6668,9 +6834,11 @@ leadTest('the filter names only ids the contract has', () => {
   expect(unknownScenes(wanted, contract.rows.map((row) => row.id)), 'TEAM_EXIT_IDS names an id with no contract row').toEqual([]);
 });
 
+// Reads the whole command tree, the same work the analyzer probes below do, so it carries the
+// same 30s margin over the 5s default.
 leadTest('the exit-code check is clean', () => {
   expect(problems()).toEqual([]);
-});
+}, 30_000);
 
 // The analyzer's own probes: crafted fixtures fed to the analyzer, never this repo's files. A
 // filtered local run (`TEAM_EXIT_IDS`) skips them — a feature diff cannot change what they feed
@@ -7105,13 +7273,15 @@ const unreadForms: { name: string; files: Map<string, string>; needle: string; e
     { name: 'reportFailure returns a helper', files: failureMoved(), needle: 'says code 1, the site returns 2' },
 ];
 
-// The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason above.
+// The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason
+// above. Each row reads the whole command tree like the analyzer tests above, so each is given
+// their 30s margin over the 5s default.
 test.each(wanted === null && leadPart(part) ? unreadForms : [])('$name fails the check', (row) => {
   const found = problems(row.extra
     ? { files: row.files, contractText: canon([...contract.rows, ...row.extra]), page: render([...contract.rows, ...row.extra]) }
     : { files: row.files });
   expect(found.some((line) => line.includes(row.needle)), row.name).toBe(true);
-});
+}, 30_000);
 
 // Phase 3: the same add and remove runs under `team-config.source: registry`, on a team moved into
 // the scene's own registry. The edit lands in the record, the file is left as it was, and the

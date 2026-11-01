@@ -31,6 +31,10 @@ export function mintSeatId(): string {
 export type RetainedSeat = {
   id: string;
   last_active?: string;
+  /** The conversation the seat ran when `team down` stopped it: the state's half of the resume
+   *  binding (`recordedSeatSession`), so the next `up` resumes the registry's recorded session
+   *  rather than minting a fresh one. */
+  agent_session?: string;
 };
 
 /**
@@ -320,11 +324,13 @@ export type SessionState = {
    * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
    * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
    * watch until that pane's first pass records its process; `pane` is absent only on a record an
-   * older detached watch left. `epoch` is the host's authority fence (`watch_` and 32 lowercase
-   * hex); its absence marks a pane watch record, and a value this build cannot read is dropped at
-   * the read door.
+   * older detached watch left. `started_at` is the instant the recorded process captured when it
+   * reached its loop: a pane-less record is stopped only when the live process's start instant
+   * matches it, so a record an older build wrote without one is never signalled. `epoch` is the
+   * host's authority fence (`watch_` and 32 lowercase hex); its absence marks a pane watch
+   * record, and a value this build cannot read is dropped at the read door.
    */
-  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string };
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string; started_at?: string };
   /** The event bus `team up` started for this session: its pane and workspace, for `team down`. */
   bus?: { pane: string; workspace?: string; started: string };
   /**
@@ -408,6 +414,21 @@ export const LOG_FILE = 'team.log';
 
 export function emptySession(): SessionState {
   return { seats: {}, worktrees: {} };
+}
+
+/**
+ * The state's sessions map, built without a prototype: `sessions[name]` then finds the team's own
+ * record or nothing at all, never an object every object inherits. Session names are keys here,
+ * and a name like `__proto__` must be an ordinary own key if it is one at all; with a prototype
+ * in place, a lookup of a name the team does not hold would find the inherited object, and a
+ * write through it (`sessions[name] ??= emptySession()`) would reach the shared prototype. Every
+ * map that enters the program is built here — the missing file's empty state and the map a read
+ * returns — so every reader and writer works on a map of this shape.
+ */
+export function sessionMap(entries: Iterable<[string, SessionState]> = []): Record<string, SessionState> {
+  const map = Object.create(null) as Record<string, SessionState>;
+  for (const [name, record] of entries) map[name] = record;
+  return map;
 }
 
 /** Whether a value from the state file is the record `team hold` writes: a reason with text, a
@@ -548,7 +569,7 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
-  if (!existsSync(path)) return { format: 1, sessions: {} };
+  if (!existsSync(path)) return { format: 1, sessions: sessionMap() };
   let parsed: unknown;
   try {
     // A file replaced under this reader (a writer that is not the atomic one) can parse as a
@@ -561,6 +582,10 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   if (!state || typeof state !== 'object' || state.format !== 1 || typeof state.sessions !== 'object' || !state.sessions) {
     throw new Error(`${path} is not a team state of format 1; move it aside and run the command again`);
   }
+  // The map is rebuilt without a prototype before any reader sees it (`sessionMap`): a file's
+  // sessions object is plain, so a lookup by a name the team does not hold would find what every
+  // object inherits. A record the file does hold under such a name stays an ordinary own key.
+  state.sessions = sessionMap(Object.entries(state.sessions));
   // The hold, cleaned at the same door: a record that is not the one `team hold` writes is
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
@@ -607,8 +632,15 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       if (typeof session.watch !== 'object' || session.watch === null || Array.isArray(session.watch)
         || typeof session.watch.heartbeat !== 'string') {
         delete session.watch;
-      } else if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
-        delete session.watch.epoch;
+      } else {
+        if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
+          delete session.watch.epoch;
+        }
+        // A start instant this build cannot read is no proof: the record stays a watch record,
+        // and a pane-less pid it names is left alone rather than signalled on trust.
+        if (session.watch.started_at !== undefined && typeof session.watch.started_at !== 'string') {
+          delete session.watch.started_at;
+        }
       }
     }
     // A stored classification is validated here, at the one door a value from outside the program
@@ -679,6 +711,9 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
         seenIds.add(retained.id);
         if (retained.last_active !== undefined && typeof retained.last_active !== 'string') {
           delete retained.last_active;
+        }
+        if (retained.agent_session !== undefined && (typeof retained.agent_session !== 'string' || retained.agent_session === '')) {
+          delete retained.agent_session;
         }
       }
     } else if (session.retained_seats !== undefined) {
@@ -835,7 +870,12 @@ export function storedWatchRecord(dir: string, session: string): unknown {
     throw error;
   }
   const raw = JSON.parse(text) as { sessions?: Record<string, { watch?: unknown }> };
-  return raw?.sessions?.[session]?.watch;
+  // This reader parses the file itself, so its map is plain: an own key only, or a lookup by a
+  // name the file does not hold would return the inherited object instead of no record at all.
+  const sessions = raw?.sessions;
+  if (sessions === undefined || sessions === null || typeof sessions !== 'object') return undefined;
+  if (!Object.hasOwn(sessions, session)) return undefined;
+  return sessions[session]?.watch;
 }
 
 export function writeAtomic(path: string, text: string): void {
@@ -938,7 +978,7 @@ export class LockBusyError extends Error {
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;

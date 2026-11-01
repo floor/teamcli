@@ -17,6 +17,11 @@ export type Io = {
   /** Whether stderr is a terminal: used by `ttyStyle` when colouring stderr diagnostics.
    *  Absent counts as false. */
   stderrIsTTY?: boolean;
+  /** Set only by the dispatcher's general door (src/client/general-door.ts) on a run it admitted:
+   *  the absolute paths of the verified grant and key. `daemon install` records them in the
+   *  service unit, so the service-started run is admitted through the same door, re-verified at
+   *  every start. Never set from the environment or a command line. */
+  general?: { grant: string; key: string };
   // Set by tests only. A command asks `callerOf(io)`, which otherwise reads the processes.
   caller?: Caller;
   // Set by tests only. A command asks `callerOf(io, session)`, which otherwise reads the

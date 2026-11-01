@@ -12,6 +12,7 @@ import {
   launchBinary,
   launchLineFinding,
   launchLineFindings,
+  launchProgram,
   startFolder,
   type LineSources,
 } from '../src/launch/line.ts';
@@ -91,6 +92,26 @@ describe('the launch line check', () => {
     expect(launchBinary('AGENT_UNATTENDED=1 claude --model x')).toBe('claude');
     expect(launchBinary('  team-deepseek  ')).toBe('team-deepseek');
     expect(launchBinary('')).toBeNull();
+  });
+
+  // The program a launch line really starts, for the reader that decides whether a launcher
+  // selects a model: plumbing (assignments, an `env` prefix, a shell reading a script, quotes)
+  // is read off until a program is left, and a word this reader cannot follow names none.
+  test('the program a launch line really starts is read through its plumbing', () => {
+    expect(launchProgram('claude --model x')).toBe('claude');
+    expect(launchProgram('/usr/local/bin/claude')).toBe('claude');
+    expect(launchProgram('env claude')).toBe('claude');
+    expect(launchProgram('env -i FOO=1 -- claude')).toBe('claude');
+    expect(launchProgram('AGENT_UNATTENDED=1 claude')).toBe('claude');
+    expect(launchProgram('"claude"')).toBe('claude');
+    expect(launchProgram("'claude'")).toBe('claude');
+    expect(launchProgram('zsh ~/tools/run.sh claude')).toBe('run.sh');
+    expect(launchProgram('env -S "claude --model x"')).toBeNull();
+    expect(launchProgram('bash -l x')).toBeNull();
+    expect(launchProgram('$RUNNER claude')).toBeNull();
+    expect(launchProgram('claude*')).toBeNull();
+    expect(launchProgram('env')).toBeNull();
+    expect(launchProgram('')).toBeNull();
   });
 
   test('a seat that works in worktrees starts in the lobby; a shared one where the file says', () => {

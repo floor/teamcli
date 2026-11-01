@@ -10,8 +10,25 @@ flags, the caller table and the exit codes stay on the page.
 Stops the team: asks every running seat the approved copy names to exit, closes its workspace, and
 stops the herdr session. A pane herdr names with something that copy does not carry is closed when
 the state records that pane and that workspace for one seat, and left running when no seat record
-accounts for it. A pane with no name is closed on that same record. This run does not stop the
-watch: its pid is only in the state. A seat is only asked when it is
+accounts for it. A pane with no name is closed on that same record. The watch is stopped by its
+pid only when the state records that pid and no pane, and the live process proves it is that
+watch: its command line runs one of this install's own CLI entries — at the executable position,
+or exactly at position 1 under a node/bun runtime — as this session's `team watch`, and its start
+instant is the one the watch recorded as `started_at`. A pid alone is never signalled — after a
+watch exits the OS can hand its pid to an unrelated process — so a reused pid, a command line
+that cannot be read or does not prove this install's entry running this session's watch (another
+install's `cli.js`, or a watch word inside some other program's arguments included), and a
+legacy record with no start instant are left alone, named, and their record kept. A watch
+recorded in a pane is not signalled here — its pane is how it is verified, and
+`up` stops one it can prove — and a record fenced by the session's epoch names the session
+host's own process, which is never signalled. The event bus
+`team up` started goes with the team: the workspace its record names is closed after the seats
+and the watch and before the session, and the bus record is cleared once that close succeeds
+(`bus: stopped`); a close that does not succeed prints `bus: its workspace did not close` and
+keeps the record. A bus the owner runs in a terminal of their own is not in the state and is left
+running. The plan carries that close, so a dry run shows it; a dry run and a refused run return
+before the executor and close nothing. A seat is only
+asked when it is
 free — idle, with an empty input box — so a working, blocked or half-typed seat is left running
 and named. A pane whose CLI has exited — its own shell back in front of it, and no CLI process in
 its foreground list — is not asked: it is closed, and its line says the CLI had exited. A seat
@@ -27,11 +44,21 @@ force still names the seats it named when it was approved, with those seats' CLI
 ## What it reads and writes
 
 Reads the team file, this machine's approval store (the copy in force is the stop list), the
-session's state (`.agents/team.state.json`, for the seats it drops after they stop), and herdr:
+session's state (`.agents/team.state.json`: the seats it drops after they stop, the watch's pid
+and start instant, each seat's managed endpoint, and the bus's pane and workspace), and herdr:
 whether the session is running, its agents, each pane's screen and status, and each pane's
-foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped),
+foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped, and a
+bus workspace it closed has its record cleared). A stopped seat's handle, its last activity and
+the conversation it ran are kept under the session's `retained_seats`, so the next `up` can resume
+that conversation; a temporary seat retains nothing. It also writes
 `.agents/team.log`, and, through herdr: the exit in each pane, the workspaces it closes, the
-session it stops and the stopped session it clears — its own, just stopped. A name the copy does
+session it stops and the stopped session it clears — its own, just stopped. A seat whose state
+records a managed endpoint for the presence binding it holds now is stopped through it before its
+record goes — the same ownership proof `team remove` uses, with the record still there at the stop
+— and a seat that records none, every seat whose launch managed no endpoint, is not named. An
+endpoint whose process cannot be proven — or whose stop names no reason — is left alone, the
+refusal is said on stderr, and the seat is not dropped: its whole record, endpoint claim and
+presence binding included, stays for a later cleanup, and the run holds. A name the copy does
 not carry, whose pane and workspace match no seat record, is left running, rules file included;
 the owner removes it with `team remove <name> --abandon`. A pane those ids do match is closed and
 the seat is dropped, whatever name herdr gave it. A team file that no longer validates is replaced
@@ -95,7 +122,7 @@ gate asked and answered, the refusal standing unless the gate placed the caller.
 
 ## What it prints
 
-    watch: its pid is only in the state; left running
+    watch: the stop signal was sent
     claude-keeper: stopped
     session beacon: stopped and cleared
 
@@ -107,9 +134,14 @@ line says it was created for that seat and never named. A pane herdr named with 
 than the seat's name is closed the same way when one seat records that pane and that workspace,
 and the line names the title. Neither close happens for the orchestrator's or the operator's
 seat when a seat calls: that seat is left running, whatever herdr calls its pane, and the skip
-line is the one in the table below. A name no seat record accounts for is left running. A watch the
-state records, and whose pid is alive, prints
-`watch: its pid is only in the state; left running` — this run does not kill it. The session prints
+line is the one in the table below. A name no seat record accounts for is left running. A watch
+whose pid the state records and no pane does, and which is alive, is stopped only when the live
+process proves it is this session's watch — its own CLI entry, its command line and its start
+instant against `started_at` — and prints `watch: the stop signal was sent`; one that does not stop prints
+`watch: pid <pid> did not stop` and holds the run. A pid that cannot be proved is left alone and
+prints `watch: <why>; it was not signalled and the record is kept`, and the run goes on. A watch
+recorded in a pane is not signalled here, and a record fenced by the session's epoch is the
+session host's own process and is never signalled. The session prints
 `session <session>: stopped and cleared` — herdr keeps a stopped session listed until it is
 deleted, so `down` clears the one it has itself just stopped, retrying while herdr still reports
 it running, and the next `up` starts from the beginning. A clear that does not happen prints
@@ -144,7 +176,6 @@ clearing key runs first — and a dry run says so in a note under its typing ste
 | `<name>: herdr lists more than one agent of this name; left as it is` | more than one live agent of an approved name |
 | `pane <pane>: not recorded for a seat of this team; left as it is` | an unnamed pane whose pane and workspace match no seat record |
 | `<seat>: pane <pane> is not the process this team launched; left as it is` | the state records that pane and workspace, and a launched process that is no longer in the pane |
-| `watch: its pid is only in the state; left running` | the state records a watch pid that is alive; this run does not kill it |
 
 It prints `session <session> is not running: nothing to stop` and exits 0 when there is nothing to
 stop at all.
@@ -231,11 +262,11 @@ state:
     claude-beacon: {stage: ready, cli: claude-code}
 ```
 
-Two seats idle, a watch running: this is the whole plan. The watch is named and left running.
+Two seats idle, a watch recorded in a pane: this is the whole plan. The watch is left running — a
+pane is how it is verified, and this run does not signal it.
 
 ```console
 $ team down --dry-run ; echo "exit $?"
-watch: its pid is only in the state; left running
 + herdr --session beacon pane run w1:p1 /exit
   wait until claude-keeper's pane is back at its shell (30 s at most); on a time-out it is left as it is
 + herdr --session beacon workspace close w1
@@ -260,7 +291,6 @@ The orchestrator's own call stops the team but never its own seat, so the sessio
 
 ```console caller=claude-keeper
 $ team down --dry-run ; echo "exit $?"
-watch: its pid is only in the state; left running
   skip claude-keeper: left running; only the owner stops the orchestrator's or the operator's seat
 + herdr --session beacon pane run w2:p1 /exit
   wait until claude-beacon's pane is back at its shell (30 s at most); on a time-out it is left as it is
@@ -307,7 +337,6 @@ seats:
 
 ```console
 $ team down --dry-run ; echo "exit $?"
-watch: its pid is only in the state; left running
 + herdr --session beacon pane run w1:p1 /exit
   wait until claude-keeper's pane is back at its shell (30 s at most); on a time-out it is left as it is
 + herdr --session beacon workspace close w1
@@ -325,7 +354,6 @@ For the owner, running that plan stops everything, and clears the session it sto
 
 ```console
 $ team down ; echo "exit $?"
-watch: its pid is only in the state; left running
 claude-keeper: stopped
 claude-beacon: stopped
 session beacon: stopped and cleared

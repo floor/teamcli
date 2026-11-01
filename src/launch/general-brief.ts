@@ -393,6 +393,9 @@ export function deliverBriefForAttribution(input: {
   state: SessionState;
   attributed: readonly string[];
   broadcast?: boolean;
+  /** Deliver to the attributed seats alone: a single-seat restart never drops the brief to the
+   *  rest of the team, whatever claims they hold. */
+  onlyAttributed?: boolean;
   handover?: string;
 }): BriefDeliveryReport {
   const attributed = new Set(input.attributed);
@@ -403,7 +406,7 @@ export function deliverBriefForAttribution(input: {
     (seat) => currentBriefClaim(input.state.briefs?.[seat.name])?.sha256 !== GENERAL_BRIEF_SHA256,
   );
   const names: string[] = [...attributed];
-  if (input.broadcast === true || behind) {
+  if (input.onlyAttributed !== true && (input.broadcast === true || behind)) {
     for (const seat of liveOrHuman) if (!attributed.has(seat.name)) names.push(seat.name);
   }
   const at = input.now.toISOString();
@@ -470,8 +473,11 @@ export function deliverBriefForAttribution(input: {
     // The message transport is the same record and claim, walked: the seat's own delivery order
     // is attempted with the send command's legs once this launch's writes stand. The record is
     // rebuilt here only to hand the walk its exact payload, and only when its id is the one the
-    // claim and the delivery agree on.
-    if (delivery.ok && reading.transport === 'message') {
+    // claim and the delivery agree on. A seat that already held this claim and its verified
+    // record is not walked again: a broadcast is a delivery of the claim, not a new
+    // notification, and a walk would only write a retry sidecar for a delivery the seat already
+    // has — including one it has read.
+    if (delivery.ok && delivery.existing !== true && reading.transport === 'message') {
       const payload = generalBriefRecord({
         to: seat,
         root: input.root,

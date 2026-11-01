@@ -64,6 +64,7 @@ import { deliverCodexNativeRoute } from '../src/send/push-adapters/codex-relay.t
 import { readHistory } from '../src/send/history.ts';
 import { pushPointer } from '../src/send/push.ts';
 import { recordBody, testIo } from './helpers.ts';
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 
 const NOW = new Date('2026-10-20T04:00:00.000Z');
 const MESSAGE_ID = '11111111-2222-4333-8444-555555555555';
@@ -554,7 +555,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
 
     // One queue process, bound to the very socket the probe read, under the same thread.
     expect(calls).toEqual([
@@ -609,7 +610,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex thread ${THREAD_ID} is active (waitingOnUserInput); codex queue would hold the message`;
@@ -640,7 +641,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex app-server answered for thread another-thread, not the bound thread ${THREAD_ID}`;
@@ -660,7 +661,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex thread ${THREAD_ID} does not report whether it accepts direct input; readiness is unknown`;
@@ -688,7 +689,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
@@ -935,8 +936,8 @@ describe('the ordinary send native leg (Codex)', () => {
     );
     const sent = await sendWith(scene, codexHomeServer);
     expect(sent.code).toBe(0);
-    expect(sent.err).toBe('');
-    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(sent.err).toContain(`${SEAT}: queued, no event adapter`);
+    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(sent.calls).toEqual([]);
     expect(codexHomeServer.requests).toEqual([]);
     if (recorded !== undefined) expect(recorded.requests).toEqual([]);
@@ -968,7 +969,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     expect(sent.code).toBe(0);
     expect(sent.err).toBe('');
-    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(sent.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     // The recorded URL is the one the queue is handed, verbatim, after the probe read that socket.
     expect(sent.calls).toEqual([
       ['queue', '--remote', `unix://${recordedSocket}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
@@ -1054,7 +1055,7 @@ describe('the implied native-first default for a Codex receiver', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
@@ -1064,7 +1065,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     ]);
     const entry = lastEntry(scene);
     expect(entry).toEqual(expect.objectContaining({ via: 'native', outcome: 'sent (unconfirmed)' }));
-    expect(entry.failed).toBeUndefined();
+    expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`]);
   });
 
   test('a signed off at the team level ranks the typed wake ahead of a live inbox', async () => {
@@ -1080,7 +1081,7 @@ describe('the implied native-first default for a Codex receiver', () => {
 
     expect(await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene))).toBe(0);
 
-    expect(io.out).toContain('via a 0600 drop file and one trigger line, falling back to the seat\'s own MCP inbox');
+    expect(io.out).toContain('via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane');
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
   });
 
@@ -1091,7 +1092,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('drop');
@@ -1105,7 +1106,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('mcp-inbox');
@@ -1118,7 +1119,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const code = await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene));
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line, then the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
+    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
     expect(queueCalls(scene.queueLog)).toEqual([]);
   });

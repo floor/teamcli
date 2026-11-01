@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
@@ -53,6 +54,13 @@ function place(launch = `claude ${FLAG}`): Place {
   mkdirSync(join(root, '.agents'));
   mkdirSync(join(root, 'home'), { mode: 0o700 });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamText(launch));
+  // A server started with no --file resolves its team from the registry record holding the seat.
+  upsertTeam(join(root, 'home'), teamIdOf(root), {
+    project: 'acme',
+    session: SESSION,
+    root,
+    roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
+  });
   return {
     root,
     home: join(root, 'home'),

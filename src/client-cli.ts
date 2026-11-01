@@ -32,6 +32,7 @@ import { resolveClientUpTarget } from './client/up-grant.ts';
 import { readTeams } from './registry/teams.ts';
 import { bundleSignsFile, isBundleName, type BundleName, type BundleOp } from './client/bundle-ops.ts';
 import { bundleCard, expandBundle, projectIdOfTeam } from './client/bundles.ts';
+import { clientPaneGuard } from './client/pane-guard.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
 import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
@@ -392,6 +393,11 @@ export function runClientGrantRequestMode(rawIo: Io, io: Io, args: Args, json: b
     else io.stderr(`team grant: ${why}\n`);
     return 'refused';
   };
+  // The pane guard, judged before the master grant or any key file is opened (see
+  // src/client/pane-guard.ts): a caller inside a team pane never issues from a client key. It is a
+  // machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  const pane = clientPaneGuard(io);
+  if (!pane.ok) return refuse(pane.why);
   const key = clientPublicInput(args.values['public-key']!, io.cwd);
   if (!key.ok) return refuse(key.why);
   const now = new Date();

@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
@@ -7,14 +8,21 @@ import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/iden
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
-import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
+import type { Agent } from '../registry/agents.ts';
+import { defaultSocketsDirs, socketAddressOf, type SocketAddress } from '../send/address.ts';
+import {
+  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketHeldReason, socketIneligibleReason,
+  type InboundDeclaration,
+} from '../send/inbound.ts';
+import { seatAgent } from '../send/resolve.ts';
+import { findTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
-import { launchModelWhenUnread, modelDiffers, runningModel, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, seatModel, wrapperSeat } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -35,9 +43,19 @@ export type Row = {
   pane: string;
   stored?: string;
   start_cwd?: string;
-  /** How a send would reach this seat: over the session's socket in its pane, else typed. */
+  /** How a send would reach this seat: over the session's socket in its pane, else typed. Set
+   *  only when the caller named the route's files (`ReachRoute`); a caller with no readings to
+   *  make leaves it off rather than guessing one. */
   reach?: 'socket' | 'typed';
 };
+
+/** What reading a row's reach needs beyond the comparison: the receiving team's state folder and
+ *  root, for the seat's launch-effective `crossSessionInbound` declaration and the mark a held
+ *  frame leaves, and the store folder a send resolves the seat's agent record under — whose CLI
+ *  and recorded address the walk reads first. `home` is the run's own resolved home, the same one
+ *  its other registry reads use; the reader also resolves the default itself when a caller leaves
+ *  it out, so an omission reads the default store and never an empty one. */
+export type ReachRoute = { dir: string; root: string; home: string };
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -167,6 +185,91 @@ export function paneShowsSeat(
   return true;
 }
 
+/**
+ * The team's registry record, read the way a plain-seat send reads it (`resolveTarget` in
+ * src/send/resolve.ts): by the id its root keys, then by its own name, then by its session; a
+ * class two records answer stops the walk rather than falling through to another spelling.
+ * Null when the store holds none — the send then takes the file's own seat, with no recorded
+ * address.
+ */
+export function registryTeamOf(home: string, root: string, team: TeamFile): TeamRecord | null {
+  for (const key of [teamIdOf(root), team.project, team.session]) {
+    const found = findTeams(home, key);
+    if (found.length > 0) return found.length === 1 ? (found[0] as TeamRecord) : null;
+  }
+  return null;
+}
+
+/**
+ * The agent record a plain-name send resolves for a seat of this team, over one read of the
+ * team's registry record: the record's own keys, then the seat's line in it. Null when either
+ * read finds nothing — the send then takes the file's own seat, with no recorded address.
+ */
+export function seatRecordsOf(home: string, root: string, team: TeamFile): (seat: string) => Agent | null {
+  const record = registryTeamOf(home, root, team);
+  if (record === null) return () => null;
+  const keys = [teamIdOf(record.root), record.project, record.session];
+  return (seat) => seatAgent(home, keys, seat);
+}
+
+/** One seat's socket leg as the send's own readings see it: the row's word, and the evidence
+ *  behind it, kept so a caller can say why a send would skip the socket rather than only that it
+ *  would. */
+export type SocketLeg = {
+  /** The word a status row carries: `socket` only while a send would dial. */
+  reach: 'socket' | 'typed';
+  /** The gate's reason a send would not dial (`socketIneligibleReason`'s words), or null. */
+  gate: string | null;
+  /** The address choice a send would make (`socketAddressOf`), or null when it finds none. */
+  address: SocketAddress | null;
+  /** The launch-effective declaration both readers read. */
+  declaration: InboundDeclaration;
+  /** The held-frame reason a send would skip on, or null. */
+  held: string | null;
+  /** Whether the socket the address names is old enough for the declaration (`inboundIsLive`). */
+  live: boolean;
+};
+
+/**
+ * One seat's socket leg, read by the send's own gate and address choice — the one reading
+ * `team status`'s reach column and `team check`'s skipped-socket finding both make. The identity
+ * is the one a plain-name send resolves: the seat's agent record when the team has a registry
+ * record, else the file's own line; a temporary seat has no line, so its record is its whole
+ * identity and its declaration is read with no launch, exactly as the send reads it. The store
+ * and the snapshot are the caller's, so both readers must pass the same ones.
+ */
+export function socketLegOf(input: {
+  seat: string;
+  /** The file's line, when it declares the seat. */
+  declared: Pick<Seat, 'cli' | 'launch' | 'inbound'> | undefined;
+  /** The agent record a plain-name send resolves, or null. */
+  agent: Agent | null;
+  /** The pane's process identity as the live read found it, or null where it could not read it. */
+  processes: PaneProcesses | null;
+  /** The receiving team's state folder, for the generated settings file and the held-frame mark. */
+  dir: string;
+  /** The receiving team's root, for a relative script in the launch line. */
+  root: string;
+  session: string;
+  sockets: string | readonly string[];
+}): SocketLeg {
+  const declaration = declaredInboundOf({
+    dir: input.dir,
+    root: input.root,
+    session: input.session,
+    seat: input.seat,
+    ...(input.declared?.launch !== undefined ? { launch: input.declared.launch } : {}),
+  });
+  const held = socketHeldReason(readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)), declaration);
+  // The recorded address is the one the send reads the pane for in this session; a record that
+  // names another session leaves the walk with the pane's own discovery.
+  const recorded = input.agent !== null && input.agent.reach.session === input.session ? input.agent.reach.address : null;
+  const address = socketAddressOf(recorded, input.processes, input.sockets);
+  const gate = socketIneligibleReason(input.agent?.cli ?? input.declared?.cli ?? '', input.declared?.inbound, declaration, held);
+  const live = address !== null && address.kind === 'path' && inboundIsLive(declaration, address.path);
+  return { reach: gate === null && live ? 'socket' : 'typed', gate, address, declaration, held, live };
+}
+
 // Compares the file and the state with the live session. Pure over what is handed in, but for
 // one probe: a seat reads `socket` only while the session's socket file is really there, so the
 // filesystem decides that word. `watch` is the watch values in force — the live file's under a
@@ -182,8 +285,9 @@ export function compare(
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
   trust = false,
-  signing?: ReadonlyMap<string, { model: string; version: string }>,
+  signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string }>,
   continuityIds?: ReadonlyMap<string, string | null>,
+  route?: ReachRoute,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -260,7 +364,7 @@ export function compare(
       const shell = noIdentity && paneHoldsShell(live.processes?.[agent.pane] ?? null);
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
-      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered !== undefined);
+      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered);
       const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
@@ -296,7 +400,8 @@ export function compare(
       // screen's, and herdr's `unknown` is not a state to show or a note to print. A screen no
       // profile reads leaves herdr's word standing, and the note with it.
       const theirWord = herdrUnreliable(seat.cli);
-      const word = theirWord ? screenWord(screen) : agent.status;
+      const switchReason = screen.kind === 'rate limit' ? screen.reason : undefined;
+      const word = switchReason !== undefined ? 'blocked' : theirWord ? screenWord(screen) : agent.status;
       // `done` is as free as `idle`: delivery types into either one (`deliver.ts`), and the
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = word === 'idle' || word === 'done';
@@ -305,8 +410,8 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const quotaOut = quiet ? quotaOutText(screen) : null;
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
+      const quotaOut = quiet && switchReason === undefined ? quotaOutText(screen) : null;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined ? ` (${switchReason})` : '';
       const stateText = quotaOut !== null
         ? `${quotaOut}${seat.parked ? ', parked' : ''}`
         : `${word}${mark}${seat.parked ? ', parked' : ''}`;
@@ -599,14 +704,49 @@ export function compare(
     }
   }
 
-  // How a send would reach each seat, read over the processes herdr already reported: `socket`
-  // while the pane's own processes carry a session socket (the rule the launch records with,
-  // address.ts), `typed` otherwise — a seat that is not a Claude Code one, a pane that is gone,
-  // or one herdr could not read. No extra herdr call: the reading is the row's own pane.
-  for (const row of rows) {
-    const declared = team.seats.find((seat) => seat.name === row.name);
-    const processes = live.processes?.[row.pane] ?? null;
-    row.reach = declared?.cli === 'claude-code' && socketOfProcesses(processes, sockets) ? 'socket' : 'typed';
+  // How a send would reach each seat, read by the send's OWN readings: its gate
+  // (`socketIneligibleReason` in src/send/inbound.ts) and its address choice (`socketAddressOf`
+  // in src/send/address.ts). `socket` only while a send to the seat would be dialed: the
+  // receiving session's launch-effective settings declare `crossSessionInbound: accept`, the team
+  // file authorizes that route (its `inbound: accept`, or this build's generated settings file on
+  // the line), its box holds no unconfirmed frame, and the address the walk would pick — the
+  // registry's recorded one where the store holds it, else the pane's own socket — is live for
+  // the declaration (`inboundIsLive`'s age check). `typed` for every other row: another CLI, a
+  // launch whose files do not admit the frame, a pane that is gone or the terminal host could not
+  // read, an address the walk would find stale, or a temporary seat no send can resolve. The
+  // identity is the one a plain-name send resolves: the seat's agent record when the team has a
+  // registry record, else the file's own seat. The store is the run's own resolved home (`home`,
+  // or the default home when a caller left it out): an omission reads the default store, never an
+  // empty one. A temporary seat has no file line, so its record is its whole identity and its
+  // declaration is read with no launch — exactly the send's read.
+  // Reading only the CLI and a pane socket promised the socket leg on launches the walk never
+  // dialed and picked an address it would not; the two readers must agree on the same store and
+  // the same snapshot. No extra terminal-host call: the reading is the row's own pane.
+  if (route !== undefined) {
+    const home = route.home ?? homedir();
+    const agentOf = seatRecordsOf(home, route.root, team);
+    for (const row of rows) {
+      const declared = team.seats.find((seat) => seat.name === row.name);
+      const temporary = declared === undefined && state.seats[row.name]?.temporary !== undefined;
+      if (declared === undefined && !temporary) continue;
+      const agent = agentOf(row.name);
+      if (declared === undefined && agent === null) {
+        // A temporary seat is not in the file: with no record behind it a send has no identity to
+        // address and refuses, so there is no route to promise.
+        row.reach = 'typed';
+        continue;
+      }
+      row.reach = socketLegOf({
+        seat: row.name,
+        declared,
+        agent,
+        processes: live.processes?.[row.pane] ?? null,
+        dir: route.dir,
+        root: route.root,
+        session,
+        sockets,
+      }).reach;
+    }
   }
 
   return { rows, differences, notes };
@@ -699,7 +839,7 @@ function notLaunched(
   verdict: 'gone' | 'replaced',
   screen: string | undefined,
 ): { row: Row; difference: Difference; note?: string } {
-  const running = seatModel(seat, screen);
+  const running = paneSeatModel(seat, screen);
   return {
     row: {
       name: seat.name,
@@ -731,8 +871,15 @@ function notLaunched(
  *  seat's declared display marked `(declared, unread)`. Never a difference — this is not a
  *  comparison. */
 function unverifiedModel(seat: Seat, screen: string | undefined): string {
-  const running = seatModel(seat, screen);
+  const running = paneSeatModel(seat, screen);
   return running ? `${running.model} ${running.version}` : `${seat.display} (declared, unread)`;
+}
+
+/** The screen's model where the pane is not proven to be the seat: a wrapper's declaration is
+ *  never shown as what such a pane runs, and the CLI's own default family is never read for the
+ *  seat's other maker's model. */
+function paneSeatModel(seat: Seat, screen: string | undefined) {
+  return wrapperSeat(seat) ? null : seatModel(seat, screen);
 }
 
 function modelOf(
@@ -744,10 +891,15 @@ function modelOf(
   team: TeamFile,
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
-  registered: boolean,
+  record: { cli?: string; launch?: string } | undefined,
 ): string {
   const screen = live.screens[agent.pane];
-  const running = registered ? runningModel(seat.cli, screen ?? '') : seatModel(seat, screen);
+  // A registered seat carries its record's signing as its model and version here, so the
+  // comparison is like for like: a wrapper's signed declaration against its banner, a bare
+  // Claude Code launch against the Claude family its screen names — with the record's own cli
+  // and launch as the provenance, never the file's. An unregistered seat has only the file's
+  // declaration, so the display read stands.
+  const running = record ? recordSignedModel(seat, record, screen) : seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -759,7 +911,7 @@ function modelOf(
     // the seat's declared display and marks both halves — declared, and unread. A registry
     // record's declaration is named as the registry's; without one the file's (or the state's
     // retained) declaration stands, still marked as a declaration and never as a reading.
-    if (registered) {
+    if (record !== undefined) {
       notes.push(`${seat.name}: its screen shows no model; the registry declares ${seat.display}, and the screen reading is unread`);
     } else {
       notes.push(`${seat.name}: its screen shows no model; the declared ${seat.display} stands, and the screen reading is unread`);
@@ -779,7 +931,7 @@ function modelOf(
   const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
   const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
   const detail = modelDrifts
-    ? `running ${observed}, ${registered ? 'registry' : 'file'} says ${file}`
+    ? `running ${observed}, ${record !== undefined ? 'registry' : 'file'} says ${file}`
     : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {

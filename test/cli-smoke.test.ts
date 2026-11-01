@@ -129,6 +129,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'brief', args: ['brief', 'rollout'], schemaKey: 'team.brief' },
   { command: 'swap', args: ['swap'], schemaKey: 'team.swap' },
   { command: 'workflow', args: ['workflow', 'check', 'workflow.yaml'], schemaKey: 'team.workflow' },
+  { command: 'agents', args: ['agents', 'prune'], schemaKey: 'team.agents' },
 ];
 
 /** One cold entry into src/cli.ts is a fresh Bun process; a healthy `--help` answers in well

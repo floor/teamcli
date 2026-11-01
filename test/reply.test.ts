@@ -22,6 +22,7 @@ import { REPLY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
+import { version } from '../src/version.ts';
 import { updateState } from '../src/state.ts';
 import { recordAt, testIo } from './helpers.ts';
 
@@ -122,7 +123,7 @@ describe('a reply is a record on the thread it answers', () => {
     sentTo('owner', SENT, { from: 'worker' });
     const result = await run([SENT, 'the answer'], { kind: 'owner' }, { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toEqual({
       kind: 'message',
@@ -148,7 +149,9 @@ describe('a reply is a record on the thread it answers', () => {
 
     const receipt = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.replied.json`), 'utf8')));
     if (receipt === null) throw new Error('no receipt was written');
-    expect(receipt.payload).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    const { writer, ...fields } = receipt.payload;
+    expect(fields).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
     const key = messageKeyState(home);
     if (key.kind !== 'key') throw new Error(key.kind);
     expect(verifyReceipt(receipt, key.key)).toBe(true);
@@ -179,7 +182,7 @@ describe('a reply is a record on the thread it answers', () => {
     sentTo('helper', SENT, { from: 'worker' });
     const result = await run([SENT, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toMatchObject({
       from: 'helper',
@@ -210,7 +213,7 @@ describe('a reply is a record on the thread it answers', () => {
     });
     const code = await runReply([SENT, 'answered'], io, host({ newId: () => REPLY }));
 
-    expect([code, io.out, io.err]).toEqual([0, 'team acme, session "acme"\nworker: replied\n', '']);
+    expect([code, io.out, io.err]).toEqual([0, 'team acme, session "acme"\nworker: delivered (drop)\n', '']);
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toMatchObject({
       from: 'helper',
@@ -251,7 +254,7 @@ describe('a reply is a record on the thread it answers', () => {
       schema: { name: 'team.reply', version: 1 },
       format: 1,
       status: 'replied',
-      action_summary: 'worker: replied',
+      action_summary: 'worker: delivered (drop)',
       project: 'acme',
       session: 'acme',
       record: REPLY_B,
@@ -505,7 +508,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\norchestrator: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\norchestrator: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(floorRoot, 'floor', 'orchestrator'), REPLY));
     expect(record.payload).toEqual({
       kind: 'message',
@@ -525,7 +528,9 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     // The receipt stays beside the answered record, where the local seat reads it.
     const receipt = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'lead'), `${SENT}.replied.json`), 'utf8')));
     if (receipt === null) throw new Error('no receipt was written');
-    expect(receipt.payload).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'lead', root, session: 'acme', at: NOW_ISO });
+    const { writer, ...fields } = receipt.payload;
+    expect(fields).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'lead', root, session: 'acme', at: NOW_ISO });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
   });
 
   test('a declared endpoint replaces the default, and the reply lands on that seat', async () => {
@@ -536,7 +541,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\ninbox: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\ninbox: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(floorRoot, 'floor', 'inbox'), REPLY));
     expect(record.payload).toMatchObject({
       to: 'inbox',
@@ -559,7 +564,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     expect(result.code).toBe(1);
     expect(result.err).toBe(
       `team reply: record ${SENT} was sent by the owner, and the owner's reply endpoint orchestrator@floor cannot be resolved: ` +
-        'orchestrator@floor: no team registry record matches "floor" (by id, project or session); nothing was written\n',
+        'orchestrator@floor: no team registry record matches "floor" (by id, name or session); nothing was written\n',
     );
   });
 

@@ -43,11 +43,17 @@ function programOf(program: ServiceProgram): string[] {
   if (program.presence === true) args.push('--presence');
   // The watch opt-in is separate: a unit may record either, both or neither.
   if (program.watch === true) args.push('--watch');
+  // An install admitted by a general grant: the run is admitted by the same grant, verified anew.
+  if (program.general !== undefined) args.push('--general', program.general.grant, '--key', program.general.key);
   return args;
 }
 
-function unitText(home: string, program: string[]): string {
+function unitText(home: string, program: string[], path?: string): string {
   const args = program.map((arg) => `    <string>${escapeXml(arg)}</string>`).join('\n');
+  // The installer's PATH, so the service finds herdr and the CLIs where the owner's shell does.
+  const env = path === undefined || path === ''
+    ? ''
+    : `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n    <string>${escapeXml(path)}</string>\n  </dict>\n`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,7 +64,7 @@ function unitText(home: string, program: string[]): string {
   <array>
 ${args}
   </array>
-  <key>RunAtLoad</key>
+${env}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <dict>
@@ -112,7 +118,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       try {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
         temporary = `${path}.${String(process.pid)}.tmp`;
-        writeFileSync(temporary, unitText(home, programOf(program)), { mode: 0o600 });
+        writeFileSync(temporary, unitText(home, programOf(program), program.path), { mode: 0o600 });
         chmodSync(temporary, 0o600);
         renameSync(temporary, path);
         temporary = null;

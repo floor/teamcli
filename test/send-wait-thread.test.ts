@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // `team send --wait` on the thread: across `drop`, `mcp-inbox` and `typed` legs, and for
 // `human: true` seats. A waited send writes the signed message record via the receiving seat's
 // delivery walk, then awaits the first verified reply record on the thread within the timeout
@@ -176,7 +177,9 @@ describe('team send --wait on the thread across delivery legs', () => {
       clearTimeout(replyTimer);
 
       expect(code).toBe(0);
-      expect(sendIo.err).toBe('');
+      // A declared `typed` word now walks the Codex seat's native runtime queue (no event leg is
+      // typing), so a send it does not take says no event adapter of this seat took it.
+      expect(sendIo.err).toBe(leg === 'mcp-inbox' ? '' : leg === 'typed' ? queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT) : queuedLine('worker'));
       assertMatchesOutputSchema(sendIo.out, SEND_OUTPUT_SCHEMA);
       const doc = JSON.parse(sendIo.out) as Record<string, unknown>;
       expect(doc).toMatchObject({
@@ -188,7 +191,8 @@ describe('team send --wait on the thread across delivery legs', () => {
         project: 'acme',
         session: 'acme',
         seat: 'worker',
-        channel: leg,
+        // No pane messaging: a typed word is never walked, so the walk ends at the bus drop.
+        channel: leg === 'typed' ? 'drop' : leg,
         thread: SENT_ID,
         reply: expect.stringContaining(`ack via ${leg}`),
       });
@@ -203,7 +207,9 @@ describe('team send --wait on the thread across delivery legs', () => {
         expect(host.enters).toEqual([]);
         expect(readPending(dropDir(w.root, 'worker'))).toEqual([]);
       } else {
-        expect(host.typed).toHaveLength(1);
+        // No pane messaging: the typed word is never walked, so nothing is typed or entered.
+        expect(host.typed).toEqual([]);
+        expect(host.enters).toEqual([]);
       }
       rmSync(base, { recursive: true, force: true });
       base = '';
@@ -238,7 +244,7 @@ describe('team send --wait on the thread across delivery legs', () => {
     const replyIo = testIo(w.root, workerCaller);
     const replyCode = await runReply([SENT_ID, 'late answer'], replyIo, { home: w.home, now: () => NOW });
     expect(replyCode).toBe(0);
-    expect(replyIo.out).toContain('lead: replied');
+    expect(replyIo.out).toContain('lead: delivered (drop)');
     expect(statusOf(workerDrops, SENT_ID, { to: 'worker', root: w.root, session: 'acme' }, key)).toBe('replied');
 
     const leadDrops = dropDir(w.root, 'lead');
@@ -291,7 +297,7 @@ describe('team send --wait on the thread across delivery legs', () => {
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(io.err).toBe(queuedLine('lead') + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
   });
 });
 

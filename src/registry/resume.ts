@@ -12,6 +12,11 @@ import { teamIdOf } from './teams.ts';
  *  whitespace, a control byte or a shell metacharacter is never a session id. */
 const SESSION_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+/** The part of a seat state a binding reads: the stable handle the record is compared by, and
+ *  the conversation the launch wrote beside it. A caller holding the whole seat state passes one;
+ *  a reader that has only these two facts (the delivery class) reads the same binding. */
+export type SeatBindingState = Pick<SeatState, 'id' | 'agent_session'>;
+
 /** What the two team-owned records agree on, when they agree. */
 export type RecordedSeatSession = {
   /** The agent's immutable registry id (`agt_`); the record this resume is bound to. */
@@ -70,7 +75,7 @@ export function recordedSeatSession(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): RecordedSeatSessionRead {
   const read = readSeatBinding(input);
   if (read.kind !== 'bound') return read;
@@ -100,7 +105,7 @@ export function recordedSeatContinuity(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): RecordedSeatSessionRead {
   const read = readSeatBinding(input);
   if (read.kind !== 'bound') return read;
@@ -114,7 +119,7 @@ export function recordedSeatContinuity(input: {
  * herdr session, another CLI, or an orphaned one is a doubt, and the state's copy is not allowed
  * to overrule it. `null` is a refusal: the caller treats the pane as not tied to the launch.
  */
-export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatState | undefined): string | null {
+export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatBindingState | undefined): string | null {
   if (read.kind === 'bound') return read.recorded.sessionId;
   if (read.kind === 'refused') return null;
   const own = state?.agent_session;
@@ -128,7 +133,7 @@ export function continuityIdOfSeat(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): string | null {
   return continuityIdOf(recordedSeatContinuity(input), input.state);
 }
@@ -174,13 +179,23 @@ type SeatBindingRead =
   | { kind: 'none'; why: string }
   | { kind: 'refused'; why: string };
 
-function readSeatBinding(input: {
+/** The registry's agent record for the seat, by every check a binding makes short of the
+ *  conversation id: team, seat, orphan mark, the herdr session it was written in, the CLI, and
+ *  the stable handle against the seat state. */
+type SeatRecordRead =
+  | { kind: 'bound'; agent: Agent; state: SeatBindingState | undefined }
+  | { kind: 'none'; why: string }
+  | { kind: 'refused'; why: string };
+
+type SeatLookup = {
   home: string;
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
-}): SeatBindingRead {
+  state: SeatBindingState | undefined;
+};
+
+function readSeatRecord(input: SeatLookup): SeatRecordRead {
   const team = teamIdOf(input.root);
   const agent = findAgent(input.home, {
     team,
@@ -205,14 +220,45 @@ function readSeatBinding(input: {
   if (state?.id !== undefined && agent.seat_handle != null && state.id !== agent.seat_handle) {
     return { kind: 'refused', why: 'the record is another agent for this seat' };
   }
+  return { kind: 'bound', agent, state };
+}
+
+function readSeatBinding(input: SeatLookup): SeatBindingRead {
+  const record = readSeatRecord(input);
+  if (record.kind !== 'bound') return record;
+  const { agent } = record;
   const id = agent.reach.agent_session;
   if (id === null || id === undefined || id === '') return { kind: 'none', why: 'the record names no agent session' };
   if (!SESSION_TOKEN.test(id)) return { kind: 'refused', why: 'the recorded id is not one session token' };
-  const live = state?.agent_session;
+  const live = record.state?.agent_session;
   if (live !== undefined && live !== '' && live !== id) {
     return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
   }
   return { kind: 'bound', agent, id, stateAgrees: live !== undefined && live !== '' };
+}
+
+/** What the registry holds for a seat when only the record matters, not the conversation. */
+export type RecordedSeatRecordRead =
+  | { kind: 'bound'; agent: Agent }
+  | { kind: 'none'; why: string }
+  | { kind: 'refused'; why: string };
+
+/**
+ * The registry's agent record for the seat, by the checks every binding makes — team, seat,
+ * orphan mark, the herdr session it was written in, the CLI, and the stable handle — without the
+ * conversation id a resume carries. This is the binding native delivery resolves the seat by: a
+ * record that names no conversation still binds the seat, while a missing or refused record
+ * leaves it reachable only by pull.
+ */
+export function recordedSeatRecord(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatBindingState | undefined;
+}): RecordedSeatRecordRead {
+  const record = readSeatRecord(input);
+  return record.kind === 'bound' ? { kind: 'bound', agent: record.agent } : record;
 }
 
 function recordedOf(read: { agent: Agent; id: string }): RecordedSeatSession {

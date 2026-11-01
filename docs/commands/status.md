@@ -80,19 +80,21 @@ difference `the watch's last pass was <n> minutes ago`, repaired with `team watc
 <session>`, which starts the watch in its workspace again.
 
 A watch the machine daemon hosts is a different watch from that one, and the reading says it after
-the daemon's own line: `watch: in daemon, last cycle <age>` for a watch whose last pass completed,
-with the age the record gives it and never a borrowed one, and `watch: in daemon, not yet cycled`
-while no pass has completed. The phases say themselves: `watch: starting in the daemon, not yet
+the daemon's own line: `watch: running in the daemon since <time>, version <v>` once it is cycling
+in this daemon — the time is the record's own start instant and the version is the build the
+daemon reports, so an install that changed the package's version or packaged commit is the
+identity the line names. The phases say themselves: `watch: starting in the daemon, not yet
 cycled`, `watch: stopping in the daemon`, `watch: stopped in the daemon (<reason>)` and `watch:
 failed in the daemon (<reason>)`, with `no reason recorded` where the record gives none. A watch
 standing down for a live pane watch reads `watch: standing by; a live pane watch owns this session
 (<reason>)`: it leaves that session to the pane watch and touches nothing there. A watch whose
 outbound effects are closed adds `watch: outbound effects blocked (no verified admitted sender is
 injected); it is not enforcing anything` — it can cycle while those effects are closed, and the
-reading never prints it as enforcing. The phase line says how old the last pass is, not whether it
-failed; the check names a failed pass. A stopped or failed watch is terminal in the record: nothing
-here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
-started again. A route the daemon records no watch for prints no such line: a watch exists only
+reading never prints it as enforcing. The phase line names the identity that is cycling, not
+whether its last pass failed; the check names a failed pass. A stopped or failed watch is terminal
+in the record: nothing here restarts it, and the daemon does not bring it back by itself, so it
+runs again only when it is started again. A route the daemon records no watch for prints no such
+line: a watch exists only
 where one was started on purpose. With more than one watched route, each line ends with its route,
 `… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
 difference, never in a total, never an exit.
@@ -198,14 +200,26 @@ are padded on the cleaned text, so a value can never move the cursor, paint the 
 second line. `--json` is the one text not cleaned: the document carries each string as it was read,
 escaped where JSON requires it, for a parser rather than a terminal.
 
-Every row of the seats table ends with the word for the channel a send would take to reach that
-seat: `socket` while the file declares the seat `cli: claude-code` and the pane's own processes
-carry a live session socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr
-could not read. No path opens a cross-session socket directly; `--wait` writes the signed record
-through the receiving seat's delivery walk and awaits a reply record on the thread. The word
-is read from the processes the comparison already holds, so no extra herdr call is made; only the
-socket file itself is looked up on disk. `--json` rows carry no such word: `reach` is the plain
-table's alone.
+Every row of the seats table ends with the word for whether the send's socket leg is eligible for
+that seat. The word is read with the send's own readings — its gate and its choice of address — so,
+over the same resolved registry home and the same snapshot, the table never promises a route the
+send would refuse: `socket` only while the seat is a `claude-code` one,
+the receiving session's launch-effective settings declare `crossSessionInbound: accept`, the
+team file authorizes the route (its `inbound: accept`, or the generated settings file this build
+writes onto a launch it started), its box holds no frame the declaration has not since re-confirmed,
+and the address the send would dial — the registry's recorded socket where the store holds the
+seat's agent record, the pane's own processes otherwise — is no older than that declaration; and
+`typed` otherwise — another CLI, a launch that does not admit the frame, a pane that is gone, one
+the terminal host could not read, a recorded socket the walk would find stale. A temporary seat has
+no file line: its agent record is its identity and address, and its declaration is the generated
+settings file its launch left, read exactly as a send reads them. Past that snapshot the row is a
+reading, not a promise: the send's own admission checks, an earlier leg that succeeds, a size
+limit, or a socket that vanishes after the read are its findings to make. No path opens a
+cross-session socket directly; `--wait` writes the signed record through the receiving seat's
+delivery walk and awaits a reply record on the thread. The word is read from the processes the
+comparison already holds, so no extra terminal-host call is made; the seat's own files and the
+agent record a send would resolve are read from disk. `--json` rows carry no such word: `reach` is
+the plain table's alone.
 
 ## Example
 

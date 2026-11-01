@@ -269,7 +269,7 @@ describe('a project leads cross their teams', () => {
     const code = await runSend(['lead-io@teamcli.io', BODY], testIo(w.rootA, seatCaller('lead')), host);
 
     expect(code).toBe(0);
-    expect(ioLeadPane.typed.length).toBe(1);
+    expect(ioLeadPane.typed.length).toBe(0);
     const drop = dropOf(w.rootB, 'teamcli-io', 'lead-io');
     const sender = readAgents(w.home).find((one) => one.reach.team === teamIdOf(w.rootA) && one.reach.seat === 'lead');
     expect(drop.text).toContain(sender?.id ?? 'no agent id');

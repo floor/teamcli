@@ -7,8 +7,9 @@ import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
-import { launchBinary } from './line.ts';
+import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
+import type { TeamFile } from '../file/types.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
  *  reads a trust prompt's terminal with, when `team answer` may be racing it. */
@@ -35,6 +36,13 @@ export type Op =
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * True when the command this step runs carries the seat's rules line: decided here, where
+       * the line is given to `launchCommand`, never re-derived from the built command — the line
+       * is shell-quoted on it, and a profile with no launch prompt carries none at all. Absent on
+       * a hand-built op: no rules ride its launch.
+       */
+      rulesCarried?: boolean;
       /**
        * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
        * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
@@ -111,7 +119,13 @@ export type Op =
   /** A seat already running, painted from the file without typing into it or launching it again.
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
   | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
-  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
+  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string;
+      /**
+       * Whether a launch line for this seat can carry the rules at all: its profile names a
+       * launch prompt. False means no launch ever carries them, so the left-out report says that
+       * and never advises a restart.
+       */
+      launchCanCarryRules?: boolean }
   | { do: 'ready'; seat: string; rules: 'option' | 'message' | 'prepend'; notice?: string }
   | {
       do: 'repair';
@@ -358,6 +372,21 @@ export interface UpSeat {
   grantKeep?: string;
 }
 
+/**
+ * Whether this plan runs the seat's launch line now: the one test every launch step and every
+ * launch refusal uses. A fresh seat launches; so does a recorded seat whose pane the host still
+ * lists while no agent is live in it (a launch that stopped before ready) — the line runs again
+ * in that pane, with no workspace made. A waiting seat never launches, and a ready or named one
+ * is left as it is.
+ */
+export function launchWillRun(
+  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting'>,
+): boolean {
+  const waiting = seat.waiting;
+  const fresh = !waiting && (seat.stage === undefined || !seat.pane);
+  return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+}
+
 export interface UpInput {
   /** The project root; seats start in it. */
   root: string;
@@ -426,6 +455,10 @@ export interface UpInput {
    * path is guessed in the state's place. Present on every real launch.
    */
   stateDir?: string;
+  /** The team the run already read. The seat policies are resolved from it, so a team whose
+   *  record lives in the registry is not looked up again through a file path it has no file at
+   *  (which reads as unresolved, and a managed Codex endpoint would then never be planned). */
+  team?: TeamFile;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -450,6 +483,134 @@ function watcherNote(watcher: CliWatcher): string {
 }
 
 /** Every step of `team up`, in order. Nothing here runs anything. */
+/** One shell word without its quoting: `'a'\''b'` and `"a\"b"` read as the shell reads them. */
+function unquoteWord(word: string): string {
+  let out = '';
+  for (const part of word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? []) {
+    if (part.startsWith("'")) out += part.slice(1, -1);
+    else if (part.startsWith('"')) out += part.slice(1, -1).replace(/\\(.)/g, '$1');
+    else if (part.startsWith('\\')) out += part.slice(1);
+    else out += part;
+  }
+  return out;
+}
+
+/**
+ * The configuration a managed Codex endpoint is started with, from the seat's own line.
+ * Measured on codex-cli 0.161.0: a TUI attached with `--remote` runs its turns under the
+ * app-server's configuration, not its own: the TUI's `-c mcp_servers.…` pairs are not loaded
+ * (the seat loses its team inbox server), and a resumed thread's permissions are the
+ * app-server's (a danger-full-access thread read "Workspace" under a default app-server and
+ * "Full Access" under one started with `-c sandbox_mode="danger-full-access"`). So every `-c`
+ * pair of the line, and its `-a`/`-s` overrides as their config keys — however the line spells
+ * them (spaced, `=`-joined, or attached short) — go to the endpoint. A bare `--` ends option
+ * parsing as it does for the CLI: every word after the first one is positional (a prompt), so a
+ * prompt word shaped like an option never becomes an endpoint permission.
+ */
+export function codexEndpointConfig(command: string): string[] {
+  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const config: string[] = [];
+  const toml = (value: string): string => JSON.stringify(value);
+  // A joined value is part of its flag's own word: `--flag=value`, and a short option's
+  // `-a=value` or `-avalue`. Measured on codex-cli 0.161.0: `codex -abogus --version` exits 2
+  // with "invalid value 'bogus' for '--ask-for-approval <APPROVAL_POLICY>'" and `codex
+  // -aon-request -sworkspace-write completion bash` exits 0, so the attached forms name the
+  // same options as the spaced ones.
+  const joined = (raw: string): { flag: string; value: string } | null => {
+    const long = /^(--[a-z-]+)=(.*)$/.exec(raw);
+    if (long !== null) return { flag: long[1]!, value: unquoteWord(long[2]!) };
+    const short = /^-([as])=(.*)$/.exec(raw);
+    if (short !== null) return { flag: `-${short[1]!}`, value: unquoteWord(short[2]!) };
+    const attached = /^-([as])(.+)$/.exec(raw);
+    if (attached !== null) return { flag: `-${attached[1]!}`, value: unquoteWord(attached[2]!) };
+    return null;
+  };
+  // A bare `--` ends option parsing, as it does for the CLI: every later word is positional (the
+  // prompt), in every spelling — spaced, `=`-joined, attached short or long. An attached-looking
+  // prompt word such as `-sdanger-full-access` after it names no sandbox.
+  let positional = false;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--') { positional = true; continue; }
+    if (positional) continue;
+    const next = i + 1 < words.length ? unquoteWord(words[i + 1]!) : undefined;
+    const own = joined(word);
+    const flag = own === null ? word : own.flag;
+    const value = own === null ? next : own.value;
+    const took = own === null ? 1 : 0;
+    if ((flag === '-c' || flag === '--config') && value !== undefined) {
+      config.push('-c', value); i += took;
+    } else if ((flag === '-a' || flag === '--ask-for-approval') && value !== undefined && !value.startsWith('-')) {
+      config.push('-c', `approval_policy=${toml(value)}`); i += took;
+    } else if ((flag === '-s' || flag === '--sandbox') && value !== undefined && !value.startsWith('-')) {
+      config.push('-c', `sandbox_mode=${toml(value)}`); i += took;
+    } else if (word === '--dangerously-bypass-approvals-and-sandbox') {
+      config.push('-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"');
+    } else if (word === '--full-auto') {
+      config.push('-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"');
+    }
+  }
+  return config;
+}
+
+/**
+ * The line a managed Codex seat runs once it attaches to its endpoint. Keep the selected
+ * conversation; permission overrides belong to `codexEndpointConfig` on a remote resume.
+ * Other configuration and quoted arguments stay on the line. A fresh launch is unchanged.
+ *
+ * Measured 2026-10-31 on codex-cli 0.161.0 with a synthetic home, local response fixture and
+ * scratch terminal session: start the endpoint with `-c approval_policy="never" -c
+ * sandbox_mode="danger-full-access"`, launch a fresh thread with `-a never -s danger-full-access`,
+ * then detach and run `codex resume <id> --remote <endpoint>` without permission overrides.
+ * Repeat after stopping that endpoint and starting another with the same config. All three
+ * completed turns recorded `approval_policy: "never"` and `sandbox_policy.type:
+ * "danger-full-access"` in the synthetic rollout's `turn_context`, on the same thread.
+ * Evidence: ~/Code/floor/briefs/teamcli-notes/briefs-0.5.10/a7-measurement/measurement.json
+ * and provider.py. This measurement used an endpoint carrying the line's config words.
+ */
+export function remoteCodexCommand(command: string): string {
+  // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
+  // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
+  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  if (!words.includes('resume')) return command;
+  const kept: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--') {
+      kept.push(...words.slice(i));
+      break;
+    }
+    if (['--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
+      || /^--(ask-for-approval|sandbox)=/.test(word)
+      // A short option's joined value: `-a=value` or the attached `-avalue` (measured on
+      // codex-cli 0.161.0: `-abogus` is refused as `--ask-for-approval`'s invalid value and
+      // the valid attached forms run). Both are permission overrides for the endpoint.
+      || /^-[as]=?.+/.test(word)) continue;
+    if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
+      if (words[i + 1] !== undefined && !words[i + 1]!.startsWith('-')) i++;
+      continue;
+    }
+    const config = word === '-c' || word === '--config';
+    const inline = word.startsWith('--config=');
+    const value = config ? words[i + 1] : inline ? word.slice('--config='.length) : undefined;
+    if (value !== undefined) {
+      // A config value is one shell word even when quotes or spaces occur inside it.
+      const key = unquoteWord(value).split('=', 1)[0]!.trim();
+      if (/^(approval_policy|sandbox_mode|sandbox_workspace_write)(\.|$)/.test(key)) {
+        if (config) i++;
+        continue;
+      }
+      if (config) {
+        kept.push(word, value);
+        i++;
+        continue;
+      }
+    }
+    kept.push(word);
+  }
+  return kept.length === words.length ? command : kept.join(' ');
+}
+
 export function upPlan(input: UpInput): Step[] {
   const { session } = input;
   const steps: Step[] = [];
@@ -679,7 +840,7 @@ export function upPlan(input: UpInput): Step[] {
     const fresh = !waiting && (seat.stage === undefined || !seat.pane);
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
-    const wouldLaunch = !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+    const wouldLaunch = launchWillRun(seat);
     if (seat.launchProblem && wouldLaunch) {
       steps.push({
         // The dry run prints the finding in full, as it always did; the record is left out with
@@ -765,7 +926,9 @@ export function upPlan(input: UpInput): Step[] {
       codexDaemon = codexDaemonForSeat({
         home: input.home,
         root: input.root,
-        ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        ...(input.team !== undefined
+          ? { team: input.team }
+          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
         seat: seat.name,
         session,
       });
@@ -779,13 +942,19 @@ export function upPlan(input: UpInput): Step[] {
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
+    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
+    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command for the
+    // line, which is shell-quoted there.
+    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -793,12 +962,14 @@ export function upPlan(input: UpInput): Step[] {
     const managedCodex = profile.cli === 'codex'
       && codexDaemon === 'on'
       && input.stateDir !== undefined
-      && launchBinary(seat.launch) === profile.binary
+      && launchedCliBinary(seat.launch) === profile.binary
       && !/(^|\s)--remote(=|\s|$)/.test(command)
+      // A resume line attaches too: the attach sheds its permission overrides
+      // (`remoteCodexCommand`), which codex-cli 0.161.0 refuses on a remote resume.
       && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
-    if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
+    if (wouldLaunch) {
       const said = takeNotice();
       const watched = watcherNote(watcher);
       // `would launch` joins a notice or a resume gap; a plain watcher note stands alone.
@@ -809,7 +980,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;
@@ -877,12 +1048,15 @@ export function upPlan(input: UpInput): Step[] {
       }
       const said = takeNotice();
       const file = seat.rulesFile;
+      // Where no launch prompt exists, restart builds the same line the launch did: the note
+      // says no launch carries them rather than advising a restart that cannot.
+      const carryNote = profile.rulesPrompt === null
+        ? 'the rules go to a per-seat file in the project state folder; its CLI takes no initial prompt at launch, so no launch carries them, and a seat is never typed into: it is left out'
+        : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them';
       steps.push({
         kind: 'run',
-        argv: herdr(session, 'pane', 'send-text', pane, file.line),
-        note: said
-          ? `${said}; the rules go to a per-seat file in the project state folder first; the line that points at it is typed only at an empty idle prompt, read back row by row, then Enter`
-          : 'the rules go to a per-seat file in the project state folder first; the line that points at it is typed only at an empty idle prompt, read back row by row, then Enter',
+        argv: ['team', 'rules', '--with-launch', file.line],
+        note: said ? `${said}; ${carryNote}` : carryNote,
         do: {
           do: 'deliver',
           seat: seat.name,
@@ -892,6 +1066,7 @@ export function upPlan(input: UpInput): Step[] {
           path: file.path,
           line: file.line,
           seconds: profile.idleTimeout,
+          launchCanCarryRules: profile.rulesPrompt !== null,
           pane: seat.pane,
           ...(said ? { notice: said } : {}),
         },

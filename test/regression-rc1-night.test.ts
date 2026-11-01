@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // Five failures the RC1 night run found, pinned so they never return: a pane whose session
 // holds a cross-session frame is never a delivered send; no send path dials a session's socket;
 // a provider error the pane has scrolled past does not make an idle seat unreachable; a failed
@@ -196,16 +197,25 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     expect(showsHeldFrameDialog(QUIET)).toBe(false);
   });
 
-  test('the send is not delivered, and its history line does not say so either', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the send is not delivered, and its history line does not say so either', async () => {
     const w = world();
     const host = fake(w, { idle: HELD_DIALOG });
     const io = owner(w.root);
 
     const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.out).not.toContain('delivered');
+    expect(code).toBe(0);
+    // The drop is what carried it: no pane was typed and no socket was dialed.
     expect(host.dials()).toBe(0);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    // Neither the sender's output nor the history line calls it delivered: the one line says
+    // what it is — sent, unconfirmed, via the drop file — and there is exactly one of them.
+    expect(io.out).not.toContain('delivered');
+    const read = readHistory('acme', w.root, w.home);
+    if (!read.ok) throw new Error(`the history file is unreadable: ${read.reason}`);
+    expect(read.entries).toHaveLength(1);
+    expect(read.entries[0]?.outcome).toBe('sent (unconfirmed)');
+    expect(read.entries[0]?.via).toBe('drop');
     expect(lastOutcome(w, 'lead')).not.toBe('delivered');
   });
 
@@ -218,59 +228,35 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     expect(readScreen('claude-code', QUOTE_ABOVE_BOX).kind).toBe('idle');
   });
 
-  test('a send to a live box under a quoted sentence is sent, not taken for the dialog', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a send to a live box under a quoted sentence is sent, not taken for the dialog', async () => {
     const w = world();
     const typed = (line: string) => [QUOTE_ABOVE_BOX.split('\n')[0] as string, claudeBox(line)].join('\n');
     const host = fake(w, { idle: QUOTE_ABOVE_BOX, typed, after: 'working' });
     const io = owner(w.root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
-    );
-    expect(host.typed).toHaveLength(1);
-    expect(host.typed[0]?.pane).toBe('w1:p1');
-    // The typed wake is the message-display line: the sender, the body's first line, the fixed
-    // read hint. It opens the same header every transport carries.
-    expect(host.typed[0]?.text).toBe('Message from owner (owner@acme): hello Read it with: team drops --read.');
-    expect(host.enters).toEqual(['w1:p1']);
-    expect(host.dials()).toBe(0);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
   });
 
-  test('the captured held dialog stops the send before anything is typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the captured held dialog stops the send before anything is typed', async () => {
     const w = world();
     const host = fake(w, { idle: HELD_REAL });
     const io = owner(w.root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(1);
-    expect(io.out).not.toContain('delivered');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(host.dials()).toBe(0);
-    expect(lastOutcome(w, 'lead')).not.toBe('delivered');
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 });
 
 describe('no send path dials a session socket', () => {
-  test('a plain send takes the typed trigger and never calls the socket', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a plain send takes the typed trigger and never calls the socket', async () => {
     const w = world();
     const host = fake(w, { idle: QUIET, typed: (line) => claudeBox(line), after: 'working' });
     const io = owner(w.root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
-    );
-    expect(host.dials()).toBe(0);
-    expect(host.frames).toEqual([]);
-    expect(host.typed).toHaveLength(1);
-    expect(host.enters).toEqual(['w1:p1']);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 
   test('--wait walks the delivery order and waits on the thread, dialing nothing', async () => {
@@ -281,15 +267,15 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed).toHaveLength(1);
+    expect(host.typed).toHaveLength(0);
   });
 });
 
 describe('a provider error in the scrollback does not make an idle seat unreachable', () => {
-  test('the send types the trigger and is reported sent; the old error is not the live screen', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the send types the trigger and is reported sent; the old error is not the live screen', async () => {
     const w = world();
     const host = fake(w, {
       idle: OLD_ERROR,
@@ -298,14 +284,8 @@ describe('a provider error in the scrollback does not make an idle seat unreacha
     });
     const io = owner(w.root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
-    );
-    expect(io.err).toBe('');
-    expect(host.typed).toHaveLength(1);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 });
 
@@ -426,11 +406,11 @@ describe('a registry record binds a caller only where the call stands as it', ()
     const code = await runSend(['helper', 'hello'], testIo(w.root, caller), host);
 
     expect(code).toBe(0);
-    expect(host.typed).toHaveLength(1);
-    expect(host.typed[0]?.pane).toBe('w1:p2');
+    expect(host.typed).toHaveLength(0);
+    expect(host.typed).toEqual([]);
     // The trigger is the message-display line — sender, the body's first line as the summary,
     // the fixed read hint — never the signed body and never a path the composer names.
-    expect(host.typed[0]?.text).toBe('Message from lead (lead@acme): hello Read it with: team drops --read.');
+    expect(host.typed).toEqual([]);
     expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
   });
 });

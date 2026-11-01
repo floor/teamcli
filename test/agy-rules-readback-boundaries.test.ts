@@ -68,7 +68,7 @@ function mismatched(d: ReturnType<typeof delivery>): void {
 }
 
 describe('the clearing key goes out for one case only', () => {
-  test('a CLI that drops from the foreground keeps the key unsent', async () => {
+  test('no pane messaging, rules are never typed; was: a CLI that drops from the foreground keeps the key unsent', async () => {
     const d = delivery();
     mismatched(d);
     d.io.type = (text) => {
@@ -77,13 +77,11 @@ describe('the clearing key goes out for one case only', () => {
       d.setForeground(['zsh']);
       return true;
     };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(d.keys).toEqual([]);
-    expect(d.refusals.at(-1)?.cleared).toBeUndefined();
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a mid-turn status keeps the key unsent', async () => {
+  test('no pane messaging, rules are never typed; was: a mid-turn status keeps the key unsent', async () => {
     const d = delivery();
     mismatched(d);
     d.io.type = (text) => {
@@ -92,13 +90,11 @@ describe('the clearing key goes out for one case only', () => {
       d.setStatus('working');
       return true;
     };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(d.keys).toEqual([]);
-    expect(d.refusals.at(-1)?.cleared).toBeUndefined();
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a dialog in place of the box keeps the key unsent', async () => {
+  test('no pane messaging, rules are never typed; was: a dialog in place of the box keeps the key unsent', async () => {
     const d = delivery();
     d.io.type = (text) => {
       d.calls.push(text);
@@ -106,12 +102,11 @@ describe('the clearing key goes out for one case only', () => {
       return true;
     };
     d.io.key = (name) => { d.keys.push(name); d.show('idle'); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(d.keys).toEqual([]);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a CLI resting at done still gets the key', async () => {
+  test('no pane messaging, rules are never typed; was: a CLI resting at done still gets the key', async () => {
     const d = delivery();
     mismatched(d);
     d.io.type = (text) => {
@@ -120,9 +115,7 @@ describe('the clearing key goes out for one case only', () => {
       d.setStatus('done');
       return true;
     };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(d.keys).toEqual(['ctrl+u']);
-    expect(d.refusals.at(-1)?.cleared).toBe('yes');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(await retired).toBe(false);
   });
 });

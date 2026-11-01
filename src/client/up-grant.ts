@@ -194,11 +194,11 @@ export function verifyClientUp(input: {
   const op: BundleOp = input.op ?? 'up';
   const fail = (why: string, identified: ClientUpGrantRecord | null = null): ClientUpVerification => ({ ok: false, why, identified });
   // The pane guard, judged before the grant or the key is opened (see pane-guard.ts): a caller inside
-  // a team pane never acts as the client. Dev mode lifts it with its warning.
+  // a team pane never acts as the client. It is a machine guard: no dev-mode setting lifts it
+  // (OD-20261019-49).
   if (input.io !== null) {
-    const pane = clientPaneGuard(input.io, op, input.home);
+    const pane = clientPaneGuard(input.io);
     if (!pane.ok) return fail(pane.why);
-    if (pane.warning !== undefined) input.io.stderr(`${pane.warning}\n`);
   }
   const presented = readClientUpGrantFile(input.home, input.grantFile, op);
   if (!presented.ok) return fail(presented.why);

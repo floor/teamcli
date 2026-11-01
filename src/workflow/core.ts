@@ -74,6 +74,20 @@ export type StateEntryPlanItem = {
 
 export type PlanItem = EffectPlanItem | StateEntryPlanItem;
 
+/**
+ * The engine's error path (workflow-mvp-spec-draft-4 §2.6, docs b0f48b3): a refused entry effect
+ * is taken to the definition's top-level `error` state by the engine's own rule, never along a
+ * graph transition. `transition` stays the transition the envelope requested; `next.state` is the
+ * error state the run enters instead, and the daemon records the refused outcome beside it.
+ */
+export type ErrorPath = {
+  rule: 'entry-effect-refused';
+  from: string;
+  to: string;
+  effect: string;
+  occurrence: OccurrenceId;
+};
+
 export type StepDecision = {
   kind: 'step';
   revision: Revision;
@@ -85,6 +99,7 @@ export type StepDecision = {
   guard?: GuardAnswer;
   plan: readonly PlanItem[];
   next: { state: string; activation: number };
+  error?: ErrorPath;
 };
 
 export type DuplicateDecision = {
@@ -395,7 +410,15 @@ export function decide(input: CoreInput): CoreDecision {
     }
   }
 
-  // A state with entry effects is left only on their successful supplied outcomes.
+  // A state with entry effects is left only on their successful supplied outcomes. Two engine
+  // rules extend this check (workflow-mvp-spec-draft-4 §2.6, docs b0f48b3):
+  // - A lead-stop is supervisory: it may fire while an entry effect is pending or refused. The
+  //   daemon records a pending effect's outcome as `cancelled` before delivering the stop; this
+  //   core records nothing itself and never pretends the effect succeeded.
+  // - A refused entry effect takes the run to the definition's top-level `error` state by the
+  //   engine's own rule, not along the requested transition; the refused outcome stays recorded.
+  const supervisoryStop = signal.name === 'lead-stop';
+  let errorPath: Omit<ErrorPath, 'rule'> | undefined;
   for (const hook of state.onEnter) {
     const effect = effectOf(definition, hook.name);
     const occurrence = occurrenceId(run.runId, run.activation, hook.name);
@@ -405,6 +428,7 @@ export function decide(input: CoreInput): CoreDecision {
     );
     const outcome = selectOutcome(resolved, occurrence, effect.run.name, scope);
     if (outcome.length === 0) {
+      if (supervisoryStop) continue;
       return held(
         DECISION_CODES.evidenceMissing,
         `entry effect "${hook.name}" has no supplied outcome`,
@@ -423,49 +447,63 @@ export function decide(input: CoreInput): CoreDecision {
       );
     }
     if (outcome[0]!.record.result === 'refused') {
-      return held(
-        DECISION_CODES.entryEffectFailed,
-        `entry effect "${hook.name}" was refused`,
-        undefined,
-        undefined,
-        transitionRef,
+      if (supervisoryStop) continue;
+      const errorState = definition.error;
+      if (errorState === undefined) {
+        return held(
+          DECISION_CODES.entryEffectFailed,
+          `entry effect "${hook.name}" was refused`,
+          undefined,
+          undefined,
+          transitionRef,
+        );
+      }
+      invariant(
+        definition.states[errorState] !== undefined,
+        `the error state "${errorState}" is not in the pinned definition`,
       );
+      errorPath = { from: run.state, to: errorState, effect: hook.name, occurrence };
+      break;
     }
   }
 
-  // An exit occurrence from an earlier attempt is never re-planned; it needs its outcome too.
-  for (const hook of state.onLeave) {
-    const effect = effectOf(definition, hook.name);
-    const occurrence = occurrenceId(run.runId, run.activation, hook.name);
-    if (!run.occurrences.has(occurrence)) continue;
-    const outcome = selectOutcome(resolved, occurrence, effect.run.name, scope);
-    if (outcome.length === 0) {
-      return held(
-        DECISION_CODES.evidenceMissing,
-        `exit effect "${hook.name}" from an earlier attempt has no supplied outcome`,
-        { kind: 'entry-effect', occurrence },
-        undefined,
-        transitionRef,
+  // The error path abandons the requested transition: no exit hook of the refusing state runs
+  // (its entry never completed) and the transition's guard is not evaluated.
+  if (errorPath === undefined) {
+    // An exit occurrence from an earlier attempt is never re-planned; it needs its outcome too.
+    for (const hook of state.onLeave) {
+      const effect = effectOf(definition, hook.name);
+      const occurrence = occurrenceId(run.runId, run.activation, hook.name);
+      if (!run.occurrences.has(occurrence)) continue;
+      const outcome = selectOutcome(resolved, occurrence, effect.run.name, scope);
+      if (outcome.length === 0) {
+        return held(
+          DECISION_CODES.evidenceMissing,
+          `exit effect "${hook.name}" from an earlier attempt has no supplied outcome`,
+          { kind: 'entry-effect', occurrence },
+          undefined,
+          transitionRef,
+        );
+      }
+      if (outcome.length > 1) {
+        return refused(
+          DECISION_CODES.evidenceAmbiguous,
+          `${outcome.length} supplied outcomes answer exit occurrence "${occurrence}"`,
+          undefined,
+          undefined,
+          transitionRef,
+        );
+      }
+      invariant(
+        outcome[0]!.record.result !== 'refused',
+        'a refused exit-effect outcome has no frozen slice-1 code (later slice)',
       );
     }
-    if (outcome.length > 1) {
-      return refused(
-        DECISION_CODES.evidenceAmbiguous,
-        `${outcome.length} supplied outcomes answer exit occurrence "${occurrence}"`,
-        undefined,
-        undefined,
-        transitionRef,
-      );
-    }
-    invariant(
-      outcome[0]!.record.result !== 'refused',
-      'a refused exit-effect outcome has no frozen slice-1 code (later slice)',
-    );
   }
 
   // The transition's guard reads its one selector among the cited, in-scope records.
   let guardAnswer: GuardAnswer | undefined;
-  if (transition.guard !== undefined) {
+  if (errorPath === undefined && transition.guard !== undefined) {
     const guard = input.guards.guard(transition.guard.name);
     if (guard === undefined) {
       return refused(
@@ -560,24 +598,30 @@ export function decide(input: CoreInput): CoreDecision {
     };
   }
 
-  for (const hook of state.onLeave) {
-    const effect = effectOf(definition, hook.name);
-    const occurrence = occurrenceId(run.runId, run.activation, hook.name);
-    if (run.occurrences.has(occurrence)) continue;
-    const planned = planEffect('exit', hook.name, effect, occurrence);
-    if ('conflict' in planned) return planned.conflict;
-    plan.push(planned.item);
+  if (errorPath === undefined) {
+    for (const hook of state.onLeave) {
+      const effect = effectOf(definition, hook.name);
+      const occurrence = occurrenceId(run.runId, run.activation, hook.name);
+      if (run.occurrences.has(occurrence)) continue;
+      const planned = planEffect('exit', hook.name, effect, occurrence);
+      if ('conflict' in planned) return planned.conflict;
+      plan.push(planned.item);
+    }
   }
 
+  // The error path is the engine's own rule, not a graph transition: the entry item names the
+  // error state, and only that state's entry effects are planned.
+  const targetState =
+    errorPath !== undefined ? definition.states[errorPath.to]! : toState;
   plan.push({
     kind: 'state-entry',
     from: transition.from,
-    to: transition.to,
+    to: targetState.name,
     on: transition.on,
     revision: run.revision + 1,
   });
 
-  for (const hook of toState.onEnter) {
+  for (const hook of targetState.onEnter) {
     const effect = effectOf(definition, hook.name);
     const occurrence = occurrenceId(run.runId, next, hook.name);
     const planned = planEffect('enter', hook.name, effect, occurrence);
@@ -595,7 +639,10 @@ export function decide(input: CoreInput): CoreDecision {
     transition: transitionRef,
     ...(guardAnswer !== undefined ? { guard: guardAnswer } : {}),
     plan,
-    next: { state: transition.to, activation: next },
+    next: { state: targetState.name, activation: next },
+    ...(errorPath !== undefined
+      ? { error: { rule: 'entry-effect-refused' as const, ...errorPath } }
+      : {}),
   };
 }
 

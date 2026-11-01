@@ -30,7 +30,7 @@ The first release since 0.3.5, and the first on npm since it. The full list is i
   `team send --record <seat> --channel native --ms <n>` writes the delivery down. Every run ends
   in one word — `delivered`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable` or
   `refused`. A seat its file marks `assistant: true` is its entity's assistant, admitted to the
-  entity's main coordinator by its place in the chain, never by a role's name.
+  entity's lead coordinator by its place in the chain, never by a role's name.
 - **Projects.** A team names the project it sits in; `team projects` lists them, and
   `team status --project <name>` covers one project's teams.
 - **Seat state, live.** `team seats` gives each seat a state and the source it was read from, and

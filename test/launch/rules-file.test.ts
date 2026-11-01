@@ -599,7 +599,7 @@ describe("the inbox sentence follows the seat's CLI", () => {
     const { team, seat } = codexSeat();
     const lines = rulesOf(team, seat, '/nowhere').split('\n');
     const sentence =
-      '- If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.';
+      '- If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.';
     expect(lines.indexOf(sentence)).toBe(3);
     expect(lines.filter((line) => line.includes('inbox_check'))).toHaveLength(1);
     expect(lines[2]).toStartWith('- Never stop at a question:');

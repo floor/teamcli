@@ -27,8 +27,9 @@ import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
+import { readTeams } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { readRecord, verifyRecord } from '../send/record.ts';
+import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -192,7 +193,7 @@ function toolList(serving: Serving): unknown[] {
   const tools: unknown[] = [
     {
       name: 'inbox_check',
-      description: "List the messages waiting in this seat's inbox. Call it at the start of every turn.",
+      description: "List the messages waiting in this seat's inbox. Call it at the start and the end of every turn.",
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     {
@@ -246,18 +247,22 @@ function negotiate(params: unknown): string {
   return PROTOCOL_VERSION;
 }
 
-/** One channel notification: the message-display header, then the signed body whole. */
+/** One channel notification: the message-display header, then the signed body whole. The record's
+ *  complete raw payload must carry this key's signature before any field is read: a tampered or
+ *  unsupported record is shown nowhere, not even as a header. */
 function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
-  const looked = readRecord(join(serving.dropDir, id), id);
-  if (!looked.ok || looked.record === null) return null;
-  const payload = looked.record.payload;
+  const looked = readSealedRecord(join(serving.dropDir, id));
+  if (!looked.ok || looked.sealed === null) return null;
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key') return null;
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind !== 'ok' || auth.value.payload.id !== id) return null;
+  const payload = auth.value.payload;
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) return null;
   // A record a client wrote, and the seat's own general brief, are never channel messages: the
   // brief is served at the turn start under its claim, and an ack here would hold the receipt
   // name that reader needs.
   if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
-  const key = messageKeyState(serving.home);
-  if (key.kind !== 'key' || !verifyRecord(looked.record, key.key)) return null;
   const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
   if (sender === null) return null;
   const header = wakeHead(sender);
@@ -396,17 +401,22 @@ function ackTool(args: unknown, serving: Serving): unknown {
   if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
     return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
   }
-  const looked = readRecord(join(serving.dropDir, id), id);
-  if (!looked.ok || looked.record === null) return toolError(`no message ${id} is waiting in this inbox`);
-  const payload = looked.record.payload;
+  const looked = readSealedRecord(join(serving.dropDir, id));
+  if (!looked.ok || looked.sealed === null) return toolError(`no message ${id} is waiting in this inbox`);
+  // The complete raw payload is authenticated before any field is read or any receipt written.
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key') return toolError('no message key; nothing was acknowledged');
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind === 'shape') return toolError(`message ${id} is not a signed record`);
+  if (auth.kind === 'tampered') return toolError(`message ${id} does not verify with this home's key`);
+  if (auth.kind === 'unsupported') return toolError(`message ${id} is signed, and this version cannot read it: ${auth.reason}`);
+  const payload = auth.value.payload;
+  if (payload.id !== id) return toolError(`no message ${id} is waiting in this inbox`);
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) {
     return toolError(`message ${id} is not addressed to this inbox`);
   }
   if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
-  const key = messageKeyState(serving.home);
-  if (key.kind !== 'key') return toolError('no message key; nothing was acknowledged');
-  if (!verifyRecord(looked.record, key.key)) return toolError(`message ${id} does not verify with this home's key`);
   const outcome = publishRecordRead({
     dropDir: serving.dropDir,
     id,
@@ -417,6 +427,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
     key: key.key,
     at: new Date().toISOString(),
     readBy: CHANNEL_READ_BY,
+    ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
   if (outcome.kind === 'held') {
     return toolError(`${id}: not acknowledged: the ${outcome.status} receipt name is held by a file that does not verify for this message`);
@@ -535,11 +546,43 @@ export function handleLine(line: string, serving: Serving): string | null {
 }
 
 /**
+ * The root of the registered team that holds `seat`: the server's placement when no `--file` was
+ * given. The folder the server started in says nothing about the team — a seat starts in a lobby,
+ * which is not a work tree of any checkout — so the registry's roster is what names the team.
+ * `--session` narrows between teams that hold the same seat name, and a lone holder is returned
+ * even when its session differs, so the caller's own session check can name the difference.
+ */
+function registeredRoot(
+  home: string,
+  seat: string,
+  session: string | undefined,
+): { ok: true; root: string } | { ok: false; message: string } {
+  let teams: ReturnType<typeof readTeams>;
+  try {
+    teams = readTeams(home);
+  } catch (error) {
+    return { ok: false, message: `the team registry cannot be read: ${(error as Error).message}` };
+  }
+  const holders = Object.values(teams).filter((team) => team.roster.some((line) => line.seat === seat));
+  if (holders.length === 0) return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
+  const matching = session === undefined
+    ? holders
+    : holders.filter((team) => team.session === session || team.lobbies[session] !== undefined);
+  const candidates = matching.length > 0 ? matching : holders;
+  if (candidates.length > 1) {
+    const ids = candidates.map((team) => team.id ?? team.project).sort();
+    return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(candidates.length)} registered teams (${ids.join(', ')}); pass --file to say which` };
+  }
+  return { ok: true, root: candidates[0]!.root };
+}
+
+/**
  * Runs the stdio server for one seat and returns the process exit code. The seat must be one the
  * team file declares, and `--session`, when given, must be the team's own session: the server
  * serves exactly one inbox. `--file` is the team file the seat's launch read: a seat that starts
  * in a lobby has no team file in its folder, so the registration names the launch's file and the
- * server reads that instead of its own folder.
+ * server reads that instead of its own folder. Without `--file` the team comes from the registry
+ * record that holds the seat (narrowed by `--session`), never from the folder the server starts in.
  */
 export async function runMcpServe(
   options: ServeOptions,
@@ -556,7 +599,15 @@ export async function runMcpServe(
   if (options.epoch !== undefined && !isBriefEpoch(options.epoch)) {
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
-  const loaded = readTeamConfig(io.cwd, { ...(options.file === undefined ? {} : { file: options.file }), home: host.home });
+  // A named file is the launch's own team file, read as given. Without one the team is the
+  // registry's record for this seat: the folder the server starts in is a lobby for most seats,
+  // and reading a team file from it would be reading the checkout's folder, not the seat's team.
+  const registered = options.file === undefined ? registeredRoot(host.home, options.seat, options.session) : null;
+  if (registered !== null && !registered.ok) return refuse(registered.message);
+  const loaded = readTeamConfig(registered === null ? io.cwd : registered.root, {
+    ...(options.file === undefined ? {} : { file: options.file }),
+    home: host.home,
+  });
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;

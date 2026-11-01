@@ -1,6 +1,8 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
@@ -62,6 +64,11 @@ export interface Profile {
    *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
    *  says `prepend`. */
   rulesMode: 'option' | 'message' | 'prepend';
+  /** For a first-message seat: how its launch line carries the one line that points at its rules
+   *  file, so the line is never typed into its pane (0.5.9, src/send/no-pane-messaging.ts).
+   *  `''` is the CLI's positional initial prompt; any other value is the option that precedes
+   *  it (`-i`). Null: the CLI takes no initial prompt at launch, and its rules are not delivered. */
+  rulesPrompt: string | null;
   /** Rules the profile carries for every seat of this CLI, over the team file's: a safety line
    *  the CLI itself makes necessary. They ride with the file's rules in every delivery. Empty
    *  when the CLI needs none. */
@@ -103,6 +110,10 @@ export interface Profile {
   /** How the team inbox registers with this CLI, from the route a run measured. Null when no
    *  route is measured for this CLI: its seats stay on the drop and typed legs. */
   mcpInbox: InboxBlock | null;
+  /** How an idle seat of this CLI can be told it has a message, as the profile's own
+   *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
+   *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
+  delivery: DeliveryClass;
   /** Seconds to wait for the idle prompt after a launch. */
   idleTimeout: number;
   /** Seconds to wait for the pane's shell after the exit command. */
@@ -158,6 +169,16 @@ export function shellQuote(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
+/** A profile's measured way of reaching an idle seat. `push`: an event adapter wakes it (the
+ *  development channel, the cross-session socket); `between-turns`: its own runtime queue holds
+ *  the message for it (a Codex seat on a managed endpoint); `pull-on-turn`: an MCP inbox the
+ *  model reads when it takes a turn; `none`: no way to be woken while idle. A seat's effective
+ *  class also depends on what its launch installed (src/launch/delivery-class.ts). */
+export type DeliveryClass = 'push' | 'between-turns' | 'pull-on-turn' | 'none';
+
+/** The delivery classes a profile may declare, in the order an effective class is chosen. */
+export const DELIVERY_CLASSES = ['push', 'between-turns', 'pull-on-turn', 'none'] as const;
+
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
   /** Launch-line arguments, appended when a seat launches. `{seat}`, `{session}`, `{command}`
@@ -209,6 +230,44 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
 
+/** Add defaults as complete options: a line's own flag keeps its value, including when the
+ *  flag uses an alias or the value is joined with `=` or attached to a short flag. Quoted
+ *  arguments are kept whole so a flag appearing inside a prompt or config value does not
+ *  suppress a default. */
+function unattendedOptions(profile: Profile, launch: string): string[] {
+  const aliases: Record<string, string> = profile.cli === 'codex'
+    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
+    : {};
+  const key = (word: string): string => {
+    const flag = word.split('=', 1)[0]!;
+    const alias = aliases[flag];
+    if (alias !== undefined) return alias;
+    // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
+    // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
+    // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
+    const attached = /^-([as]).+$/.exec(flag);
+    return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
+  };
+  const words = launch.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const flags = new Set<string>();
+  for (const word of words) {
+    if (word === '--') break;
+    if (word.startsWith('-')) flags.add(key(word));
+  }
+  const options: string[] = [];
+  for (let i = 0; i < profile.unattended.length; i++) {
+    const flag = profile.unattended[i]!;
+    const next = profile.unattended[i + 1];
+    const value = !flag.includes('=') && next !== undefined && !next.startsWith('-') ? next : undefined;
+    if (!flags.has(key(flag))) {
+      options.push(flag);
+      if (value !== undefined) options.push(value);
+    }
+    if (value !== undefined) i++;
+  }
+  return options;
+}
+
 /**
  * The command a seat's pane runs: the unattended flag in its environment, the
  * file's launch line, then the profile's options and, where the CLI takes
@@ -224,9 +283,10 @@ export function launchCommand(
   place?: InboxPlace,
   displayName?: string,
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  rulesLine?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
-  const options = profile.unattended.filter((option) => !words.has(option));
+  const options = unattendedOptions(profile, launch);
   if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
@@ -246,6 +306,12 @@ export function launchCommand(
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
     && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
     options.push('--settings', cliHook);
+  }
+  // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
+  // is never typed into the pane.
+  if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
+    if (profile.rulesPrompt !== '') options.push(profile.rulesPrompt);
+    options.push(rulesLine);
   }
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
 }
@@ -652,7 +718,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
-const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
+const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
 const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
@@ -757,6 +823,15 @@ function unreadModelOf(entry: YamlEntry): 'launch' {
   const value = text(entry, 'unread_model');
   if (value !== 'launch') fail(entry.line, '"unread_model" must be launch');
   return 'launch';
+}
+
+/** The value of `delivery`: one word from the closed set, never a guess. */
+function deliveryOf(entry: YamlEntry): DeliveryClass {
+  const value = text(entry, 'delivery');
+  if (!(DELIVERY_CLASSES as readonly string[]).includes(value)) {
+    fail(entry.line, `"delivery" must be one of: ${DELIVERY_CLASSES.join(', ')}`);
+  }
+  return value as DeliveryClass;
 }
 
 /** The value of `herdr_status`: `reliable` (the default when the key is absent) or
@@ -1079,6 +1154,7 @@ function launchOf(root: YamlNode): Shipped {
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       rulesOption: rules.option,
       rulesMode: rules.mode,
+      rulesPrompt: rules.prompt,
       standingRules: standingRulesEntry ? strings(standingRulesEntry.value, 'standing_rules') : [],
       herdrStatus: herdrStatusEntry ? herdrStatusOf(herdrStatusEntry) : 'reliable',
       loginCheck: login.check,
@@ -1092,6 +1168,7 @@ function launchOf(root: YamlNode): Shipped {
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
+      delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,
@@ -1348,12 +1425,18 @@ function template(text: string, line: number): void {
   if (rest.includes('{') || rest.includes('}')) fail(line, 'a template is "{n}" or "{n:title}"');
 }
 
-function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null } {
-  if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null };
-  if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null };
+function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null; prompt: string | null } {
+  if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null, prompt: null };
+  if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null, prompt: null };
   const entries = mapping(node, 'rules');
-  only(entries, ['option']);
-  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option') };
+  only(entries, ['option', 'launch_prompt']);
+  const prompt = optional(entries, 'launch_prompt');
+  if (prompt !== undefined) {
+    if (optional(entries, 'option') !== undefined) fail(prompt.line, '"option" and "launch_prompt" are one or the other, not both');
+    const word = text(prompt, 'launch_prompt');
+    return { mode: 'message', option: null, prompt: word === 'positional' ? '' : word };
+  }
+  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option'), prompt: null };
 }
 
 /** The value of `compose_module`: a module shipped beside the profiles whose `compose` export
@@ -1456,4 +1539,33 @@ function optional(entries: YamlEntry[], key: string): YamlEntry | undefined {
 
 function fail(line: number, message: string): never {
   throw new YamlError(line, message);
+}
+
+/**
+ * Whether the conversation a resume line names is on disk for its CLI, read before the line
+ * runs: a resume of a conversation the CLI never wrote stops at the CLI's own error and leaves
+ * the pane at its shell. Claude Code keeps each conversation as
+ * `<config>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`, written on
+ * the conversation's first turn (measured on the owner's Mac: a `--session-id` launch that never
+ * took a turn left no file, and `claude --resume <id>` then said "No conversation found with
+ * session ID"). Null for a CLI whose store is not measured: the resume goes ahead as before.
+ */
+export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env): boolean | null {
+  if (cli !== 'claude-code' || id === '' || cwd === '') return null;
+  const config = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR !== '' ? env.CLAUDE_CONFIG_DIR : join(homedir(), '.claude');
+  return existsSync(join(config, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${id}.jsonl`));
+}
+
+/** The same launch line without its resume, for a CLI whose resume form is measured as a flag
+ *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. */
+export function withoutResume(cli: string, command: string): string | null {
+  if (cli !== 'claude-code') return null;
+  const stripped = command.replace(/(^|\s)(?:--resume|-r)(?:=|\s+)[A-Za-z0-9._-]+(?=\s|$)/, '$1').replace(/\s+$/, '').replace(/ {2,}/g, ' ');
+  return stripped === command ? null : stripped;
+}
+
+/** The screen a resume of a missing conversation leaves (Claude Code 2.1.x: "No conversation
+ *  found with session ID: <id>", then the shell). */
+export function conversationMissingOnScreen(cli: string, screen: string): boolean {
+  return cli === 'claude-code' && /No conversation found with session ID/.test(screen);
 }

@@ -22,7 +22,7 @@ import {
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
+import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -130,11 +130,17 @@ export type StartMachineDaemonInput = {
   roots: string[];
   startedBy?: string;
   version: string;
+  /** The packaged commit this build was installed from; null or absent in a source checkout. */
+  gitHead?: string | null;
   now?: () => Date;
   /** How often the state record's heartbeat is refreshed. */
   heartbeatMs?: number;
   /** How long a request may be in flight before it is reported as stuck. */
   stuckMs?: number;
+  /** How long a close waits for an endpoint refresh sent before its admission; 10 s in
+   *  production. Past it the close answers pending and keeps ownership. A test shortens it to
+   *  observe that answer without waiting the production bound. */
+  refreshCloseBoundMs?: number;
   /** `absent` until the broker handler lands; never `on` without the owner's go. */
   features?: DaemonFeatures;
   /** Injected for a test that must not touch the real terminal host's pane sources. */
@@ -142,6 +148,10 @@ export type StartMachineDaemonInput = {
   /** Starts one root's per-project send server. The default starts the real server; a test
    *  injects its own to read the start input without binding a socket. */
   sendStart?: typeof startSendDaemon;
+  /** Starts one root's bus server when the heartbeat finds it stopped. The default starts the
+   *  real server; a test injects its own to hold or observe a revive. It is never the start that
+   *  hosts the bus beside send: that one is `startBus` itself. */
+  busStart?: (input: StartBusInput) => Promise<StartBusResult>;
   /**
    * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
    * quiet foundation lands before any activation, and a daemon started only to host endpoints
@@ -241,11 +251,32 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = 5_000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
+/** The longest a close waits for an endpoint refresh sent before its admission. It sits above
+ *  the refresh's own bounds (the send probe, the bus probes and the start lock), so only a start
+ *  that never answers reaches it; that close answers pending and keeps ownership. */
+const REFRESH_CLOSE_BOUND_MS = 10_000;
 
 type InFlight = { op: string; since: number };
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether a run settles within `ms`, whether it resolves or rejects. The timer only decides
+ *  the close's answer: a run that loses the race is not cancelled, and nothing it owns is
+ *  released on the strength of the timer. */
+async function settlesWithin(run: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run.then(() => true, () => true),
+      new Promise<boolean>((done) => {
+        timer = setTimeout(() => done(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 type LockResult = { ok: true } | { ok: false; holder: number | null };
@@ -301,6 +332,7 @@ function snapshotOf(fields: {
   since: string;
   startedBy: string;
   version: string;
+  gitHead?: string | null;
   heartbeatAt: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
@@ -312,6 +344,7 @@ function snapshotOf(fields: {
     since: fields.since,
     startedBy: fields.startedBy,
     version: fields.version,
+    ...(fields.gitHead === undefined ? {} : { gitHead: fields.gitHead }),
     heartbeatAt: fields.heartbeatAt,
     stuck: fields.stuck,
     features: fields.features,
@@ -327,7 +360,15 @@ type EndpointWatch = {
   /** The checkout whose bus this heartbeat may restart. Null until the team file loads. */
   busRoot: string | null;
   busState: BusWatch;
+  /** Consecutive send probes that went unanswered (0.5.9). The endpoint runs on this same event
+   *  loop, so one probe can miss while a synchronous herdr read holds the loop; only
+   *  SEND_PROBE_MISSES misses in a row mark it failed, and an answer afterwards restores it. */
+  sendMisses: number;
+  /** What the send endpoint was before probes marked it failed, to restore on the next answer. */
+  sendWas: 'serving' | 'already-running' | null;
 };
+const SEND_PROBE_MISSES = 3;
+const SEND_PROBE_TIMEOUT_MS = 2_000;
 
 /** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
 function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
@@ -360,6 +401,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const features: DaemonFeatures = input.features ?? { broker: 'absent' };
   const heartbeatMs = input.heartbeatMs ?? HEARTBEAT_MS;
   const stuckMs = input.stuckMs ?? STUCK_MS;
+  const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   const socketPath = daemonSocketPath(home);
@@ -446,6 +488,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   let seatReady = false;
   let heartbeatAt = since;
   let closed = false;
+  /** The daemon's own log writer. Like its state record, it stops once admission has closed: a
+   *  probe or watch pass that settles afterwards must not recreate the machine folder to append
+   *  a line. The close's own pending note is written deliberately, as its state record is. */
+  const logLine = (line: string, afterClose = false): void => {
+    if (closed && !afterClose) return;
+    appendDaemonLog(home, line, now());
+  };
 
   const stuckNow = (): DaemonStuckRequest[] => {
     const at = now().getTime();
@@ -520,6 +569,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       since,
       startedBy,
       version: input.version,
+      gitHead: input.gitHead ?? null,
       heartbeatAt,
       features,
       stuck: stuckNow(),
@@ -538,6 +588,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         since,
         startedBy,
         version: input.version,
+        gitHead: input.gitHead ?? null,
         heartbeatAt,
         socket: socketPath,
         features,
@@ -625,6 +676,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         action: request.action ?? 'claim',
         mine: request.mine ?? false,
         now: at.getTime(),
+        // The registry home this daemon was started with: the one the route's team was read in,
+        // and the one the handler reads the seat's agent record from.
+        home,
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
@@ -642,7 +696,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     frameLimit: DAEMON_FRAME_LIMIT,
     onError: (error) => {
       // A listener error after the bind is recorded; the service manager still owns restarts.
-      appendDaemonLog(home, `machine socket: ${error.message}`, now());
+      logLine(`machine socket: ${error.message}`);
     },
     // The daemon's parser owns validation and takes the exact framed line; the decoded value the
     // host also offers is never a principal and is not needed here.
@@ -710,13 +764,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   for (const rootArg of input.roots) {
     const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
-    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch() };
+    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch(), sendMisses: 0, sendWas: null };
     watched.push(watch);
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     // Routed by what the loader actually opened, never by the spelling of the argument: two
@@ -725,14 +779,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (canonical === null) {
       status.why = 'the checkout root cannot be resolved to a folder';
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     if (duplicateRoute(routes, canonical) !== null) {
       status.root = canonical;
       status.why = 'this checkout is already hosted by this daemon';
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     status.root = canonical;
@@ -831,7 +885,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       } catch (error) {
         const why = `the runtime subscriptions were not built: ${messageOf(error)}`;
         health.unresolved(why);
-        appendDaemonLog(home, `presence ${route.root}: ${why}`, now());
+        logLine(`presence ${route.root}: ${why}`);
       }
       try {
         for (const failed of [...unresolvedTargets, ...(input.presenceUnproven?.(route, stateDir) ?? [])]) {
@@ -840,7 +894,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       } catch (error) {
         const why = `the runtime resolutions were not built: ${messageOf(error)}`;
         health.unresolved(why);
-        appendDaemonLog(home, `presence ${route.root}: ${why}`, now());
+        logLine(`presence ${route.root}: ${why}`);
       }
       presenceWork.push({
         route,
@@ -881,7 +935,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     } catch (error) {
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     if (send.kind === 'serving') {
@@ -909,7 +963,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       if (status.why === null) status.why = thresholds.refusals.map((refusal) => refusal.message).join('; ');
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: bus not hosted: ${status.why}`, now());
+      logLine(`root ${rootArg}: bus not hosted: ${status.why}`);
       continue;
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
@@ -918,7 +972,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         root: canonical,
         team: loaded.team,
         home,
-        stderr: (text) => appendDaemonLog(home, text, now()),
+        stderr: (text) => logLine(text),
         heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
         now,
       });
@@ -926,7 +980,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       status.bus = 'failed';
       if (status.why === null) status.why = `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       roots.push(status);
-      appendDaemonLog(home, `root ${rootArg}: ${status.why}`, now());
+      logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     if (bus.kind === 'serving') {
@@ -945,7 +999,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
     }
     roots.push(status);
-    appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
+    logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
   }
 
   /** The seat's current managed binding, read at the moment of use. A missing seat record, an
@@ -1111,7 +1165,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // heartbeat needs. A root that failed to load, or that duplicates a checkout already hosted,
   // has no route and gets no watch; its status entry has no `watch` record either.
   if (input.watchHosting === true) {
-    const log = (text: string): void => appendDaemonLog(home, text, now());
+    const log = (text: string): void => logLine(text);
     for (const status of roots) {
       const route = routes.find((candidate) => candidate.root === status.root);
       if (route === undefined) continue;
@@ -1181,7 +1235,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (presenceLogged.has(key)) return;
     if (presenceLogged.size >= 64) return;
     presenceLogged.add(key);
-    appendDaemonLog(home, `presence ${route.root}: ${text}`, now());
+    logLine(`presence ${route.root}: ${text}`);
   };
 
   /** One failed reading for a source that could not be sampled: never healthy, and never the
@@ -1390,7 +1444,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // hosted endpoint. The heartbeat asks each hosted socket. A send endpoint that stopped answering
   // is marked failed and left; a bus that is not answering is started again, with backoff, so a
   // killed bus does not stay dead.
-  let refreshing = false;
+  /** The one refresh in flight, if any. Admission joins it before ownership is released, so a
+   *  probe sent while the endpoints were still up cannot settle after the close; with the log
+   *  guarded, its late answer writes neither the record nor the log. A beat that finds one
+   *  running joins it. */
+  let refreshRun: Promise<void> | null = null;
   const reviveHostedBus = async (watch: EndpointWatch): Promise<void> => {
     const root = watch.busRoot;
     if (root === null || closed) return;
@@ -1414,46 +1472,75 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (!thresholds.ok) {
       watch.busState.failures += 1;
       watch.busState.nextAt = at + nextBackoffMs(watch.busState.failures);
-      appendDaemonLog(home, `root ${root}: bus not restarted: ${thresholds.refusals.map((refusal) => refusal.message).join('; ')}`, now());
+      logLine(`root ${root}: bus not restarted: ${thresholds.refusals.map((refusal) => refusal.message).join('; ')}`);
       return;
     }
     const revived = await reviveBus({
       root: loaded.root,
       team: loaded.team,
       home,
-      stderr: (text) => appendDaemonLog(home, text, now()),
+      stderr: (text) => logLine(text),
       heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
       now,
-    }, watch.busState, at);
+    }, watch.busState, at, undefined, input.busStart);
+    // A revive started before admission can land after it: the handles admission stopped were
+    // already spliced, so a listener bound now would belong to no one. It is closed here instead
+    // of adopted. Admission joined this refresh, so the daemon's close waits for this close to
+    // settle and cannot answer with the listener still bound.
+    if (closed) {
+      if (revived.kind === 'serving') {
+        try {
+          await revived.handle.close();
+        } catch {
+          // A handle that was already closed has nothing left to stop.
+        }
+      }
+      return;
+    }
     if (revived.kind === 'serving') {
       busHandles.push(revived.handle);
       watch.status.bus = 'serving';
       watch.busSocket = busSocket(loaded.root);
       if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
-      appendDaemonLog(home, `root ${root}: bus restarted`, now());
+      logLine(`root ${root}: bus restarted`);
     } else if (revived.kind === 'busy' || revived.kind === 'listening') {
       watch.status.bus = 'serving';
       watch.busSocket = busSocket(loaded.root);
       if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
     } else if (revived.kind === 'failed') {
-      appendDaemonLog(home, `root ${root}: bus restart failed (${revived.why})`, now());
+      logLine(`root ${root}: bus restart failed (${revived.why})`);
     }
   };
-  const refreshHostedEndpoints = async (): Promise<void> => {
-    if (closed || refreshing) return;
-    refreshing = true;
+  const refreshOnce = async (): Promise<void> => {
     try {
-      await Promise.all(
+      // Every root's task is drained before the refresh counts as finished, and a failure is
+      // recorded rather than allowed to settle the run early: a close joins this run before it
+      // releases ownership, and a Promise.all rejection would let the other roots' revives
+      // outlive that close and bind a listener behind the release.
+      const settled = await Promise.allSettled(
         watched.map(async (watch) => {
           const { status } = watch;
-          if ((status.send === 'serving' || status.send === 'already-running') && watch.sendSocket !== null) {
-            if (!(await probeDaemonSocket(watch.sendSocket))) {
-              status.why ??=
-                status.send === 'serving'
-                  ? 'the hosted send endpoint stopped answering'
-                  : 'the send server that was already running stopped answering';
-              status.send = 'failed';
-              appendDaemonLog(home, `root ${status.root}: send endpoint stopped answering`, now());
+          const probing = status.send === 'serving' || status.send === 'already-running' || (status.send === 'failed' && watch.sendWas !== null);
+          if (probing && watch.sendSocket !== null) {
+            if (await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS)) {
+              watch.sendMisses = 0;
+              if (status.send === 'failed' && watch.sendWas !== null) {
+                status.send = watch.sendWas;
+                watch.sendWas = null;
+                if (status.why === 'the hosted send endpoint stopped answering' || status.why === 'the send server that was already running stopped answering') status.why = null;
+                logLine(`root ${status.root}: send endpoint answering again`);
+              }
+            } else if (status.send !== 'failed') {
+              watch.sendMisses += 1;
+              if (watch.sendMisses >= SEND_PROBE_MISSES) {
+                status.why ??=
+                  status.send === 'serving'
+                    ? 'the hosted send endpoint stopped answering'
+                    : 'the send server that was already running stopped answering';
+                watch.sendWas = status.send;
+                status.send = 'failed';
+                logLine(`root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`);
+              }
             }
           }
           if (watch.busRoot !== null) {
@@ -1467,17 +1554,30 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               if (status.bus === 'serving') {
                 status.why ??= 'the hosted bus endpoint stopped answering';
                 status.bus = 'failed';
-                appendDaemonLog(home, `root ${status.root}: bus endpoint stopped answering`, now());
+                logLine(`root ${status.root}: bus endpoint stopped answering`);
               }
               await reviveHostedBus(watch);
             }
           }
         }),
       );
+      for (const [index, one] of settled.entries()) {
+        if (one.status !== 'rejected') continue;
+        const root = watched[index]?.status.root ?? 'an unknown root';
+        logLine(`root ${root}: the endpoint refresh failed: ${messageOf(one.reason)}`);
+      }
     } finally {
-      refreshing = false;
       writeState();
     }
+  };
+  const refreshHostedEndpoints = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    if (refreshRun !== null) return refreshRun;
+    const run = refreshOnce().finally(() => {
+      if (refreshRun === run) refreshRun = null;
+    });
+    refreshRun = run;
+    return run;
   };
 
   // The one scoped fault diagnostic rides this same heartbeat: at most one request per beat,
@@ -1490,7 +1590,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     pid,
     since,
     now,
-    log: (text) => appendDaemonLog(home, text, now()),
+    log: (text) => logLine(text),
   });
 
   // The first state write happened before hosting so a reader never finds a bound socket with no
@@ -1503,7 +1603,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     try {
       faultInbox.consume(faultTargets);
     } catch (error) {
-      appendDaemonLog(home, `fault request: ${(error as Error).message}`, now());
+      logLine(`fault request: ${(error as Error).message}`);
     }
     // A tick releases only the waits whose own due instant has passed and returns at once: a
     // pass that is still running is never awaited here, so one slow or hanging route cannot
@@ -1512,7 +1612,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       try {
         one.watch.tick(now());
       } catch (error) {
-        appendDaemonLog(home, `root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`, now());
+        logLine(`root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`);
       }
     }
     writeState();
@@ -1524,16 +1624,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const swept = sweepFallbackEscalations({ home, roots: sweepRoots, now });
     for (const entry of swept.roots) {
       if (entry.why !== null) {
-        appendDaemonLog(home, `fallback sweep ${entry.root}: ${entry.why}`, now());
+        logLine(`fallback sweep ${entry.root}: ${entry.why}`);
         continue;
       }
       const report = entry.report;
       if (report === null) continue;
       if (report.escalated.length === 0 && report.refused.length === 0 && report.unreadable.length === 0) continue;
-      appendDaemonLog(
-        home,
+      logLine(
         `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
-        now(),
       );
     }
   }, heartbeatMs);
@@ -1682,6 +1780,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           // A synchronous throw is a handle that was already closed.
         }
       }
+      // The endpoint refresh is joined below, after this admission block, so its wait is bounded
+      // and a retry joins a run that outlived the first answer. It is not part of `admissions`:
+      // that join is unbounded, and a start that never settles must not keep the lock, the
+      // socket and the record held without an answer.
       // The record says the daemon is closing before anything unbounded is awaited: a hung
       // presence drain must not leave the old serving record standing behind it. A route that
       // does quiesce is released below and its record is unlinked; one that does not keeps this
@@ -1698,6 +1800,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // close began can never reach one now: its writer is answered `not reached` instead of
       // being left to a later daemon that did not receive the request.
       faultInbox.close();
+    }
+    // The refresh sent before admission is joined here, bounded, and outside the admission
+    // block so a retry after a pending answer joins it again. Once it has settled, its late
+    // answer can neither reach the record nor the log behind the close. A run the bound outlasts
+    // is not cancelled and nothing it owns is released: the answer is a pending close that keeps
+    // the lock, the socket and the record, so the revive it still holds can bind and close its
+    // own listener without another daemon taking the routes beside it.
+    const refresh = refreshRun;
+    if (refresh !== null && !(await settlesWithin(refresh, refreshCloseBoundMs))) {
+      logLine('close pending: the endpoint refresh did not settle', true);
+      writeState(true);
+      return;
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the
@@ -1754,7 +1868,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       for (const one of unsettled) {
         const status = roots.find((entry) => entry.root === one.route.root);
         if (status !== undefined) status.presence = { state: 'pending', why: one.why };
-        appendDaemonLog(home, `presence ${one.route.root}: close pending: ${one.why}`, now());
+        logLine(`presence ${one.route.root}: close pending: ${one.why}`, true);
       }
       writeState(true);
       return;
@@ -1802,19 +1916,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         try {
           const result = await runner(route.root, teamFile);
           if (result.kind === 'ran') {
-            appendDaemonLog(home, `restore ${route.root}: ${result.summary.line}`, now());
+            logLine(`restore ${route.root}: ${result.summary.line}`);
           } else if (result.kind === 'lock-held') {
-            appendDaemonLog(home, `restore ${route.root}: another session-mutating run holds the session; skipped`, now());
+            logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
           } else if (result.kind === 'not-running') {
-            appendDaemonLog(home, `restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`, now());
+            logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
           } else if (result.kind === 'unreadable') {
-            appendDaemonLog(home, `restore ${route.root}: ${result.reason}`, now());
+            logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
-            appendDaemonLog(home, `restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`, now());
+            logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
           }
         } catch (error) {
-          appendDaemonLog(home, `restore ${route.root}: ${messageOf(error)}`, now());
+          logLine(`restore ${route.root}: ${messageOf(error)}`);
         }
       }
     })().catch((error: unknown) => {
@@ -1822,7 +1936,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection
       // that could bring the daemon down. Serving must not depend on the sweep's bookkeeping.
       try {
-        appendDaemonLog(home, `restore: ${messageOf(error)}`, now());
+        logLine(`restore: ${messageOf(error)}`);
       } catch {
         // The log is unavailable too; there is nowhere left to say it.
       }

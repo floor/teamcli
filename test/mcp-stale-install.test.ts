@@ -8,13 +8,11 @@
 // hooks).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import {
-  CHANNEL_HELD_RECEIPT,
-  channelPushPath,
   channelPushed,
 } from '../src/mcp/channel.ts';
 import {
@@ -25,6 +23,7 @@ import {
 } from '../src/mcp/inbox.ts';
 import { restartSelf, runMcpServe } from '../src/mcp/serve.ts';
 import { selfRunner } from '../src/mcp/register.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { BuildIdentity, InstallIdentity } from '../src/version.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -62,6 +61,17 @@ afterEach(() => {
 /** A channel seat's world: no declared delivery order, and the lead's launch carries the flag. */
 function channelWorld(): World {
   const made = world(null, [], { lead: CHANNEL_LAUNCH });
+  // A server started with no --file resolves its team from the registry record holding the seat.
+  upsertTeam(made.home, teamIdOf(made.root), {
+    project: 'acme',
+    session: SESSION,
+    root: made.root,
+    roster: [
+      { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
+      { agent: 'agt_000000000002', seat: 'helper', role: 'implementer' },
+      { agent: 'agt_000000000003', seat: 'native', role: 'reviewer' },
+    ],
+  });
   cleanup = made.cleanup;
   return made;
 }
@@ -334,22 +344,18 @@ describe('a sender falling back from a stale channel', () => {
       const host = fake(made, { sendId: () => SEND_ID, build: () => NEW, native: pane });
       const sendIo = owner(made.root);
       expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
-      expect(sendIo.out).toContain('(typed');
+      expect(sendIo.out).toContain('(drop');
       expect(sendIo.out).not.toContain('sent (channel)');
-      expect(pane.typed).toHaveLength(1);
-      expect(pane.enters).toBe(1);
+      expect(pane.typed).toHaveLength(0);
+      expect(pane.enters).toBe(0);
 
-      // Let the 250 ms watcher tick over the record more than once: no push is written, so the
-      // stale server added no second wake to the typed trigger's one.
+      // Let the 250 ms watcher tick over the record more than once. No pane messaging: no
+      // trigger is typed, so the sender holds no push name, and the server's one push is the
+      // seat's only wake. It still wakes the seat once, never twice.
       await new Promise((resolve) => setTimeout(resolve, 600));
-      expect(notices(serverFeed.replies)).toEqual([]);
-      expect(pane.typed).toHaveLength(1);
-
-      // The held marker landed before the record, at the push marker's own name; it is not a
-      // push, so a channel wait for this id still does not read it as delivered.
-      const marker = JSON.parse(readFileSync(channelPushPath(dir, SEND_ID), 'utf8')) as Record<string, unknown>;
-      expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id: SEND_ID });
-      expect(channelPushed(dir, SEND_ID)).toBe(false);
+      expect(notices(serverFeed.replies)).toHaveLength(1);
+      expect(pane.typed).toHaveLength(0);
+      expect(pane.enters).toBe(0);
     } finally {
       serverFeed.end();
       expect(await running).toBe(0);

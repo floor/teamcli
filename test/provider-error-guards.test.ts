@@ -1,21 +1,34 @@
 // Each place that types into a seat refuses a provider error and a rate limit the way it refuses
 // a question. One test per guard.
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { stateOf, typeExit, type ExitIo } from '../src/commands/down.ts';
 import { deliverRules, type Delivery, type Refusal } from '../src/launch/deliver.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
 import { downPlan } from '../src/launch/plan.ts';
 import { CLASSIFICATIONS, classificationOf, progressWriter, recordText } from '../src/launch/progress.ts';
 import { guardReading } from '../src/profiles/overrides.ts';
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox } from './helpers.ts';
 
 const lost = `API Error: Connection lost mid-response. The response above may be incomplete.\n${claudeBox('')}`;
 const limit = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${claudeBox('')}`;
+const codexIdle = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8');
+const codexModelSwitch = `Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+`;
 const screens = [lost, limit];
 
 describe('nothing is typed into a provider error or a rate limit', () => {
-  test('delivery refuses at the first read, before any wait', async () => {
+  test('no pane messaging, rules are never typed; was: delivery refuses at the first read, before any wait', async () => {
     for (const screen of screens) {
       let naps = 0;
       const calls: string[] = [];
@@ -32,14 +45,13 @@ describe('nothing is typed into a provider error or a rate limit', () => {
         now: () => clock,
         sleep: async (ms) => { naps += 1; clock += ms; },
       };
-      expect(await deliverRules('claude-code', 'Rules.', 30, io)).toBe(false);
+      const retired = await deliverRules('claude-code', 'Rules.', 30, io);
+      expect(await retired).toBe(false);
       expect(calls).toEqual([]);
-      expect(naps).toBe(0);
-      expect(refusals.at(-1)?.kind).toBe(readScreen('claude-code', screen).kind);
     }
   });
 
-  test('a screen that becomes a provider error or a rate limit after Enter gets no further key', async () => {
+  test('no pane messaging, rules are never typed; was: a screen that becomes a provider error or a rate limit after Enter gets no further key', async () => {
     for (const next of screens) {
       let raw = claudeBox('');
       const calls: string[] = [];
@@ -56,10 +68,9 @@ describe('nothing is typed into a provider error or a rate limit', () => {
         now: () => clock,
         sleep: async (ms) => { clock += ms; },
       };
-      expect(await deliverRules('claude-code', 'Rules.', 5, io)).toBe(false);
-      expect(calls).toEqual(['Rules.', 'Enter']);
-      expect(refusals.at(-1)?.stop).toBe('ack');
-      expect(refusals.at(-1)?.kind).toBe(readScreen('claude-code', next).kind);
+      const retired = await deliverRules('claude-code', 'Rules.', 5, io);
+      expect(await retired).toBe(false);
+      expect(calls).toEqual([]);
     }
   });
 
@@ -78,6 +89,49 @@ describe('nothing is typed into a provider error or a rate limit', () => {
       expect(plan.some((step) => step.do?.do === 'type')).toBe(false);
       expect(plan.some((step) => step.kind === 'skip' && step.text.includes('deepseek-acme'))).toBe(true);
     }
+  });
+
+  test('the Codex model-switch choice blocks delivery, restart state, and exit confirmation', async () => {
+    const reading = readScreen('codex', codexModelSwitch);
+    expect(reading).toEqual({ kind: 'rate limit', reset: null, reason: 'needs a choice: rate-limit model switch' });
+    expect(stateOf('idle', reading)).toBe('blocked');
+
+    const calls: string[] = [];
+    const refusal: Refusal[] = [];
+    const delivery: Delivery = {
+      screen: () => codexModelSwitch,
+      status: () => 'idle',
+      report: (why) => { refusal.push(why); },
+      file: () => true,
+      type(text) { calls.push(text); return true; },
+      enter() { calls.push('Enter'); return true; },
+      foreground: () => ['codex'],
+      now: () => 0,
+      sleep: async () => {},
+    };
+    expect(await deliverRules('codex', 'Rules.', 5, delivery)).toBe(false);
+    expect(calls).toEqual([]);
+    // No pane messaging: delivery refuses before any screen is read, so the refusal names the
+    // line it would have typed rather than the screen the reading above blocks on.
+    expect(refusal.at(-1)?.kind).toBe('unknown');
+    expect(refusal.at(-1)?.row).toBe(NO_PANE_MESSAGING);
+
+    const exitKeys: string[] = [];
+    let raw = codexIdle;
+    const exit: ExitIo = {
+      typeText() { exitKeys.push('text'); raw = codexModelSwitch; return true; },
+      sendKey(key) { exitKeys.push(key); return true; },
+      pressEnter() { exitKeys.push('Enter'); return true; },
+      screen: () => raw,
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      now: () => 0,
+      sleep: async () => {},
+    };
+    expect(await typeExit(exit, 'codex', '/exit')).toEqual({
+      left: 'its exit was not confirmed; the screen was reading rate limit before the Enter; left running',
+    });
+    expect(exitKeys).toEqual(['text']);
   });
 
   test('an exit whose screen becomes a provider error or a rate limit is not confirmed', async () => {

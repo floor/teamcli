@@ -26,6 +26,9 @@ tested:
 # walks them.
 unattended: []
 rules: prepend
+# The delivery class a run measured: a fresh session per brief means no runtime holds a queue
+# for it, and no MCP inbox is registered; an idle seat cannot be woken.
+delivery: none
 # The TUI's `ctrl+d` deletes a session for the whole account, not just this seat, and a delete
 # cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
 standing_rules:

@@ -24,6 +24,7 @@ import { isRead, signReceiptPayload, signedReceiptOf, verifyReceipt, writeReceip
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { version } from '../src/version.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -172,7 +173,8 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
   const receipt = signedReceiptOf(JSON.parse(readFileSync(join(drops, `${id}.read.json`), 'utf8')));
   expect(receipt).not.toBeNull();
   if (receipt === null) return;
-  expect(receipt.payload).toEqual({
+  const { writer, ...fields } = receipt.payload;
+  expect(fields).toEqual({
     kind: 'receipt',
     status: 'read',
     id,
@@ -182,6 +184,7 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
     at: NOW.toISOString(),
     read_by: 'socket delivery',
   });
+  expect(writer).toEqual({ version: version(), pid: process.pid });
   expect(verifyReceipt(receipt, messageKeyOf(made.home))).toBe(true);
 });
 
@@ -206,7 +209,7 @@ test('the watch does not ring for a socket-delivered record, and rings for it on
   // The control: without the receipt the same scene types the wake line for the same record.
   unlinkSync(join(drops, `${id}.read.json`));
   await wakeUnreadDrops(scene, { unreadAfter: 600 });
-  expect(pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'a note' }) as string]);
+  expect(pane.typed).toEqual([]);
 });
 
 test('a held socket frame writes no receipt, and the record waits for the watch retry', async () => {
@@ -309,7 +312,7 @@ test('the read receipt verifies with read_by and an older receipt without it sti
 
 test('a seat with no nickname opens the frame with its written label name, and with its seat name when that is blank', async () => {
   const made = world(null, [
-    { name: 'labelled', role: 'builder', label: 'Epimetheus · builder 5' },
+    { name: 'labelled', role: 'builder', label: 'Seat Eight · builder 5' },
     { name: 'blank', role: 'builder', label: '   ' },
   ]);
   cleanup = made.cleanup;
@@ -323,7 +326,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Message from Epimetheus (labelled@acme)\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Message from Seat Eight (labelled@acme)\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
   const blank = registerSeat(made, 'blank', 'w5:p1');

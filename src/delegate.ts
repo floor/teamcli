@@ -193,7 +193,9 @@ export function delegateGate(input: {
     return refuse('delegate-placement', 'the approved delegate must be an external non-seat pane');
   }
 
-  const found = findEntry(entries, io);
+  // The team's own session is where a refusal that matches no entry names the caller: an
+  // entry's session places only what stands in it, and a caller of the team stands in the team's.
+  const found = findEntry(entries, io, team.session);
   if (found.kind === 'evidence') return refuse('delegate-evidence', `delegation cannot verify its placement or seats: ${found.reason}`);
   if (found.kind === 'none') return refuse('delegate', nonDelegate(command, describeCaller(found.caller)));
   const words: readonly DelegateCommand[] = !input.swap ? [command] : command === 'remove' ? ['swap'] : [command, 'swap'];
@@ -404,7 +406,9 @@ type Found =
  * does an agentless pane the root vouched. The agent name is not compared: a rename of the
  * agent in the approved pane still matches, and a pane renamed to that agent's name does not.
  * The caller is placed in each entry's session, because a pane id only means something inside
- * the session that lists it.
+ * the session that lists it. When no entry's session places it and `ownSession` is given, it is
+ * placed there too: the refusal then names it where it stands, never the entry session's
+ * unplaced reading of it.
  */
 /** Whether the live file names this caller for `command`. No approval record is read. */
 export function delegateNamedFor(
@@ -418,7 +422,11 @@ export function delegateNamedFor(
   return found.kind === 'match' && found.entry.commands.includes(command);
 }
 
-function findEntry(entries: readonly Delegate[], io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>): Found {
+function findEntry(
+  entries: readonly Delegate[],
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  ownSession?: string,
+): Found {
   let shown: Caller | undefined;
   for (const entry of entries) {
     const split = splitPane(entry.pane);
@@ -435,6 +443,13 @@ function findEntry(entries: readonly Delegate[], io: Pick<Io, 'env' | 'stdinIsTT
       || (shown.kind !== 'seat' && placed.kind === 'seat')
       || (shown.kind === 'unplaced' && placed.kind === 'pane')
     ) shown = placed;
+  }
+  // A caller that matched no entry stands in a session the entries do not name, and the entry's
+  // session says only that. Place it where this team's commands judge it — the team's own
+  // session — and keep the entry's reading only when that places it nowhere either.
+  if (ownSession !== undefined && (shown === undefined || shown.kind === 'unplaced')) {
+    const own = callerOf(io, ownSession === 'default' ? undefined : ownSession);
+    if (own.kind !== 'unplaced') shown = own;
   }
   return { kind: 'none', caller: shown ?? callerOf(io) };
 }

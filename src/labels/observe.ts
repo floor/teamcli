@@ -13,7 +13,7 @@
 // stays until a later screen shows a different one.
 import { stripSgr } from '../ansi.ts';
 import { displayEffort } from '../profiles/profile.ts';
-import { runningModel } from '../status/statusline.ts';
+import { seatModel } from '../status/statusline.ts';
 import { statusRow } from '../watch/screen.ts';
 
 export type LabelSeat = {
@@ -22,6 +22,8 @@ export type LabelSeat = {
   version: string;
   display: string;
   effort?: string;
+  launch?: string;
+  modelFrom?: 'launcher';
 };
 
 /** The display_agent line for one seat this pass, and the effort word the screen showed, when
@@ -47,7 +49,7 @@ export function observedEffort(cli: string, screen: string | undefined): string 
 
 function displayOf(seat: LabelSeat, screen: string | undefined): string {
   if (screen === undefined || screen === '') return seat.display;
-  const running = runningModel(seat.cli, screen);
+  const running = seatModel(seat, screen);
   if (!running) return seat.display;
   if (running.model === seat.model && running.version === seat.version) return seat.display;
   return `${running.model} ${running.version}`;

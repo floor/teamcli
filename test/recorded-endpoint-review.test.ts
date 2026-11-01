@@ -405,12 +405,12 @@ function pointerOf(scene: Scene): string {
   return pointer;
 }
 
-function nativeLine(): string {
-  return `team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`;
+function nativeLine(words: string): string {
+  return `team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)${words}\n`;
 }
 
-function dropLine(): string {
-  return `team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`;
+function dropLine(words: string): string {
+  return `team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)${words}\n`;
 }
 
 /** Every witness saw no connection and no method, the queue never ran, and the send fell to the
@@ -422,8 +422,8 @@ function expectHeld(
   witnesses: AppServer[],
 ): void {
   expect(sent.code).toBe(0);
-  expect(sent.err).toBe('');
-  expect(sent.out).toBe(dropLine());
+  expect(sent.err).toContain('queued, no event adapter');
+  expect(sent.out).toBe(dropLine('; queued; probe-seat reads it at its next turn (pull-only)'));
   expect(sent.calls).toEqual([]);
   for (const witness of witnesses) {
     expect(witness.connections).toBe(0);
@@ -467,7 +467,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
 
     expect(sent.code).toBe(0);
     expect(sent.err).toBe('');
-    expect(sent.out).toBe(nativeLine());
+    expect(sent.out).toBe(nativeLine('; woken through its runtime queue'));
     // The queue process is handed the record's URL verbatim.
     expect(sent.calls).toEqual([
       ['queue', '--remote', url, '--thread', THREAD_ID, '--message', pointerOf(scene)],
@@ -550,7 +550,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
     const sent = await sendWith(scene, server, scene.codexHome);
     expect(sent.code).toBe(0);
     expect(sent.err).toBe('');
-    expect(sent.out).toBe(nativeLine());
+    expect(sent.out).toBe(nativeLine('; queued; probe-seat reads it at its next turn (pull-only)'));
     expect(sent.calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);

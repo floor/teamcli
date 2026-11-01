@@ -16,11 +16,13 @@ prints no body and writes nothing. The older `.agents/messages` store keeps its 
 and its original print-then-write order.
 
 `team send` writes the record: one signed message per send, into the recipient's folder
-`<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The typed
-leg types the wake line that names the record, the drop leg leaves the record for its seat, and
-the mcp-inbox leg puts the same record in the seat's inbox. The watch rings
-`Team: run team drops --read --seat <seat> --session <session>` — the waiting seat's own read —
-when a record is already there, and never writes one. A message a
+`<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The
+record reaches the seat by one of its own event adapters — the channel push, the socket frame or
+its runtime's queue — by the drop leg, which leaves the record for its seat, or by the mcp-inbox
+leg, which puts the same record in the seat's inbox. No leg types into a seat. The watch types
+nothing for a record that is already there: this build reaches no seat by typing, so the record
+waits for the seat's turn-start read or a reader running `team messages`, and the watch never
+writes one. A message a
 previous build left in `.agents/messages/<seat>/` is read the same way. The owner's mailbox is
 `.agents/messages/owner/`: the Runtime writes one signed record there for each event it delivers
 to the owner, its `from` is `runtime`, and the run lists it and writes its receipt like any other
@@ -31,6 +33,14 @@ The signature is integrity, not authenticity. Every seat runs as the owner-user,
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
 is a name the writer put on the record. The receipt says a process was shown the body, not that
 the recipient acted on it.
+
+The signature covers the complete payload exactly as it was parsed, and it is checked before any
+field is read: a field inserted, altered or removed after signing is a signature refusal whatever
+the fields now claim, and a record carrying a signed field this version does not read is refused
+as unsupported — authenticated, never interpreted, and never reported as a bad signature. A
+receipt also carries the signed writer provenance: the build's version, the signing process's id,
+and the runtime epoch it was started under when it had one. That names the process that signed;
+it is never the key's generation, and a receipt written before the field existed still verifies.
 
 The message key is a second file, `~/.config/team-key/messages.json`, beside the approval key.
 It is created the first time a message or a receipt is signed. An empty mailbox creates nothing.
@@ -126,6 +136,15 @@ repair names the file the table already shows:
       repair: remove .agents/send-drops/<session>/<seat>/<id>, or have the sender re-send it
       who: any seat
 
+    difference: <seat>/<id> does not verify: it is signed, and this version cannot read it: <reason>
+      repair: upgrade team to read .agents/send-drops/<session>/<seat>/<id>, or remove it and have the sender re-send it in this version's fields
+      who: any seat
+
+The unsupported difference is a record the message key signed that this version cannot read: its
+signed fields are not all ones this version knows (`the signed record carries fields this version
+does not read: <names>`), or a known field is not the shape it writes. The signature holds, so it
+is refused on the schema's ground, not the key's — and its fields are never acted on.
+
 A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
 place of the record's path, and its shape refusal reads `the record is not a message`.
 
@@ -214,19 +233,25 @@ never printed.
 
 ### The client pane guard
 
-A client key is the client's, never a seat's. `team send --client`, `team messages --client` and
-`team client keygen` place their caller with the same parent-process walk the owner gates use (never an environment
-variable) and refuse a caller that runs inside a herdr pane — a seat, an agentless team pane, or a
+A client key is the client's, never a seat's. `team send --client`, `team messages --client`,
+`team client keygen`, `team grant --client-request` and `team client general-grant --via --key`
+place their caller with the same parent-process walk the owner gates use (never an environment
+variable) and refuse a caller that runs inside a team pane — a seat, an agentless team pane, or a
 process either started — before the grant or the key is opened: exit 1, `send.client-pane`,
-`messages.client-pane` or `client.keygen.pane`. Every grant-verified client form (`team up
---client`, `team down --client`, `team status --client` and the bundle ops such as `pause`,
-`resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`, `restart` and `sessions`) runs the
-same guard inside `verifyClientUp`, so it is refused with that command's own client refusal
-before its grant or key is read. Keys stay under `~/.config/team-client`, and
-an external client outside herdr (an agent CLI included) is not refused. A usage error is still judged first and keeps exit 2. The guard is a
-policy, not a wall: the owner's dev mode lifts it through the shared owner-gate admission
-(`devModeOwnerLiftAtCwd`), and a lifted run prints the dev-mode warning and goes on. Seatbelt
-confinement of `~/.config/team-client` for guarded seats belongs to the pane guard
+`messages.client-pane`, `client.keygen.pane`, `grant.refused` or `client.general-grant.failed`.
+Every grant-verified client form (`team up --client`, `team down --client`, `team status --client`
+and the bundle ops such as `pause`, `resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`,
+`restart` and `sessions`) runs the same guard inside `verifyClientUp`, so it is refused with that
+command's own client refusal before its grant or key is read. The general door (`--general
+<grant.json> --key <client.key>`) and the own doors of `up`, `init` and `config` are deliberately
+not placed: an owner tool applies changes under a general grant from inside a team pane, and the
+grant's own bounds — its ops, entities and expiry — cover that call. Keys stay under
+`~/.config/team-client`, and an external client outside the terminal host (an agent CLI included)
+is not refused. A usage error is still judged first and keeps exit 2. The guard is a machine
+guard, not a policy: no dev-mode setting lifts it (OD-20261019-49), and a caller inside a team
+pane is refused alike with dev mode on or off — the lift would hand a seat's own process the key
+the guard keeps out of it.
+Seatbelt confinement of `~/.config/team-client` for guarded seats belongs to the pane guard
 (`src/guard`), which is not on this line yet.
 
 ### Known limits

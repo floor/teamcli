@@ -34,6 +34,9 @@ function agent(name: string | null, workspace: string, status = 'idle', kind = '
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
 }
 
+/** A seat's pane as the fixture shows it, so a scene names the pane without writing its shape. */
+const paneOf = (live: Live, name: string): string => live.agents.find((one) => one.name === name)?.pane ?? '';
+
 // The example's team as herdr would show it; the codex seat's pane is added by the scenes that
 // need its captured footer.
 function built(): Live {
@@ -83,14 +86,14 @@ afterEach(() => rmSync(base, { recursive: true, force: true }));
 
 // One agent record, the way a launch would have written it: the seat's own pane and session, and
 // the signing triple under test.
-function record(seat: string, signing: AgentSigning, pane: string, over: { team?: string; cli?: string; lab?: string } = {}) {
+function record(seat: string, signing: AgentSigning, pane: string, over: { team?: string; cli?: string; lab?: string; launch?: string } = {}) {
   return registerAgent(home, {
     name: seat,
     signing,
     lab: over.lab ?? 'openai',
     cli: over.cli ?? 'codex',
     launcher: null,
-    launch: 'codex',
+    launch: over.launch ?? 'codex',
     reach: { team: over.team ?? teamIdOf(root), seat, session: 'acme-web', pane, address: null },
     mcp: [],
     skills: [],
@@ -201,13 +204,69 @@ describe('the signing drift', () => {
     expect(out).not.toContain('signs as');
   });
 
-  test('a foreign-vendor model in Claude Code is compared with the registry signing', () => {
+  test('a provider wrapper\'s Claude Code screen is never a drift against the registry signing', () => {
     record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, 'w3:p1', {
       cli: 'claude-code',
       lab: 'deepseek',
+      // The record names the launch it ran, as `team up` writes it: the seat's own wrapper.
+      launch: 'team-deepseek',
     });
-    // The team file names the foreign model, but Claude Code's footer still names the running model.
-    const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    // The seat runs another maker's model through its launcher, and Claude Code's footer prints
+    // its own default family whatever the launcher selected: that family is not the seat's model,
+    // so it is never a difference. The signing and the screen's own id compare here instead.
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { out } = check(live);
+    expect(out).not.toContain('signs as');
+  });
+
+  test('a bare Claude Code launch of a foreign model is compared with the registry signing', () => {
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, pane, {
+      cli: 'claude-code',
+      lab: 'deepseek',
+      launch: 'claude',
+    });
+    // No launcher: the CLI cannot run the signed model, and the family on its screen is the
+    // contradiction the record needs — still compared, like the bare launch it is.
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      example.replace('launch: team-deepseek', 'launch: claude'),
+    );
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { out } = check(live);
+    expect(out).toContain('difference: deepseek-acme: signs as DeepSeek V4.1 Flash, runs Claude Opus 5.5');
+  });
+
+  // The provenance is the launch the record was made from: a team file edited after the launch —
+  // to name a wrapper, or to name the bare CLI — cannot say what the running process started.
+  test('a recorded wrapper launch speaks for the pane, whatever launch line the file carries now', () => {
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, pane, {
+      cli: 'claude-code',
+      lab: 'deepseek',
+      launch: 'team-deepseek',
+    });
+    writeFileSync(join(root, '.agents/team.yaml'), example.replace('launch: team-deepseek', 'launch: claude'));
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { out } = check(live);
+    expect(out).not.toContain('signs as');
+  });
+
+  test('a recorded bare launch is compared even when the file now names a wrapper', () => {
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, pane, {
+      cli: 'claude-code',
+      lab: 'deepseek',
+      launch: 'claude',
+    });
+    // The file still carries the example's `team-deepseek`: the record proves the CLI itself ran,
+    // so the Claude family on the pane contradicts the foreign model it signs.
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { out } = check(live);
     expect(out).toContain('difference: deepseek-acme: signs as DeepSeek V4.1 Flash, runs Claude Opus 5.5');
   });

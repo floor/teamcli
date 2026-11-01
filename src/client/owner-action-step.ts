@@ -23,6 +23,10 @@ export type OwnerSeatSources = {
   /** Whether a request is presented to the owner seat's Touch ID signer at once. Absent: only
    *  with the system key store (a real run); an injected store opts in with `true`. */
   present?: boolean;
+  /** The team root the caller has already resolved, for a caller whose team lives in a folder
+   *  that is not a git repository (the registry record is keyed by that folder). Absent: the git
+   *  root of `io.cwd`, as before. */
+  root?: string;
 };
 
 export type OwnerSeatStep =
@@ -71,7 +75,7 @@ export function ownerSeatStep(
     return { kind: 'refused' };
   };
   if (ask.request && ask.approval !== undefined) return refused('--request asks the owner seat and --approval runs an answered request: pass one');
-  const root = findRoot(io.cwd);
+  const root = sources.root ?? findRoot(io.cwd);
   if (root === null) return refused('not inside a git repository');
   const team = teamNameAt(root, home);
   const head = headOf(root);

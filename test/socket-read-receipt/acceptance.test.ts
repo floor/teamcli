@@ -131,8 +131,8 @@ test('a held socket frame writes no receipt, and the one watch retry still comes
 
   const code = await runSend(['lead', 'the held note'], ownerIo(one.root), host);
 
-  // The socket held the frame and no route stood behind it: exit 1, and nothing is a read.
-  expect(code).toBe(1);
+  // The socket held the frame; the bus inbox keeps it (exit 0), and nothing is a read.
+  expect(code).toBe(0);
   expect(host.frames.length).toBe(1);
   const record = recordOf(drops);
   expect(readReceipt(drops, record.id)).toBeNull();
@@ -147,12 +147,9 @@ test('a held socket frame writes no receipt, and the one watch retry still comes
 
   const due = book();
   await wakeUnreadDrops(sceneOf(one, due, new Date(NOW.getTime() + (N + 1) * 1000)), { unreadAfter: N });
-  // The retry types the message-display line, its summary the held note's first line.
-  const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'the held note' }) as string;
-  expect(due.typed).toEqual([line]);
-  expect(due.enters).toBe(1);
-  expect(existsSync(wakePath(drops, record.id))).toBe(true);
-  // The retry is a typed line, not a read: no receipt appears behind it.
+  // No pane messaging: the watch types nothing after the window either, and nothing is a read.
+  expect(due.typed).toEqual([]);
+  expect(due.enters).toBe(0);
   expect(readReceipt(drops, record.id)).toBeNull();
 
   // One wake per message: a later pass at an idle box types nothing again.

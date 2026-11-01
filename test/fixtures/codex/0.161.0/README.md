@@ -54,18 +54,11 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `⚠ 1 warning · f2 to view` right-aligned on the same row and no chrome row under it. It
   read `unknown` until the warning tail counted as the row's own end.
 
-## Rules-delivery captures
-
-Added in commit `9e68204b7` (floor, 2026-10-28 10:51 +0100, "up rules delivery: wait out a busy
-seat instead of reporting a read-back mismatch"), whose message says they are the real Codex 0.161
-screens. The commit does not record who captured them, when, or the exact launch line: unknown.
-The `>_ OpenAI Codex (v0.161.0)` header in each file names the version. Read by
-`test/launch/rules-busy-seat.test.ts`.
-
-- `rules-unsent-builder-3.txt`: a builder seat's box holding a typed rules line, read `unsent`.
-  10 lines, 829 bytes as added.
-- `rules-unsent-orchestrator.txt`: an orchestrator seat's box holding a typed rules line, read
-  `unsent`. 58 lines, 3,934 bytes as added.
+- `rules-unsent-orchestrator.txt`, `rules-unsent-builder-3.txt`: live seat panes of a team
+  on this machine, captured 2026-10-28 with herdr `pane read --source visible --format ansi`
+  while `team up` had put each seat's rules line in its box and the resumed seat was busy on
+  its queued drops; read `unsent`. They pin the busy-seat wait in `src/launch/deliver.ts`
+  (commit 9e68204b7) and are used by `test/launch/rules-busy-seat.test.ts`.
 
 ## Constructed
 

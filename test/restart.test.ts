@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
@@ -13,16 +12,20 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { acquireRunLock } from '../src/launch/run-lock.ts';
+import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
+import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { findAgent, readAgents, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
+import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -204,7 +207,10 @@ describe('the real restart launch', () => {
 });
 
 function makeFixture(rawYaml = TEAM_YAML): Fixture {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-restart-')));
+  // The state folder sits under the short socket base so the endpoint path a managed launch owns
+  // for this seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path
+  // limit; the scene below measures that path against the limit.
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 'tr-')));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -418,6 +424,54 @@ function makeHarness(
   return { sources, did };
 }
 
+/** The endpoint URL a managed launch owns for this fixture's seat under `binding`. The bind reads
+ *  only this URL, so a scene recording any other records an endpoint this seat's launch never
+ *  started. */
+function ownedEndpointUrl(fixture: Fixture, binding: string): string {
+  const socket = codexEndpointSocket(fixture.dir, 'acme', 'worker', binding);
+  if (socket === null) {
+    const path = join(fixture.dir, 'run', 'acme', 'worker', `${binding}.sock`);
+    throw new Error(`the fixture state folder is too long for an owned endpoint path: ${String(Buffer.byteLength(path))} bytes against the 100-byte limit`);
+  }
+  return socket.url;
+}
+
+/** What a real managed Codex launch leaves on the seat: a fresh presence incarnation and the
+ *  app-server endpoint recorded under it, bound to each other. */
+function managedEndpoint(fixture: Fixture, binding: string): NonNullable<Launch['codexEndpoint']> {
+  const url = ownedEndpointUrl(fixture, binding);
+  return {
+    managed: async () => {
+      updateState(fixture.dir, (state) => {
+        const held = (state.sessions.acme ??= emptySession()).seats.worker;
+        if (held !== undefined) {
+          held.presence_binding = binding;
+          held.codex_endpoint = {
+            url,
+            binding,
+            pid: 4242,
+            started_at: '2026-10-31T00:00:00.000Z',
+            config: [],
+          };
+        }
+      });
+      return { kind: 'up' as const, url, started: true };
+    },
+    stop: () => ({ stopped: true }),
+  } as unknown as NonNullable<Launch['codexEndpoint']>;
+}
+
+describe('the fixture temp folder', () => {
+  // Measured, not assumed: the base comes from the runtime temp folder, and the endpoint a
+  // managed launch owns for this seat is a unix socket path the build refuses over 100 bytes.
+  test('keeps the owned endpoint inside the socket path limit', () => {
+    const fixture = makeFixture();
+    const path = join(fixture.dir, 'run', 'acme', 'worker', 'prs_0123456789ab.sock');
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(fixture.dir, 'acme', 'worker', 'prs_0123456789ab')).not.toBeNull();
+  });
+});
+
 describe('team restart <seat>', () => {
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
     const fixture = makeFixture();
@@ -446,6 +500,86 @@ describe('team restart <seat>', () => {
 
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
+  });
+
+  // The launch wrote the state and the registry write that binds the seat to it failed. The seat
+  // is ready but reachable only by pull, and the result says so instead of reporting a restart
+  // whose native delivery was never written.
+  test('a ready restart says pull-only when the final binding could not be written', async () => {
+    function blocked(): { fixture: Fixture; io: ReturnType<typeof testIo> } {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      });
+      // The registry folder this run would write the agent record into is a file.
+      mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+      writeFileSync(join(fixture.home, '.config', 'team', 'agents'), 'synthetic blocked registry');
+      return { fixture, io: testIo(fixture.root, { kind: 'owner' }) };
+    }
+
+    const plain = blocked();
+    expect(await runRestart(['worker'], plain.io, makeHarness(plain.fixture).sources)).toBe(0);
+    expect(plain.io.err).toBe('');
+    expect(plain.io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: no agent record for this seat\n');
+
+    const json = blocked();
+    expect(await runRestart(['worker', '--json'], json.io, makeHarness(json.fixture).sources)).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      status: string;
+      action_summary: string;
+      seat: string;
+      pull_only?: string | null;
+    }>(json.io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.pull_only).toBe('no agent record for this seat');
+    expect(doc.action_summary).toContain('pull-only: no agent record for this seat');
+  });
+
+  // The Codex native route is addressed by the conversation the seat holds (`codex queue
+  // --thread <agent_session>`), so the record alone does not make native delivery possible: a
+  // relaunch whose new pane has not reported its session yet ends ready and says pull-only with
+  // the reader's own reason. The registry writes themselves succeed here — what is missing is the
+  // binding the route resolves.
+  test('a Codex restart whose new pane has not reported its session says pull-only', async () => {
+    function unsettled(): { fixture: Fixture; run: ReturnType<typeof makeHarness>; io: ReturnType<typeof testIo> } {
+      const fixture = makeFixture(CODEX_TEAM_YAML);
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      });
+      const run = makeHarness(fixture, { foregroundArgv0: 'codex', newPaneScreen: CODEX_NEW_IDLE });
+      // The relaunched pane's own process state, and its agent reports no session — the reading
+      // the live agent list gives before the CLI has said which conversation it is in.
+      run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+      const agents = run.sources.upLaunch.agents;
+      run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+        agent.pane.startsWith('pane-new') ? { ...agent, agent: 'codex' } : agent
+      ));
+      run.sources.screenText = (_session, pane) =>
+        pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+      return { fixture, run, io: testIo(fixture.root, { kind: 'owner' }) };
+    }
+
+    const plain = unsettled();
+    expect(await runRestart(['worker'], plain.io, plain.run.sources), plain.io.err).toBe(0);
+    expect(plain.io.err).toBe('');
+    expect(plain.io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: the record names no agent session\n');
+    // The record the launch wrote is there; the conversation its route resolves is not.
+    expect(findAgent(plain.fixture.home, { team: teamIdOf(plain.fixture.root), seat: 'worker' })?.reach.agent_session)
+      .toBeUndefined();
+
+    const json = unsettled();
+    expect(await runRestart(['worker', '--json'], json.io, json.run.sources), json.io.err).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      action_summary: string;
+      pull_only?: string | null;
+    }>(json.io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.pull_only).toBe('the record names no agent session');
+    expect(doc.action_summary).toContain('pull-only: the record names no agent session');
   });
 
   test('a dev-mode restart records the mark and the caller it admitted', async () => {
@@ -833,6 +967,75 @@ describe('team restart <seat>', () => {
     expect(ioLocked.err).toContain('another session-mutating run is holding');
   });
 
+  // The stop is a session mutation, so a restart stands aside while another run mutates the
+  // session rather than refusing at the first reading or, worse, beginning the stop anyway. It
+  // waits in counted steps — the run's own sleep — up to its bound; when the bound runs out it
+  // refuses with the holder named and the seat exactly as it was.
+  test('waits for the session lock up to its bound, then refuses with the holder named and nothing stopped', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+      };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const held = acquireRunLock(fixture.dir, 'acme');
+    if ('held' in held) throw new Error('the scene could not take the session lock');
+    try {
+      let steps = 0;
+      sources.upLaunch.sleep = async () => {
+        steps += 1;
+      };
+      const before = readState(fixture.dir);
+      const io = testIo(fixture.root, { kind: 'owner' });
+
+      expect(await runRestart(['worker'], io, sources)).toBe(1);
+      // It stood aside first: the refusal is not the first reading's.
+      expect(steps).toBeGreaterThan(0);
+      expect(io.err).toBe(
+        `team restart: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      );
+      // Nothing was stopped, closed, typed into or launched, and the state is untouched.
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(readState(fixture.dir)).toEqual(before);
+    } finally {
+      held.release();
+    }
+  });
+
+  test('takes the session lock when it is released inside the wait, and restarts the seat', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+      };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const held = acquireRunLock(fixture.dir, 'acme');
+    if ('held' in held) throw new Error('the scene could not take the session lock');
+    let steps = 0;
+    sources.upLaunch.sleep = async () => {
+      steps += 1;
+      if (steps === 3) held.release();
+    };
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources)).toBe(0);
+    // The restart waited for the holder to let go, then did the whole stop and relaunch.
+    expect(steps).toBeGreaterThanOrEqual(3);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-new');
+  });
+
   test('an unread screen on a seat herdr calls idle does not block a lead: closed without typing, then restarted', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -1104,6 +1307,204 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
   });
 
+  // The incident's shape, on the CLI whose native route binds through the registry: the record
+  // holds the stable handle of an earlier incarnation while the seat state names its own id. The
+  // resume read refuses — correctly — and the relaunch starts fresh. The launch's own registry
+  // write is the authority that repairs the record: the live seat id becomes its handle, so the
+  // two records agree again and the native route binds (a send after the restart is native, not
+  // a drop). An ordinary write, or a state mint alone, still never rewrites a handle.
+  test('a relaunch repairs a record left with another incarnation\'s handle, and the native binding returns', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_keep', state: 'ses_keep', declaredCli: 'codex' });
+    const OTHER = 'seat_fedcba987654';
+    updateAgent(fixture.home, agentId!, { seat_handle: OTHER });
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: readState(fixture.dir).sessions.acme?.seats.worker,
+    })).toEqual({ kind: 'refused', why: 'the record is another agent for this seat' });
+
+    // The relaunched pane reports the conversation it actually started, as herdr does live.
+    const agents = run.sources.upLaunch.agents;
+    run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+      agent.pane.startsWith('pane-new') ? { ...agent, agent: 'codex', session: 'ses_new' } : agent
+    ));
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    // The old pane draws Codex's own screens around the one exit text the stop types.
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
+    expect(run.did.runs.join('\n')).not.toContain('resume');
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.id).toBe('seat_0123456789ab');
+    expect(seat?.agent_session).toBe('ses_new');
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.id).toBe(agentId);
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe('ses_new');
+    // The read the Codex native route makes: the record and the state now bind this seat.
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('bound');
+  });
+
+  // The incident's other ending, and the live shape: the relaunched pane never reports the thread
+  // it started, so the state ends naming no conversation while the managed launch has recorded a
+  // fresh endpoint and a fresh presence incarnation for it. The endpoint's own thread read is made
+  // and proves nothing (a socket that is not listening here), so the restart says exactly that
+  // (pull-only), and the class a send prints must say the same: the runtime queue is addressed by
+  // the conversation the records bind, and an endpoint alone never wakes anybody.
+  test('a restart whose new pane and endpoint name no thread ends pull-only, and the class claims no wake', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BOUND = 'prs_fedcba987654';
+    // What the real managed launch leaves: the endpoint, recorded under a fresh incarnation.
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BOUND);
+    // The endpoint read this run makes: the socket is gone, so no thread is proven.
+    run.sources.codexThreads = async () => ({
+      kind: 'unavailable',
+      why: 'the Codex endpoint socket is not listening (ENOENT)',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    // The old pane draws Codex's own screens around the one exit text the stop types; the new
+    // pane draws the idle prompt, but herdr lists no session for it.
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    // The resume read refuses the record that is another agent's, and the relaunch starts fresh.
+    expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
+    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // The managed launch did its part: endpoint and incarnation are recorded, bound to each other.
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.presence_binding).toBe(BOUND);
+    expect(seat?.codex_endpoint?.binding).toBe(BOUND);
+    // The conversation did not come with them: the pane reported no thread, so the state names
+    // none, and the record keeps the one it held before the restart. Nothing addresses the queue.
+    expect(seat?.agent_session).toBeUndefined();
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe('ses_old');
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('none');
+
+    // The class a send prints for this seat: the endpoint is there, but with no bound
+    // conversation it is no wake, and the words say what will actually happen.
+    const delivery = seatDeliveryClass({
+      home: fixture.home,
+      dir: fixture.dir,
+      root: fixture.root,
+      session: 'acme',
+      seat: 'worker',
+      declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
+      state: seat,
+    });
+    expect(delivery.class).toBe('pull-on-turn');
+    expect(delivery.words).toBe('queued; worker reads it at its next turn (pull-only)');
+    expect(delivery.evidence.endpoint).toBe(false);
+    expect(delivery.evidence.conversation).toBe(false);
+    // The run says which read proved nothing, so a reader can tell an unreadable endpoint from a
+    // pane that simply reported no thread.
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: no thread was bound from its Codex endpoint (the Codex endpoint socket is not listening (ENOENT))');
+  });
+
+  // The incident's live repair, on the preferred path: the relaunched pane reports no thread, but
+  // the managed endpoint its launch started holds exactly one loaded thread, and that thread is
+  // the conversation the seat's runtime queue is addressed by. The restart reads it from the
+  // endpoint (never from the pane) and binds it to both records, so the seat ends reachable
+  // through its queue rather than only at its next turn.
+  test('a restart binds the one thread its Codex endpoint holds, and the class claims the wake', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BINDING = 'prs_fedcba987654';
+    const THREAD = '019a0000-aaaa-7bbb-8ccc-ddddeeeeffff';
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BINDING);
+    const asked: string[] = [];
+    run.sources.codexThreads = async (endpoint) => {
+      asked.push(endpoint);
+      return { kind: 'read', ids: [THREAD] };
+    };
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    // The read is addressed by the seat's own recorded endpoint, never a home-derived path.
+    expect(asked).toEqual([ownedEndpointUrl(fixture, BINDING)]);
+    expect(io.out).not.toContain('pull-only');
+    // Both records now name the endpoint's thread, under the incarnation the launch wrote.
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.presence_binding).toBe(BINDING);
+    expect(seat?.agent_session).toBe(THREAD);
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe(THREAD);
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('bound');
+    // The native route and the class read the same binding: this seat can be woken while idle.
+    const delivery = seatDeliveryClass({
+      home: fixture.home,
+      dir: fixture.dir,
+      root: fixture.root,
+      session: 'acme',
+      seat: 'worker',
+      declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
+      state: seat,
+    });
+    expect(delivery.class).toBe('between-turns');
+    expect(delivery.words).toBe('woken through its runtime queue');
+    expect(delivery.evidence.endpoint).toBe(true);
+    expect(delivery.evidence.conversation).toBe(true);
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain(`worker: its Codex endpoint holds thread ${THREAD}; bound as the seat's session`);
+  });
+
+  // The ambiguous reading: the endpoint holds two threads, so neither is proven to be this seat's.
+  // Nothing is bound, and the restart stays honest about what a send will do.
+  test('a restart whose Codex endpoint holds more than one thread binds none and stays pull-only', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BINDING = 'prs_fedcba987654';
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BINDING);
+    run.sources.codexThreads = async () => ({
+      kind: 'read',
+      ids: ['019a0000-aaaa-7bbb-8ccc-ddddeeeeffff', '019a0000-1111-7222-8333-444455556666'],
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.agent_session).toBeUndefined();
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_old');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: no thread was bound from its Codex endpoint (its Codex endpoint holds 2 threads; none is proven to be this seat\'s)');
+  });
+
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
@@ -1178,7 +1579,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Antigravity wrapper keeps --conversation=<id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh agy --model gemini-3.8-flash';
+    const launch = 'zsh /home/owner/as-floor.sh agy --model gemini-3.8-flash';
     const { fixture, run } = seeded({
       registry: AGY_CONVERSATION,
       cli: 'antigravity',
@@ -1233,7 +1634,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh grok --model grok-4.7';
+    const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({
       registry: GROK_SESSION,
       cli: 'grok',
@@ -1259,7 +1660,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -1278,6 +1679,84 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       `AGENT_UNATTENDED=1 ${launch} resume ses_codex`,
     );
     expect(run.did.runs.join('\n')).not.toContain('--resume');
+  });
+
+  test('a restarted Codex seat resumes its recorded thread on an endpoint carrying its permissions', async () => {
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol';
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${launch}`),
+      launch,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    // The successor reports the thread its command actually selected. A fresh command
+    // cannot pass by leaving the old id in the state or registry.
+    const agents = run.sources.upLaunch.agents;
+    run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => ({
+      ...agent,
+      ...(agent.pane.startsWith('pane-new') ? {
+        agent: 'codex',
+        session: /(?:^|\s)resume\s+(\S+)/.exec(run.did.runs.at(-1) ?? '')?.[1] ?? 'ses_fresh',
+      } : {}),
+    }));
+    const endpointConfigs: (string[] | undefined)[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      managed: async (endpoint: { config?: string[] }) => {
+        endpointConfigs.push(endpoint.config);
+        return { kind: 'up', url: 'unix:///tmp/worker.sock', started: true };
+      },
+      stop: () => ({ stopped: true }),
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    const command = run.did.runs.join('\n');
+    expect(command).toContain(`AGENT_UNATTENDED=1 ${launch} resume ses_codex`);
+    expect(command.match(/(?:^|\s)resume(?=\s|$)/g)).toHaveLength(1);
+    expect(command).not.toMatch(/(?:^|\s)(?:-a|-s)(?=\s|$)/);
+    expect(command).toContain('--no-alt-screen');
+    expect(command).toContain(' --remote unix:///tmp/worker.sock');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.agent_session).toBe('ses_codex');
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_codex');
+    expect(io.err).not.toContain('starts a fresh Codex thread');
+    // The endpoint carries what the attached line shed: its turns run under the endpoint's config.
+    expect(endpointConfigs).toHaveLength(1);
+    expect(endpointConfigs[0]).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="danger-full-access"']));
+    expect(endpointConfigs[0]!.some((word) => word.startsWith('mcp_servers.team_inbox.args='))).toBe(true);
+  });
+
+  test.each([
+    { cli: 'codex', live: 'ses_other', why: 'its live agent session is not the recorded one' },
+    { cli: 'claude-code', live: 'ses_codex', why: 'the record ran claude-code, the seat now declares codex' },
+  ])('a managed Codex restart refuses an unbound conversation: $why', async ({ cli, live, why }) => {
+    const { fixture, run } = seeded({
+      registry: 'ses_codex', state: 'ses_codex', declaredCli: 'codex',
+      workerSession: live, launched: true, cli,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    let endpointStarts = 0;
+    run.sources.upLaunch.codexEndpoint = {
+      managed: async () => {
+        endpointStarts++;
+        return { kind: 'up', url: 'unix:///tmp/worker.sock', started: true };
+      },
+      stop: () => ({ stopped: true }),
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain(`not resuming its recorded session (${why})`);
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.typed).toEqual([]);
+    expect(endpointStarts).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.agent_session).toBe('ses_codex');
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_codex');
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {
@@ -1445,7 +1924,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
-    expect(run.did.runs.join('\n')).not.toContain('resume');
+    expect(run.did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
   });
 

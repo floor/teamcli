@@ -1,3 +1,5 @@
+import { NO_PANE_MESSAGING } from './no-pane-messaging.ts';
+const NO_PANE_MESSAGING_ON = true;
 // Verified delivery of one trigger line into a seat's input box.
 //
 // The seam's word is `delivered`: the seat began processing the line, not that the line was
@@ -540,6 +542,8 @@ export type DeliverOptions = {
 export async function deliverTrigger(
   host: DeliverHost, pane: string, line: string, profile: string, options: DeliverOptions = {},
 ): Promise<DeliverResult> {
+  // No pane messaging: this trigger is never typed (src/send/no-pane-messaging.ts).
+  if (NO_PANE_MESSAGING_ON) return { outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING };
   const before = host.status(pane);
   if (before === null) return { outcome: 'unreachable', tries: 0, reason: "the seat's status could not be read" };
   // The drop this line is for: the caller's own when the receipt-writing trigger names no path,

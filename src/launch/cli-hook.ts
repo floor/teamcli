@@ -53,6 +53,11 @@ export type CliHookSeat = {
    *  seat with no recorded binding gets no presence entry rather than a binding its running
    *  process never loaded. */
   fresh?: boolean;
+  /** The team file's own `inbound` word for the seat. An `accept` there is written into the
+   *  generated settings when the launch scripts declare no word of their own, so a seat whose
+   *  owner accepts cross-session frames is launched able to take them: its socket is its event
+   *  adapter, with nothing ever typed into its pane. */
+  inbound?: CrossSessionInbound;
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -505,7 +510,9 @@ export function installCliHooks(
     const epoch = claimEpochAt(dir, session, seat);
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
     const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
-    const inbound = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
+    const launchWord = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
+    const teamWord = byName.get(seat)?.inbound;
+    const inbound = launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
     const fresh = byName.get(seat)?.fresh === true;
     const binding = fresh
       ? recordPresenceBinding(dir, session, seat)

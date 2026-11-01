@@ -306,7 +306,7 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome names the trigger sent, never a read.
       expect(sendIo.out).toBe(
-        'team acme-v4, session "acme-v4"\nbuilder-1: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+        'team acme-v4, session "acme-v4"\nbuilder-1: sent (unconfirmed) (drop, 0 ms); queued; builder-1 reads it at its next turn (pull-only)\n',
       );
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.

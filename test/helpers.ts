@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
@@ -162,13 +163,29 @@ export function capturedWorkspaceEntry(workspaceId: string, label: string) {
   };
 }
 
+/** The runtime temp folder, the one these captured entries name: the capture's own temp folder is
+ *  not part of any contract a scene reads, so the fixture takes this machine's. */
+const TEMP = realpathSync(tmpdir());
+
+/** The short base for a fixture that binds a unix socket: the POSIX temp folder `/tmp` when it
+ *  exists (4 bytes on Linux, 12 on macOS as the real path), else the runtime temp folder. A unix
+ *  socket path has a 100-byte limit, so a socket fixture must not sit under a deep temp folder;
+ *  every other fixture keeps the runtime temp folder. */
+export function shortSocketBase(): string {
+  try {
+    return realpathSync('/tmp');
+  } catch {
+    return realpathSync(tmpdir());
+  }
+}
+
 /** The `herdr 0.7.1` `pane list` entry, as captured. */
 export function capturedPaneEntry(paneId: string, workspaceId: string, terminalId = 'term_65dd8274742df1') {
   return {
     agent_status: 'unknown',
-    cwd: '/private/tmp',
+    cwd: TEMP,
     focused: true,
-    foreground_cwd: '/private/tmp',
+    foreground_cwd: TEMP,
     pane_id: paneId,
     revision: 0,
     tab_id: `${workspaceId}:t1`,
@@ -184,7 +201,7 @@ export function capturedProcessInfo(paneId: string, shellPid: number, foreground
   return {
     foreground_process_group_id: shellPid,
     foreground_processes: [
-      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: '/private/tmp', name: 'zsh', pid: foregroundPid },
+      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: TEMP, name: 'zsh', pid: foregroundPid },
     ],
     pane_id: paneId,
     shell_pid: shellPid,
@@ -252,6 +269,15 @@ export function testIo(cwd: string, caller?: Caller): TestIo {
     ...(caller ? { caller } : {}),
   };
   return io;
+}
+
+/** The notes in a check's output other than the one a live seat with no socket anywhere draws:
+ *  that seat is named once, by its delivery class, on every pass. A scene whose subject is a
+ *  different note reads this list rather than the whole output. */
+export function notesOtherThanSocket(out: string): string[] {
+  return out
+    .split('\n')
+    .filter((line) => line.startsWith('note: ') && !line.includes('no cross-session socket is live'));
 }
 
 /** The live read a fake herdr host answers with: every running registry record placed in the

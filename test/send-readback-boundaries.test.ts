@@ -4,7 +4,7 @@
 // where the status alone says what happened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -98,14 +98,11 @@ delivery_order: [mcp-inbox, typed]
 `;
 }
 
-/** A short writable parent, or the platform temp root when neither short path exists. The
- *  daemon spells its trigger as the absolute path of the store drop, so a deep temp root can
- *  push that line past `TRIGGER_MAX` on a machine where the suite still has to pass. */
+/** The runtime temp folder itself, with no deeper folder of our own: the daemon spells its
+ *  trigger as the absolute path of the store drop, so this scene keeps the world as shallow as
+ *  the platform allows instead of assuming one fixed folder is short enough. */
 function shortTempBase(): string {
-  for (const candidate of ['/private/tmp', '/tmp']) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return tmpdir();
+  return realpathSync(tmpdir());
 }
 
 function setupWorld(baseDir: string = tmpdir()) {
@@ -181,8 +178,40 @@ function outcomes(world: ReturnType<typeof setupWorld>): string[] {
   return history.entries.map((entry) => entry.outcome);
 }
 
+/** The bus record a retired read-back edge leaves: one signed drop for `body` at mode 0600 in
+ *  the seat's 0700 folder, the drop-leg marker, and the history line the sender was told about.
+ *  These scenes' subjects were the typed leg's edges; the record is what the send keeps now. */
+function expectKeptInBus(world: ReturnType<typeof setupWorld>, seat: string, body: string): string {
+  const drops = join(world.dir, 'send-drops', 'acme', seat);
+  expect(lstatSync(drops).mode & 0o777).toBe(0o700);
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files).toHaveLength(1);
+  const id = files[0] as string;
+  expect(lstatSync(join(drops, id)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, id))).toBe(filed(body));
+  expect(JSON.parse(readFileSync(join(drops, `${id}.pending`), 'utf8'))).toMatchObject({
+    id,
+    from: 'owner',
+    to: seat,
+    body: filed(body),
+    leg: 'drop',
+  });
+  const history = readHistory('acme', world.root, world.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries).toContainEqual(expect.objectContaining({
+      id,
+      to: seat,
+      body: filed(body),
+      outcome: 'sent (unconfirmed)',
+      via: 'drop',
+    }));
+  }
+  return id;
+}
+
 describe('the composer read-back at its boundaries', () => {
-  test('an Enter that is not taken, with the trigger still in the composer, is not-submitted with the box text', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: an Enter that is not taken, with the trigger still in the composer, is not-submitted with the box text', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The Enter is refused by the pane and the box keeps holding the trigger.
@@ -196,25 +225,13 @@ describe('the composer read-back at its boundaries', () => {
     };
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'the pane refused the Enter'], io, host)).toBe(1);
-    expect(io.err).toContain('not-submitted: the seat did not take the trigger after 0 Enters; the box holds');
-    // The typed line is the message-display line — sender, the body's first line, the fixed read
-    // hint — so the quoted box proves which line was left unsent.
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'the pane refused the Enter' }) as string;
-    expect(io.err).toContain(`the box holds ${JSON.stringify(line)}`);
-    expect(host.enters.length).toBe(1);
-    expect(outcomes(world)).toEqual(['not-submitted']);
-
-    // The body waits in the drop file, whole, for the seat to pick up, with the retry record
-    // the watch reads beside it and the walk's own `<id>.fallback.json` record beside both.
-    const drops = join(world.dir, 'send-drops', 'acme', 'lead');
-    const files = readdirSync(drops).filter((name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json'));
-    expect(files.length).toBe(1);
-    expect(recordBody(join(drops, files[0]!))).toBe(filed('the pane refused the Enter'));
-    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
+    const retired = await runSend(['lead', 'the pane refused the Enter'], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'the pane refused the Enter');
   });
 
-  test('a box that stops holding the trigger after the first Enter is sent with the trigger note, and gets no second Enter', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a box that stops holding the trigger after the first Enter is sent with the trigger note, and gets no second Enter', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The first Enter is taken but herdr never reports the seat working, and the composer now
@@ -234,20 +251,13 @@ describe('the composer read-back at its boundaries', () => {
     };
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
-    expect(io.out).toContain('trigger taken, no read receipt yet');
-    expect(host.enters.length).toBe(1);
-    const history = readHistory('acme', world.root, world.home);
-    if (!history.ok) throw new Error('history could not be read');
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['sent (unconfirmed)', 'trigger taken, no read receipt yet']]);
-
-    // A taken line is never retyped: no retry record is left beside the drop.
-    const drops = join(world.dir, 'send-drops', 'acme', 'lead');
-    expect(readdirSync(drops).filter((name) => name.endsWith('.pending'))).toHaveLength(0);
+    const retired = await runSend(['lead', 'never submitted'], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'never submitted');
   });
 
-  test('the same box through the daemon: one Enter, and the same sent word', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the same box through the daemon: one Enter, and the same sent word', async () => {
     // This is the path-form boundary scene: the daemon types `read <absolute drop path>`, so
     // the world runs under a short owned root to keep the intended successful line <= 200.
     const world = setupWorld(shortTempBase());
@@ -271,23 +281,13 @@ describe('the composer read-back at its boundaries', () => {
     handles.push(started.handle);
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
-    expect(io.out).toContain('trigger taken, no read receipt yet');
-    expect(io.err).not.toContain('not-submitted');
-    expect(host.enters.length).toBe(1);
-    const history = readHistory('acme', world.root, world.home);
-    if (!history.ok) throw new Error('history could not be read');
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([['sent (unconfirmed)', 'trigger taken, no read receipt yet']]);
-
-    // The daemon keeps no retry record in the folder a watch scans — and a taken line is never
-    // typed again either way.
-    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'lead');
-    expect(readPending(drops)).toHaveLength(0);
-    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
+    const retired = await runSend(['lead', 'never submitted through the daemon'], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'never submitted through the daemon');
   });
 
-  test('a dialog between typing and the first Enter is never a read-back mismatch', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a dialog between typing and the first Enter is never a read-back mismatch', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The composer is empty before typing; the question dialog is up by the time the trigger
@@ -298,11 +298,10 @@ describe('the composer read-back at its boundaries', () => {
     };
 
     const io = ownerIo(world.root);
-    expect(await runSend(['lead', 'into a dialog'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable now (the screen reads question); a running watch retries it when the seat is idle; the record is at');
-    // The pane is a dialog by the time the line has settled: no Enter goes to it.
-    expect(host.enters.length).toBe(0);
-    expect(outcomes(world)).toEqual(['unreachable']);
+    const retired = await runSend(['lead', 'into a dialog'], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'into a dialog');
   });
 
   test('a pane that cannot be read is judged by the status alone, and is sent', async () => {
@@ -312,14 +311,14 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'delivered unread'], io, host)).toBe(0);
-    expect(host.typed.length).toBe(1);
-    expect(host.enters.length).toBe(1);
+    expect(host.typed.length).toBe(0);
+    expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
   });
 });
 
 describe('the composer at the narrowest box', () => {
-  test('an 80-column box takes the whole display line, its summary trimmed to fit', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: an 80-column box takes the whole display line, its summary trimmed to fit', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     // The pane draws 80 columns of text; a line wider than that would wrap and the read-back
@@ -332,16 +331,9 @@ describe('the composer at the narrowest box', () => {
     const io = ownerIo(world.root);
     // A summary far wider than the line's room: the line is cut, never wrapped.
     const body = 'a summary that keeps going and going far past the room the line has';
-    const code = await runSend(['lead', body], io, host);
-    if (code !== 0) throw new Error(`exit ${String(code)}: ${io.err}${io.out}`);
-    expect(code).toBe(0);
-    expect(host.typed).toHaveLength(1);
-    const line = host.typed[0]?.text ?? '';
-    expect(line.length).toBeLessThanOrEqual(80);
-    expect(line.endsWith(' Read it with: team drops --read.')).toBe(true);
-    expect(line).toContain('…');
-    // The box read back whole, so the delivery took its one Enter.
-    expect(host.enters).toHaveLength(1);
-    expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
+    const retired = await runSend(['lead', body], io, host);
+    expect(await retired).toBe(0);
+    expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', body);
   });
 });

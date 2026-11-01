@@ -49,7 +49,7 @@ import {
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -127,7 +127,7 @@ const realLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
@@ -641,7 +641,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true }], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', who, `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
@@ -662,6 +662,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
       ...(home === undefined ? {} : { home }),
+      team,
       ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
@@ -690,7 +691,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(launch.codexEndpoint === undefined
         ? {}
         : {
-            managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+            managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
             stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
           }),
       ...(launch.registerInbox
@@ -715,7 +716,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           current: string,
           pane: string,
           cli: string,
-          file: { text: string; path: string; line: string; seat: string },
+          file: { text: string; path: string; line: string; seat: string; writeOnly?: boolean },
           seconds: number,
         ) => {
           const devProject = standing.kind !== 'verified' || owner ? team.project : undefined;
@@ -724,6 +725,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           if (!typeablePath(file.path)) {
             return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
           }
+          // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+          if (file.writeOnly === true) return true;
           const stopped: { why: Refusal | null } = { why: null };
           const delivered = await deliverRules(cli, file.line, seconds, {
             screen: () => launch.paneText(current, pane) ?? undefined,

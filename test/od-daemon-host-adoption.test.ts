@@ -205,8 +205,8 @@ describe('the listener frames through the shared relay host, not a second parser
     const body = `é—世 ${'x'.repeat(70_000)}`;
     expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(65_536);
     const answer = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'big-body', from: 'owner', to: 'native', body });
-    expect(outcomeOf(answer)).toBe('delivered');
-    expect(host.typed.length).toBe(1);
+    expect(outcomeOf(answer)).toBe('unreachable');
+    expect(host.typed).toEqual([]);
     const drop = readFileSync(join(drops, 'big-body'));
     expect(drop.equals(Buffer.from(body, 'utf8'))).toBe(true);
     expect(statSync(join(drops, 'big-body')).mode & 0o777).toBe(0o600);
@@ -226,12 +226,10 @@ describe('the drop is staged before the route, and the write is create-or-match'
     const handle = await serve(world, host);
     const body = 'the body this send carries — unchanged';
     const answer = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'ordered', from: 'owner', to: 'native', body });
-    expect(outcomeOf(answer)).toBe('delivered');
-    // The route (typing the trigger) observed the durable copy first; the package's stage is not
-    // a step that happens after the route.
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.bytes).toBe(body);
-    expect(seen[0]!.text).toContain('ordered');
+    expect(outcomeOf(answer)).toBe('unreachable');
+    // No pane messaging: the daemon's typed route is never taken, so nothing observes a pane;
+    // the durable copy is still staged with the exact body.
+    expect(seen).toHaveLength(0);
     expect(readFileSync(join(drops, 'ordered'), 'utf8')).toBe(body);
   });
 
@@ -247,10 +245,10 @@ describe('the drop is staged before the route, and the write is create-or-match'
     const before = statSync(same);
     const delivered = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'same-id', from: 'owner', to: 'native', body: 'the same body' });
     const after = statSync(same);
-    expect(outcomeOf(delivered)).toBe('delivered');
+    expect(outcomeOf(delivered)).toBe('unreachable');
     expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({ ino: before.ino, mtimeMs: before.mtimeMs });
     expect(readFileSync(same, 'utf8')).toBe('the same body');
-    expect(host.typed.length).toBe(1);
+    expect(host.typed).toEqual([]);
 
     const held = join(drops, 'held-id');
     writeFileSync(held, 'an earlier holder\n', { mode: 0o600 });
@@ -259,21 +257,29 @@ describe('the drop is staged before the route, and the write is create-or-match'
     expect(detailOf(refused)).toBe('native: the drop file could not be written; nothing was typed');
     expect(readFileSync(held, 'utf8')).toBe('an earlier holder\n');
     // The refused send typed nothing: the route never ran.
-    expect(host.typed.length).toBe(1);
+    expect(host.typed).toEqual([]);
   });
 });
 
 describe('admission, queue, history and the socket path stay the daemon’s', () => {
-  test('a seat that is not the orchestrator is refused before any drop or route', async () => {
+  test('a sender that is no seat of the team is refused before any drop or route', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     const handle = await serve(world, host);
-    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'native');
-    const refused = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send', from: 'native', to: 'lead', body: 'hello' });
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'stranger');
+    const refused = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send', from: 'stranger', to: 'lead', body: 'hello' });
     expect(outcomeOf(refused)).toBe('refused');
-    expect(detailOf(refused)).toBe('a seat may not send (native): only the owner, or the orchestrator from its own seat, can send');
+    expect(detailOf(refused)).toBe('a sender that is not a seat of this team may not send (stranger): only the owner or a declared seat sends through this endpoint');
     expect(host.typed).toEqual([]);
     expect(existsSync(join(drops, 'seat-send'))).toBe(false);
+  });
+
+  test('a declared seat that is not the orchestrator is not refused by the endpoint (its admission is the CLI\'s)', async () => {
+    const world = setupWorld();
+    const host = makeHost(world);
+    const handle = await serve(world, host);
+    const sent = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send-2', from: 'native', to: 'lead', body: 'hello' });
+    expect(detailOf(sent) ?? '').not.toContain('may not send');
   });
 
   test('two sends through the one dispatcher are each queued and delivered, and history keeps both', async () => {
@@ -281,15 +287,13 @@ describe('admission, queue, history and the socket path stay the daemon’s', ()
     const host = makeHost(world);
     const handle = await serve(world, host);
     const one = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'queued-1', from: 'owner', to: 'native', body: 'first' });
-    expect(outcomeOf(one)).toBe('delivered');
+    expect(outcomeOf(one)).toBe('unreachable');
     // A busy seat legitimately holds the next send until it is free; the queue is still the
     // daemon's, and a send that arrives when the seat is idle is delivered in turn.
     host.setStatus('pane-native', 'idle');
     const two = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'queued-2', from: 'owner', to: 'native', body: 'second' });
-    expect(outcomeOf(two)).toBe('delivered');
-    expect(host.typed).toHaveLength(2);
-    expect(host.typed[0]!.text).toContain('queued-1');
-    expect(host.typed[1]!.text).toContain('queued-2');
+    expect(outcomeOf(two)).toBe('unreachable');
+    expect(host.typed).toEqual([]);
 
     const history = readHistory(world.team.project, world.root, world.home);
     expect(history.ok).toBe(true);

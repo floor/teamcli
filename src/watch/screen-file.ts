@@ -47,7 +47,7 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);
@@ -184,14 +184,17 @@ function stageOf(node: YamlNode, name: (typeof STAGES)[number]): Stage {
       tested: testedOf(required(entries, 'tested', node.line)),
     };
   }
-  if (node.kind === 'seq') return { rules: node.items.map((item) => ruleOf(item, false)) };
+  if (node.kind === 'seq') return { rules: node.items.map((item) => ruleOf(item, false, true, name === 'rate_limit')) };
   const entries = mapping(node, 'a stage');
-  only(entries, ['ignore_case', 'rules']);
+  only(entries, name === 'rate_limit' ? ['ignore_case', 'rules', 'reason'] : ['ignore_case', 'rules']);
   const flag = optional(entries, 'ignore_case');
   const ignoreCase = flag ? boolOf(flag.value, 'ignore_case') : false;
   const rules = required(entries, 'rules', node.line);
   if (rules.value.kind !== 'seq') fail(rules.line, '"rules" must be a list');
-  return { rules: rules.value.items.map((item) => ruleOf(item, ignoreCase)) };
+  const reasonEntry = name === 'rate_limit' ? optional(entries, 'reason') : undefined;
+  const reason = reasonEntry ? stringOf(reasonEntry.value) : null;
+  if (reasonEntry && (reason === null || reason.trim() === '')) fail(reasonEntry.line, '"reason" must be a non-empty string');
+  return { rules: rules.value.items.map((item) => ruleOf(item, ignoreCase, true, name === 'rate_limit')), ...(reasonEntry ? { reason: reason! } : {}) };
 }
 
 /** The `tested:` range of a vendor notice: `from` and `to`, both required. */
@@ -207,9 +210,9 @@ function testedOf(entry: YamlEntry): VersionRange {
   return { from: a, to: b };
 }
 
-function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
+function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true, allowReason = false): Rule {
   const entries = mapping(node, 'a rule');
-  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live', 'at_composer']);
+  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live', 'at_composer', ...(allowReason ? ['reason'] : [])]);
   if (entries.length === 0) fail(node.line, 'a rule has no primitive');
   const block = optional(entries, 'block');
   // A block spells the rows it draws, the footer among them, so it stands alone: a rule that
@@ -219,6 +222,10 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
     return { block: blockOf(block.value) };
   }
   const rule: Rule = {};
+  const reasonEntry = allowReason ? optional(entries, 'reason') : undefined;
+  const reason = reasonEntry ? stringOf(reasonEntry.value) : null;
+  if (reasonEntry && (reason === null || reason.trim() === '')) fail(reasonEntry.line, '"reason" must be a non-empty string');
+  if (reasonEntry) rule.reason = reason!;
   const any = optional(entries, 'any');
   const all = optional(entries, 'all');
   const footer = optional(entries, 'footer');

@@ -19,7 +19,11 @@ tested:
   to: '1.4.2'
 unattended:
   - --dangerously-skip-permissions
-rules: first-message
+rules:
+  launch_prompt: --prompt-interactive
+# The delivery class a run measured: no MCP inbox is registered for this CLI and it has no event
+# adapter, so an idle seat cannot be woken; a message waits in its bus inbox.
+delivery: none
 login:
   check:
     - models

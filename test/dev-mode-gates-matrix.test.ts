@@ -1,8 +1,12 @@
 // The dev-mode gates matrix. TEAMCLI_DEV_MODE=1 turns a command's caller gate into a warning
 // (a log line beside it, on every command the list names) and the run continues past it; unset,
-// every gate refuses as always. `grant`, `delegate`, `revoke` and `approve` are owner-only in
-// every mode, and so are `broker`, `tempo` and `remove --abandon`. Every file, caller and pane
-// below is synthetic.
+// every gate refuses as always. The owner gates are not caller gates: `grant`, `delegate`,
+// `revoke`, `approve`, `policy`, `check --repair`, `remove`/`down --abandon`, `broker`, `tempo`
+// and the daemon's three verbs stay the owner's, except that the owner's widening
+// (OD-20261019-49) admits one placed orchestrator while dev mode is on. The table scene at the
+// end pins every lift the widening makes — plus the installer designation the task host admits —
+// and every guard it never lifts: the client pane guard, the load guard, the swap gate and the
+// public actions. Every file, caller and pane below is synthetic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,18 +14,21 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runApprove, type ApproveSources } from '../src/approve/command.ts';
+import { clientPaneGuard } from '../src/client/pane-guard.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runInit } from '../src/commands/init.ts';
+import { pr } from '../src/commands/pr.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
+import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runReload, type ReloadSources } from '../src/commands/reload.ts';
-import { resolveDevMode, DEV_MODE_COMMANDS } from '../src/dev_mode.ts';
+import { devModeCallerGate, devModeOwnerLift, devModeOwnerLiftAtCwd, resolveDevMode, DEV_MODE_COMMANDS } from '../src/dev_mode.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -29,7 +36,10 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { readState } from '../src/state.ts';
+import { installSlice } from '../src/tasks/slice-handler.ts';
+import type { Machine } from '../src/watch/machine.ts';
 import type { Screen } from '../src/watch/screen.ts';
+import { config } from './check/fixtures.ts';
 import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
 const IDLE = CLAUDE_IDLE;
@@ -94,6 +104,24 @@ function emptyRepo(): { root: string; home: string } {
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
   return { root, home };
 }
+
+/** A repository whose state places `lead` on pane1 and `worker` on pane2, in session "acme". */
+function placedRepo(builder: (root: string) => string = file): { root: string; home: string } {
+  const { root, home } = repo(builder);
+  writeFileSync(join(root, '.agents', 'team.state.json'), `${JSON.stringify({
+    format: 1,
+    sessions: {
+      acme: {
+        seats: { lead: { stage: 'ready', pane: 'pane1' }, worker: { stage: 'ready', pane: 'pane2' } },
+        worktrees: {},
+      },
+    },
+  }, null, 2)}\n`);
+  return { root, home };
+}
+
+const PLACED_LEAD = { kind: 'seat' as const, name: 'lead', pane: 'pane1', session: 'acme' };
+const PLACED_WORKER = { kind: 'seat' as const, name: 'worker', pane: 'pane2', session: 'acme' };
 
 function approve(home: string, root: string): void {
   const loaded = loadTeamFile(root, { home });
@@ -565,9 +593,25 @@ test('register: unset, the caller gate refuses; set, it warns and the run reads 
 });
 
 // --- the owner-only edits ---------------------------------------------------------------------
-// Dev mode waives caller gates; it never widens `grant`, `delegate`, `revoke` or `approve`.
+// Dev mode waives caller gates; the owner's widening adds one admission of its own — a placed
+// orchestrator, while the mode is on, may run the owner-only command and the run says so. A
+// caller the walk cannot place is no admission in either mode, and `approve` is not in the
+// widening: it stays the owner's in every mode.
 
-describe('the owner-only edits are not dev-mode gates', () => {
+describe('the owner-only edits: the widening admits one placed orchestrator, and nobody else', () => {
+  test('grant: the placed orchestrator is admitted under dev mode, and the warned run writes the grant', async () => {
+    const { root, home } = placedRepo();
+    const line = 'only the owner runs this, from a terminal outside herdr; this call is lead';
+    const io = testIo(root, PLACED_LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runGrant(['lead', '--scope', 'up'], io, { home })).toBe(0);
+    expect(io.err).toBe(`warning: ${line}; dev mode continues\n`);
+    expect(io.out).toBe('grant: updated\n');
+    // The audit line names the command, the caller and the role the widening proved.
+    expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
+      .toContain(` grant [lead] warning: ${line}; dev mode continues; admitted as orchestrator\n`);
+  });
+
   test('grant refuses an unplaced caller with the mode unset and with it set', async () => {
     const { root, home } = repo();
     const off = testIo(root, UNPLACED);
@@ -888,4 +932,229 @@ test("up: an owner's run under a governing on owes no warning and no dev mark", 
   const agents = readAgents(home);
   expect(agents.length).toBeGreaterThan(0);
   expect(agents.every((agent) => agent.provenance.dev_mode !== true)).toBe(true);
+});
+
+// --- the widening's table ---------------------------------------------------------------------
+// One row per lift OD-20261019-49 makes, and one per guard it never lifts. The caller lifts are
+// the one list read at the top of this file. The owner lifts are one admission,
+// `devModeOwnerLift`: reached at the cwd by `devModeOwnerLiftAtCwd`, and after the file is read
+// by `devModeOwnerLift` directly. The installer row is the task host's own admission of an
+// unapproved designation. The never-lifted rows are the two machine guards (the client pane
+// guard and the load guard), the swap gate and a public action, and each answers alike in every
+// mode.
+
+/** A file whose `installer:` is `worker` and whose task source is a local file. */
+const INSTALLER_FILE = (root: string): string => `format: 1
+project: acme
+session: acme
+coordinator: lead
+operator: lead
+trust:
+  - ~/.config/team/lobby
+  - ${root}
+workspace:
+  mode: shared
+installer: worker
+tasks:
+  source: file
+  path: .agents/tasks.yaml
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+/** The owner gates reached before any file read: every one asks `devModeOwnerLiftAtCwd`. */
+const OWNER_AT_CWD = [
+  { command: 'grant', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
+  { command: 'delegate', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
+  { command: 'revoke', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
+  { command: 'policy', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
+  { command: 'broker', refusal: 'only the owner runs `broker`, from a terminal outside herdr; this call is lead' },
+  { command: 'tempo', refusal: 'only the owner runs tempo, from a terminal outside herdr; this call is lead' },
+  { command: 'daemon', refusal: 'only the owner installs or removes the machine daemon; this call is lead' },
+  { command: 'down', refusal: 'only the owner abandons a team, from a terminal outside herdr' },
+];
+
+/** The owner gates that already hold the loaded file: each asks `devModeOwnerLift`. */
+const OWNER_AFTER_LOAD = [
+  { command: 'check', refusal: "--repair is the owner's" },
+  { command: 'remove', refusal: 'only the owner abandons a seat, from a terminal outside herdr' },
+];
+
+test('every caller lift folds under the variable and refuses without it', () => {
+  const { root, home } = repo();
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
+  const context = { home, team: loaded.team, root, now: NOW };
+  for (const command of DEV_MODE_COMMANDS) {
+    const off = testIo(root);
+    const refused = resolveDevMode(command, off, context);
+    expect(refused.on).toBe(false);
+    expect(devModeCallerGate(refused, `the ${command} gate`)).toBeNull();
+
+    const on = testIo(root);
+    on.env = { TEAMCLI_DEV_MODE: '1' };
+    const folded = resolveDevMode(command, on, context);
+    expect(folded.on).toBe(true);
+    expect(folded.by).toBe('env');
+    expect(devModeCallerGate(folded, `the ${command} gate`))
+      .toBe(`warning: the ${command} gate; dev mode continues`);
+  }
+});
+
+test('every owner lift admits the placed orchestrator, and logs the role it proved', () => {
+  const { root, home } = placedRepo();
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
+  const warned: { command: string; warning: string }[] = [];
+  for (const row of OWNER_AT_CWD) {
+    const io = testIo(root, PLACED_LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const lift = devModeOwnerLiftAtCwd(io, { command: row.command, refusal: row.refusal, home, now: NOW });
+    expect(lift).not.toBeNull();
+    if (lift === null || lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
+    expect(lift.lifted).toBe(true);
+    expect(lift.role).toBe('orchestrator');
+    expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
+    warned.push({ command: row.command, warning: lift.warning });
+  }
+  for (const row of OWNER_AFTER_LOAD) {
+    const io = testIo(root, PLACED_LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const lift = devModeOwnerLift(io, {
+      command: row.command,
+      refusal: row.refusal,
+      home,
+      team: loaded.team,
+      root,
+      dir: join(root, '.agents'),
+      now: NOW,
+    });
+    if (lift.warning === null) throw new Error(`${row.command}: the lift spoke no warning`);
+    expect(lift.lifted).toBe(true);
+    expect(lift.role).toBe('orchestrator');
+    expect(lift.warning).toBe(`warning: ${row.refusal}; dev mode continues`);
+    warned.push({ command: row.command, warning: lift.warning });
+  }
+  expect(warned).toHaveLength(OWNER_AT_CWD.length + OWNER_AFTER_LOAD.length);
+  const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+  for (const row of warned) {
+    expect(log).toContain(`${NOW.toISOString()} ${row.command} [lead] ${row.warning}; admitted as orchestrator\n`);
+  }
+});
+
+test('the owner lift admits nobody else: the mode off, another seat, a pane, the owner, an unplaced walk', () => {
+  const { root, home } = placedRepo();
+  const line = 'only the owner runs this, from a terminal outside herdr; this call is lead';
+  // Unset, the same placed orchestrator is refused.
+  const off = testIo(root, PLACED_LEAD);
+  const refused = devModeOwnerLiftAtCwd(off, { command: 'grant', refusal: line, home, now: NOW });
+  expect(refused?.lifted).toBe(false);
+  // On, a placed seat that is not the team's lead is no admission.
+  const other = testIo(root, PLACED_WORKER);
+  other.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(devModeOwnerLiftAtCwd(other, { command: 'grant', refusal: line, home, now: NOW })?.lifted).toBe(false);
+  // A pane caller and an unplaced walk are never considered, and the owner is not this path's.
+  for (const caller of [{ kind: 'pane' as const, pane: 'pane3' }, UNPLACED, { kind: 'owner' as const }]) {
+    const io = testIo(root, caller);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const lift = devModeOwnerLiftAtCwd(io, { command: 'grant', refusal: line, home, now: NOW });
+    if (caller.kind === 'unplaced') expect(lift?.lifted).toBe(false);
+    else expect(lift).toBeNull();
+  }
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+});
+
+test('the installer designation: unapproved, only the dev-mode admission lets the placed installer record it', () => {
+  const { root, home } = placedRepo(INSTALLER_FILE);
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
+  const unapproved = 'the installer designation is not the approved one: only the owner records an install until the owner approves the file';
+  const input = { caller: PLACED_WORKER, described: 'seat worker', task: 'q1', commit: 'abcdef1', version: '0.5.10', now: NOW.getTime() };
+
+  const refused = installSlice(loaded.team, root, home, input);
+  expect(refused.ok).toBe(false);
+  if (!refused.ok) {
+    expect(refused.refusal.id).toBe('queue.installer');
+    expect(refused.refusal.message).toBe(unapproved);
+  }
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+
+  const admitted = installSlice(loaded.team, root, home, { ...input, env: { TEAMCLI_DEV_MODE: '1' } });
+  expect(admitted.ok).toBe(true);
+  if (admitted.ok) {
+    expect(admitted.status).toBe('recorded');
+    expect(admitted.event.installedBy).toBe('worker');
+  }
+  expect(readFileSync(join(root, '.agents', 'team.log'), 'utf8'))
+    .toContain(`queue install [worker] warning: ${unapproved}; dev mode continues; admitted as installer\n`);
+});
+
+test('the client pane guard is a machine guard: refused under dev mode, with no dev clause', () => {
+  const { root } = placedRepo();
+  const io = testIo(root, PLACED_LEAD);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const verdict = clientPaneGuard(io);
+  expect(verdict.ok).toBe(false);
+  if (!verdict.ok) {
+    expect(verdict.why).toContain('a client key is not used from inside a team pane');
+    expect(verdict.why).not.toContain('dev mode');
+  }
+});
+
+test('the load guard stops a dev-admitted mount, and nothing is launched', async () => {
+  const { root, home } = placedRepo();
+  approve(home, root);
+  const hot: Machine = { loadPerCore: 9, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+  const world = upWorld();
+  const io = testIo(root, UNPLACED);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runUp([], io, { ...upSources(home, world.launch), machine: () => hot })).toBe(1);
+  // The caller gate folded — the run moved past it — and the machine guard stopped the mount.
+  expect(io.err).toContain('dev mode continues');
+  expect(io.err).toContain('the load is 9.0 per core, above 3');
+  expect(world.runs).toEqual([]);
+});
+
+test('the swap gate answers alike in every mode, and writes no dev line', async () => {
+  const { root, home } = placedRepo();
+  const off = testIo(root, UNPLACED);
+  const offCode = await runSwap(['queue', 'lead', '--to', 'codex:gpt sol'], off, { home, now: () => NOW });
+  const on = testIo(root, UNPLACED);
+  on.env = { TEAMCLI_DEV_MODE: '1' };
+  const onCode = await runSwap(['queue', 'lead', '--to', 'codex:gpt sol'], on, { home, now: () => NOW });
+  expect(offCode).toBe(1);
+  expect(onCode).toBe(offCode);
+  expect(on.out).toBe(off.out);
+  expect(on.err).toBe(off.err);
+  expect(off.err).toStartWith('team swap: ');
+  expect(existsSync(join(root, '.agents', 'team.log'))).toBe(false);
+});
+
+test('the public action reads alike in every mode', async () => {
+  const { root } = placedRepo();
+  writeFileSync(join(root, 'body.md'), 'Bump the retry window.\n\nSee WEB-1234.\n');
+  const load = () => ({ ok: true as const, config: config(), warnings: [] });
+  const off = testIo(root);
+  const offCode = await pr(['check', 'body.md'], off, load);
+  const on = testIo(root);
+  on.env = { TEAMCLI_DEV_MODE: '1' };
+  const onCode = await pr(['check', 'body.md'], on, load);
+  expect(offCode).toBe(1);
+  expect(onCode).toBe(offCode);
+  expect(off.out).toContain('the pull request body refused');
+  expect(on.out).toBe(off.out);
+  expect(on.err).toBe(off.err);
 });

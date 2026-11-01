@@ -592,11 +592,11 @@ describe('readJournal', () => {
     expect(read.why).toContain('dispatched must be false');
   });
 
-  test('refuses a signal outside the closed twelve', () => {
+  test('refuses a signal outside the closed set', () => {
     const step = { ...demoStep0(demo), signal: 'release.ready' };
     const read = readJournal(JSON.stringify(journalOf(demo, { steps: [step as never] })));
     if (read.ok) throw new Error('expected a refusal');
-    expect(read.why).toContain('twelve transition signals');
+    expect(read.why).toContain('transition signals');
   });
 
   test('refuses a mistyped waitingOn', () => {

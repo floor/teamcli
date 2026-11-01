@@ -11,6 +11,13 @@
 //   the OS reused is never signalled;
 // - an unprovable predecessor is preserved and reported, never signalled; a predecessor whose
 //   own path this one takes over makes the launch unmanaged;
+// - a live endpoint is reused only when its record names the configuration this launch needs; a
+//   record naming none, or another line's, is stopped under the same proof and a fresh one
+//   started, never attached to;
+// - a missing socket file is no proof the server is gone: a live pid proved by its command line
+//   is stopped by pid, and the socket file is removed only when it is that socket;
+// - a record that is present but not one this build could have written is unproven, not absent:
+//   a stop says why and removes nothing, and a removal keeps the seat and the record;
 // - a start that never produced its socket, or whose seat binding moved while it started, is
 //   cleaned up by the call that started it and records nothing;
 // - the seat stop clears the record only after a proven stop, and only for the record it stopped.
@@ -20,8 +27,7 @@
 // command's ordering with the same injected endpoint stop.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
@@ -39,7 +45,7 @@ import {
 } from '../../src/launch/codex-endpoint.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from '../helpers.ts';
 
 const SESSION = 'acme';
 const SEAT = 'worker';
@@ -49,10 +55,9 @@ const THIRD = 'prs_cccccccccccc';
 const STARTED_AT = '2026-10-20T07:59:00.000Z';
 const NOW = new Date('2026-10-20T08:00:00.000Z');
 
-// The endpoint path has a 100-byte contract limit, so the state folder has to be short: macOS's
-// own temporary folder is far too deep for a run/<session>/<seat>/<binding>.sock path. Linux's
-// `/tmp` is already short; the macOS short temp is `/private/tmp`.
-const SHORT_TMP = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+// The endpoint path has a 100-byte contract limit, so the state folder has to be short: these
+// scenes take the short socket base, and the endpoint a scene builds is measured against the limit.
+const SHORT_TMP = shortSocketBase();
 
 let dirs: string[] = [];
 afterEach(() => {
@@ -67,11 +72,17 @@ function stateDir(): string {
 }
 
 function socketOf(dir: string, binding = BINDING): string {
-  return join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
+  const path = join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
+  // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
+  // path over 100 bytes.
+  expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+  return path;
 }
 
 function recordOf(dir: string, binding = BINDING, pid = 500): CodexEndpointRecord {
-  return { url: `unix://${socketOf(dir, binding)}`, binding, pid, started_at: STARTED_AT };
+  // A managed launch always records the configuration its server was started with; these scenes
+  // start it with none.
+  return { url: `unix://${socketOf(dir, binding)}`, binding, pid, started_at: STARTED_AT, config: [] };
 }
 
 function seed(dir: string, input: { binding?: string; record?: CodexEndpointRecord } = {}): void {
@@ -178,7 +189,7 @@ describe('the endpoint path and the recorded start', () => {
     expect(await ensure(w)).toEqual({ kind: 'up', url, started: true });
     expect(w.calls).toEqual([`spawn ${url}`]);
     expect(w.sockets.has(socketOf(w.dir))).toBe(true);
-    expect(seat(w.dir)?.codex_endpoint).toEqual({ url, binding: BINDING, pid: 501, started_at: NOW.toISOString() });
+    expect(seat(w.dir)?.codex_endpoint).toEqual({ url, binding: BINDING, pid: 501, started_at: NOW.toISOString(), config: [] });
   });
 
   test('an unreadable state or no valid binding starts nothing', async () => {
@@ -389,9 +400,26 @@ describe('the recorded stop', () => {
     expect(stop.calls).toEqual([]);
   });
 
-  test('no socket file at the record path means nothing to do, and nothing is signalled', () => {
+  test('a missing socket file is no proof the server is gone: a proven live pid is signalled', () => {
     const dir = stateDir();
     const stop = stopHarness({ procs: [[500, proven(`unix://${socketOf(dir)}`)]] });
+    const read = stopRecordedCodexEndpoint({ dir, session: SESSION, seat: SEAT, record: recordOf(dir) }, stop.deps);
+    expect(read).toEqual({ stopped: true });
+    expect(stop.calls).toEqual(['terminate 500']);
+  });
+
+  test('a missing socket file leaves a live pid it cannot prove untouched, and says so', () => {
+    const dir = stateDir();
+    const stop = stopHarness({ procs: [[500, proven(`unix://${socketOf(dir)}`, { start: Date.parse(STARTED_AT) + 60_000 })]] });
+    const read = stopRecordedCodexEndpoint({ dir, session: SESSION, seat: SEAT, record: recordOf(dir) }, stop.deps);
+    expect(read.stopped).toBe(false);
+    expect(read.why).toContain('cannot be proven');
+    expect(stop.calls).toEqual([]);
+  });
+
+  test('a missing socket file and a dead pid leave nothing to do', () => {
+    const dir = stateDir();
+    const stop = stopHarness();
     const read = stopRecordedCodexEndpoint({ dir, session: SESSION, seat: SEAT, record: recordOf(dir) }, stop.deps);
     expect(read).toEqual({ stopped: true });
     expect(stop.calls).toEqual([]);
@@ -539,19 +567,32 @@ function place(workerExtra = ''): Place {
   return { base, root, home, file, dir: join(root, '.agents') };
 }
 
-function seedRemovalEndpoint(at: Place): void {
+function removalRecord(at: Place): CodexEndpointRecord {
+  return {
+    url: `unix://${join(at.dir, 'run', 'acme', 'worker', `${REMOVE_BINDING}.sock`)}`,
+    binding: REMOVE_BINDING,
+    pid: 4242,
+    started_at: REMOVE_STARTED_AT,
+  };
+}
+
+/** A record present on the seat but not one this build could have written: the pid and the start
+ *  instant a launch writes are missing, as a launch that died mid-write could leave them. */
+function unreadableRemovalRecord(at: Place): CodexEndpointRecord {
+  return {
+    url: `unix://${join(at.dir, 'run', 'acme', 'worker', `${REMOVE_BINDING}.sock`)}`,
+    binding: REMOVE_BINDING,
+  } as unknown as CodexEndpointRecord;
+}
+
+function seedRemovalEndpoint(at: Place, record: CodexEndpointRecord = removalRecord(at)): void {
   updateState(at.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
     session.seats.worker = {
       stage: 'ready',
       pane: 'w1:p1',
       presence_binding: REMOVE_BINDING,
-      codex_endpoint: {
-        url: `unix://${join(at.dir, 'run', 'acme', 'worker', `${REMOVE_BINDING}.sock`)}`,
-        binding: REMOVE_BINDING,
-        pid: 4242,
-        started_at: REMOVE_STARTED_AT,
-      },
+      codex_endpoint: record,
     };
   });
 }
@@ -718,5 +759,76 @@ describe('removal and the managed endpoint', () => {
     expect(await runRemove(['worker', '--json'], io, sources)).toBe(1);
     expect(JSON.parse(io.out).error.id).toBe('remove.endpoint');
     expect(removeSeat(at)?.codex_endpoint).toBeDefined();
+  });
+
+  test('a record the stop cannot read is unproven: removal refuses and keeps the seat, with or without --abandon', async () => {
+    for (const argv of [['worker'], ['worker', '--abandon']]) {
+      const at = place();
+      seedRemovalEndpoint(at, unreadableRemovalRecord(at));
+      let reads = 0;
+      const { sources } = removeSources(at, {
+        codexEndpoint: {
+          stop: (seen) => {
+            reads += 1;
+            // The real stop, with a reading that would fail the scene if it ever reached a pid:
+            // a record this build cannot read names no process to prove.
+            return stopSeatCodexEndpoint(seen, {
+              alive: () => { throw new Error('read a pid the record does not name'); },
+            });
+          },
+        },
+      });
+      const io = testIo(at.root, { kind: 'owner' });
+      expect(await runRemove(argv, io, sources)).toBe(1);
+      expect(reads).toBe(1);
+      expect(io.err).toContain('endpoint record cannot be read');
+      expect(io.err).toContain('left as it is');
+      expect(removeSeat(at)?.codex_endpoint).toBeDefined();
+      expect(readFileSync(at.file, 'utf8')).toContain('name: worker');
+    }
+  });
+
+  test('--abandon stops a provable record by pid when its socket file is gone, then drops it', async () => {
+    const at = place();
+    seedRemovalEndpoint(at);
+    const url = removalRecord(at).url;
+    const terminated: number[] = [];
+    const dropped: string[] = [];
+    let typed = '';
+    let shelled = false;
+    const { sources } = removeSources(at, {
+      sessionRunning: () => true,
+      agents: () => [agent('worker')],
+      screenText: () => (typed === '' ? CLAUDE_IDLE : claudeBox(typed)),
+      foreground: () => (shelled ? ['zsh'] : ['claude']),
+      codexEndpoint: {
+        stop: (seen) => stopSeatCodexEndpoint(seen, {
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${url}`,
+          startOf: () => Date.parse(REMOVE_STARTED_AT),
+          isPlainDir: () => true,
+          // The app-server lost its socket file; the pid is what proves it is still there.
+          isSocket: () => false,
+          terminate: (pid) => { terminated.push(pid); },
+          drop: (path) => { dropped.push(path); },
+        }),
+      },
+      launch: removeLaunch({
+        typeText: (_session, _pane, text) => {
+          typed = text;
+          return true;
+        },
+        pressEnter: () => {
+          shelled = true;
+          return true;
+        },
+      }),
+    });
+    const io = testIo(at.root, { kind: 'owner' });
+    expect(await runRemove(['worker', '--abandon'], io, sources)).toBe(0);
+    expect(terminated).toEqual([4242]);
+    expect(dropped).toEqual([]);
+    expect(removeSeat(at)).toBeUndefined();
+    expect(readFileSync(at.file, 'utf8')).not.toContain('name: worker');
   });
 });

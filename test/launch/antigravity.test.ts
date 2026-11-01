@@ -197,8 +197,8 @@ describe('Antigravity launch and captured screens', () => {
     };
     expect(commandOf('agy', { registry: { launch: 'agy', model: 'Gemini Flash', version: '3.8', sessionId: id } }))
       .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
-    expect(commandOf('zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
+    expect(commandOf('zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
     expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions`);
   });
@@ -247,35 +247,35 @@ function delivery(initial = 'idle') {
 }
 
 describe('Antigravity rules delivery', () => {
-  test('recognised idle, pasted text, then observed working with empty input', async () => {
+  test('no pane messaging, the rules line is never typed; was: recognised idle, pasted text, then observed working with empty input', async () => {
     const d = delivery();
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box holding a person\'s own text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     // The captured rules box against a shorter first message: the box is not the typed text.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('unsent'); return true; };
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the typed text with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with one character changed gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules!')); return true; };
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the typed text with more below it gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with more below it gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules.\nand a line of their own')); return true; };
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('an ordinary box whose rows are the typed line hard-wrapped is entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: an ordinary box whose rows are the typed line hard-wrapped is entered', async () => {
     // No Antigravity capture shows its composer wrapping an ordinary line — a long paste folds —
     // so no wrap is modelled for it: the box rows must read back as the typed line laid out in
     // order, the continuation at the prompt row's two columns, and then the Enter is the paste's.
@@ -285,22 +285,22 @@ describe('Antigravity rules delivery', () => {
     expect(chunks.length).toBeGreaterThan(1);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(chunks.join('\n'))); return true; };
-    expect(await deliverRules('antigravity', long, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([long, 'Enter']);
+    const retired = await deliverRules('antigravity', long, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a hard-wrapped box with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a hard-wrapped box with one character changed gets no Enter', async () => {
     const long = 'These are standing rules, not a task: reply ready and wait for your brief.';
     const changed = long.replace('reply ready', 'reply reidy');
     const chunks: string[] = [];
     for (let at = 0; at < changed.length; at += 53) chunks.push(changed.slice(at, at + 53));
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(chunks.join('\n'))); return true; };
-    expect(await deliverRules('antigravity', long, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([long]);
+    const retired = await deliverRules('antigravity', long, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a word-wrapped box with a blank row between its rows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a word-wrapped box with a blank row between its rows gets no Enter', async () => {
     // An empty continuation row is not part of the typed line: the pane draws one only where
     // the text itself has a blank line, and this line has none.
     const long = 'These are standing rules, not a task: reply ready and wait for your brief.';
@@ -308,11 +308,11 @@ describe('Antigravity rules delivery', () => {
     const [firstRow = '', ...rest] = rows;
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed([firstRow, '', ...rest].join('\n'))); return true; };
-    expect(await deliverRules('antigravity', long, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([long]);
+    const retired = await deliverRules('antigravity', long, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a trailing blank row after the word-wrapped line gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trailing blank row after the word-wrapped line gets no Enter', async () => {
     // No capture shows Antigravity drawing an empty row of its own inside the box — idle.txt's
     // composer is the bare `>` row and unsent.txt's rows sit directly between the rules — so a
     // trailing blank row is never the pane's frame: it is a row the text does not have.
@@ -324,19 +324,19 @@ describe('Antigravity rules delivery', () => {
     expect(boxHoldsText('antigravity', long, screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('antigravity', long, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([long]);
+    const retired = await deliverRules('antigravity', long, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a blank line the typed text itself has is refused: a blank row is never the text\'s', async () => {
+  test('no pane messaging, the rules line is never typed; was: a blank line the typed text itself has is refused: a blank row is never the text\'s', async () => {
     // A blank row was the pane's drawing of a blank line the text had, when texts could hold
     // newlines. A row break may stand for at most one space, never a newline, so the blank row
     // never reads back and there is no Enter.
     const typed = 'Rules.\n\nMore rules.';
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(typed)); return true; };
-    expect(await deliverRules('antigravity', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('antigravity', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('two spaces typed, one shown, gets no Enter', async () => {
@@ -345,12 +345,12 @@ describe('Antigravity rules delivery', () => {
     expect(boxHoldsText('antigravity', 'alpha  beta', boxed('alpha beta'))).toBe(false);
   });
 
-  test('a boxed multi-line paste no longer reads back: typed, not sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a boxed multi-line paste no longer reads back: typed, not sent', async () => {
     // A row break may stand for at most one space, never the newline between the lines, so a
     // multi-line text never verifies and the Enter is never the delivery's to send.
     const d = delivery();
-    expect(await deliverRules('antigravity', 'Rules.\nOne more line.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.\nOne more line.']);
+    const retired = await deliverRules('antigravity', 'Rules.\nOne more line.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each(['trust', 'permission', 'unsent', 'exit', 'working'])('types nothing at %s', async (screen) => {
@@ -366,19 +366,19 @@ describe('Antigravity rules delivery', () => {
     expect(d.calls).toEqual([]);
   });
 
-  test('a trust question appearing after paste gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trust question appearing after paste gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('trust'); return true; };
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a dialog arriving at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a dialog arriving at the final re-read gets no Enter', async () => {
     const d = delivery();
     let reads = 0;
     d.io.screen = () => fixture(++reads === 3 ? 'trust' : reads === 1 ? 'idle' : 'unsent');
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('a swallowed Enter, working with pasted input, and a failed Enter are not delivery', async () => {
@@ -389,20 +389,21 @@ describe('Antigravity rules delivery', () => {
     }
   });
 
-  test('a paste that has not rendered is awaited, never submitted blind', async () => {
+  test('no pane messaging, the rules line is never typed; was: a paste that has not rendered is awaited, never submitted blind', async () => {
     const d = delivery();
     let clock = 0;
     d.io.type = () => true;
     d.io.now = () => clock;
     d.io.sleep = async (ms) => { clock += ms; d.showText(boxed('Rules.')); };
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(true);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
 // The rules a lane seat was given, as `up` renders them: the fixture below is this text folded
 // in agy's composer at 54 columns (see the fixtures README).
 const RULES_INPUT: RulesInput = {
-  orchestrator: 'floor-30',
+  orchestrator: 'session-30',
   rules: [
     'Work only on the brief in front of you, and skip nothing in it.',
     'Never push: your `ready` file is the hand-off.',
@@ -433,22 +434,19 @@ describe('Antigravity folded rules paste', () => {
   // The captures of a folded whole message stay as documentation of the fold; the delivery
   // is one line, which the box draws whole, so the fold path in delivery is gone: a folded
   // box is never verified, whatever its marker says, and never entered.
-  test('a folded box never verifies: the line is typed, not sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a folded box never verifies: the line is typed, not sent', async () => {
     const d = foldedPane();
-    expect(await deliverRules('antigravity', RULES, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([RULES]);
-    expect(d.refusals.at(-1)?.stop).toBe('read-back');
-    expect(d.refusals.at(-1)?.typed).toBe(true);
-    expect(refusalReport(d.refusals.at(-1)!)).toContain("the read-back didn't match");
+    const retired = await deliverRules('antigravity', RULES, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a prompt-marked fold reads unsent and still never verifies', async () => {
+  test('no pane messaging, the rules line is never typed; was: a prompt-marked fold reads unsent and still never verifies', async () => {
     const marked = (screen: string) => screen.replace('↑ 21 more lines', '> ↑ 21 more lines');
     expect(readScreen('antigravity', marked(fixture('folded-rules'))).kind).toBe('unsent');
     expect(boxHoldsText('antigravity', RULES, marked(fixture('folded-rules')))).toBe(false);
     const d = foldedPane(marked);
-    expect(await deliverRules('antigravity', RULES, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([RULES]);
+    const retired = await deliverRules('antigravity', RULES, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the one line is far shorter than the fold: its box never shows a marker', () => {
@@ -603,11 +601,11 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     expect(boxHoldsText('antigravity', rulesLine(CAPTURED_PATH, '4d0c9f8b3a2e'), screen)).toBe(false);
   });
 
-  test('the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(text === capturedLine ? fixture('rules-line') : boxed(text)); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each([
@@ -618,33 +616,25 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
   ] as const)('one character changed %s gets no Enter', async (what, [from, to]) => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(fixture('rules-line').replace(from, to)); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.typed).toBe(true);
-    expect(why?.sent).toBe(false);
-    expect(why?.row).not.toBeNull();
-    expect(why?.cleared).toBeUndefined();
-    expect(refusalReport(why!)).toContain("the read-back didn't match");
-    expect(refusalReport(why!)).toContain('the line sits in its box, unsent');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a row of the line with one character more than the line has gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a row of the line with one character more than the line has gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(fixture('rules-line').replace('your brief.', 'your brief. x')); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the line with one character more than the box shows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line with one character more than the box shows gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(fixture('rules-line')); return true; };
-    expect(await deliverRules('antigravity', `${capturedLine} x`, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([`${capturedLine} x`]);
+    const retired = await deliverRules('antigravity', `${capturedLine} x`, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('two spaces in the line where the row break hides one get no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: two spaces in the line where the row break hides one get no Enter', async () => {
     // The captured break after `Read` hides the line's single space. A line with two spaces
     // there draws the same rows — the read-back refuses it: a break may stand for exactly one
     // space, never a run of them.
@@ -652,20 +642,20 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     expect(boxHoldsText('antigravity', doubled, fixture('rules-line'))).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(fixture('rules-line')); return true; };
-    expect(await deliverRules('antigravity', doubled, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([doubled]);
+    const retired = await deliverRules('antigravity', doubled, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a tab in the line gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a tab in the line gets no Enter', async () => {
     const tabbed = capturedLine.replace('Read ', 'Read\t');
     expect(boxHoldsText('antigravity', tabbed, fixture('rules-line'))).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(fixture('rules-line')); return true; };
-    expect(await deliverRules('antigravity', tabbed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([tabbed]);
+    const retired = await deliverRules('antigravity', tabbed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a trust dialog at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trust dialog at the final re-read gets no Enter', async () => {
     // The other way round: the line reads back in the loop, and the re-read that immediately
     // precedes the Enter sees the dialog — so the Enter is never pressed into it.
     const d = delivery();
@@ -677,91 +667,67 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     };
     const keys: string[] = [];
     d.io.key = (name) => { keys.push(name); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(keys).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.sent).toBe(false);
-    expect(why?.kind).toBe('trust');
-    expect(why?.cleared).toBeUndefined();
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the file changing after it was written gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the file changing after it was written gets no Enter', async () => {
     // The line read back as its own rows; between that and the key, the file at its path no
     // longer holds the text whose hash the line names. Nothing is sent, and the report says
     // the file changed — the seat is never pointed at a file team cannot vouch for.
     const d = delivery();
     d.io.file = () => false;
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('file-changed');
-    expect(why?.sent).toBe(false);
-    expect(refusalReport(why!)).toBe('rules typed, not sent: the rules file changed after it was written');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a seat mid-turn is reported as working; nothing is typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a seat mid-turn is reported as working; nothing is typed', async () => {
     const d = delivery();
     d.status('working');
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('working');
-    expect(refusalReport(why!)).toBe('rules not confirmed: the seat is working; run up again when it is idle');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box already holding the person\'s own text is left alone', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box already holding the person\'s own text is left alone', async () => {
     const d = delivery();
     d.showText(boxed('the person\'s own message'));
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('leftover');
-    expect(refusalReport(why!)).toContain('its box already holds text that is not the rules line');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box already holding this CLI\'s exit text is named for its owner, not typed onto', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box already holding this CLI\'s exit text is named for its owner, not typed onto', async () => {
     // An earlier stop typed `/exit` and never confirmed it. This run did not type it, so the
     // clearing key is named and not sent.
     const d = delivery();
     const keys: string[] = [];
     d.io.key = (name) => { keys.push(name); return true; };
     d.showText(fixture('exit-typed'));
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(keys).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('leftover');
-    expect(refusalReport(why!)).toBe(
-      "rules not typed: its box already holds this CLI's exit text (/exit), unsent from an earlier stop; "
-      + 'press Ctrl+U in its pane to clear it, then run up again',
-    );
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
     const d = delivery();
     d.showText(fixture('rules-line'));
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Enter']);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
     // This CLI breaks the path mid-word (`…rules/im` / `plementer.md`), so the seat name itself
     // spans a row break; the other line is made by changing the path's project segment, which
     // one row holds whole. Any line but today's is leftover, never typed onto.
     const d = delivery();
     d.showText(fixture('rules-line').replace('demo-3f9c2a8e1d7b', 'demo-3f9c2a8e1d7c'));
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals.at(-1)?.stop).toBe('leftover');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat with an empty box is typed once, verified and sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat with an empty box is typed once, verified and sent', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(text === capturedLine ? fixture('rules-line') : boxed(text)); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('the 1.3.5 rules box reads unsent and holds the line', () => {
@@ -770,15 +736,15 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     expect(boxHoldsText('antigravity', capturedLine, screen)).toBe(true);
   });
 
-  test('the 1.3.5 rules box is read back and entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: the 1.3.5 rules box is read back and entered', async () => {
     const screen = readFileSync(new URL('../fixtures/antigravity/1.3.5/rules-line.txt', import.meta.url), 'utf8');
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(text === capturedLine ? screen : boxed(text)); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a mismatched read-back clears the line this run typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a mismatched read-back clears the line this run typed', async () => {
     const d = delivery();
     const keys: string[] = [];
     d.io.type = (text) => {
@@ -787,19 +753,11 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
       return true;
     };
     d.io.key = (name) => { keys.push(name); d.show('idle'); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    expect(keys).toEqual(['ctrl+u']);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.sent).toBe(false);
-    expect(why?.cleared).toBe('yes');
-    expect(refusalReport(why!)).toBe(
-      "rules typed, not sent: the read-back didn't match; the line team typed was cleared (Ctrl+U); run up again",
-    );
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a clearing key the pane does not take leaves the line', async () => {
+  test('no pane messaging, the rules line is never typed; was: a clearing key the pane does not take leaves the line', async () => {
     const d = delivery();
     const keys: string[] = [];
     d.io.type = (text) => {
@@ -808,18 +766,11 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
       return true;
     };
     d.io.key = (name) => { keys.push(name); return false; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(keys).toEqual(['ctrl+u']);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.cleared).toBe('undelivered');
-    expect(refusalReport(why!)).toBe(
-      "rules typed, not sent: the read-back didn't match; the clearing key (Ctrl+U) was not delivered; "
-      + 'the line sits in its box, unsent: press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again',
-    );
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a clearing key that leaves the box unsent names the reading', async () => {
+  test('no pane messaging, the rules line is never typed; was: a clearing key that leaves the box unsent names the reading', async () => {
     const d = delivery();
     const keys: string[] = [];
     d.io.type = (text) => {
@@ -828,12 +779,8 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
       return true;
     };
     d.io.key = (name) => { keys.push(name); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(keys).toEqual(['ctrl+u']);
-    const why = d.refusals.at(-1);
-    expect(why?.cleared).toBe('stayed');
-    expect(why?.kind).toBe('unsent');
-    expect(refusalReport(why!)).toContain('the clearing key (Ctrl+U) left the screen reading unsent');
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('a box already holding someone else\'s text is not cleared', async () => {
@@ -846,7 +793,7 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
     expect(keys).toEqual([]);
   });
 
-  test('a resumed line that then changes is not cleared', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed line that then changes is not cleared', async () => {
     // The box already held today's line, so this run typed nothing. A later row that is not
     // the line's own is a read-back stop, and the key stays unsent.
     const d = delivery();
@@ -857,11 +804,8 @@ describe('Antigravity rules delivery of the one line (1.2.16 capture)', () => {
       return reads <= 2 ? fixture('rules-line') : fixture('rules-line').replace('your brief.', 'your brief!');
     };
     d.io.key = (name) => { keys.push(name); d.show('idle'); return true; };
-    expect(await deliverRules('antigravity', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(keys).toEqual([]);
-    expect(d.refusals.at(-1)?.stop).toBe('read-back');
-    expect(d.refusals.at(-1)?.cleared).toBeUndefined();
+    const retired = await deliverRules('antigravity', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -910,27 +854,21 @@ describe('Antigravity rules delivery through a wrapper', () => {
     return { io, calls, refusals, at: () => clock };
   }
 
-  test('the line is delivered once the CLI takes the pane off the wrapper\'s shell', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line is delivered once the CLI takes the pane off the wrapper\'s shell', async () => {
     // The wrapper's shell holds the pane for 350 ms; the CLI then draws its idle box. Nothing
     // is typed before that — `type` would throw — and the delivery reads the box and sends.
     const d = wrapper(350);
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
-    expect(d.at()).toBeGreaterThanOrEqual(350);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a CLI that never takes the pane gives up at the deadline, saying the CLI never appeared', async () => {
+  test('no pane messaging, the rules line is never typed; was: a CLI that never takes the pane gives up at the deadline, saying the CLI never appeared', async () => {
     const d = wrapper(Number.POSITIVE_INFINITY);
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toEqual([{ stop: 'launch', typed: false, sent: false, kind: 'unknown', row: null, clearKey: 'ctrl+u' }]);
-    expect(d.at()).toBe(1000); // the whole second, not a refusal at the first poll
-    expect(refusalReport(d.refusals[0]!)).toContain(
-      'the CLI never appeared as its pane\'s foreground process (the screen read unknown)',
-    );
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a live CLI whose frame never becomes the idle box gives up on the reading it saw', async () => {
+  test('no pane messaging, the rules line is never typed; was: a live CLI whose frame never becomes the idle box gives up on the reading it saw', async () => {
     // The process is the CLI from the first poll, but the frame it draws is never a box this
     // version recognises: the wait runs out and the refusal names the reading.
     let clock = 0;
@@ -946,17 +884,15 @@ describe('Antigravity rules delivery through a wrapper', () => {
       now: () => clock,
       sleep: async (ms) => { clock += ms; },
     };
-    expect(await deliverRules('antigravity', 'Rules.', 1, io)).toBe(false);
-    expect(refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'unknown', row: null, clearKey: 'ctrl+u' }]);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, io);
+    expect(retired).toBe(false);
   });
 
-  test('a dialog at the CLI\'s first frame is refused at once, nothing typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a dialog at the CLI\'s first frame is refused at once, nothing typed', async () => {
     // The wrapper's shell gives way to the CLI's trust dialog: the delivery refuses the moment
     // the dialog is read, without waiting the deadline out.
     const d = wrapper(100, 'trust');
-    expect(await deliverRules('antigravity', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toEqual([{ stop: 'screen', typed: false, sent: false, kind: 'trust', row: null, clearKey: 'ctrl+u' }]);
-    expect(d.at()).toBe(100);
+    const retired = await deliverRules('antigravity', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 });

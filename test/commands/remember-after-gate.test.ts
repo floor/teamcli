@@ -200,7 +200,9 @@ describe('watch remembers only after the flag gate', () => {
     expect(code).toBe(0);
     const remembered = readState(dir).last_valid;
     expect(remembered?.file).toBe(EXAMPLE);
-    expect(remembered?.read_at).toBe(ticks.at(1));
+    // The watch takes its process-start instant before it loads the file for the gate, so the
+    // reading taken after the gate, and stored, is the third.
+    expect(remembered?.read_at).toBe(ticks.at(2));
   });
 
   test('a watch that is already running leaves the state file untouched', async () => {

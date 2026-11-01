@@ -86,7 +86,7 @@ trap release EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-# A heavy lock whose owner pid is gone is reclaimed, never waited on (Atlas, 2026-10-17: a light
+# A heavy lock whose owner pid is gone is reclaimed, never waited on (Reviewer, 2026-10-17: a light
 # slot sat four hours under a dead pid; the same rule here for the heavy slots). The owner's pid
 # is the second word of its second line — this script's `hub-sweep <pid> <epoch>` token, the
 # hourly suite's `run <pid> <epoch>`, or another writer's `<holder> <pid> <epoch>` — or, failing

@@ -392,7 +392,7 @@ describe('a message-transport full brief sent end to end', () => {
     // Codex walk falls back from typed to the live mcp-inbox leg, which takes it.
     const code = await runSend([SEAT, '--brief', path], on, { ...fake(w), agents: () => [] });
     expect(code, on.err).toBe(0);
-    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
     const rec = record(w);
     expect(rec.body).toBe(`${HEADER}\n\n${text}`);
 

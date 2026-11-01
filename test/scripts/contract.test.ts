@@ -39,7 +39,7 @@ test('hidden commands and undocumented short flags are marked', () => {
   expect(byName('worktree')?.subcommands.map((sub) => sub.name)).toEqual(['list', 'new', 'remove']);
   expect(byName('add')?.positionals).toEqual([{ name: 'name', optional: true, repeatable: false }]);
   const json = readFileSync(join(root, 'contract/cli.json'), 'utf8');
-  expect(json.includes('/Users/')).toBe(false);
+  expect(json.includes('/home/')).toBe(false);
   expect(json.includes('/home/')).toBe(false);
   expect(json.includes('\\')).toBe(false);
   expect(json.endsWith('\n')).toBe(true);
@@ -78,6 +78,8 @@ test('a command with two parser forms carries both usage lines and the union of 
     ['--ack', true],
     ['--client', true],
     ['--follow', false],
+    // The dispatcher's general door: every command takes --general (and --key).
+    ['--general', true],
     ['--help', false],
     ['--json', false],
     ['--key', true],

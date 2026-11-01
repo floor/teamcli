@@ -63,8 +63,24 @@ export function idleThresholdReading(team: TeamFile, root: string, home: string 
  * live lease in this clone already holds. A paused team claims nothing. A team whose file names
  * a tracker counts the caller's prefetched broker snapshot when one is supplied; without one the
  * count is unknown rather than zero, and nothing here reads the tracker over the network.
+ *
+ * `bySeat` is the same reading split by target: how many of those records each idle seat itself
+ * could claim now. The dispatcher gates a seat on its own share, so a seat whose picker offers it
+ * nothing is not woken for work another seat could take. `null` is the same unknown as
+ * `takeable: null` — the source could not be read — and no caller may read it as "nothing".
  */
+export type IdleWorkReading = {
+  report: IdleWorkReport;
+  bySeat: ReadonlyMap<string, number> | null;
+};
+
+/** The public snapshot alone: `status`, `check` and every reader of the printed shape. */
 export function idleWorkReport(input: IdleWorkInput): IdleWorkReport {
+  return idleWorkReading(input).report;
+}
+
+/** The snapshot with its per-seat split, for a caller that decides per seat (the dispatcher). */
+export function idleWorkReading(input: IdleWorkInput): IdleWorkReading {
   const now = input.now.getTime();
   const threshold = idleThresholdReading(input.team, input.root, input.home, input.now);
   const seats = idleSeatsOf(input, threshold.seconds, now);
@@ -84,7 +100,7 @@ export function idleWorkReport(input: IdleWorkInput): IdleWorkReport {
   if (threshold.unknown !== undefined) report.threshold_unknown = threshold.unknown;
   if (counted.refused !== undefined) report.refused = counted.refused;
   if (seats.unknown !== undefined) report.presence_unknown = seats.unknown;
-  return report;
+  return { report, bySeat: counted.bySeat ?? null };
 }
 
 type IdleWorker = { name: string; since: string; native_since?: string; presence_source?: PresenceSource };
@@ -208,11 +224,20 @@ function sinceOf(stamp: string | undefined): string | null {
 }
 
 /** The records at least one idle seat could claim now, under the picker's rules, with live
- *  leases removed. `takeable: null` means a named source could not be read; the reason is
- *  carried so the reading never looks like an empty queue. A tracker team counts the caller's
- *  prefetched broker snapshot; without one the count stays unknown, never zero. */
-function takeableNow(input: IdleWorkInput, seats: readonly IdleWorker[], now: number): { takeable: number | null; refused?: string } {
-  if (input.pause != null) return { takeable: 0 };
+ *  leases removed, and the same count per idle seat. `takeable: null` means a named source could
+ *  not be read; the reason is carried so the reading never looks like an empty queue. A tracker
+ *  team counts the caller's prefetched broker snapshot; without one the count stays unknown,
+ *  never zero. `bySeat` is present exactly when the count is known. */
+function takeableNow(
+  input: IdleWorkInput,
+  seats: readonly IdleWorker[],
+  now: number,
+): { takeable: number | null; bySeat?: ReadonlyMap<string, number>; refused?: string } {
+  const bySeat = new Map<string, number>();
+  if (input.pause != null) {
+    for (const seat of seats) bySeat.set(seat.name, 0);
+    return { takeable: 0, bySeat };
+  }
   const source = fileSourceOf(input.team);
   let records: readonly TaskRecord[];
   if (source === null) {
@@ -235,9 +260,15 @@ function takeableNow(input: IdleWorkInput, seats: readonly IdleWorker[], now: nu
   const pull = input.team.tasks?.pull ?? 'self';
   const ids = new Set<string>();
   for (const seat of seats) {
+    // One seat's share, distinct ids only: the same record reachable through two entries of a
+    // source is one task, and a live lease removes it from every seat's count alike.
+    const own = new Set<string>();
     for (const record of takeable(records, seat.name, pull, false)) {
-      if (!held.has(record.id)) ids.add(record.id);
+      if (held.has(record.id)) continue;
+      own.add(record.id);
+      ids.add(record.id);
     }
+    bySeat.set(seat.name, own.size);
   }
-  return { takeable: ids.size };
+  return { takeable: ids.size, bySeat };
 }

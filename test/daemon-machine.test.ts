@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type HostedWatchExtras } from '../src/daemon/host.ts';
+import { busListening, startBus, type StartBusInput, type StartBusResult } from '../src/bus/server.ts';
 import type { BrokerWorkSource } from '../src/idle_work.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
 import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
@@ -359,6 +360,243 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     } finally {
       await started.daemon.close();
       idle.destroy();
+    }
+  });
+
+  test('a close during an in-flight endpoint refresh waits for it and leaves nothing written after it', async () => {
+    const { base, root, home } = scratch();
+    // A socket that accepts the heartbeat's ping and never answers holds the refresh in flight
+    // for the whole probe timeout, so a close started while it is pending is the case under
+    // test: its late answer used to mark the closed daemon's bus failed and append one line
+    // after the machine folder had been released.
+    const silentPath = join(base, 'silent.sock');
+    const held: Socket[] = [];
+    let accepted = false;
+    const silent = createServer((socket) => {
+      held.push(socket);
+      socket.on('error', () => undefined);
+      accepted = true;
+    });
+    try {
+      await new Promise<void>((resolve) => silent.listen(silentPath, resolve));
+      const sendStart = async (): Promise<{ kind: 'already-running'; socketPath: string; pid: null }> => ({
+        kind: 'already-running',
+        socketPath: silentPath,
+        pid: null,
+      });
+      const started = await startMachineDaemon({
+        home,
+        roots: [root],
+        startedBy: 'manual',
+        version: '0.5.3-daemon-test',
+        heartbeatMs: 25,
+        sendStart,
+      });
+      expect(started.kind).toBe('serving');
+      if (started.kind !== 'serving') return;
+      try {
+        await waitFor(() => accepted, 3_000);
+        const at = Date.now();
+        await started.daemon.close();
+        const closeMs = Date.now() - at;
+        // Ownership is released: the close removed its socket and record, and the machine
+        // folder is now free to go. A refresh that settled after the close would recreate it
+        // to append its late line; the late answer's own timeout is the send probe's 2 s.
+        rmSync(machineConfigDir(home), { recursive: true, force: true });
+        const settleBy = at + 2_700;
+        if (Date.now() < settleBy) await new Promise((resolve) => setTimeout(resolve, settleBy - Date.now()));
+        expect(existsSync(machineConfigDir(home))).toBe(false);
+        // The close admitted the refresh it found in flight and waited for it before releasing
+        // ownership, so the probe had settled when the close answered, not after it.
+        expect(closeMs).toBeGreaterThanOrEqual(1_000);
+      } finally {
+        await started.daemon.close();
+      }
+    } finally {
+      for (const socket of held.splice(0)) socket.destroy();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+  });
+
+  test('a close that lands during a bus revive closes the revived listener instead of adopting it', async () => {
+    const { root, home } = scratch();
+    // The injected start holds the revive until the close has begun, so the bus it binds is a
+    // listener that lands after admission had already spliced the handles it stops.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const reviving = new Promise<void>((resolve) => { reached = resolve; });
+    let outcome: StartBusResult['kind'] | null = null;
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      reached();
+      await held;
+      const result = await startBus(input);
+      outcome = result.kind;
+      return result;
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await reviving;
+      const closeRun = started.daemon.close();
+      release();
+      await closeRun;
+      // The revive did bind a listener, behind the close that had already spliced the handles
+      // it stops; it may not outlive that close.
+      expect(outcome as StartBusResult['kind'] | null).toBe('serving');
+      expect(await busListening(root)).toBe(false);
+    } finally {
+      release();
+      await started.daemon.close();
+    }
+  });
+
+  test('a refresh whose root fails still drains its other root before the close releases ownership', async () => {
+    const { base, root, home } = scratch();
+    const second = join(base, 'second');
+    mkdirSync(join(second, '.agents'), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: second });
+    writeFileSync(
+      join(second, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme', 'project: acme-second').replace('session: acme', 'session: acme-second'),
+    );
+    const roots = [root, second];
+    // One refresh holds a revive for each root. The first root's start throws, which used to
+    // settle the whole refresh at once; the second root is held, so the close trusted that
+    // settlement and released ownership while a real listener could still be bound.
+    const entered = roots.map(() => {
+      let reach!: () => void;
+      const reached = new Promise<void>((resolve) => { reach = resolve; });
+      return { reached, reach };
+    });
+    const releases = roots.map(() => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      return { held, release };
+    });
+    let lateSettled!: () => void;
+    const lateStart = new Promise<void>((resolve) => { lateSettled = resolve; });
+    let outcome: StartBusResult['kind'] | null = null;
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      const index = roots.indexOf(input.root);
+      entered[index]?.reach();
+      await releases[index]?.held;
+      if (index === 0) throw new Error('the synthetic bus start failed');
+      const result = await startBus(input);
+      outcome = result.kind;
+      lateSettled();
+      return result;
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots,
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    let closeRun: Promise<void> | null = null;
+    try {
+      // Both sockets are unlinked in one tick, so the next beat finds both stopped and its one
+      // refresh holds both revives: the failing start and the held one belong to the same run.
+      for (const one of roots) unlinkSync(join(one, '.agents', 'bus.sock'));
+      await Promise.all(entered.map((one) => one.reached));
+      closeRun = started.daemon.close();
+      releases[0]?.release();
+      // The failing root has rejected and the held root has not drained. The close may not
+      // release the lock or unlink the record while that revive can still bind a listener.
+      const deadline = Date.now() + 600;
+      let releasedEarly = false;
+      while (Date.now() < deadline) {
+        if (!existsSync(daemonLockPath(home))) {
+          releasedEarly = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(releasedEarly).toBe(false);
+      // Releasing the held revive binds its listener; the close joins that task, closes the
+      // late listener, and only then releases ownership.
+      releases[1]?.release();
+      await closeRun;
+      expect(outcome as StartBusResult['kind'] | null).toBe('serving');
+      expect(await busListening(second)).toBe(false);
+      expect(existsSync(daemonLockPath(home))).toBe(false);
+      expect(existsSync(daemonStatePath(home))).toBe(false);
+    } finally {
+      for (const one of releases) one.release();
+      if (closeRun !== null) await closeRun.catch(() => undefined);
+      await started.daemon.close();
+      await lateStart;
+      await waitFor(async () => (await busListening(second)) === false, 3_000);
+    }
+  });
+
+  test('a close whose endpoint refresh never settles answers pending and keeps ownership', async () => {
+    const { root, home } = scratch();
+    // The injected start holds the revive forever, so the refresh the close joins never settles.
+    // The close must answer within its bound and keep the lock, the record and the socket: a
+    // timer that released live work would let a listener bind behind a released daemon.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const reviving = new Promise<void>((resolve) => { reached = resolve; });
+    let outcome: StartBusResult['kind'] | null = null;
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      reached();
+      await held;
+      const result = await startBus(input);
+      outcome = result.kind;
+      return result;
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      refreshCloseBoundMs: 250,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await reviving;
+      const at = Date.now();
+      const closeRun = started.daemon.close();
+      const answered = await Promise.race([
+        closeRun.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      expect(answered).toBe(true);
+      expect(Date.now() - at).toBeLessThan(2_000);
+      // The answer is pending, not a release: everything the daemon owns still stands, so no
+      // later daemon can take these routes while the held revive might still bind a listener.
+      expect(existsSync(daemonLockPath(home))).toBe(true);
+      expect(existsSync(daemonStatePath(home))).toBe(true);
+      expect(existsSync(daemonSocketPath(home))).toBe(true);
+      // Only a later close that finds the refresh settled releases ownership.
+      release();
+      await waitFor(() => outcome === 'serving', 3_000);
+      await waitFor(async () => (await busListening(root)) === false, 3_000);
+      await started.daemon.close();
+      expect(existsSync(daemonLockPath(home))).toBe(false);
+      expect(existsSync(daemonStatePath(home))).toBe(false);
+    } finally {
+      release();
+      await started.daemon.close();
     }
   });
 
@@ -721,7 +959,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(seen[0]?.presenceCodexEndpoint).toBeUndefined();
     const binding = mintPresenceBinding();
     const dir = join(root, '.agents');
-    const url = `unix:///private/tmp/launch/${binding}.sock`;
+    const url = `unix://${join(realpathSync(tmpdir()), 'launch')}/${binding}.sock`;
     const located = (current: string): string => `${JSON.stringify({
       format: 1,
       sessions: {
@@ -750,6 +988,26 @@ describe('team daemon status, install, uninstall and run', () => {
     const refused = testIo(root, owner);
     expect(await runDaemon(['status', '--presence'], refused, sourcesOf(home))).toBe(2);
     expect(refused.err).toContain('--presence belongs to run or install');
+  });
+
+  test('run records the packaged commit beside the version, so an install identity is tellable', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    const sha = 'a'.repeat(40);
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, {
+      start,
+      version: '0.5.5',
+      gitHead: sha,
+    }))).toBe(0);
+    expect(seen[0]?.version).toBe('0.5.5');
+    expect(seen[0]?.gitHead).toBe(sha);
+    // A source checkout has no packaged commit; the record says so rather than inventing one.
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, gitHead: null }))).toBe(0);
+    expect(seen[1]?.gitHead).toBeNull();
   });
 
   test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {

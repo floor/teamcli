@@ -11,6 +11,7 @@ import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMess
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import { listUnread, readMessage } from '../src/mcp/inbox.ts';
 import { receiptFile as recordReceiptFile, signReceiptPayload, signRecord, statusOf, writeReceipt, writeRecord } from '../src/send/record.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { keyFingerprint, keyOf, MESSAGE_DOMAIN, messageKeyOf, messageKeyPath, messageKeyState, signDomain } from '../src/store/keys.ts';
 import { MESSAGES_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
@@ -852,7 +853,9 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
 
   // A general seat brief is waiting for the seat's own turn-start reader: its receipt is bound to
   // the seat's current claim, so this checkout-wide reading skips it rather than spend the id.
-  /** One signed general seat brief waiting in `seat`'s drop folder, at the pinned instant. */
+  /** One signed general seat brief waiting in `seat`'s drop folder, at the pinned instant, with
+   *  the current claim that names it: a delivery writes the claim beside the drop, and the
+   *  reader's waiting list keeps only the brief its seat's claim can serve. */
   function plantBrief(found: string, seat: string): ReturnType<typeof generalBriefRecord> {
     const brief = generalBriefRecord({
       to: seat,
@@ -863,6 +866,21 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     });
     const written = writeRecord(recordDir(found, 'acme', seat), signRecord(brief, home));
     if (!written.ok) throw new Error(written.reason);
+    const { incarnation, brief_sha256: sha256 } = brief;
+    if (incarnation === undefined || sha256 === undefined) throw new Error('the brief record names no delivery');
+    updateState(join(found, '.agents'), (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      (session.briefs ??= {})[seat] = {
+        id: brief.id,
+        at: NOW.toISOString(),
+        incarnation,
+        epoch: 'run_aaaaaaaaaaaa',
+        sha256,
+        attempt: 0,
+        stage: 'ready',
+        superseded: [],
+      };
+    });
     return brief;
   }
 

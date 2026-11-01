@@ -12,7 +12,7 @@ import { actionRequestsFolder } from '../client/team-create.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
 import { canonicalTeam, readTeamConfig } from '../file/team-config.ts';
 import { importTeamFile, type ImportMode, type ImportOutcome } from '../file/team-import.ts';
-import { approvalStanding } from '../store/store.ts';
+import { approvalStanding, approvedRecordOf, type Standing } from '../store/store.ts';
 import { sha256 } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { Command, Io } from '../io.ts';
@@ -345,7 +345,7 @@ export async function runTeamImport(
   const root = findRoot(io.cwd) ?? io.cwd;
   const teamFile = join(root, TEAM_FILE);
   // The approval's standing before the move: the move must not change it.
-  const before = approvalStanding(root, home).kind;
+  const beforeStanding = approvalStanding(root, home);
   if (outcome === undefined) {
     outcome = settleMigrated(importTeamFile({
       cwd: io.cwd,
@@ -372,7 +372,8 @@ export async function runTeamImport(
   // A non-owner retires the file only after the owner seat (or the charter) admitted this run.
   const mayRetire = mode !== 'migrate' || ownerTerminal || charterAdmitted || doorAdmitted;
   if (mayRetire && !keepFile && !dryRun && outcome.verified && existsSync(teamFile)) retired = retireTeamFile(teamFile);
-  const after = approvalStanding(root, home).kind;
+  const afterStanding = approvalStanding(root, home);
+  const after = afterStanding.kind;
   if (json) {
     writeJson(io, `team.${mode}`, {
       format: 1,
@@ -405,8 +406,31 @@ export async function runTeamImport(
   } else if (existsSync(teamFile)) {
     io.stdout(`${TEAM_FILE} was kept (--keep-file); it is no longer read, and team migrate moves it later\n`);
   }
-  if (mode === 'migrate' && before === 'verified') {
-    io.stdout(after === 'verified' ? 'the approval is still in force: it is signed over the canonical record\n' : `the approval no longer verifies (${after}); approve the team again\n`);
+  if (mode === 'migrate' && beforeStanding.kind === 'verified') {
+    if (afterStanding.kind === 'verified') {
+      io.stdout('the approval is still in force: it is signed over the canonical record\n');
+    } else {
+      // What the registry's record proves, never more: the two canonical records are compared,
+      // never the gate's difference list, which ignores a removed seat on purpose — an empty
+      // list is not record equality. Equal records name the approval itself (its signature, or
+      // its absence) as the failure; records that differ are an earlier one; a record that
+      // cannot be compared proves neither.
+      const live = readTeamConfig(io.cwd, { home, source: 'registry' });
+      const approvedCopy = approvedRecordOf(beforeStanding.record.file);
+      const unchanged = live.ok && approvedCopy !== null && approvedCopy === canonicalTeam(live.team);
+      const state = approvalStateWords(afterStanding);
+      const repair = 'this version has no command to refresh that snapshot';
+      if (unchanged) io.stdout(`migration completed; the team record is unchanged, and the stored approval ${state}; ${repair}\n`);
+      else if (live.ok && approvedCopy !== null) io.stdout(`migration completed; the stored approval describes an earlier team record and ${state}; ${repair}\n`);
+      else io.stdout(`migration completed; the stored approval ${state}; ${repair}\n`);
+    }
   }
   return 'done';
+}
+
+/** The post-move standing as a clause after "the stored approval", from its verified reader. */
+function approvalStateWords(standing: Exclude<Standing, { kind: 'verified' }>): string {
+  if (standing.kind === 'refused') return `no longer verifies (${standing.why})`;
+  if (standing.kind === 'none') return 'is gone';
+  return 'is in the older format-1 form this version does not verify';
 }

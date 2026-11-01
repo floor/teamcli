@@ -1,3 +1,4 @@
+import { refuseTyping } from './no-pane-messaging.ts';
 // The `team send` delivery daemon (`<storeDir>/send/daemon.sock` and `daemon.lock`).
 //
 // Owns the per-seat FIFO queue (`MAX_QUEUE_DEPTH = 32`), retries when a seat is mid-turn
@@ -30,7 +31,7 @@ import { stage as relayStage } from '../../packages/relay/index.js';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -87,14 +88,15 @@ export const realDaemonHost: DaemonHost = {
   socketsDir: join(tmpdir(), 'cc-socks'),
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
-    typeText: (session, pane, text) => typeText(pane, text, session),
-    pressEnter: (session, pane) => pressEnter(pane, session),
+    // No pane messaging: the send endpoint never types (src/send/no-pane-messaging.ts).
+    typeText: refuseTyping,
+    pressEnter: refuseTyping,
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
     // The queue's typed leg is the same delivery `team send` makes: a box holding its owner's
     // unsent text is cleared with the profile's measured keys and the text pasted back.
-    sendKey: (session, pane, key) => sendKey(pane, key, session),
+    sendKey: refuseTyping,
   },
   now: () => new Date(),
   home: homedir(),
@@ -635,14 +637,20 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: session "${request.session}" does not belong to this project's session "${input.team.session}"; nothing was sent`,
       });
     }
-    if (request.from !== 'owner' && request.from !== input.team.orchestrator) {
+    // The send's admission is the CLI's (`admitSend` over the registry's rules, run before this
+    // dial): a builder replying to its lead, a reviewer to the orchestrator, a seat to another seat
+    // its rules admit. This endpoint only refuses a sender that is no one of this team (0.5.9:
+    // through 0.5.8 it refused every seat but the orchestrator, so with the daemon up no builder
+    // or reviewer could send at all, whatever the rules admitted).
+    const sender = typeof request.from === 'string' ? request.from : '';
+    if (sender !== 'owner' && sender !== input.team.orchestrator && !input.team.seats.some((s) => s.name === sender)) {
       return Promise.resolve({
         v: 1,
         ok: false,
         id: null,
         seat: seatName,
         outcome: 'refused',
-        detail: `a seat may not send (${String(request.from)}): only the owner, or the orchestrator from its own seat, can send`,
+        detail: `a sender that is not a seat of this team may not send (${String(request.from)}): only the owner or a declared seat sends through this endpoint`,
       });
     }
     const configured = input.team.seats.find((s) => s.name === seatName);

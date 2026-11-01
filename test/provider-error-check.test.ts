@@ -6,7 +6,7 @@ import type { CheckContext, Report, SeatObservation } from '../src/watch/check.t
 import { providerError } from '../src/watch/checks/provider-error.ts';
 import type { Reset, Screen } from '../src/watch/screen.ts';
 
-function seat(name: string, screen: { kind: string; reset?: Reset | null }, running = true, working = false, account?: string): SeatObservation {
+function seat(name: string, screen: { kind: string; reset?: Reset | null; reason?: string }, running = true, working = false, account?: string): SeatObservation {
   return {
     name,
     running,
@@ -89,6 +89,18 @@ describe('provider-error check', () => {
     expect(texts(providerError.run(seat('claude-b', { kind: 'rate limit', reset: null }, true, false, ''), bare.ctx))).toEqual([
       'operator: claude-b is out of quota: usage limit, and the screen names no reset time',
       'owner: claude-b is out of quota: usage limit, and the screen names no reset time',
+    ]);
+  });
+
+  test('a Codex model-switch limit reports the choice the owner must make', () => {
+    const { ctx } = harness();
+    expect(texts(providerError.run(seat('codex-seat', {
+      kind: 'rate limit',
+      reset: null,
+      reason: 'needs a choice: rate-limit model switch',
+    }, true, false, 'openai'), ctx))).toEqual([
+      'operator: codex-seat needs a choice: rate-limit model switch',
+      'owner: codex-seat needs a choice: rate-limit model switch',
     ]);
   });
 

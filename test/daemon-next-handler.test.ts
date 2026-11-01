@@ -11,7 +11,7 @@ import { handleNext, type NextHandlerDeps, type NextHandlerInput, type NextClaim
 import { routeOf, type HostedRoute } from '../src/daemon/routes.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { emptySession, updateState, type State } from '../src/state.ts';
+import { emptySession, readState, updateState, type State } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 
 const SEATS = `seats:
@@ -59,6 +59,12 @@ ${SEATS}tasks:
 
 const TASKS = '- id: m1\n  title: the task title\n';
 const lead: NextClaim = { seat: 'lead', pane: 'w1:p1' };
+/** The caller a seat's own pane makes: the pane the fixture's state records for it. */
+function callerOf(seat: string): NextClaim {
+  const record = readState(join(root, '.agents')).sessions.crew?.seats[seat];
+  if (record?.pane === undefined) throw new Error(`the fixture records no pane for seat ${seat}`);
+  return { seat, pane: record.pane };
+}
 const now = Date.parse('2026-10-20T09:00:00.000Z');
 
 let base: string;
@@ -121,6 +127,33 @@ describe('handleNext, file and local sources', () => {
     expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
     // The task file is the owner's; a claim never writes it.
     expect(readFileSync(join(root, '.agents', 'tasks.yaml'), 'utf8')).toBe(TASKS);
+  });
+
+  test('a seat nothing can wake while it is idle is offered no time-bound record', async () => {
+    const queue = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n';
+    project(FILE_TEAM, queue);
+    // The worker's launch installs no wake adapter, so an idle worker is pull-on-turn: the
+    // time-bound record would fall due between its turns, and the ordinary one stays open.
+    expect(await call(callerOf('worker'))).toEqual({ ok: true, kind: 'claimed', record: { id: 'plain', title: 'the ordinary title' } });
+    expect(leaseNames()).toEqual(['plain.json']);
+
+    // With only the time-bound record left, the same seat is offered nothing at all.
+    project(FILE_TEAM, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n');
+    expect(await call(callerOf('worker'))).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
+    expect(leaseNames()).toEqual([]);
+
+    // Control: the same record is offered once the seat's launch record names the development
+    // channel — a wake reaches it while it is idle.
+    project(FILE_TEAM, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n');
+    updateState(join(root, '.agents'), (state) => {
+      const seats = state.sessions.crew!.seats;
+      seats.worker = {
+        ...seats.worker!,
+        cli: 'claude-code',
+        launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+      };
+    });
+    expect(await call(callerOf('worker'))).toEqual({ ok: true, kind: 'claimed', record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' } });
   });
 
   test('another pane on a declared seat is refused and claims nothing', async () => {

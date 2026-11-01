@@ -1,3 +1,4 @@
+import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
@@ -12,7 +13,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -23,8 +24,9 @@ import type { Live } from '../status/compare.ts';
 import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
+import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
-import { realHost, redeliverChannelOnSocket, sendDirect } from './send.ts';
+import { realHost, redeliverChannelOnSocket } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
 import { listUnacked, listUnackedMessages } from './messages.ts';
@@ -38,7 +40,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
-import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
@@ -251,23 +253,6 @@ async function prefetchBrokerWork(
   }
 }
 
-/** The streams a direct dispatch writes through: the watch process's own, with an optional copy
- *  of what it said on stderr, so a refusal that names no route still reaches the dispatcher. */
-function watchIo(onStderr?: (text: string) => void): Io {
-  return {
-    stdout: (text) => void process.stdout.write(text),
-    stderr: (text) => {
-      onStderr?.(text);
-      void process.stderr.write(text);
-    },
-    cwd: process.cwd(),
-    env: process.env,
-    stdinIsTTY: Boolean(process.stdin.isTTY),
-    stdoutIsTTY: Boolean(process.stdout.isTTY),
-    stderrIsTTY: Boolean(process.stderr.isTTY),
-  };
-}
-
 export const realWatchSources: WatchSources = {
   // The status live read, handed no state: the watch compares each live pane's process with its
   // seat's record itself, through `processes` below — only `status` needs the panes the state
@@ -280,9 +265,10 @@ export const realWatchSources: WatchSources = {
   status: agentStatus,
   foreground: (pane, session) => paneForeground(pane, session),
   processes: (pane, session) => paneProcesses(pane, session),
-  typeText,
-  pressEnter,
-  sendKey: (pane, key, session) => herdrSendKey(pane, key, session),
+  // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
+  typeText: refuseTyping,
+  pressEnter: refuseTyping,
+  sendKey: refuseTyping,
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),
@@ -310,14 +296,11 @@ export const realWatchSources: WatchSources = {
   busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
   statusSource: herdrStatusSource(),
-  pushWork: async (request) => {
-    // The send runs in this process, through the same admission, delivery order and route rules
-    // an ordinary send runs; only routes that reach a live receiver without a keystroke are
-    // walked. What the dispatcher reads back is that route's own ending, never an exit code.
-    const said: string[] = [];
-    const run = await sendDirect(watchIo((text) => said.push(text)), realHost, request);
-    return workPushResultOf(run.result, said.join(''));
-  },
+  // The direct-work route: this process holds no verified watch authority (a hand-started watch
+  // records no epoch), so the wake is held with a refusal and no transport is attempted. The
+  // hosted watch wires its own verified sender over `sendWatchDirect`; an infrastructure pane is
+  // never used as the sender, and no placement, grant or registration stands in for the watch.
+  pushWork: watchPushWork(null),
 };
 
 /**
@@ -468,6 +451,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     // exit: watch.watchdog
     return 1;
   }
+  // The instant this process reached its loop, recorded once on the first beat the record takes:
+  // `down` stops a pane-less watch only when the live process's command line and start instant
+  // prove it is this watch. Captured once the run is admitted and before the first pass reads, so
+  // it is this process's start rather than the first pass's, and a refused run reads no source.
+  const watchStartedAt = sources.now().toISOString();
   const aimed = args.values.file ?? (grant && 'file' in grant ? grant.file : undefined);
   const first = currentTeam(io.cwd, aimed, sources.now(), sources.home, false);
   if (!first.ok) {
@@ -918,7 +906,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           machineAccounts,
           signing: sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
             const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
-            return [seat.name, agent?.signing ?? null] as const;
+            return [seat.name, agent ? { ...agent.signing, cli: agent.cli, launch: agent.launch } : null] as const;
           })),
           // The same records, read for continuity: a pane restored from outside the launch line
           // is the seat while the record's session is the one the pane runs.
@@ -1014,7 +1002,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
-          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
+          const standing = item.staged === true
+            ? 'the work waits in its bus inbox and is read at its next wake'
+            : 'nothing was written for it and the attempt is not retried in this idle episode';
+          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); ${standing}`, false);
         }
         for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
         for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);
@@ -1282,7 +1273,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           break;
         }
         paneGoneOnce = place === 'end';
-        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
+        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes

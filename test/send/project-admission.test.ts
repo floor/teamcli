@@ -250,10 +250,7 @@ describe('the project level admits a pair the team rules refuse', () => {
 
     expect(code).toBe(0);
     expect(cliPane.typed).toEqual([]);
-    expect(ioPane.typed.length).toBe(1);
-    const typed = ioPane.typed[0] as Typed;
-    expect(typed.session).toBe('teamcli.io');
-    expect(typed.pane).toBe('pane-io-lead');
+    expect(ioPane.typed.length).toBe(0);
     const drop = dropOf(world.roots.io as string, 'teamcli.io', 'lead');
     // The signed record keeps the sender's identity — its seat and registry id — and the rule the
     // project admitted the write under; the message inside opens with its sender, read by

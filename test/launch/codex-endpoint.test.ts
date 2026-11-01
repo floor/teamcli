@@ -3,16 +3,22 @@
 // are the ones a launch depends on — a record is written under the seat's current binding, a
 // server this call started is stopped when its record cannot land, a reused pid is never
 // signalled, and only the endpoint's own socket under the seat's own run folder is ever removed.
-// A socket no record names is left where it is, and said.
+// A socket no record names is left where it is, and said. A missing socket is no proof its
+// server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { emptySession, readState, updateState } from '../../src/state.ts';
+import { shortSocketBase } from '../helpers.ts';
+import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state.ts';
 import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
   ensureCodexEndpoint,
+  isSocketFile,
+  launchCodexEndpoint,
+  seatOfManagedEndpoint,
+  seatRecordsCodexEndpoint,
   stopRecordedCodexEndpoint,
   stopSeatCodexEndpoint,
   type CodexEndpointDeps,
@@ -26,9 +32,9 @@ const OTHER = 'prs_fedcba987654';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
 
-// A unix socket path has a hard OS limit, so scenes live under the shortest temp folder this
-// machine offers: macOS's per-user `T` folder is too deep for the endpoint this build names.
-const SHORT_TMP = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+// A unix socket path has a hard OS limit, so scenes live under the short socket base with a
+// short prefix; the scenes that bind a socket measure their endpoint against the limit.
+const SHORT_TMP = shortSocketBase();
 
 function scratch(): string {
   return mkdtempSync(join(SHORT_TMP, 'te-'));
@@ -72,6 +78,7 @@ describe('the endpoint socket path', () => {
       if (socket === null) throw new Error('expected a socket');
       expect(socket.path).toBe(join(rootOf(dir), `${BINDING}.sock`));
       expect(socket.url).toBe(`unix://${socket.path}`);
+      expect(Buffer.byteLength(socket.path)).toBeLessThanOrEqual(100);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -96,6 +103,105 @@ describe('the endpoint socket path', () => {
       rmSync(deep, { recursive: true, force: true });
     }
   });
+});
+
+describe('the endpoint socket the app-server makes', () => {
+  test('a link to a private socket counts; a link to a shared folder or a plain file does not', async () => {
+    const base = mkdtempSync(join(shortSocketBase(), 'cx-sock-'));
+    const hidden = join(base, 'daemon');
+    mkdirSync(hidden, { mode: 0o700 });
+    const real = join(hidden, 's.sock');
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(real, done));
+    try {
+      const link = join(base, 'a.sock');
+      symlinkSync(real, link);
+      expect(isSocketFile(real)).toBe(true);
+      expect(isSocketFile(link)).toBe(true);
+      chmodSync(hidden, 0o755);
+      expect(isSocketFile(link)).toBe(false);
+      chmodSync(hidden, 0o700);
+      writeFileSync(join(hidden, 'plain'), '');
+      const plainLink = join(base, 'b.sock');
+      symlinkSync(join(hidden, 'plain'), plainLink);
+      expect(isSocketFile(plainLink)).toBe(false);
+      expect(isSocketFile(join(base, 'missing.sock'))).toBe(false);
+    } finally {
+      server.close();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the launch side mints the binding a Codex seat has no settings file to carry', () => {
+  test('a seat with no binding gets a fresh one, and its endpoint starts under it', async () => {
+    const dir = scratch();
+    try {
+      updateState(dir, (state) => {
+        (state.sessions[SESSION] ??= emptySession()).seats[SEAT] = { stage: 'launched' };
+      });
+      let spawned = 0;
+      let listening = false;
+      const answer = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { spawned++; listening = true; return { pid: 9020 }; },
+          alive: () => true,
+          isPlainDir: () => true,
+          isSocket: () => listening,
+          sleep: async () => {},
+        },
+      });
+      const binding = readState(dir).sessions[SESSION]?.seats[SEAT]?.presence_binding;
+      expect(typeof binding).toBe('string');
+      expect(answer.kind).toBe('up');
+      expect(spawned).toBe(1);
+      if (answer.kind === 'up') expect(answer.url).toContain(`${binding as string}.sock`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a binding write that fails fails the managed launch instead of reusing the predecessor endpoint', async () => {
+    const dir = scratch();
+    try {
+      // A prior incarnation whose endpoint is still provably up under the old binding: exactly
+      // the state the reuse branch would attach to if the failed mint went unnoticed.
+      const prior = ownedRecord(dir);
+      seedRecord(dir, prior);
+      // A live holder of the state lock, this test's own pid, makes the mint's write wait out
+      // its lock and time out. The deps below never start, read or signal a process.
+      writeFileSync(join(dir, LOCK_FILE), `${process.pid}\n`);
+      let spawned = 0;
+      let hookReads = 0;
+      let signals = 0;
+      const answer = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'pane-a',
+        deps: {
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          isSocket: () => true,
+          isPlainDir: () => true,
+          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'pane-a' }; },
+          spawn: () => { spawned++; return { pid: 9002 }; },
+          terminate: () => { signals++; },
+        },
+      });
+      expect(answer.kind).toBe('unmanaged');
+      if (answer.kind === 'unmanaged') {
+        expect(answer.why).toContain('fresh presence binding could not be recorded');
+      }
+      // Nothing was reused, started, hooked or signalled, and the predecessor's record stands.
+      expect(spawned).toBe(0);
+      expect(hookReads).toBe(0);
+      expect(signals).toBe(0);
+      expect(recordedAt(dir)).toEqual(prior);
+      expect(readState(dir).sessions[SESSION]?.seats[SEAT]?.presence_binding).toBe(BINDING);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
 
 describe('ensuring the endpoint', () => {
@@ -147,20 +253,76 @@ describe('ensuring the endpoint', () => {
         binding: BINDING,
         pid: 9001,
         started_at: '2026-10-01T10:00:05.000Z',
+        config: [],
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('reuses the recorded server only while the full ownership proof holds', async () => {
+  test('starts the server with the seat\'s config and the herdr hook environment of its pane', async () => {
+    // With the TUI attached by --remote, Codex loads config and runs hooks in the app-server:
+    // the seat's -c pairs and herdr's pane environment must reach that process.
     const dir = scratch();
     try {
-      seedRecord(dir, ownedRecord(dir));
-      const prior = ownedRecord(dir);
+      seed(dir);
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      let listening = false;
+      const spawned: { config?: string[]; env?: Record<string, string> }[] = [];
+      const asked: string[] = [];
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'pane1', config: ['-c', 'sandbox_mode="danger-full-access"'],
+        deps: {
+          spawn: (input) => { spawned.push({ config: input.config, env: input.env }); listening = true; return { pid: 9031 }; },
+          herdrEnv: (session, pane) => { asked.push(`${session} ${pane}`); return { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: pane }; },
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === socketPath,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer).toEqual({ kind: 'up', url: `unix://${socketPath}`, started: true });
+      expect(asked).toEqual([`${SESSION} pane1`]);
+      expect(spawned).toEqual([{
+        config: ['-c', 'sandbox_mode="danger-full-access"'],
+        env: { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: 'pane1' },
+      }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a pane herdr cannot name a socket for still starts the server, and says so', async () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      let listening = false;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'pane1',
+        deps: {
+          spawn: (input) => { expect(input.env).toBeUndefined(); listening = true; return { pid: 9032 }; },
+          herdrEnv: () => null,
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === socketPath,
+          sleep: async () => {},
+        },
+      });
+      expect(answer).toMatchObject({ kind: 'up', started: true, notes: [expect.stringContaining('turn hooks cannot report this seat')] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('reuses the recorded server only while the full ownership proof and start config hold', async () => {
+    const dir = scratch();
+    try {
+      const config = ['-c', 'mcp_servers.team_inbox.command="team"'];
+      const prior = ownedRecord(dir, { config });
+      seedRecord(dir, prior);
       let spawned = 0;
       const answer = await ensureCodexEndpoint({
-        dir, session: SESSION, seat: SEAT,
+        dir, session: SESSION, seat: SEAT, config,
         deps: {
           spawn: () => { spawned++; return { pid: 9002 }; },
           alive: () => true,
@@ -174,6 +336,79 @@ describe('ensuring the endpoint', () => {
       });
       expect(answer).toEqual({ kind: 'up', url: prior.url, started: false });
       expect(spawned).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a recorded endpoint started without the team inbox pairs is stopped, and the fresh spawn carries them', async () => {
+    const dir = scratch();
+    try {
+      // The recorded server is this launch's to replace: its config lacks the inbox server the
+      // seat's line installs, and an attached TUI loads the app-server's config, not its own.
+      const prior = ownedRecord(dir, { config: ['-c', 'sandbox_mode="workspace-write"'] });
+      seedRecord(dir, prior);
+      const config = ['-c', 'sandbox_mode="workspace-write"', '-c', 'mcp_servers.team_inbox.command="team"'];
+      const spawned: (string[] | undefined)[] = [];
+      let terminated = 0;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, config,
+        deps: {
+          spawn: (input) => { spawned.push(input.config); return { pid: 9050 }; },
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          terminate: () => { terminated++; },
+          isPlainDir: () => true,
+          isSocket: () => true,
+          drop: () => {},
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(terminated).toBe(1);
+      expect(answer).toEqual({ kind: 'up', url: prior.url, started: true });
+      expect(spawned).toEqual([config]);
+      expect(recordedAt(dir)).toEqual({
+        url: prior.url,
+        binding: BINDING,
+        pid: 9050,
+        started_at: '2026-10-01T10:00:05.000Z',
+        config,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a record that names no start config is never reused: it is stopped, not attached to', async () => {
+    const dir = scratch();
+    try {
+      // A record an older build wrote names no configuration, so nothing proves the live server
+      // would run this launch's line; it is stopped under the same proof and replaced.
+      const prior = ownedRecord(dir);
+      seedRecord(dir, prior);
+      let spawned = 0;
+      let terminated = 0;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { spawned++; return { pid: 9051 }; },
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          terminate: () => { terminated++; },
+          isPlainDir: () => true,
+          isSocket: () => true,
+          drop: () => {},
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(terminated).toBe(1);
+      expect(spawned).toBe(1);
+      expect(answer).toEqual({ kind: 'up', url: prior.url, started: true });
+      expect(recordedAt(dir)?.config).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -487,7 +722,7 @@ describe('stopping a recorded endpoint', () => {
 
   test('refuses a record that points outside the seat’s own socket', () => {
     for (const url of [
-      'unix:///private/tmp/elsewhere.sock',
+      `unix://${join(SHORT_TMP, 'elsewhere.sock')}`,
       `unix://${join(rootOf('/tmp'), 'other.sock')}`,
     ]) {
       const dir = scratch();
@@ -496,7 +731,7 @@ describe('stopping a recorded endpoint', () => {
         const record: CodexEndpointRecord = { url, binding: BINDING, pid: 700, started_at: T0 };
         const answer = stopRecordedCodexEndpoint({ dir, session: SESSION, seat: SEAT, record }, {
           alive: () => true,
-          commandOf: () => 'codex app-server --listen unix:///private/tmp/elsewhere.sock',
+          commandOf: () => `codex app-server --listen unix://${join(SHORT_TMP, 'elsewhere.sock')}`,
           startOf: () => T0_MS,
           isPlainDir: () => true,
           isSocket: () => true,
@@ -530,15 +765,59 @@ describe('stopping a recorded endpoint', () => {
     }
   });
 
-  test('with no socket there is nothing to stop, and nothing else is touched', () => {
+  test('a missing socket is no proof the server is gone: a proven live pid is stopped by pid', () => {
+    const one = scene();
+    try {
+      const terminated: number[] = [];
+      const dropped: string[] = [];
+      const answer = one.stop({
+        alive: () => true,
+        commandOf: () => `codex app-server --listen ${one.record.url}`,
+        startOf: () => T0_MS,
+        isPlainDir: () => true,
+        isSocket: () => false,
+        terminate: (pid) => { terminated.push(pid); },
+        drop: (path) => { dropped.push(path); },
+      });
+      expect(answer).toEqual({ stopped: true });
+      expect(terminated).toEqual([700]);
+      expect(dropped).toEqual([]);
+    } finally {
+      rmSync(one.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing socket leaves a live pid it cannot prove untouched, and says so', () => {
+    const one = scene();
+    try {
+      let signalled = 0;
+      const answer = one.stop({
+        alive: () => true,
+        commandOf: () => 'codex app-server --listen elsewhere',
+        startOf: () => T0_MS,
+        isPlainDir: () => true,
+        isSocket: () => false,
+        terminate: () => { signalled++; },
+        drop: () => { throw new Error('removed a socket that was not there'); },
+      });
+      expect(answer).toEqual({
+        stopped: false,
+        why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
+      });
+      expect(signalled).toBe(0);
+    } finally {
+      rmSync(one.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing socket and a dead pid have nothing to stop', () => {
     const one = scene();
     try {
       const answer = one.stop({
-        alive: () => true,
-        commandOf: () => { throw new Error('read a process with no endpoint to stop'); },
+        alive: () => false,
         isPlainDir: () => true,
         isSocket: () => false,
-        terminate: () => { throw new Error('signalled with no endpoint to stop'); },
+        terminate: () => { throw new Error('signalled a dead process'); },
         drop: () => { throw new Error('removed a file that was not there'); },
       });
       expect(answer).toEqual({ stopped: true });
@@ -574,6 +853,14 @@ describe('stopping the endpoint recorded on a seat', () => {
     try {
       const prior = ownedRecord(dir);
       seedRecord(dir, prior);
+      let proofRead = false;
+      const foreign = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT, expectedUrl: 'unix:///tmp/another-launch.sock' }, {
+        alive: () => { proofRead = true; return true; },
+      });
+      expect(foreign.stopped).toBe(false);
+      expect(foreign.why).toContain('not the one this launch started');
+      expect(proofRead).toBe(false);
+      expect(recordedAt(dir)).toEqual(prior);
       const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {
         alive: () => true,
         commandOf: () => `codex app-server --listen ${prior.url}`,
@@ -619,6 +906,112 @@ describe('stopping the endpoint recorded on a seat', () => {
       seed(dir);
       const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {});
       expect(answer).toEqual({ stopped: false, why: 'the seat records no endpoint for its current binding' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a present record it cannot read is unproven, not absent: the stop says why and keeps it', () => {
+    const dir = scratch();
+    try {
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      // Values a launch that died mid-write, or a hand-edited state, could leave behind: each is
+      // present, and none names a process this build could have recorded.
+      const broken = [
+        { url: `unix://${socketPath}`, binding: BINDING },
+        { url: `unix://${socketPath}`, binding: BINDING, pid: '700', started_at: T0 },
+        { url: `unix://${socketPath}`, binding: BINDING, pid: 700 },
+      ];
+      for (const value of broken) {
+        seedRecord(dir, value as unknown as CodexEndpointRecord);
+        const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {
+          alive: () => { throw new Error('read a pid the record does not name'); },
+          terminate: () => { throw new Error('signalled a process it could not read'); },
+        });
+        expect(answer).toEqual({
+          stopped: false,
+          why: 'the seat’s endpoint record cannot be read; the process it names cannot be proved, so it was not stopped',
+        });
+        expect(recordedAt(dir)).toEqual(value as unknown as CodexEndpointRecord);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('whether a seat records an endpoint of its own', () => {
+  test('true for every record a stop must account for, readable or not', () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(false);
+      seedRecord(dir, ownedRecord(dir));
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
+      // A record for another binding is not this seat's current endpoint, as the stop reads it.
+      seedRecord(dir, ownedRecord(dir, { binding: OTHER, url: `unix://${join(rootOf(dir), `${OTHER}.sock`)}` }));
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(false);
+      // A present record this build cannot read is unproven, not absent: the stop is attempted
+      // and says why, rather than the record passing as if the seat had none.
+      seedRecord(dir, {
+        url: `unix://${join(rootOf(dir), `${BINDING}.sock`)}`,
+        binding: BINDING,
+      } as unknown as CodexEndpointRecord);
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a state that cannot be read answers true, so the stop itself says why', () => {
+    const dir = scratch();
+    try {
+      writeFileSync(join(dir, 'team.state.json'), 'not a state\n');
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the seat a managed endpoint serves', () => {
+  // With the TUI attached by --remote, a seat's tools run under its app-server: the walk up from
+  // the seat's own `team` call meets that process, which places it only on the full proof.
+  function scene(extra: Partial<CodexEndpointRecord> = {}, pane: string | undefined = 'pane2') {
+    const dir = scratch();
+    const record = ownedRecord(dir, extra);
+    updateState(dir, (state) => {
+      (state.sessions[SESSION] ??= emptySession()).seats[SEAT] = {
+        stage: 'launched', presence_binding: BINDING, codex_endpoint: record, ...(pane === undefined ? {} : { pane }),
+      };
+    });
+    return { dir, record };
+  }
+  const proof = (command: string) => ({
+    alive: () => true,
+    commandOf: () => command,
+    startOf: () => T0_MS,
+  });
+
+  test('its own recorded app-server places the seat, at its recorded pane', () => {
+    const { dir, record } = scene();
+    try {
+      const command = `codex app-server --listen ${record.url} -c sandbox_mode="danger-full-access"`;
+      expect(seatOfManagedEndpoint(700, proof(command))).toEqual({ dir, session: SESSION, seat: SEAT, pane: 'pane2' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('another pid, a reused pid, another binding, or a stranger\'s socket places nobody', () => {
+    const { dir, record } = scene();
+    try {
+      const command = `codex app-server --listen ${record.url}`;
+      expect(seatOfManagedEndpoint(701, proof(command))).toBeNull();
+      expect(seatOfManagedEndpoint(700, { ...proof(command), startOf: () => T0_MS + 3_600_000 })).toBeNull();
+      expect(seatOfManagedEndpoint(700, proof(command.replace(BINDING, OTHER)))).toBeNull();
+      expect(seatOfManagedEndpoint(700, proof('codex app-server --listen unix:///tmp/elsewhere/x.sock'))).toBeNull();
+      expect(seatOfManagedEndpoint(700, { ...proof(command), commandOf: () => null })).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

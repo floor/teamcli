@@ -29,8 +29,19 @@
           "additionalProperties": false,
           "required": ["option"],
           "properties": { "option": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["launch_prompt"],
+          "description": "A first-message CLI whose launch line takes an initial prompt: the line that points at the seat's rules file rides the launch, never typed. `positional` is a bare trailing prompt; any other value is the option before it.",
+          "properties": { "launch_prompt": { "type": "string", "minLength": 1 } }
         }
       ]
+    },
+    "delivery": {
+      "enum": ["push", "between-turns", "pull-on-turn", "none"],
+      "description": "the measured way an idle seat of this CLI is reached: an event adapter that wakes it (channel, cross-session socket), its own runtime queue between turns, an MCP inbox read on a turn, or nothing; the launch refines it (src/launch/delivery-class.ts)"
     },
     "standing_rules": {
       "type": "array",
@@ -264,7 +275,7 @@
         "question": { "$ref": "#/$defs/stage" },
         "vendor_notice": { "$ref": "#/$defs/vendorNotice" },
         "provider_error": { "$ref": "#/$defs/stage" },
-        "rate_limit": { "$ref": "#/$defs/stage" },
+        "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
@@ -281,6 +292,26 @@
             "ignore_case": {
               "type": "boolean",
               "description": "Ignore ASCII case only: each letter matches its other case; no other character folds (a long s or a Kelvin sign reads as itself). The flag reaches every rule of the stage, the exceptions written beside a match included."
+            },
+            "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
+          }
+        }
+      ]
+    },
+    "rateLimitStage": {
+      "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rules"],
+          "properties": {
+            "ignore_case": { "type": "boolean" },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Optional rate-limit action reason carried into blocked status and watch reports."
             },
             "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
           }
@@ -366,6 +397,7 @@
         }
       ],
       "properties": {
+        "reason": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "Optional action reason carried into blocked status and watch reports when this rate-limit rule matches." },
         "any": { "$ref": "#/$defs/patterns" },
         "all": { "$ref": "#/$defs/patterns" },
         "footer": { "type": "string" },

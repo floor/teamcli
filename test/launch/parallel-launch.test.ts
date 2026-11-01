@@ -10,6 +10,13 @@ function sink(isTTY: boolean): { out: string[]; err: string[]; sink: ProgressSin
   return { out, err, sink: { stdout: (text) => out.push(text), stderr: (text) => err.push(text), isTTY } };
 }
 
+function foregroundFor(plan: Step[]): NonNullable<Host['foreground']> {
+  return (_session, pane) => {
+    const idle = plan.map((step) => step.do).find((op) => op?.do === 'idle' && `${op.seat}-pane` === pane);
+    return [idle?.do === 'idle' && idle.cli === 'codex' ? 'codex' : 'claude'];
+  };
+}
+
 function seatSteps(name: string, cli: 'claude-code' | 'codex', seconds = 90): Step[] {
   const rules = cli === 'codex' ? ('message' as const) : ('option' as const);
   const repairLine = `\`team remove ${name} --keep\` then \`team add ${name}\``;
@@ -22,7 +29,8 @@ function seatSteps(name: string, cli: 'claude-code' | 'codex', seconds = 90): St
     {
       kind: 'run',
       argv: [],
-      do: { do: 'launch', seat: name, label: name, command: cli },
+      // The rules line rides the launch (rules are never typed into a pane).
+      do: { do: 'launch', seat: name, label: name, command: rules === 'message' ? `${cli} 'Read /x/rules/${name}.md'` : cli, ...(rules === 'message' ? { rulesCarried: true } : {}) },
     },
     {
       kind: 'wait',
@@ -140,6 +148,7 @@ describe('parallel launch execution', () => {
     const logged: { who: string; what: string }[] = [];
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => {
@@ -216,6 +225,7 @@ describe('parallel launch execution', () => {
     const records = progressWriter(s);
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
@@ -275,6 +285,7 @@ describe('parallel launch execution', () => {
     const logged: { who: string; what: string }[] = [];
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
@@ -345,6 +356,7 @@ describe('parallel launch execution', () => {
     const records = progressWriter(s);
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
@@ -397,6 +409,7 @@ describe('parallel launch execution', () => {
     const records = progressWriter(s);
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
@@ -459,6 +472,7 @@ describe('parallel launch execution', () => {
     const records = progressWriter(s);
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
@@ -539,13 +553,15 @@ describe('parallel launch execution', () => {
     const records = progressWriter(s);
 
     const host: Host = {
+      foreground: foregroundFor(plan),
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
       paneRun: () => true,
       typeLine: () => true,
-      deliverRules: async () => {
-        delivered.push('seat-1');
+      // The launch writes the rules file first (writeOnly); only a delivery after it counts.
+      deliverRules: async (_session, _pane, _cli, file) => {
+        if (file.writeOnly !== true) delivered.push('seat-1');
         return true;
       },
       renameAgent: (_session, _pane, name) => {

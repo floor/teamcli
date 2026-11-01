@@ -271,7 +271,9 @@ describe('liveness', () => {
 // An approval record written by main's code today (test/fixtures/approval-main.json, its
 // fingerprints taken with main's own reader) still verifies the same file on this branch: the
 // modules produce the digests main's monolith does. The record carries its own copy of the
-// approved text, so the fixture is the proof.
+// approved text, so the fixture is the proof. The privacy sweep neutralized the human name;
+// only its identity pin was refreshed, using the pre-sweep reader at e345948a6. All other
+// historical pins remain unchanged.
 describe('an approval written by main', () => {
   const root = '/flo632a/root';
 

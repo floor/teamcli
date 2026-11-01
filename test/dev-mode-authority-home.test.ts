@@ -5,7 +5,7 @@
 // lookup involved, and this file is the one place that replaces it: the mock stands in before
 // any command module is loaded, so every `homedir()` call in the run answers the synthetic home.
 // The caller is a herdr walk, as a real seat's call is; no live file or home is read.
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import * as realOs from 'node:os';
@@ -22,7 +22,12 @@ let fakeHome = '';
 
 // Registered before the command modules load (they are imported dynamically below), so every
 // `homedir()` in the run answers `fakeHome`. The real module's other exports are untouched.
+const realHomedir = realOs.homedir;
 mock.module('node:os', () => ({ ...realOs, homedir: () => fakeHome }));
+// Bun's module mocks are process-wide, and every test file of a run shares one process: put the
+// captured real lookup back when this file ends, so a later file's default home is the machine's
+// again rather than this fixture's.
+afterAll(() => { mock.module('node:os', () => ({ ...realOs, homedir: realHomedir })); });
 
 let made: string[] = [];
 afterEach(() => {

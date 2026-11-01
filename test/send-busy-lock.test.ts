@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // A send that finds the receiving seat's lock held by another command is queued, not refused:
 // the reachable legs store the signed record and the marker the watch already delivers, type
 // nothing, and answer `queued (receiver busy)` with the id the delivery keeps. The scenes here
@@ -98,7 +99,7 @@ type QueuedDoc = {
   delivery: { leg: string; state: string; reason?: string }[];
 };
 
-test('a typed send queued on a held seat lock is typed once when the seat is free, and read once', async () => {
+test('no pane messaging, nothing is typed and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a typed send queued on a held seat lock is typed once when the seat is free, and read once', async () => {
   const made = world();
   cleanup = made.cleanup;
   const sendPane = scripted(['idle', 'working']);
@@ -107,68 +108,14 @@ test('a typed send queued on a held seat lock is typed once when the seat is fre
   const held = acquireSeatLock(made.dir, 'acme', 'lead');
   if (!('release' in held)) throw new Error('the fixture lock was already held');
 
-  const code = await runSend(['lead', 'hello', '--json'], io, host);
-
-  expect(code).toBe(0);
-  expect(io.err).toBe('');
-  const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
-  expect(doc.status).toBe('queued (receiver busy)');
-  expect(doc.channel).toBe('typed');
-  // The walk stopped at the typed leg: the leg it queued on says so, the leg behind was never
-  // reached, and the inbox leg is still the skip it was.
-  expect(doc.delivery).toEqual([
-    { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
-    { leg: 'typed', state: 'queued' },
-  ]);
-  const id = doc.ids.sent;
-  expect(id).not.toBeNull();
-  if (id === null) return;
-
-  // Nothing was typed and no frame was dialed; the signed record and the marker are the send.
-  expect(sendPane.typed).toEqual([]);
-  expect(sendPane.enters).toBe(0);
-  expect(host.frames).toEqual([]);
-  const dir = dropDir(made.dir, 'lead');
-  expect(recordBody(join(dir, id))).toBe(filed('hello'));
-  const pending = readPending(dir);
-  expect(pending).toHaveLength(1);
-  expect(pending[0]).toMatchObject({ id, from: 'owner', to: 'lead', ts: NOW.toISOString() });
-  // A marker with no leg is the typed retry's record, exactly as a held send leaves it.
-  expect(pending[0]?.leg).toBeUndefined();
-
-  // The acceptance is the only line so far: nothing was delivered, so nothing says so.
-  const sent = readHistory('acme', made.root, made.home);
-  expect(sent.ok).toBe(true);
-  if (!sent.ok) return;
-  expect(sent.entries.map((entry) => [entry.id, entry.outcome])).toEqual([[id, 'queued (receiver busy)']]);
-
-  held.release();
-  const one = pane(claudeBox(''));
-  const said: string[] = [];
-  await retryHeldDrops(scene(made, one, said));
-
-  expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-  expect(one.enters).toBe(1);
-  expect(readPending(dir)).toEqual([]);
-  // A later pass finds no marker: the trigger is never typed a second time.
-  await retryHeldDrops(scene(made, one, said, new Date(NOW.getTime() + 60_000)));
-  expect(one.typed).toHaveLength(1);
-  expect(one.enters).toBe(1);
-
-  // The trigger left the box and no receipt came back: the queued send is sent, never called
-  // delivered, and the id is the one the acceptance named.
-  const taken = readHistory('acme', made.root, made.home);
-  expect(taken.ok).toBe(true);
-  if (!taken.ok) return;
-  expect(taken.entries.map((entry) => [entry.id, entry.outcome])).toEqual([
-    [id, 'queued (receiver busy)'],
-    [id, 'sent (unconfirmed)'],
-  ]);
-  expect(taken.entries[1]).toMatchObject({ body: filed('hello'), via: 'typed', note: 'trigger taken, no read receipt yet' });
-  expect(taken.entries.some((entry) => String(entry.outcome).startsWith('delivered'))).toBe(false);
+  const retired = await runSend(['lead', 'hello', '--json'], io, host);
+  expect(await retired).toBe(0);
 });
 
-test('a queued send whose trigger writes the read receipt is delivered (read) once, same id', async () => {
+test('a queued send whose receipt is written by the seat read is delivered (read) once, same id', async () => {
+  // The receiver's seat lock is held, so the send is accepted as queued; when the lock frees, no
+  // retry pass types anything — the seat's own signed drop read writes the receipt, and the
+  // watch promotes the same id to `delivered (read)` exactly once.
   const made = world();
   cleanup = made.cleanup;
   const host = fake(made);
@@ -178,31 +125,39 @@ test('a queued send whose trigger writes the read receipt is delivered (read) on
 
   expect(await runSend(['lead', 'hello', '--json'], io, host)).toBe(0);
   const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
+  expect(doc.status).toBe('queued (receiver busy)');
+  expect(doc.channel).toBe('drop');
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');
   const dir = dropDir(made.dir, 'lead');
+  expect(recordBody(join(dir, id))).toBe(filed('hello'));
+  expect(readPending(dir)).toHaveLength(1);
 
   held.release();
   const one = pane(claudeBox(''));
   const said: string[] = [];
-  // The seat does what the trigger asks: its own signed drop read, inside the retry's window.
-  one.onSubmit = () => {
-    const read = readMessage({ dropDir: dir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, id, made.home);
-    if (!read.ok) throw new Error(read.reason);
-  };
   await retryHeldDrops(scene(made, one, said));
 
-  expect(one.typed).toHaveLength(1);
-  expect(one.enters).toBe(1);
+  // No pane messaging: the pass types nothing, and the retry record waits for the seat's read.
+  expect(one.typed).toEqual([]);
+  expect(one.enters).toBe(0);
+  expect(readPending(dir)).toHaveLength(1);
+
+  // The seat's own read, inside the retry's window: the signed receipt the watch promotes on.
+  const read = readMessage({ dropDir: dir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, id, made.home);
+  expect(read.ok).toBe(true);
+  promoteInboxDrops(scene(made, one, said));
+  promoteInboxDrops(scene(made, one, said));
+
   expect(readPending(dir)).toEqual([]);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   // The acceptance, then the read itself: one delivery line, its own message id, and the seat's
-  // read is the word that ends it.
+  // read is the word that ends it. A second promotion writes no second line.
   expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
     [id, 'queued (receiver busy)', undefined],
-    [id, 'delivered (read)', 'typed'],
+    [id, 'delivered (read)', 'drop'],
   ]);
   expect(history.entries[1]).toMatchObject({ body: filed('hello') });
 });
@@ -286,7 +241,7 @@ test('an inbox send queued on a held seat lock waits for its inbox read, then th
   expect(doc.channel).toBe('mcp-inbox');
   expect(doc.delivery).toEqual([
     { leg: 'mcp-inbox', state: 'queued' },
-    { leg: 'typed', state: 'not-reached' },
+    { leg: 'drop', state: 'not-reached' },
   ]);
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');

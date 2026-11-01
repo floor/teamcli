@@ -106,7 +106,7 @@ describe('the rules of a seat', () => {
     expect(withInbox.slice(0, 4)).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
-      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
+      'If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     ]);
     // A seat whose CLI carries no measured route is asked for nothing: its rules are the ones
@@ -956,23 +956,19 @@ describe('the pane lines a report carries', () => {
   });
 });
 
-describe('the row a stopped delivery prints', () => {
-  // The first mismatching row is pane text, whatever the box drew: control characters and all.
-  // It goes to the terminal alone — stripped of every control character and cut to 200 — and
-  // never to the log, which holds the report only (a BEL would ring and a CR would overwrite
-  // the report, and an unbounded row would flood the terminal).
-  const ROW_SAYED = 'coder: first row of its box that is not the rules line: ';
-
-  function stoppedOn(row: string) {
+describe('a launch whose line did not carry the rules', () => {
+  // The typed read-back these tests once exercised is gone: rules are never typed into a pane,
+  // so no screen row can be read back and printed. The seat is left out, nothing typed.
+  test('never reaches a typed delivery: only the file is written, and the seat is left out', async () => {
     const said: string[] = [];
-    const logged: { who: string; what: string }[] = [];
+    const asked: string[] = [];
     const host: Host = {
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
       paneRun: () => true,
-      typeLine: () => false,
-      deliverRules: async () => ({ stop: 'read-back', typed: true, sent: false, kind: 'unsent' as const, row }),
+      typeLine: () => { asked.push('typed'); return false; },
+      deliverRules: async (_s, _p, _c, file) => { asked.push(file.writeOnly === true ? 'write' : 'typed-rules'); return true; },
       renameAgent: () => true,
       closeWorkspace: () => true,
       stopSession: () => true,
@@ -986,9 +982,9 @@ describe('the row a stopped delivery prints', () => {
       running: () => {},
       drop: () => {},
       say: (line) => { said.push(line); },
-      log: (who, what) => { logged.push({ who, what }); },
+      log: () => {},
     };
-    const steps: Step[] = [{
+    const steps: Step[] = [{ kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command: 'codex', pane: 'p1', cli: 'codex', cwd: '.' } }, {
       kind: 'run',
       argv: [],
       do: {
@@ -998,32 +994,8 @@ describe('the row a stopped delivery prints', () => {
         seconds: 1, pane: 'p1',
       },
     }];
-    return { said, logged, run: () => executePlan(steps, 'acme', host) };
-  }
-
-  test('a BEL, a CR and escape sequences are stripped; the row never reaches the log', async () => {
-    const row = '\u0007bad-row\r\u001b]0;secret\u0007after\u001b[?25l';
-    const { said, logged, run } = stoppedOn(row);
-    await run();
-    // One say for the seat: its record, then — on the next line, as the record's detail — the row.
-    expect(said.length).toBe(1);
-    const lines = (said[0] ?? '').split('\n');
-    expect(lines[0]).toContain("rules typed, not sent: the read-back didn't match");
-    expect(lines[1]).toBe(`${ROW_SAYED}bad-rowafter`);
-    expect(said.join('')).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
-    expect(said.join('')).not.toContain('secret');
-    expect(logged).toEqual([{ who: 'coder', what: expect.stringContaining("rules typed, not sent: the read-back didn't match") }]);
-    expect(logged[0]?.what).not.toContain('bad-row');
-  });
-
-  test('a 5,000-character row is cut to 200 characters and marked', async () => {
-    const row = `${'x'.repeat(4_994)}\u0007${'y'.repeat(5)}`;
-    const { said, logged, run } = stoppedOn(row);
-    await run();
-    const lines = (said[0] ?? '').split('\n');
-    expect(lines[1]).toBe(`${ROW_SAYED}${'x'.repeat(200)}…`);
-    expect(lines[1]?.length).toBe(ROW_SAYED.length + 200 + '…'.length);
-    expect(said.join('')).not.toContain('y'.repeat(5));
-    expect(logged[0]?.what).not.toMatch(/x{10}/);
+    await executePlan(steps, 'acme', host);
+    expect(asked).toEqual(['write']);
+    expect(said.join('')).toContain('rules not typed: its rules ride only a launch');
   });
 });

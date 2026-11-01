@@ -10,7 +10,7 @@
 //       "kind": "seat",                    // written, never inferred from the id's shape
 //       "capabilities": ["gate", "merge"], // from the closed, version-pinned vocabulary below
 //                                          // (`dialogs.trust` is a team-only owner setting)
-//       "scope": ["/Users/x/Code/acme"],   // always concrete: the declared roots when none is given
+//       "scope": ["/home/x/Code/acme"],   // always concrete: the declared roots when none is given
 //       "issued": "2026-10-17T02:00:00.000Z",
 //       "expires": null,                   // optional; checked at every use
 //       "generation": 1,

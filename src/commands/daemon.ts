@@ -34,7 +34,7 @@ import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
-import { version as installedVersion } from '../version.ts';
+import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
@@ -82,6 +82,8 @@ export type DaemonCommandSources = {
   program?: { execPath: string; entry: string } | null;
   now?: () => Date;
   version?: string;
+  /** Injected for tests: the packaged commit; null in a source checkout. */
+  gitHead?: string | null;
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
@@ -219,6 +221,14 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
   }
 }
 
+/**
+ * The owner's gate of the daemon's three owner-only verbs — install, uninstall and fault-watch.
+ * The owner's widening (OD-20261019-49) admits a placed team orchestrator here, through the same
+ * central admission every owner-only command shares; the admission is the file's lead on the pane
+ * its team's state records, never a bare name or a role claim. `run` is not this gate: a
+ * no-terminal start by the service manager is `runAllowed`'s separate answer, and no dev-mode
+ * setting admits a seat or a pane to it.
+ */
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
@@ -522,6 +532,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       roots,
       startedBy,
       version: sources.version ?? installedVersion(),
+      gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
       ...(sources.now !== undefined ? { now: sources.now } : {}),
       ...(sources.heartbeatMs !== undefined ? { heartbeatMs: sources.heartbeatMs } : {}),
       ...(sources.sendHost !== undefined ? { sendHost: sources.sendHost } : {}),
@@ -568,6 +579,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return 0;
   }
 
+  // The three verbs left here are owner-only: install, uninstall and fault-watch. The owner's
+  // widening admits a placed orchestrator under dev mode (OD-20261019-49), through `ownerAllows`'s
+  // one admission; status returned above, and run has its own gate.
   if (!ownerAllows(io, sources, parsed.json)) {
     // exit: daemon.not-owner
     return 1;
@@ -639,6 +653,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // install writes no flag and starts exactly the daemon it did before.
     ...(parsed.presence ? { presence: true } : {}),
     ...(parsed.watch ? { watch: true } : {}),
+    // Only the paths the door verified for this run (io.general), never a path read elsewhere.
+    ...(io.general !== undefined ? { general: io.general } : {}),
+    // The installing shell's PATH, so the service finds herdr where the owner's shell does.
+    ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
   const plan = manager.plan(home, fullProgram);
   if (parsed.dryRun) {

@@ -12,6 +12,21 @@ is free, so a working, blocked or half-typed seat is left running and named. A s
 typed into it; left running. A seat whose profile
 says herdr cannot report it (`herdr_status: unreliable`) is free when the profile's own screen
 reads idle, whatever herdr's status says, and it is stopped on its own exit key at that screen.
+A watch the state records by pid alone — one started outside a pane of the team — is stopped only
+when the live process proves it is that watch: its command line runs this install's own `team` CLI
+entry as this session's `team watch`, and its start instant is the one the watch recorded. A pid
+alone is never signalled; an unprovable one
+is left alone, said, and its record is kept. A watch recorded in a pane is not signalled here, its
+pane being how it is verified, and a record that belongs to the session's own host process is never
+signalled. A seat whose launch
+started a managed Codex endpoint is stopped through the endpoint's recorded process, with the same
+proof `team remove` uses, before its state record goes; a seat that started none is not mentioned.
+A stop that cannot prove its process — or one that names no reason at all — signals nothing: the
+seat keeps its whole record, endpoint claim and presence binding included, and the run holds so a
+later cleanup can still account for the process.
+The event bus `team up` started is closed with the team: the workspace its record names is shut
+after the seats and before the session, and its state record is cleared when that close succeeds. A bus the
+owner runs in a terminal of their own is not in the state and is left running.
 `--dry-run` prints the plan and runs nothing.
 
 ## Synopsis
@@ -166,11 +181,11 @@ state:
     claude-beacon: {stage: ready, cli: claude-code}
 ```
 
-Two seats idle, a watch running: this is the whole plan. The watch is named and left running.
+Two seats idle, a watch recorded in a pane: this is the whole plan. The watch is left running — a
+pane is how it is verified, and this run does not signal it.
 
 ```console
 $ team down --dry-run ; echo "exit $?"
-watch: its pid is only in the state; left running
 + herdr --session beacon pane run w1:p1 /exit
   wait until claude-keeper's pane is back at its shell (30 s at most); on a time-out it is left as it is
 + herdr --session beacon workspace close w1

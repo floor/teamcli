@@ -2,7 +2,11 @@
 // gate, the same read, the same ordering, against this clone's clock. It is a listing: it claims
 // nothing and writes no lease, so a record another seat holds can still appear. A deadline the
 // clock has passed reads `overdue` in the STATE column; the mark decides nothing — an overdue
-// record is still takeable and is never dropped, blocked, reordered or released by lateness.
+// record is still takeable and is never dropped, blocked, reordered or released by lateness. A
+// record with a deadline planned by a seat nothing can wake while it is idle carries the reason
+// after its title: dispatch hands that seat no time-bound record.
+import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
@@ -10,6 +14,7 @@ import { isNoRepository, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
 import { plainText } from '../launch/plain.ts';
 import {
   contextLine,
@@ -21,6 +26,7 @@ import {
   writeJsonError,
   type OutputSchemaTag,
 } from '../output/index.ts';
+import { readState, type SeatState } from '../state.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
@@ -32,7 +38,9 @@ export const USAGE = `Usage: team plan [--json]
 Prints the queue a claim would consider, in team next's order — priority first, then the
 tasks.fallback tie-break — against this clone's clock. Reads the checkout, the team file, the
 task file or the owner's broker; claims nothing and writes no lease. A deadline the clock has
-passed reads overdue in the STATE column and decides nothing.
+passed reads overdue in the STATE column and decides nothing. A record with a deadline, planned
+by a seat that cannot be woken while it is idle, carries (its seat cannot be woken while idle)
+after its title.
 
 Exits 0 when the plan is shown, 1 when the caller, broker, or file is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
@@ -79,6 +87,36 @@ export function planState(record: TaskRecord, at: number): PlanState {
   return Date.parse(record.deadline) < at ? 'overdue' : 'open';
 }
 
+/** The note a time-bound record carries when the seat planning cannot be woken while it sits
+ *  idle: dispatch hands that seat no record with a deadline. */
+const UNWAKEABLE_NOTE = '(its seat cannot be woken while idle)';
+
+/**
+ * Whether the seat the plan is for cannot be woken while it sits idle, read the way dispatch
+ * reads it: the launch's records first, the file's row second. A state that cannot be read falls
+ * to the file's row, never to a guess.
+ */
+function cannotBeWokenWhileIdle(team: TeamFile, root: string, path: string, seat: string, home?: string): boolean {
+  const dir = dirname(path);
+  let recorded: SeatState | undefined;
+  try {
+    recorded = readState(dir).sessions[team.session]?.seats[seat];
+  } catch {
+    recorded = undefined;
+  }
+  const declared = team.seats.find((row) => row.name === seat);
+  const delivery = seatDeliveryClass({
+    dir,
+    root,
+    session: team.session,
+    seat,
+    ...(declared === undefined ? {} : { declared }),
+    ...(recorded === undefined ? {} : { state: recorded }),
+    ...(home === undefined ? {} : { home }),
+  });
+  return !wakeableWhileIdle(delivery.class);
+}
+
 function planTask(record: TaskRecord, step: number, at: number): PlanTaskJson {
   return {
     step,
@@ -96,6 +134,10 @@ function planTask(record: TaskRecord, step: number, at: number): PlanTaskJson {
 export async function runPlan(argv: string[], io: Io, sources: PlanSources = {}): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
+  // The registry home is resolved the way the configuration read resolves it: the caller's when
+  // one names it, the machine's `homedir()` otherwise. A real CLI run supplies none, and the
+  // seat's delivery class below reads its agent record from the same home the team was read in.
+  sources = { ...sources, home: sources.home ?? homedir() };
   // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
   // must still route the refusal through the `team.plan` error document on stdout.
   const json = hasJsonFlag(argv);
@@ -146,7 +188,7 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
     else out.stderr('team plan: the task file is not a list\n');
     return shape();
   }
-  return show(io, read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, json);
+  return show(io, read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat, sources.home), json);
 }
 
 /**
@@ -155,7 +197,7 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
  */
 async function planFromBroker(
   io: Io,
-  loaded: { team: TeamFile; root: string },
+  loaded: { team: TeamFile; root: string; path: string },
   tasks: Extract<NonNullable<TeamFile['tasks']>, { source: 'linear' }>,
   sources: PlanSources,
   json: boolean,
@@ -178,14 +220,15 @@ async function planFromBroker(
   // A notice about the read is for a person reading the table; a `--json` run's stderr stays
   // empty, the document on stdout being the whole answer.
   if (outcome.notice !== undefined && !json) io.stderr(`team plan: ${outcome.notice}\n`);
-  return show(io, outcome.read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, json);
+  return show(io, outcome.read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat, sources.home), json);
 }
 
 /**
  * One pass of the read path — the takeable records, ordered — with no claim and no write. A
  * refusal in the read is named on stderr and is not a candidate. The plain table carries the
- * step, its state, the owner and the title; a held record still appears: it is in the queue a
- * claim would consider, and this command claims nothing.
+ * step, its state, the owner and the title, and a time-bound record of a seat nothing can wake
+ * while it is idle carries the reason after that title; a held record still appears: it is in
+ * the queue a claim would consider, and this command claims nothing.
  */
 function show(
   io: Io,
@@ -195,6 +238,7 @@ function show(
   fallback: 'file' | 'id',
   now: () => number,
   team: TeamFile,
+  unwakeable: boolean,
   json: boolean,
 ): number {
   const at = now();
@@ -229,7 +273,12 @@ function show(
       context,
       ...renderTable({
         headers: ['STEP', 'STATE', 'OWNER', 'TITLE'],
-        rows: candidates.map((record, index) => [String(index + 1), planState(record, at), record.assignee ?? '-', record.title]),
+        rows: candidates.map((record, index) => [
+          String(index + 1),
+          planState(record, at),
+          record.assignee ?? '-',
+          unwakeable && record.deadline !== undefined ? `${record.title} ${UNWAKEABLE_NOTE}` : record.title,
+        ]),
         style,
       }),
       pluralCount(candidates.length, 'task'),

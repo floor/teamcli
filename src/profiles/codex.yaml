@@ -14,7 +14,12 @@ unattended:
   - -s
   - danger-full-access
   - --no-alt-screen
-rules: first-message
+rules:
+  launch_prompt: positional
+# The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a
+# pointer through its own queue between turns (src/send/push-adapters/codex-relay.ts); a seat
+# without that endpoint reads its MCP inbox when it takes a turn.
+delivery: between-turns
 login:
   check:
     - login
@@ -179,6 +184,14 @@ screen:
     # local clock (`3:05 PM`, `Oct 23rd, 2026 3:05 PM`), printed as the screen words it. The
     # near-cap warning (`less than N% of your… limit left`) is not exhaustion: it is never
     # this stage.
+    - all:
+        - '^\s*Approaching rate limits\s*$'
+        - '^\s*Switch to gpt-6-luna for lower credit usage\?\s*$'
+        - '^\s*›?\s*1\. Switch to gpt-6-luna\s+Fast and affordable model for easier tasks\.\s*$'
+        - '^\s*2\. Keep current model\s*$'
+        - '^\s*3\. Keep current model \(never show again\)\s+Hide future rate limit reminders about switching models\s*$'
+      footer: 'enter select · esc back'
+      reason: 'needs a choice: rate-limit model switch'
     - any:
         - 'Quota exceeded\. Check your plan and billing details\.'
         - 'You(?:’|'')ve hit your usage limit'

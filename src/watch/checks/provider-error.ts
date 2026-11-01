@@ -11,7 +11,7 @@ import type { Reset, Screen } from '../screen.ts';
 // exactly as the screen words it (a clock after `at`, a span after `in`), or saying plainly that
 // the screen names none.
 
-type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: Reset | null };
+type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: Reset | null; reason?: string };
 
 function held(screen: Screen): Held | null {
   if (screen.kind === 'provider error') return screen;
@@ -27,6 +27,7 @@ function accountOf(seat: SeatObservation): string | null {
 
 function textOf(name: string, account: string | null, state: Held): string {
   if (state.kind === 'provider error') return `${name} shows a provider error: connection lost, and no capture names a retry`;
+  if (state.reason !== undefined) return `${name} ${state.reason}`;
   const on = account === null ? '' : ` on ${account}`;
   if (state.reset) return `${name} is out of quota${on}: usage limit, resets ${state.reset.kind} ${state.reset.value}`;
   return `${name} is out of quota${on}: usage limit, and the screen names no reset time`;

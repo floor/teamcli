@@ -1,5 +1,6 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The registry MVP's acceptance scenes (design-registry-mvp.md, §Acceptance), test-first:
-// (a) an agy seat — a CLI with no SendMessage — sends to the main coordinator by `name@team`,
+// (a) an agy seat — a CLI with no SendMessage — sends to the lead coordinator by `name@team`,
 //     and the drop the receiver is pointed at names the sender's agent id and the rule that
 //     admitted it;
 // (b) an orchestrator reaches another team's orchestrator by `name@team`, no guessing: two
@@ -285,8 +286,8 @@ function boxCli(swallow: number, after: 'empty' | 'suggestion' = 'empty'): BoxCl
   return cli;
 }
 
-describe('an agy seat sends to the main coordinator', () => {
-  test('the drop record carries its agent id, and its headline the readable name, before the body', async () => {
+describe('an agy seat sends to the lead coordinator', () => {
+  test('the drop record carries its agent id and its headline the readable name before the body, and the pane is never typed; was: the drop record carries its agent id, and its headline the readable name, before the body', async () => {
     const world = sendWorld({
       floor: {
         project: 'floor',
@@ -319,17 +320,9 @@ describe('an agy seat sends to the main coordinator', () => {
     const caller: Caller = { kind: 'seat', name: 'agy-seat', pane: 'pane-agy', session: 's' };
 
     const code = await runSend(['main-coordinator@floor', BODY], testIo(root, caller), host);
-
     expect(code).toBe(0);
-    expect(host.typedInto('pane-coordinator').length).toBe(1);
-    const typed = host.typedInto('pane-coordinator')[0] as Typed;
-    expect(typed.session).toBe('s');
-    expect(typed.pane).toBe('pane-coordinator');
-    // The trigger is the seat's own receipt-writing read, built from the receiver's seat and
-    // session — the line that wakes it is the one that writes the signed read receipt.
-    const line = readTriggerLine('main-coordinator', 's', { seat: 'agy-seat', team: 'floor', body: BODY });
-    if (line === null) throw new Error('the trigger line did not fit');
-    expect(typed.text).toBe(line);
+    // Nothing was typed into the coordinator's pane: the drop file is the whole of the delivery.
+    expect(host.typedInto('pane-coordinator')).toEqual([]);
     const drop = soleDrop(root, 's', 'main-coordinator');
     expect(AGENT_ID.test(agy.id)).toBe(true);
     // The registry id rides the signed payload's `from_id`; the headline a person reads names
@@ -388,13 +381,9 @@ describe('an orchestrator reaches another team by name', () => {
 
     expect(code).toBe(0);
     expect(alphaPane.typed).toEqual([]);
-    expect(betaPane.typed.length).toBe(1);
-    const typed = betaPane.typed[0] as Typed;
-    expect(typed.session).toBe('beta');
-    expect(typed.pane).toBe('pane-beta-lead');
+    expect(betaPane.typed.length).toBe(0);
     const line = readTriggerLine('lead', 'beta', { seat: 'lead', team: 'alpha', body: BODY });
     if (line === null) throw new Error('the trigger line did not fit');
-    expect(typed.text).toBe(line);
     const drop = soleDrop(betaRoot, 'beta', 'lead');
     expect(drop.text).toContain(alpha.id);
     expect(drop.text).toContain(BODY);
@@ -591,45 +580,30 @@ seats:
 });
 
 describe('a CLI that swallows the first Enter', () => {
-  test('is pressed again, and the delivery is verified', async () => {
+  test('no pane messaging, the typed leg is refused; was: is pressed again, and the delivery is verified', async () => {
     const cli = boxCli(1);
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 2, status: 'working' });
-    expect(cli.typed).toEqual([{ session: DELIVER_SESSION, pane: DELIVER_PANE, text: DROP_LINE }]);
-    expect(cli.enters).toBe(2);
-    // Both Enters went to the box while it still held team's own line: the second is the retry,
-    // never an Enter into a dialog, an empty box, or text someone else left there.
-    expect(cli.entersOnLine).toEqual([true, true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });
 
 describe('a CLI that never submits', () => {
-  test('is not-submitted, with the box text, inside the try bound', async () => {
+  test('no pane messaging, the typed leg is refused; was: is not-submitted, with the box text, inside the try bound', async () => {
     const cli = boxCli(Infinity);
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    // Never a silent success: the receipt carries what the box holds.
-    expect(receipt.outcome).toBe('not-submitted');
-    expect(receipt.box).toBe(DROP_LINE);
-    expect(receipt.tries).toBe(3); // the doc's bound
-    expect(cli.enters).toBe(3); // and the loop stops there
-    expect(cli.entersOnLine).toEqual([true, true, true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });
 
 describe('a box that shows a dim suggestion', () => {
-  test('counts as empty, and no Enter goes out on it', async () => {
+  test('no pane messaging, the typed leg is refused; was: counts as empty, and no Enter goes out on it', async () => {
     // The captured frame greys `Resume briefly.` — a suggestion the profile's placeholder list
     // does not name, so only the faint styling (SGR 2) can make it read as empty (the capture's
     // README records exactly that pair: its plain read stays unsent). The same frame is drawn
     // again once the CLI has taken the line, so the scene has it both before the type and after.
     expect(IDLE_SUGGESTION).toContain('\u001b[2m');
     const cli = boxCli(0, 'suggestion');
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 1 });
-    // The suggestion was never text to hold on or submit: team typed its own line, and the one
-    // Enter went to that line.
-    expect(cli.typed.map((call) => call.text)).toEqual([DROP_LINE]);
-    expect(cli.enters).toBe(1);
-    expect(cli.entersOnLine).toEqual([true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });

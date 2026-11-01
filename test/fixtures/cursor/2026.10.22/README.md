@@ -1,16 +1,18 @@
-# Cursor Agent 2026.10.22 captures
+# Cursor Agent 2026.10.22 terminal captures
 
-The header of the screen here reads `Cursor Agent` and `v2026.10.22-27dcf5f`, which names the
-version. Only rules-delivery screens were added at this version.
+Captured from the installed macOS Cursor Agent (`v2026.10.22-27dcf5f`) on 2026-10-28 with
+herdr `pane read --source visible --format ansi`, from a live seat pane of a team on this
+machine.
 
-## Captured screen
-
-- `rules-unsent-reviewer-cursor.txt`: a reviewer seat's box holding a typed rules line, read
-  `unsent`. Added in commit `9e68204b7` (floor, 2026-10-28 10:51 +0100, "up rules delivery: wait
-  out a busy seat instead of reporting a read-back mismatch"), whose message says it is a real
-  Cursor screen. Who captured it, when, and the launch line are not recorded: unknown. 12 lines,
-  1,110 bytes as added. Read by `test/launch/rules-busy-seat.test.ts`.
+- `rules-unsent-reviewer-agent.txt`: the seat's box holding the rules line `team up` had put
+  there while the resumed seat was busy on its queued drops; read `unsent`. It pins the
+  busy-seat wait in `src/launch/deliver.ts` (commit 9e68204b7) and is used by
+  `test/launch/rules-busy-seat.test.ts`.
 
 ## Not produced
 
-- `idle`, `trust`, `working`, `question`, `permission`, `unsent`, `unknown`: not produced as their own frames at this version (no `unsent.txt` or `exit.txt`); the one `unsent` screen here is the rules line above, and the other shapes keep their `2026.10.16` and `2026.10.19` captures.
+- `idle`, `trust`, `working`, `question`, `permission`, `unknown`: not produced. Only the
+  busy-seat box above was captured at `2026.10.22`; those shapes keep their `2026.10.16` and
+  `2026.10.19` captures.
+- `unsent` as a plain `unsent.txt`: not produced. The one unsent shape at this version is the
+  rules line above; the plain draft keeps its `2026.10.16` capture.

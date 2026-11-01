@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from './no-pane-messaging.ts';
 // Native-CLI delivery: the body goes to a drop file, and the pane receives one short trigger.
 //
 // Measured on herdr 0.7.1 (2026-10-12, scratch session b2-send-native, then b2-send-key):
@@ -202,6 +203,8 @@ export async function submitTrigger(
   hold?: () => boolean,
   beforeEnter?: () => boolean,
 ): Promise<SubmitResult> {
+  // No pane messaging: the native trigger is never typed (src/send/no-pane-messaging.ts).
+  if (NO_PANE_MESSAGING.length > 0) return { ok: false, reason: NO_PANE_MESSAGING };
   const before = pane.status(session, paneId);
   if (before === null) return { ok: false, reason: "the seat's status could not be read" };
   if (!pane.typeText(session, paneId, line)) return { ok: false, reason: 'the pane did not take the trigger' };

@@ -425,8 +425,8 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     const sendIo = testIo(fx.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     const sendCode = await runSend(['builder-01', 'follow-up after rename'], sendIo, host);
     expect(sendCode).toBe(0);
-    expect(typed).toHaveLength(1);
-    expect(typed[0]?.pane).toBe('w1:p4');
+    expect(typed).toEqual([]);
+
 
     // Watch nudge resolves <your seat name> to builder-01
     const loadedAfter = loadTeamFile(fx.root, { home: fx.home });

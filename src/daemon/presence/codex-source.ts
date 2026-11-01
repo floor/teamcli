@@ -30,7 +30,7 @@
 // only proves attachment and does NOT overwrite the newer stream state. This is deliberately
 // conservative: a stale idle snapshot can never flip a working seat back to idle.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { basename, join } from 'node:path';
 import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
@@ -308,6 +308,135 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
       socket.destroy();
     },
   };
+}
+
+/** What one `thread/loaded/list` reading proves: the thread ids the endpoint holds in memory, or
+ *  why the reading proved nothing. */
+export type CodexLoadedThreadsRead =
+  | { kind: 'read'; ids: string[] }
+  | { kind: 'unavailable'; why: string };
+
+/**
+ * The threads a Codex app-server holds loaded, read from the endpoint itself with one
+ * `initialize` -> `initialized` -> `thread/loaded/list` exchange inside `timeoutMs`. The answer
+ * is the app-server's own in-memory list, not the persisted-session listing: measured against
+ * `codex-cli 0.161.0` on 2026-11-01 with a synthetic `CODEX_HOME`, `thread/loaded/list` answered
+ * `{"data":["01a1945b-5982-7751-9476-6a2ef1c45d6d"],"nextCursor":null}` for a thread started on
+ * that endpoint and `{"data":[]}` before one was, while `thread/list` answered
+ * `{"data":[],"nextCursor":null,"backwardsCursor":null}` even after `thread/start` had created
+ * and loaded that thread. A list longer than one page is refused rather than partially read: a
+ * caller binds a seat only when exactly one thread is proven to be its own.
+ */
+export function readLoadedCodexThreads(input: {
+  endpoint: string;
+  timeoutMs?: number;
+}): Promise<CodexLoadedThreadsRead> {
+  const budgetMs = Math.max(1, Math.round(input.timeoutMs ?? CODEX_CONNECT_TIMEOUT_MS));
+  const socketPath = codexSocketPath(input.endpoint);
+  if (socketPath === null) {
+    return Promise.resolve({
+      kind: 'unavailable',
+      why: 'the recorded endpoint is not an explicit unix:/// socket path',
+    });
+  }
+  if (!existsSync(socketPath)) {
+    return Promise.resolve({
+      kind: 'unavailable',
+      why: 'the Codex endpoint socket is not listening (ENOENT)',
+    });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let asked = false;
+    let wire: Wire | null = null;
+    const finish = (read: CodexLoadedThreadsRead): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      wire?.destroy();
+      resolve(read);
+    };
+    const timer = setTimeout(() => {
+      finish({
+        kind: 'unavailable',
+        why: `the Codex endpoint did not answer thread/loaded/list within ${String(budgetMs)} ms`,
+      });
+    }, budgetMs);
+    wire = connectWire(socketPath, {
+      onUpgrade: () => {
+        wire?.write(
+          JSON.stringify({
+            id: 'initialize',
+            method: 'initialize',
+            params: {
+              clientInfo: { name: 'teamcli', title: null, version: '0.1.0' },
+              capabilities: {
+                experimentalApi: true,
+                requestAttestation: false,
+                optOutNotificationMethods: null,
+              },
+            },
+          }),
+        );
+      },
+      onText: (text: string) => {
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(text) as Record<string, unknown>;
+        } catch {
+          finish({ kind: 'unavailable', why: 'the Codex endpoint sent a frame that is not JSON' });
+          return;
+        }
+        if (msg.id === 'initialize') {
+          if (msg.error !== undefined && msg.error !== null) {
+            finish({ kind: 'unavailable', why: 'the Codex endpoint refused initialize' });
+            return;
+          }
+          if (asked) return;
+          asked = true;
+          wire?.write(JSON.stringify({ method: 'initialized' }));
+          wire?.write(
+            JSON.stringify({ id: 'thread_loaded_list', method: 'thread/loaded/list', params: {} }),
+          );
+          return;
+        }
+        if (msg.id !== 'thread_loaded_list') return;
+        if (msg.error !== undefined && msg.error !== null) {
+          const err = msg.error as { message?: unknown };
+          const said = typeof err.message === 'string' ? err.message : 'an error';
+          finish({ kind: 'unavailable', why: `the Codex endpoint refused thread/loaded/list (${said})` });
+          return;
+        }
+        const result = msg.result !== null && typeof msg.result === 'object'
+          ? msg.result as { data?: unknown; nextCursor?: unknown }
+          : undefined;
+        const data = result?.data;
+        if (!Array.isArray(data) || !data.every((id) => typeof id === 'string')) {
+          finish({
+            kind: 'unavailable',
+            why: 'thread/loaded/list answered without a list of thread ids',
+          });
+          return;
+        }
+        if (typeof result?.nextCursor === 'string' && result.nextCursor !== '') {
+          finish({
+            kind: 'unavailable',
+            why: 'the Codex endpoint holds more threads than one page; none is proven to be its caller\'s',
+          });
+          return;
+        }
+        finish({ kind: 'read', ids: data as string[] });
+      },
+      onLoss: (reason) => {
+        finish({
+          kind: 'unavailable',
+          why: reason === 'transport-error'
+            ? 'the Codex endpoint connection failed'
+            : 'the Codex endpoint closed the connection before answering thread/loaded/list',
+        });
+      },
+    });
+  });
 }
 
 type Internals = {

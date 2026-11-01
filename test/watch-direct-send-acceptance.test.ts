@@ -339,8 +339,13 @@ describe('the direct wake legs', () => {
     expect(dials).toBe(1);
     // The direct ending the caller reads names the last live route's transport failure; the
     // refused resume leg is the walk's own line, and it is a refusal, never the unavailable
-    // runtime the build would have recorded had the guard passed.
-    expect(result).toEqual({ ok: false, refused: 'socket: unreachable: the receiver closed the socket' });
+    // runtime the build would have recorded had the guard passed. The staged copy is part of
+    // the answer: the seat reads it at its next wake.
+    expect(result).toEqual({
+      ok: false,
+      refused: 'socket: unreachable: the receiver closed the socket',
+      staged: true,
+    });
     expect(logged).toContain("headless-resume: refused: the recorded watch is another watch's epoch");
     expect(logged).not.toContain('headless-resume: this build carries no headless resume runtime');
     expect(pane.typed).toEqual([]);

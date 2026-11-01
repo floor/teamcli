@@ -16,7 +16,7 @@
 // no recursive rm.
 import { execFileSync, spawnSync } from 'node:child_process';
 import type { KeyObject } from 'node:crypto';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,9 +80,13 @@ const RECIPE = {
 
 type Fixture = { base: string; root: string; home: string; file: string; dir: string; yaml: string };
 
+// Every fixture dir waits for one trash call after the file has run. A spawn on the per-test
+// hook path costs hundreds of milliseconds under full-suite load and can cross the hook
+// deadline; one call for all of them removes that per-test external work entirely.
 const made: string[] = [];
-afterEach(() => {
-  for (const dir of made.splice(0)) spawnSync('trash', [dir], { stdio: 'ignore' });
+afterAll(() => {
+  const dirs = made.splice(0);
+  if (dirs.length > 0) spawnSync('trash', dirs, { stdio: 'ignore' });
 });
 
 function teamText(root: string, home: string): string {

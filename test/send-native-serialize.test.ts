@@ -56,15 +56,12 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(bodies[0]).not.toContain('BETA-TWO');
   expect(bodies[1]).not.toContain('ALPHA-ONE');
   expect(second).toBe(0);
-  expect(secondIo.out).toMatch(/native: queued \(receiver busy\) \(typed, \d+ ms; id [0-9a-f-]+\)\n$/);
+  expect(secondIo.out).toMatch(/native: sent \(unconfirmed\) \(drop, \d+ ms\); queued; native reads it at its next turn \(pull-only\)\n$/);
   release();
   expect(await first).toBe(0);
   const afterRecords = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(afterRecords).toEqual(duringRecords);
   expect(afterRecords.map((name) => recordBody(join(drops, name))).sort()).toEqual([filed('ALPHA-ONE'), filed('BETA-TWO')]);
-  expect(typed.length).toBe(1);
-  // The display line carries the body's first line as its summary by design; the drop it names
-  // is still the whole body, and the overlapping body reaches neither.
-  expect(typed[0]).toBe('Message from owner (owner@acme): ALPHA-ONE Read it with: team drops --read.');
-  expect(typed[0]).not.toContain('BETA-TWO');
+  // No pane messaging: neither send types a line; both bodies wait whole in the bus inbox.
+  expect(typed).toEqual([]);
 });

@@ -267,7 +267,12 @@
     "session": {
       "type": "string",
       "not": {
-        "const": "default"
+        "enum": [
+          "default",
+          "__proto__",
+          "constructor",
+          "prototype"
+        ]
       },
       "$comment": "the session key, or <entity>-<project> when the file names an entity and the project name alone when it does not"
     },

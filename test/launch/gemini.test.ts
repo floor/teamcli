@@ -219,7 +219,7 @@ describe('the plan launches gemini and delivers its rules as the first message',
     expect(plan.find((step) => step.do?.do === 'launch')?.do).toMatchObject({
       do: 'launch',
       seat: 'gemini',
-      command: 'AGENT_UNATTENDED=1 gemini -m gemini-3-pro --approval-mode yolo',
+      command: "AGENT_UNATTENDED=1 gemini -m gemini-3-pro --approval-mode yolo -i 'Read /home/owner/.config/team/demo/rules/gemini.md'",
     });
     expect(plan.find((step) => step.do?.do === 'idle')?.do).toMatchObject({ do: 'idle', cli: 'gemini', seconds: 90 });
     expect(plan.find((step) => step.do?.do === 'deliver')?.do).toMatchObject({
@@ -230,7 +230,7 @@ describe('the plan launches gemini and delivers its rules as the first message',
     });
   });
 
-  test('deliverRules types the rules line into the idle box, verifies the wrapped rows, and confirms working after Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: deliverRules types the rules line into the idle box, verifies the wrapped rows, and confirms working after Enter', async () => {
     const rulesLine =
       'Read /home/owner/.config/team/demo-3f9c2a8e1d7b/rules/lead.md (`5e1d0a9c4b2f`); those are your standing rules for this session. Reply ready and wait for your brief.';
     let typed = false;
@@ -257,7 +257,7 @@ describe('the plan launches gemini and delivers its rules as the first message',
         clock += ms;
       },
     };
-    expect(await deliverRules('gemini', rulesLine, 30, io)).toBe(true);
-    expect(calls).toEqual([rulesLine, 'enter']);
+    const retired = await deliverRules('gemini', rulesLine, 30, io);
+    expect(retired).toBe(false);
   });
 });

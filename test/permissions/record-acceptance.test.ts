@@ -39,7 +39,7 @@ const OTHER_TEAM = 'bbbbbbbbbbbb';
 const AGENT = 'agt_0123456789ab';
 const OTHER_AGENT = 'agt_ffffffffffff';
 const NOW = new Date('2026-10-17T12:00:00.000Z');
-const ROOTS = ['/Users/x/Code/acme'];
+const ROOTS = ['/home/x/Code/acme'];
 const TARGET = { root: ROOTS[0] as string };
 
 type Seat = Extract<CallerRecord, { kind: 'seat' }>;

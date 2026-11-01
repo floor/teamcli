@@ -61,7 +61,7 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "5.5"
-    launch: claude
+    launch: claude --dangerously-load-development-channels server:team-inbox
 `;
 
 const loaded = validateTeamFile(TEAM_TEXT);

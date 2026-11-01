@@ -41,7 +41,7 @@ import {
 import type { Command, Io } from '../io.ts';
 import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
+import { seatRecordsCodexEndpoint, stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -55,6 +55,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
+import { processCommandOf, processStartOf, watchStopRead } from '../watch/pane.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -63,6 +64,11 @@ export type DownSources = {
   sessionRunning(session: string): boolean | null;
   agents(session: string): HerdrAgent[] | null;
   alive(pid: number): boolean;
+  /** The command line of the process at a pid, and the instant it started (epoch ms). The watch
+   *  stop's ownership proof reads both; absent, a pane-less watch pid is unproven and left
+   *  alone. */
+  commandOf?(pid: number): string | null;
+  startOf?(pid: number): number | null;
   /** Herdr's status is not enough: a permission prompt is reported as idle. */
   screen(session: string, pane: string, cli: string, cwd?: string | null): Screen;
   /** The pane's raw text, for reading the input box back before any Enter. */
@@ -91,7 +97,9 @@ export type DownSources = {
   // Present on the shipped command. A dry run never calls it.
   launch?: DownLaunch;
   /** Stops the managed Codex endpoint a seat's launch recorded, before the record that names it
-   *  is dropped. Absent on a world with no endpoint seam: nothing is stopped or said. */
+   *  is dropped. A read that did not stop it — whatever reason it names, or none — keeps the
+   *  record and holds the run. Absent on a world with no endpoint seam: nothing is stopped or
+   *  said. */
   codexEndpoint?: {
     stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   };
@@ -165,6 +173,8 @@ export const realSources: DownSources = {
       return false;
     }
   },
+  commandOf: processCommandOf,
+  startOf: processStartOf,
   screen(session, pane, cli, cwd) {
     return readScreen(cli, paneRead(pane, 200, aim(session)) ?? undefined, {
       cwd: cwd ?? undefined,
@@ -1205,21 +1215,38 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     });
   }
 
-  const watch = state?.watch;
-  // Only a pid can be killed; a record whose pane's first pass has not written one yet is left
-  // as it is, as a watch whose process is not alive is.
-  const watchAlive = Boolean(watch && watch.pid !== undefined && sources.alive(watch.pid));
-  if (watchAlive && refusals.length === 0) notes.push('watch: its pid is only in the state; left running');
+  // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
+  // of this team — is stopped only under the full ownership proof: the live process's command
+  // line proves this install's own CLI entry running this team's `team watch` for this session,
+  // and its start instant is the one the watch recorded. A pid alone is never signalled: after
+  // the watch exited the OS can hand its pid to an unrelated process, and a record an older build
+  // wrote names no start instant to check. An unproven pid is left alone, named, and its record
+  // is kept. A record carrying a well-formed epoch is the session host's own process, never a
+  // watch to signal: killing it would stop the host. A record with a pane is left alone here —
+  // `up` verifies through that pane — and stopping the session takes it with the session. A
+  // record whose process is dead, or whose pane's first pass has not written a pid yet, has
+  // nothing to stop.
+  const watchStop = watchStopRead(state?.watch, session, {
+    alive: (pid) => sources.alive(pid),
+    commandOf: (pid) => sources.commandOf?.(pid) ?? null,
+    startOf: (pid) => sources.startOf?.(pid) ?? null,
+  });
+  const watchPid = watchStop.kind === 'proven' ? watchStop.pid : null;
+  if (watchStop.kind === 'unproven' && refusals.length === 0) {
+    notes.push(`watch: ${watchStop.why}; it was not signalled and the record is kept`);
+  }
   if (json) for (const line of notes) jsonNotes.push(line);
   else for (const line of notes) io.stdout(`${line}\n`);
   const plan = downPlan({
     session,
     seats,
     extra,
-    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
+    watchPid,
     // The bus `team up` started goes with the team, as the watch does; one the owner runs in a
-    // terminal of their own is not in the state and is left running.
-    busWorkspace: refusals.length === 0 ? null : state?.bus?.workspace ?? null,
+    // terminal of their own is not in the state and is left running. The plan carries this close
+    // whether or not this run may take it: a dry run prints the plan and a refused run returns
+    // before the executor, so neither closes anything.
+    busWorkspace: state?.bus?.workspace ?? null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && clientDown === null && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
@@ -1429,11 +1456,18 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       },
       drop(name) {
         // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
-        // before the record that names it goes. An endpoint whose process cannot be proven is
-        // left alone — its pid is never signalled on trust alone — and the refusal is said.
-        const endpoint = sources.codexEndpoint?.stop({ dir, session, seat: name });
-        if (endpoint !== undefined && !endpoint.stopped && endpoint.why !== undefined) {
-          io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+        // before the record that names it goes. A seat that records none for the binding it holds
+        // now has no managed endpoint, and is not mentioned. A stop that cannot prove its process
+        // — one that names a reason, or one that names none — signals nothing, and the seat keeps
+        // its whole record, endpoint claim and presence binding included, so a later cleanup can
+        // still account for the process.
+        if (sources.codexEndpoint !== undefined && seatRecordsCodexEndpoint({ dir, session, seat: name })) {
+          const endpoint = sources.codexEndpoint.stop({ dir, session, seat: name });
+          if (!endpoint.stopped) {
+            const why = endpoint.why ?? 'the endpoint stop could not be proven';
+            io.stderr(`team down: ${name}: ${why}; its launch record was kept\n`);
+            return false;
+          }
         }
         let pane: string | undefined;
         let temporaryDropped = false;
@@ -1446,6 +1480,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
               ...(prior.last_active ? { last_active: prior.last_active } : {}),
+              // The conversation goes with the seat's handle: the next `up` resumes it when the
+              // registry's record still names the same session.
+              ...(prior.agent_session ? { agent_session: prior.agent_session } : {}),
             };
           }
           delete current.seats[name];

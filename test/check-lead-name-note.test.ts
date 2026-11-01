@@ -17,7 +17,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -142,7 +142,7 @@ describe('a legacy seat named lead', () => {
   test('a file whose named seat holds leads loads and draws no note: the address and the name reach it', () => {
     expect(validateTeamFile(LEGACY).ok).toBe(true);
     const { code, out } = check(place(LEGACY), LEGACY);
-    expect(out).not.toContain('note:');
+    expect(notesOtherThanSocket(out)).toEqual([]);
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });

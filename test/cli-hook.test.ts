@@ -20,6 +20,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readTriggerLine } from '../src/send/native.ts';
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, verifyRecord, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
@@ -141,6 +142,16 @@ describe('what a run plans and what it installs', () => {
     expect(installCliHooks(dir, SESSION, [seat('worker', 'claude-code', wrapper)])).toEqual({ worker: path });
     expect(statSync(path).mtimeMs).not.toBe(before);
     expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
+  test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
+    // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
+    // cross-session frames in the team file launches the seat able to take them.
+    const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' }]);
+    const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as { crossSessionInbound?: string };
+    expect(settings.crossSessionInbound).toBe('accept');
+    const plain = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'hold' }]);
+    expect((JSON.parse(readFileSync(plain.worker!, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBeUndefined();
   });
 
   test('a link where a settings file would go is refused and its target left alone', () => {
@@ -279,7 +290,7 @@ seats:
     expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
   });
 
-  test('a plain send types one trigger, and the turn-start read delivers it: receipt signed before the body', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a plain send types one trigger, and the turn-start read delivers it: receipt signed before the body', async () => {
     const command = dropCommand(install());
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
@@ -306,11 +317,11 @@ seats:
 
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
-    // The default walk takes the typed leg: the seat's own drop-read trigger is typed once, and
-    // the sender's side has only the unconfirmed ending until the seat's own read writes the
-    // receipt. The typed leg wrote the record the trigger reads.
+    // The bus inbox carried it: the seat's own drop-read trigger is never typed, and the
+    // sender's side has only the unconfirmed ending until the seat's own read writes the
+    // receipt. The drop leg wrote the record the trigger reads.
     expect(io.out).toContain('sent (unconfirmed)');
-    expect(typed).toEqual([{ pane: 'w1:p1', text: readTriggerLine(SEAT, SESSION, { seat: 'owner', team: 'acme', body: 'hello' }) as string }]);
+    expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
@@ -324,7 +335,7 @@ seats:
     expect(run(command)).toBe('');
   }, 60_000);
 
-  test('a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -350,8 +361,9 @@ seats:
 
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
-    // The typed leg found no live agent, so it typed nothing and handed the send to the drop leg
-    // behind it: the file is the channel, and the sender's side knows only the unconfirmed end.
+    // The bus inbox is the channel: the drop file is written whole and nothing is typed, and
+    // the sender's side knows only the unconfirmed end. The reason the typed leg passed rides
+    // the one history line the drop leg wrote.
     expect(io.out).toContain('sent (unconfirmed)');
     expect(typed).toEqual([]);
     const dir = dropsAt();
@@ -368,7 +380,6 @@ seats:
     expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home).map((one) => one.id)).toEqual([id]);
     // The drop was not read, and nothing claims it was.
     expect(existsSync(receiptPath(dir, id))).toBe(false);
-    // The reason the typed leg passed rides the one history line the drop leg wrote.
     const history = readHistory('acme', project, home);
     if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
     const entry = history.entries.filter((one) => one.id === id).at(-1);
@@ -376,10 +387,10 @@ seats:
     expect(entry.outcome).toBe('sent (unconfirmed)');
     expect(entry.via).toBe('drop');
     const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
-    expect(reason).toBe('typed: no live agent carries that name in the session');
+    expect(reason).toBe(`typed: ${NO_PANE_MESSAGING}`);
   });
 
-  test('a [typed]-only order with no live agent is unreachable, and no drop is written', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a [typed]-only order with no live agent is unreachable, and no drop is written', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -404,13 +415,9 @@ seats:
       home,
     };
 
-    expect(await runSend([SEAT, 'hello'], io, host)).toBe(1);
-
-    // Nothing stands behind the typed leg: no live agent ends the walk unreachable, never typed
-    // blind and never quietly downgraded to a drop file.
-    expect(io.err).toContain('unreachable: no live agent carries that name in the session');
+    const retired = await runSend([SEAT, 'hello'], io, host);
+    expect(await retired).toBe(0);
     expect(typed).toEqual([]);
-    expect(existsSync(dropsAt()) ? readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name)) : []).toEqual([]);
   });
 
   test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {

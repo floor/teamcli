@@ -11,14 +11,14 @@ import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal 
 import { readScreen } from '../../src/watch/screen.ts';
 
 const fixture = (path: string) => readFileSync(new URL(`../fixtures/${path}`, import.meta.url), 'utf8');
-const RULES = '/Users/jvial/.config/team/teamcli-5e46a02374b3/rules';
+const RULES = '/home/example/.config/team/teamcli-5e46a02374b3/rules';
 const lineFor = (seat: string, hash: string) =>
   `Read ${RULES}/${seat}.md (sha256 ${hash}): your standing rules for this session; reply ready and wait for your brief.`;
 
 const SCREENS = [
   { cli: 'codex', file: 'codex/0.161.0/rules-unsent-orchestrator.txt', line: lineFor('orchestrator', '92ae1ae483d5') },
   { cli: 'codex', file: 'codex/0.161.0/rules-unsent-builder-3.txt', line: lineFor('builder-3', '8cf214db695d') },
-  { cli: 'cursor', file: 'cursor/2026.10.22/rules-unsent-reviewer-cursor.txt', line: lineFor('reviewer-cursor', 'b18ac61a29b2') },
+  { cli: 'cursor', file: 'cursor/2026.10.22/rules-unsent-reviewer-agent.txt', line: lineFor('reviewer-agent', 'b18ac61a29b2') },
 ] as const;
 
 /** A seat whose box already holds the captured line. `busyFor` ms of herdr `working` follow the
@@ -59,11 +59,10 @@ describe('rules read-back on the real Codex 0.161 and Cursor screens', () => {
       expect(boxHoldsText(cli, line, screen)).toBe(true);
     });
 
-    test(`${file}: a later run finds its own unsent line and sends it without typing again`, async () => {
+    test(`no pane messaging, rules are never typed; was: ${file}: a later run finds its own unsent line and sends it without typing again`, async () => {
       const s = seat(cli, fixture(file));
-      expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-      expect(s.calls).toEqual(['Enter']);
-      expect(s.refusals).toEqual([]);
+      const retired = await deliverRules(cli, line, 30, s.io);
+      expect(await retired).toBe(false);
     });
   }
 });
@@ -71,41 +70,36 @@ describe('rules read-back on the real Codex 0.161 and Cursor screens', () => {
 describe('a seat that turns busy under the typed line', () => {
   const { cli, file, line } = SCREENS[0];
 
-  test('is waited out, then gets its Enter: no mismatch is declared', async () => {
+  test('no pane messaging, rules are never typed; was: is waited out, then gets its Enter: no mismatch is declared', async () => {
     const s = seat(cli, fixture(file));
     // The seat is free at the first look and busy right after (a queued drop starts a turn).
     let looks = 0;
     const status = s.io.status;
     s.io.status = () => { looks += 1; if (looks === 2) s.busy(4000); return status(); };
-    expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-    expect(s.calls).toEqual(['Enter']);
-    expect(s.refusals).toEqual([]);
+    const retired = await deliverRules(cli, line, 30, s.io);
+    expect(await retired).toBe(false);
   });
 
-  test('still busy at the deadline: reported busy, the line left in its box, no clearing key', async () => {
+  test('no pane messaging, rules are never typed; was: still busy at the deadline: reported busy, the line left in its box, no clearing key', async () => {
     const s = seat(cli, fixture(file));
     let looks = 0;
     const status = s.io.status;
     s.io.status = () => { looks += 1; if (looks === 2) s.busy(10 * 60_000); return status(); };
-    expect(await deliverRules(cli, line, 5, s.io)).toBe(false);
-    expect(s.calls.filter((call) => call === 'Enter' || call.startsWith('key:'))).toEqual([]);
-    const why = s.refusals.at(-1)!;
-    expect(why).toMatchObject({ stop: 'working', typed: true, sent: false });
-    expect(refusalReport(why)).toContain('busy with a turn');
-    expect(refusalReport(why)).not.toContain("read-back didn't match");
+    const retired = await deliverRules(cli, line, 5, s.io);
+    expect(await retired).toBe(false);
   });
 });
 
 describe('a frame still drawing after the line was typed', () => {
   const { cli, file, line } = SCREENS[1];
-  test('a screen the grammar does not read yet is waited out, not called a mismatch', async () => {
+  test('no pane messaging, rules are never typed; was: a screen the grammar does not read yet is waited out, not called a mismatch', async () => {
     const s = seat(cli, fixture(file));
     const box = s.io.screen;
     let looks = 0;
     // The first two looks after the start read a frame the grammar does not know (Codex's MCP
     // start-up row on a narrow pane); then the box is drawn.
     s.io.screen = () => { looks += 1; return looks >= 3 && looks <= 5 ? 'Starting MCP servers (0/1): team_inbox' : box(); };
-    expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-    expect(s.refusals).toEqual([]);
+    const retired = await deliverRules(cli, line, 30, s.io);
+    expect(await retired).toBe(false);
   });
 });

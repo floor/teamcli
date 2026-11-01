@@ -58,9 +58,9 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-/** Two seats: a lead whose pane is a person's (never launched), and the implementer whose policy
- *  these scenes read. */
-function teamText(): string {
+/** Two seats: a lead whose pane is a person's (never launched), and the worker whose policy these
+ *  scenes read — an implementer unless a scene reads a reviewer's warning. */
+function teamText(workerRole = 'implementer'): string {
   return `format: 1
 project: acme
 coordinator: ${LEAD}
@@ -81,7 +81,7 @@ seats:
     version: "5.2"
     launch: claude --model claude-sonnet-5-2
     human: true
-  - role: implementer
+  - role: ${workerRole}
     name: ${WORKER}
     label: ${WORKER}
     cli: claude-code
@@ -94,7 +94,11 @@ seats:
 }
 
 function setup(): void {
-  const text = teamText();
+  writeTeam(teamText());
+}
+
+/** The file and the approval the owner's `team approve` leaves for exactly this text. */
+function writeTeam(text: string): void {
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -532,4 +536,149 @@ test('a live conversation the records do not bind is not taken for the seat', as
   const sessions = readStoreSessions(sessionsPath(team, root, home), home);
   if (!sessions.ok) throw new Error(sessions.reason);
   expect(sessions.sessions.filter((one) => one.seat === WORKER)).toEqual([]);
+});
+
+test('a reviewer seat whose CLI cannot be woken while it is idle is warned about, and the plan still prints', async () => {
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: jules
+    vendor: google
+    model: Gemini Pro
+    version: "4.0"
+    launch: jules
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    '! checker is a reviewer seat and jules cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
+  // The warning does not stand in for the plan: the kept seat still prints its line.
+  expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
+});
+
+test('a pull-on-turn reviewer is warned about, not only a CLI whose profile has no route', async () => {
+  // grok's profile declares pull-on-turn: its MCP inbox serves it at its turns, but no adapter
+  // wakes it while it is idle. Its declared class is not `none`, so the declared-word warning
+  // never saw it.
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: grok
+    vendor: xai
+    model: Grok 4
+    version: "4"
+    launch: grok
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    '! checker is a reviewer seat and grok cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
+  expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
+});
+
+test('a Claude reviewer whose launch has no push adapter is warned about', async () => {
+  // The profile declares push, but this launch line carries no development channel and the seat
+  // has no record yet: the effective class is pull-on-turn, and a time-bound record would wait.
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.2"
+    launch: claude --model claude-sonnet-5-2
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    '! checker is a reviewer seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
+});
+
+test('a Claude reviewer launched with the development channel is not warned about', async () => {
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.2"
+    launch: claude --model claude-sonnet-5-2 --dangerously-load-development-channels server:team-inbox
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).not.toContain('checker is a reviewer seat');
+});
+
+test('a Codex reviewer with no managed endpoint is warned about', async () => {
+  // The profile declares between-turns, but that class needs the runtime's own queue: without a
+  // managed endpoint planned, the launch leaves a pull-on-turn seat.
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: codex
+    vendor: openai
+    model: GPT-5
+    version: "5"
+    launch: codex
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    '! checker is a reviewer seat and codex cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
+});
+
+test('a reviewer kept from a launch with no push adapter is warned about from its record', async () => {
+  // The seat has a launch record and is kept: its class is read from what that launch installed,
+  // not from the CLI's declared class alone.
+  writeTeam(teamText('reviewer'));
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    `! ${WORKER} is a reviewer seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it\n`,
+  );
+  expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
+});
+
+test('a real run says the same warning on its stderr, and still starts the team', async () => {
+  // A stopped reviewer plans no launch, so nothing is started for it; the class is read from its
+  // declared line, and the warning still reaches the real run's stderr.
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    stopped: true
+    cli: jules
+    vendor: google
+    model: Gemini Pro
+    version: "4.0"
+    launch: jules
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(io.err).toContain(
+    'team up: checker is a reviewer seat and jules cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
 });

@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 // Expiring unconfirmed native handoffs past the 10-minute confirmation window, and walking the
 // remaining legs in the recipient seat's `delivery_order`.
 //
@@ -139,7 +140,9 @@ async function expireOne(
   const taken = takePending(scene.team.project, scene.root, home, record.id);
   if (!taken.ok) return;
 
-  const rawLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed', 'drop'];
+  const declaredLegs: readonly PendingNativeFallbackLeg[] = record.fallback ?? ['mcp-inbox', 'typed', 'drop'];
+  // The bus inbox closes every expiry walk (src/send/no-pane-messaging.ts).
+  const rawLegs: readonly PendingNativeFallbackLeg[] = declaredLegs.includes('drop') ? declaredLegs : [...declaredLegs, 'drop'];
   const human = isHumanSeat(scene, home, record);
   // A seat the file marks `human` is never typed into and is never handed an inbox message: the
   // expiry walks the drop leg alone, and `failed` records each kept-out leg with the human reason.
@@ -273,6 +276,12 @@ async function expireOne(
     if (leg === 'typed') {
       if (human) {
         failures.push("typed: the pane is a human's, and nothing is typed into it");
+        continue;
+      }
+      // No pane messaging (src/send/no-pane-messaging.ts): the expiry types nothing; the walk goes
+      // on to the bus inbox.
+      if (NO_PANE_MESSAGING.length > 0) {
+        failures.push(`typed: ${NO_PANE_MESSAGING}`);
         continue;
       }
       if (noNudge) {

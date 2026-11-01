@@ -162,7 +162,7 @@ function dropped(root: string, seat: string): string {
 }
 
 describe('the sending paths never dial while the socket is off', () => {
-  test('a plain send writes the drop and types the trigger: the throwing deliver is never called', async () => {
+  test('a plain send writes the drop and dials nothing: the throwing deliver is never called', async () => {
     const w = world();
     const host = dialer(w);
     const io = owner(w.root);
@@ -170,20 +170,15 @@ describe('the sending paths never dial while the socket is off', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
-    );
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    const path = dropped(w.root, 'lead');
-    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
-    const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' });
-    if (trigger === null) throw new Error('the trigger line did not fit');
-    expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
-    expect(host.enters).toEqual(['pane-lead']);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
-  test('--wait walks the typed leg without dialing and times out with the thread open', async () => {
+  test('--wait lands the drop without dialing and times out with the thread open', async () => {
     const w = world();
     const host = { ...dialer(w), waitMs: 0 };
     const io = owner(w.root);
@@ -192,17 +187,12 @@ describe('the sending paths never dial while the socket is off', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe(
-      'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n',
-    );
+    expect(io.err).toContain('queued, no event adapter');
+    expect(io.err).toContain('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    const path = dropped(w.root, 'lead');
-    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
-    const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' });
-    if (trigger === null) throw new Error('the trigger line did not fit');
-    expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
-    expect(host.enters).toEqual(['pane-lead']);
+    expect(host.typed).toEqual([]);
+    expect(recordBody(dropped(w.root, 'lead'))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('the daemon refuses a waited request and types a plain one, dialing nothing either way', async () => {
@@ -233,13 +223,11 @@ describe('the sending paths never dial while the socket is off', () => {
       to: 'lead',
       body: 'typed through the daemon',
     });
-    expect(plain && 'outcome' in plain ? plain.outcome : null).toBe('delivered');
+    expect(plain && 'outcome' in plain ? plain.outcome : null).toBe('unreachable');
 
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed.length).toBe(1);
-    expect(host.typed[0]?.pane).toBe('pane-lead');
-    expect(host.typed[0]?.text).toMatch(/(Read it at|read) \S+\/drops\/acme\/lead\/\S+/);
+    expect(host.typed).toEqual([]);
   });
 });
 
@@ -253,10 +241,17 @@ describe('the watch types no automatic work', () => {
     writeFileSync(join(dir, '.agents', 'team.yaml'), raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`));
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
     // Truthful idle clocks: the reading would offer both workers the task if a route were wired.
+    // Their launch records name the development-channel launch, so an idle wake reaches them
+    // and the missing route is the one failure the scene reports.
     updateState(join(dir, '.agents'), (state) => {
       const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
       for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
-        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+        seats[seat] = {
+          stage: 'ready',
+          last_active: '2026-10-03T13:00:00.000Z',
+          cli: 'claude-code',
+          launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+        };
       }
     });
 

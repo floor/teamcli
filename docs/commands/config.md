@@ -20,14 +20,26 @@ the editor exits 0 and the edited text validates.
 Every write is validated by the team-file validator (the schema at `schema/team.schema.json` and
 the rules behind it) before it is stored, and refused whole when it does not validate: nothing is
 written. An `edit` that does not validate is kept in its temporary file, and the refusal names it.
-`set` and `unset` rewrite the record's text, so its comments are not kept; `edit` edits the text
-itself and keeps them. A record the registry holds is written there (`edited_by: config <verb>`);
+`set` and `unset` rewrite only the lines of the key they change, so the record's comments — above
+the key, beside it and below it — are kept byte for byte; a comment beside or inside a value the
+change removes stays as a comment line where it was. A key a line-by-line change cannot reach
+makes the command rewrite the record whole, which does not keep its comments; the command says so
+on stderr (`comments_kept: false` in `--json`). `edit` edits the text and keeps the comments it
+leaves.
+A record the registry holds is written there (`edited_by: config <verb>`);
 on the legacy `file` source the team file is written instead.
 
 Writes are the owner's, from a terminal outside herdr, as editing the file was; `get` is any
 caller's. A change to an owner section leaves the approval stale exactly as a hand edit of the
 file did — the approval is compared by canonical record — and the run names what the approval no
-longer covers: `the approval no longer covers: …; approve the team again with the owner seat`.
+longer covers, then says that this version cannot refresh the stored snapshot:
+`the approval no longer covers: …; the change was applied, and the stored team approval still
+describes an earlier record; this version has no command to refresh that snapshot`. The list
+names a seat the approval still holds and the record no longer does (`seat X is missing since the
+last approval`), and a default seat ceiling that moved only because the roster did is named as
+its move (`the default seat ceiling follows the roster (N seats)`), never as a bare `limits`
+change; an explicit `limits.seats`, or a moved `limits.temporary` or `limits.vendors`, keeps the
+`limits` line.
 
 | Outcome | Exit |
 | --- | --- |

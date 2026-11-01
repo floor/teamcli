@@ -23,7 +23,11 @@ function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortValue);
   if (typeof value === 'object') {
     const source = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
+    // No prototype: a payload key named `__proto__` is an ordinary own key here, written as
+    // itself and serialized by JSON.stringify. On a plain object the assignment would replace
+    // the map's prototype instead, and two payloads that differ only in that key would encode to
+    // the same bytes and share one identity.
+    const sorted: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(source).sort()) {
       const item = source[key];
       if (item === undefined) continue;

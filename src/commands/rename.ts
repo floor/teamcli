@@ -40,7 +40,7 @@ import { registerRename, type RegistryTeam } from '../registry/sync.ts';
 import { formatSeatNumber, seatNumberOf } from '../seat-names.ts';
 import { renameSeatHistory } from '../send/history.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
-import { emptySession, readState, updateState, withLock, writeAtomic } from '../state.ts';
+import { emptySession, readState, sessionMap, updateState, withLock, writeAtomic } from '../state.ts';
 import {
   MESSAGE_DOMAIN,
   messageKeyState,
@@ -266,7 +266,9 @@ function moveSeatFiles(
 function renameSeatInState(dir: string, renames: ReadonlyArray<{ from: string; to: string }>): boolean {
   let stateChanged = false;
   updateState(dir, (current) => {
-    const nextSessions = { ...current.sessions };
+    // A copy with the state's own shape (`sessionMap`): a plain spread would carry a prototype,
+    // and this callback hands the map back to the state at its end.
+    const nextSessions = sessionMap(Object.entries(current.sessions));
     for (const [sessionName, sess] of Object.entries(nextSessions)) {
       let s = sess ?? emptySession();
       let sessionTouched = false;

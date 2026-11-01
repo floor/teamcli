@@ -255,7 +255,7 @@ if [ "$1" = pane ] && [ "$2" = process-info ]; then
   exit 0
 fi
 if [ "$1" = session ] && [ "$2" = list ]; then
-  printf '%s\\n' '{"default":"default","sessions":[{"attached_clients":0,"created_at":1776221303,"id":"s1","name":"default","pid":51289,"socket":"/Users/shared/herdr-default.sock","status":"running","version":"0.7.1","workspaces":1}]}'
+  printf '%s\\n' '{"default":"default","sessions":[{"attached_clients":0,"created_at":1776221303,"id":"s1","name":"default","pid":51289,"socket":"/home/shared/herdr-default.sock","status":"running","version":"0.7.1","workspaces":1}]}'
   exit 0
 fi
 exit 1

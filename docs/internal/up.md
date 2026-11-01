@@ -171,6 +171,18 @@ it is (run this again once herdr reports the seat idle or done)` for a delegate.
 that screen, or a screen this version does not classify, is left ready as well, with today's line. A seat the file names as orchestrator or
 operator is never cycled this way; it keeps the whole-team line above.
 
+After `team down`, the state's half of a resume is what `down` retained: each stopped seat's
+handle, last activity and the conversation it ran under `retained_seats`, read where the seat's own
+record would be. A resume is still offered only when the registry's record names the same team,
+seat, CLI and conversation; the two records must agree before a launch line carries `--resume` or
+its measured equivalent. A conversation a resume names but the CLI never wrote on disk is not
+resumed: Claude Code's record is checked before the launch against its own conversation file, and a
+recorded id that file does not hold runs fresh, with `its recorded conversation <id> is not on
+disk; launched a fresh one` under the record. A resume Claude Code refuses at runtime (`No
+conversation found with session ID`) is repaired the same way once the pane is back at its shell or
+holds no process of the seat's profile: that pane is launched once more without the resume id, with
+`its recorded conversation was not found by the CLI; launched a fresh one`.
+
 A command run in a folder that is not a git repository reads `.agents/team.yaml` in that folder,
 and nowhere above it. A link at `.agents` or at `team.yaml` is not followed. When `--file` names a
 file a flagless watch in the project folder would not read, `up` still starts the watch, and the
@@ -285,26 +297,30 @@ brief, and `add`, `restart`, `reload`, `register` and `rename` deliver through t
 for the seat each acts on — `reload` on its matching path included, so the repair `team check`
 names is a real one.
 
-A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
-`up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
-mode `0600`, beside the approval store, never inside a worktree, the lobby or the project — and
-types one line into the pane at an empty idle prompt:
+A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file
+and its launch line: `up` writes the approved rules text to `<project state folder>/rules/<seat>.md`
+— owner-only, mode `0600`, beside the approval store, never inside a worktree, the lobby or the
+project — before the command runs, and the line that points at the file goes last on the launch
+line as the CLI's initial prompt, so a launch carries it and nothing is typed into the pane:
 
     Read /home/owner/.config/team/demo-3f9c2a8e1d7b/rules/implementer.md (sha256 5e1d0a9c4b2f): your standing rules for this session; reply ready and wait for your brief.
 
+A seat this run does not launch with that line gets its rules file written and is left out; the
+report says which case it is — `rules not typed: its rules ride only a launch[; its rules file is
+written]: run team restart <seat> to carry them` for a profile that has an initial-prompt form, or
+`rules not typed: its CLI takes no initial prompt at launch, so no launch carries them[; its rules
+file is written]` for one that has none; the bracketed clause appears only when the write
+succeeded.
+
 The state folder is resolved from the **approved copy's** project name, through the one resolver
-the writer, the line, the hash check before Enter, `status`, `doctor` and `remove` all use: a
-project rename is not approval drift, and the line a seat is told to obey must name the file the
-checks look at, not one resolved from the live file's new name.
+the writer, the line, `status`, `doctor` and `remove` all use: a project rename is not approval
+drift, and the line a seat is told to obey must name the file the checks look at, not one
+resolved from the live file's new name.
 
 The line carries the file's absolute path and the first 12 hex digits of its SHA-256, so the
-seat — and the read-back — can tell exactly which text is meant. A path that holds whitespace or
-a character outside letters, digits and `. _ / @ + -` is never typed: nothing is quoted or
-escaped, and the report says the path can't be typed safely. The line is read back row by row —
-every visible character in order, a row break allowed to stand for at most one space or nothing —
-and only then is Enter pressed, once. A box that already holds exactly today's line (a run that
-stopped after typing it) is verified and sent, never typed onto again. `up` never clears a box it
-could not verify: a stop leaves the text where it is.
+seat can tell exactly which text is meant. A path that holds whitespace or a character outside
+letters, digits and `. _ / @ + -` is never put on a line: nothing is quoted or escaped, and the
+report says the path can't be typed safely.
 
 Under `--json` the run writes one `team.up` v1 document on stdout, its `schema` tag first:
 `format`, `dry_run`, `status` (`dry-run`, or `ready` on a real run), `action_summary`, `project`,
@@ -545,16 +561,8 @@ record it belongs to, as its meaning says.
 | `<seat>: left out: rules not typed: its rules file did not read back as written; check the project state folder, then run up again` | the write landed but did not read back (no-follow) as the hash the line carries; nothing was typed |
 | `<seat>: left out: rules not typed: its rules file could not be written; check the project state folder, then run up again` | the write failed; nothing was typed |
 | `<seat>: left out: rules not typed: its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -; rename the seat or move the project, then run up again` | the path holds a character the read-back cannot prove; nothing was typed, nothing quoted |
-| `<seat>: left out: rules not typed: the CLI never appeared as its pane's foreground process (the screen read <kind>); check the seat's launch line — the wrapper it starts through, or the command itself — then run up again` | within the profile's own time limit the pane's foreground process was never the CLI — a wrapper's shell still in front of it, or a launch line that exited. A CLI that starts through a wrapper is waited out, its first frame included; nothing is typed into the wrapper's shell |
-| `<seat>: left out: rules not confirmed: the seat is working; run up again when it is idle` | the seat is mid-turn; nothing was typed |
-| `<seat>: left out: rules not typed: <what stopped it>; <what to do>` | nothing was typed: the screen was not an empty idle prompt, or the box already held text that is not the rules line. A box that already holds exactly this CLI's exit text — an earlier `down` typed it and never confirmed it — is its own line: the text is named and the owner is told the one key that empties it (`press Ctrl+U in its pane to clear it, then run up again`), or, on a CLI with no such key, to clear the box in its pane |
-| `<seat>: left out: rules typed, not sent: the read-back didn't match; the line sits in its box, unsent: <what to do>` | the line was typed and its box did not read back as the line, and this run did not clear it: the delivery has no clearing key, the line was already in the box when this run started, the screen was not the unsent composer, the seat was not idle, or the CLI was not the pane's foreground. `<what to do>` names the profile's one key when the CLI has one. When the box drew a row that is not the line's own, the first such row is written under the record on stderr, stripped of control characters and cut to 200 characters |
-| `<seat>: left out: rules typed, not sent: the read-back didn't match; the line team typed was cleared (<key>); run up again` | this run typed the line, the read-back failed, and the profile's one key restored the idle prompt. `<key>` is the one the profile names, spelled as its pane spells it |
-| `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) was not delivered; the line sits in its box, unsent: <what to do>` | the pane did not take the clearing key. The line stays unsent |
-| `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) left the screen reading <kind>; the line sits in its box, unsent: <what to do>` | the key was sent and the screen did not come back to an idle prompt. `<kind>` is the reading after the key, and the line stays unsent |
-| `<seat>: left out: rules typed, not sent: the rules file changed after it was written` | the line read back, but the file — read again without following a link, directly before Enter — no longer held the text whose hash the line names. Enter was not pressed; the line sits in the box, unsent, and the owner checks the project state folder before running `up` again |
-| `<seat>: left out: rules typed, not sent: its box still holds the line after Enter; <what to do>` | Enter was pressed — up to three tries, each after the box read back as the line again — and the box still shows the line: the key did not take, and nothing was sent |
-| `<seat>: left out: the seat did not come back to its idle prompt (<reading>); <what to do>` | the line was submitted and the seat never came back to its idle prompt — a running turn, or a dialog to answer |
+| `<seat>: left out: rules not typed: its rules ride only a launch[; its rules file is written]: run team restart <seat> to carry them` | the seat's launch line did not carry the rules line this run, and nothing is typed into a seat: the file is written (the bracketed clause), and `team restart <seat>` is the launch that carries them |
+| `<seat>: left out: rules not typed: its CLI takes no initial prompt at launch, so no launch carries them[; its rules file is written]` | the profile has no initial-prompt form, so no launch — this one or a restart — can carry the line; the file is written (the bracketed clause) and the seat is left out |
 | `<seat>: left out: its rules were not delivered; left at named` | the pane could not be read at all; nothing was typed |
 | `<seat>: left out: its workspace did not close; left as it is` | its pane no longer held the process `team` launched, and closing that workspace failed, so nothing was launched in its place |
 | `<seat>: left out: its workspace was not created; left at launched` | herdr made no workspace for it |

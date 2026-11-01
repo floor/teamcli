@@ -21,6 +21,50 @@ seats:
 `;
 
 describe('the line-level writer', () => {
+  test('a list inside a seat is part of that seat, so the whole seat is taken out and marked', () => {
+    // A seat whose first key is not `name:` and that carries a list (`delivery_order:` / `- typed`)
+    // was cut after the list's key: its other fields fell to the seat above, and the file no
+    // longer parsed (seen live on a registry team: line 149: unexpected indentation).
+    const text = [
+      'session: acme',
+      'seats:',
+      '  - role: implementer',
+      '    name: alpha',
+      '    delivery_order:',
+      '      - typed',
+      '    cli: claude-code',
+      '  - role: reviewer',
+      '    name: beta',
+      '    delivery_order:',
+      '      - typed',
+      '      - drop',
+      '    cli: codex',
+      '    launch: codex -m gpt',
+      '  - role: reviewer',
+      '    name: gamma',
+      '    cli: claude-code',
+      '',
+    ].join('\n');
+    expect(seatBlocks(text).map((block) => [block.name, block.start, block.end])).toEqual([
+      ['alpha', 2, 7], ['beta', 7, 14], ['gamma', 14, 18],
+    ]);
+    expect(takeOut(text, 'beta')).toBe([
+      'session: acme',
+      'seats:',
+      '  - role: implementer',
+      '    name: alpha',
+      '    delivery_order:',
+      '      - typed',
+      '    cli: claude-code',
+      '  - role: reviewer',
+      '    name: gamma',
+      '    cli: claude-code',
+      '',
+    ].join('\n'));
+    expect(seatIsStopped(markStopped(text, 'beta'), 'beta')).toBe(true);
+    expect(seatIsStopped(markStopped(text, 'beta'), 'alpha')).toBe(false);
+  });
+
   test('a count entry becomes explicit seats, and the comment stays', () => {
     const text = rewriteCount(counted, 'deepseek');
     expect(text).not.toBeNull();

@@ -36,6 +36,7 @@ import {
   inboundPolicyOf, launchWords, readDeclarationText, wrapperInboundOf, type CrossSessionInbound,
 } from '../launch/declaration.ts';
 import { writeAtomic } from '../state.ts';
+import { SOCKET_SEND } from './uds.ts';
 
 export { inboundPolicyOf, launchWords, type CrossSessionInbound };
 
@@ -192,6 +193,24 @@ export function preciseSocketSkipReason(
     return 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)';
   }
   return "the receiving seat's team file does not declare inbound accept";
+}
+
+/**
+ * Why this run would not dial the socket leg, or null when it would. The checks are the walk's
+ * own, in its order, so a dry run never promises a socket the walk would refuse — and `team
+ * status` reads this same gate, so its reach column can never promise one either.
+ */
+export function socketIneligibleReason(
+  cli: string,
+  teamWord: CrossSessionInbound | undefined,
+  declaration: InboundDeclaration,
+  heldStanding: string | null,
+): string | null {
+  if (cli !== 'claude-code') return `${cli} sessions have no cross-session socket`;
+  if (!SOCKET_SEND) return 'this build does not carry the cross-session socket';
+  if (!socketEligible(teamWord, declaration)) return socketSkipReason(teamWord, declaration);
+  if (heldStanding !== null) return heldStanding;
+  return null;
 }
 
 /** The mark a held frame leaves: when the box held it, and the declaration in force then. */

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { generalDoor } from './client/general-door.ts';
 import type { Command, Io } from './io.ts';
-import { writeJson } from './output/index.ts';
+import { writeJson, writeJsonError } from './output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from './permissions/must-not-pretend.ts';
 import { description, homepage, license, version } from './version.ts';
 
@@ -76,6 +77,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   settings: () => import('./commands/settings.ts'),
   swap: () => import('./commands/swap.ts'),
   workflow: () => import('./commands/workflow.ts'),
+  agents: () => import('./commands/agents.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one
@@ -99,9 +101,15 @@ Options:
   --about     print what this release is and what 0.5.0 must not pretend
   --help      print this text
 
+Every command but team client general-grant also takes --general <grant.json> --key <client.key>:
+a general grant the owner signed over every entity and covering the command runs it as the owner,
+with no terminal; a grant that lists entities is refused until 0.5.11. up, init and config read it
+themselves, and refuse it beside the owner-seat options and on a form that reads no record (config
+keys, init --approval-modes); every other command is admitted here.
+
 The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
-Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
+Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, --general is given without --key, or it is named where no grant can admit the run (beside --request or --approval, or on config keys or init --approval-modes).
 `;
 
 // The hidden presence hook is written into a seat's settings file at install time, so no person
@@ -146,7 +154,8 @@ export function reportFailure(error: unknown, stderr: (text: string) => void): n
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {
-  const [name, ...rest] = argv;
+  const [name, ...line] = argv;
+  let rest = line;
   if (!name || name === '--help' || name === '-h' || name === 'help') {
     io.stdout(helpText());
     // exit: team.help
@@ -206,6 +215,30 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // The one path for every command's `--help`/`-h`: it prints the command's usage and stops,
   // before any option parsing, file reading, caller check or herdr call in the command itself.
   if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
+  // The general door (src/client/general-door.ts): `--general <grant.json> --key <client.key>` on
+  // any command is verified here, once, for the op the line reaches; a grant that lists entities
+  // is refused until 0.5.11. up, init and config read it themselves, after this door has refused
+  // a scoped grant and a grant named beside their owner-seat options. An admitted run reaches the
+  // command as the owner, with the two options taken off its line.
+  const door = generalDoor(name, rest, io);
+  if (door.kind === 'usage') {
+    if (door.json) writeJsonError(io, 'team.general-usage', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 2; // exit: team.general-usage
+  }
+  if (door.kind === 'refused') {
+    if (door.json) writeJsonError(io, 'team.general-refused', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-refused
+  }
+  if (door.kind === 'target') {
+    if (door.json) writeJsonError(io, 'team.general-target', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-target
+  }
+  if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
+  rest = door.argv;
+  io = door.io;
   return command.default(rest, io);
 }
 

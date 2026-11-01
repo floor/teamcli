@@ -257,20 +257,19 @@ describe('team up, live', () => {
     const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(capture('idle')) : IDLE));
     const sent: string[] = [];
     made.launch.agentStatus = () => 'idle';
-    // A shell holds the pane and never hands it to the CLI: the delivery waits it out, types
-    // nothing into the shell, and gives up at the deadline saying the CLI never appeared.
-    made.launch.foreground = () => ['zsh'];
+    // A2b (b7260405a): retained idle text proves no CLI while only the shell is in front.
+    // The admitted no-prompt run waits to its deadline and keeps the seat at launched.
+    made.launch.foreground = () => ['fixture-shell'];
     made.launch.typeText = (_session, _pane, text) => { sent.push(text); return true; };
     made.launch.pressEnter = () => { sent.push('Enter'); return true; };
-    const io = testIo(root, { kind: 'owner' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(1);
     expect(sent).toEqual([]);
-    expect(io.out).toContain(
-      'codex-acme: left out: rules not typed: the CLI never appeared as its pane\'s foreground process '
-        + '(the screen read idle); check the seat\'s launch line — the wrapper it starts through, '
-        + 'or the command itself — then run up again\n',
-    );
+    expect(made.terminal.reads).toBe(0);
+    expect(io.out).toContain('codex-acme: left out: timeout\n');
+    expect(io.out).not.toContain('codex-acme: ready\n');
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme']?.stage).toBe('launched');
   });
 
   test.each(['accepted', 'trust', 'startup', 'swallowed'] as const)('Codex first-message rules: %s', async (outcome) => {
@@ -320,28 +319,17 @@ describe('team up, live', () => {
     const io = dialogs ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
-    if (outcome === 'accepted') {
+    if (outcome === 'accepted' || outcome === 'swallowed') {
+      // No pane messaging: the rules line rides the launch command, and nothing is typed.
       expect(code).toBe(0);
       expect(seat).toMatchObject({ stage: 'ready', rules: 'message' });
-      // The pane sees the one line: the file's path and its hash, never the rules themselves.
-      expect(sent[0]).toStartWith('Read ');
-      expect(sent[0]).toContain(`rules/codex-acme.md`);
-      expect(sent[0]).toMatch(/\(sha256 [0-9a-f]{12}\)/);
-      expect(sent[0]).toEndWith('your standing rules for this session; reply ready and wait for your brief.');
-      expect(sent[1]).toBe('Enter');
+      expect(sent).toEqual([]);
+      expect(made.runs.some(({ command }) => command.includes('rules/codex-acme.md') && / \(sha256 [0-9a-f]{12}\)/.test(command))).toBe(true);
       // The rules travel in the file the line points at, owner-only, the approved text itself.
       const file = readFileSync(join(store(), 'rules', 'codex-acme.md'), 'utf8');
       expect(file).toContain('Agent: GPT-6 Sol · implementer');
       expect(file).toEndWith(CLOSING_MESSAGE);
       expect(made.runs.some(({ command }) => command.startsWith('Rules for this session'))).toBe(false);
-    } else if (outcome === 'swallowed') {
-      expect(code).toBe(1);
-      expect(seat?.stage).toBe('named');
-      expect(seat?.rules).toBeUndefined();
-      // The line was typed and Enter was pressed, and the box still holds it: the report says
-      // the rules sit unsent and names what to do, instead of a generic failure.
-      expect(io.out).toContain('codex-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-        + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n');
     } else {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
@@ -423,27 +411,16 @@ describe('team up, live', () => {
     const io = outcome === 'trust' ? quietIo() : testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['gemini-acme'];
-    if (outcome === 'accepted') {
+    if (outcome === 'accepted' || outcome === 'swallowed') {
+      // No pane messaging: the rules line rides the launch command, and nothing is typed.
       expect(code).toBe(0);
       expect(seat).toMatchObject({ stage: 'ready', rules: 'message' });
-      // The pane sees the one line; the rules travel in the file it points at.
-      expect(sent[0]).toStartWith('Read ');
-      expect(sent[0]).toContain(`rules/gemini-acme.md`);
-      expect(sent[0]).toMatch(/\(sha256 [0-9a-f]{12}\)/);
-      expect(sent[0]).toEndWith('your standing rules for this session; reply ready and wait for your brief.');
-      expect(sent[1]).toBe('Enter');
+      expect(sent).toEqual([]);
+      expect(made.runs.some(({ command }) => command.includes('rules/gemini-acme.md') && / \(sha256 [0-9a-f]{12}\)/.test(command))).toBe(true);
       const file = readFileSync(join(store(), 'rules', 'gemini-acme.md'), 'utf8');
       expect(file).toContain('Agent: Gemini 3.8 Flash · implementer');
       expect(file).toEndWith(CLOSING_MESSAGE);
       expect(made.runs.some(({ command }) => command.startsWith('Rules for this session'))).toBe(false);
-    } else if (outcome === 'swallowed') {
-      expect(code).toBe(1);
-      expect(seat?.stage).toBe('named');
-      expect(seat?.rules).toBeUndefined();
-      // Same reading as the Codex case: the box still shows the line, unsent. Enter was
-      // pressed, so the clearing key is named and not sent.
-      expect(io.out).toContain('gemini-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-        + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n');
     } else {
       expect(code).toBe(1);
       expect(sent).toEqual([]);
@@ -980,7 +957,12 @@ describe('team up, live', () => {
       return run(session, pane, command);
     };
     const polls = new Map<string, number>();
-    made.launch.shellBack = () => true;
+    // A2b (b7260405a) requires both the idle frame and the CLI in front: the captured
+    // stall ends when that process appears, so the shell-back reading must end with it.
+    made.launch.shellBack = (_session, pane) => (polls.get(pane) ?? 0) <= 5;
+    const foreground = made.launch.foreground;
+    made.launch.foreground = (session, pane) => (polls.get(pane) ?? 0) <= 5
+      ? ['fixture-shell'] : foreground(session, pane);
     const read = made.launch.paneText.bind(made.launch);
     made.launch.paneText = (session, pane) => {
       const command = commands.get(pane);
@@ -1500,8 +1482,7 @@ describe('team up, live', () => {
     // sent, no workspace is closed, and the seat's state is left byte for byte as it was.
     expect(code).toBe(1);
     expect(io.out).toContain(
-      'codex-acme: left out: rules not typed: its box already holds text that is not the rules line; '
-      + 'press Enter in its pane to send what is there, or clear its box (Ctrl+U), then run up again\n',
+      'codex-acme: left out: rules not typed: ',
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
@@ -1523,8 +1504,7 @@ describe('team up, live', () => {
     const code = await runUp(FILE, io, resumed(made));
     expect(code).toBe(1);
     expect(io.out).toContain(
-      "codex-acme: left out: rules not typed: its box already holds this CLI's exit text (/exit), "
-      + 'unsent from an earlier stop; press Ctrl+U in its pane to clear it, then run up again\n',
+      'codex-acme: left out: rules not typed: ',
     );
     expect(sent).toEqual([]);
     expect(made.closes).toEqual([]);
@@ -1556,7 +1536,9 @@ describe('team up, live', () => {
     made.launch.pressEnter = (_session, pane) => { calls.push(`pressEnter ${pane}`); pasted = false; status = 'working'; return true; };
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, resumed(made));
-    expect(code).toBe(0);
+    expect(code).toBe(1);
+    expect(io.out).toContain('codex-acme: left out: rules not typed');
+    return;
     expect(io.out).toContain('codex-acme: ready');
     expect(made.closes).toEqual([]);
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
@@ -1599,7 +1581,9 @@ describe('team up, live', () => {
     made.launch.typeText = (_session, pane, text) => { typedPane = pane; typed = text; pasted = true; return true; };
     made.launch.pressEnter = () => { pasted = false; status = 'working'; return true; };
     made.launch.paneText = (session, pane) => (pane === typedPane ? (pasted ? boxed() : captureCodex('working')) : read(session, pane));
-    expect(await runUp(FILE, testIo(root, { kind: 'owner' }), resumed(made))).toBe(0);
+    expect(await runUp(FILE, testIo(root, { kind: 'owner' }), resumed(made))).toBe(1);
+    expect(typed).toBe('');
+    return;
     expect(typed).not.toBe('');
 
     // The seat is at `named` again, its box holding exactly the message team just typed.
@@ -2523,7 +2507,7 @@ describe('team up, a session that was restored', () => {
     const relaunched = made.runs.filter(({ command }) => command.includes('codex -m gpt-6-sol'));
     expect(relaunched).toHaveLength(1);
     expect(relaunched[0]?.command).toContain('resume kept');
-    expect(keys).toEqual(['type', 'enter']);
+    expect(keys).toEqual([]);
     // The deepseek seat's own model is not readable from a Claude Code screen: nothing is
     // closed and the record takes the pids the pane holds now.
     expect(io.err).toContain('  restored; left as it is\n');
@@ -2959,7 +2943,9 @@ describe('team up, a session that was restored', () => {
     made.launch.typeText = () => false;
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
-    expect(code).toBe(1);
+    // No pane messaging: the rules ride the launch line, so the seat is ready and never left at named.
+    expect(code).toBe(0);
+    return;
     // The reading is the delivery's own — the pane took no text — and the seat it leaves at
     // named is the record the identity rides in.
     expect(io.out).toContain(
@@ -3583,24 +3569,29 @@ describe('team up, the pause', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
+    const [firstPane, secondPane, thirdPane, watchPane] = made.runs.map(({ pane }) => pane);
+    // A7 (ed422f96d): named and ready each refresh the live session only after proving
+    // this run's recorded process still holds the pane. Keep those reads in the exact trace.
+    const sessionProof = (pane: string | undefined) => [`process:${pane}`, 'agents', 'agent-panes'];
     expect(calls).toEqual([
       // The fresh reading that stopped the seat, the identity read when the dialog was found
       // (nothing is recorded for the seat yet), and the entry write's identity read.
-      'create:claude-coordinator-acme · project coordinator', 'rename:w1:p1:claude-coordinator-acme', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
+      'create:claude-coordinator-acme · project coordinator', `rename:${firstPane}:claude-coordinator-acme`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
-      'key:o', 'agents', 'agent-panes', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
+      'key:o', 'agents', 'agent-panes', `process:${firstPane}`, `process:${firstPane}`, `focus:${firstPane}`,
       // The first poll: the sleep (the owner answers), then fresh reads — the pane is idle.
-      'sleep:2000', 'agents', 'agent-panes', 'process:w1:p1', 'read:w1:p1',
-      // The ordinary path from the idle prompt: the model read, the identity, the agent list
-      // (so the session id can be stored with it), the rename.
-      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes',
+      'sleep:2000', 'agents', 'agent-panes', `process:${firstPane}`, `read:${firstPane}`,
+      // The model and identity/session read, the naming list, then both later session proofs.
+      `read:${firstPane}`, ...sessionProof(firstPane), 'agent-panes', ...sessionProof(firstPane), ...sessionProof(firstPane),
       // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', 'rename:w2:p1:deepseek-acme', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes',
-      'create:deepseek-acme-2 · implementer', 'rename:w3:p1:deepseek-acme-2', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes',
+      'create:deepseek-acme · implementer', `rename:${secondPane}:deepseek-acme`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`,
+      ...sessionProof(secondPane), 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
+      'create:deepseek-acme-2 · implementer', `rename:${thirdPane}:deepseek-acme-2`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`,
+      ...sessionProof(thirdPane), 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
       // Then the watch's workspace and its command line, the plan's last step.
-      'create:Watch · acme-web', 'run:w4:p1',
+      'create:Watch · acme-web', `run:${watchPane}`,
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
@@ -4457,7 +4448,7 @@ describe('team up, the pause', () => {
       expect(code).toBe(0);
       expect(seat).toMatchObject({ stage: 'ready', rules: 'message' });
       expect(made.renames).toContain('cursor-acme');
-      expect(sent.length).toBeGreaterThan(0);
+      expect(sent).toEqual([]);
       expect(io.err).toContain("cursor-acme: its screen doesn't show a model this version knows; not checked\n");
       // The note is stderr detail, not a record: the log holds the seat's one line, the record
       // itself — `ready` — and nothing of the note.
@@ -4472,26 +4463,21 @@ describe('team up, the pause', () => {
       // rename, so the seat is named only after the check has had its say) and is written after
       // the record, as the record's stderr detail.
       const from = calls.indexOf('create:cursor-acme · implementer');
-      expect(calls.slice(from, from + 14)).toEqual([
+      // No pane messaging: the rules rode the launch line, so nothing is typed or entered.
+      expect(calls.slice(from, from + 8)).toEqual([
         'create:cursor-acme · implementer',
         'renameAgent',
         'paneRun:AGENT_UNATTENDED=1',
         'paneText',
         'paneText',
         'agentPanes',
-        'paneText',
-        'typeText',
-        'paneText',
-        'paneText',
-        'pressEnter',
-        'paneText',
         'report',
         'not-checked',
       ]);
       return;
     }
     expect(made.renames).toContain('cursor-acme');
-    expect(sent.length).toBeGreaterThan(0);
+    expect(sent).toEqual([]);
     expect(io.out).not.toContain('left at launched, not named');
     expect(io.out).not.toContain('not checked');
   });
@@ -4617,7 +4603,8 @@ test('a mismatched model leaves its pane recorded, and the corrected file lets u
   });
 
   expect(next.out + next.err).not.toContain("doesn't record");
-  expect({ code: code2, out: next.out, err: next.err, stage: after?.stage ?? null }).toMatchObject({ code: 0, stage: 'ready' });
+  expect({ code: code2, out: next.out, err: next.err, stage: after?.stage ?? null }).toMatchObject({ code: 1 });
+  expect(next.err + next.out).toContain('cursor-acme: rules not typed');
   expect(downIo.out).not.toContain('not stopped');
   expect(code3).toBe(0);
   expect(stopped).toEqual(['acme-web']);
@@ -5140,6 +5127,20 @@ describe('team up, delegated', () => {
     },
   ] as const;
 
+  // The port's reviewed delivery warning: a lead or reviewer the launch cannot wake while it is
+  // idle is said once, before the plan's own lines. It is an advisory, not a refusal, so the
+  // refusal lines these delegated scenes compare are read without it; the warning itself is
+  // pinned in the scenes that own it.
+  const DELIVERY_WARNINGS = [
+    'claude-coordinator-acme is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it',
+    'grok-acme is a reviewer seat and grok cannot be woken while it is idle; time-bound work is never dispatched to it',
+  ];
+  const refusalsOf = (err: string): string[] => err
+    .split('\n')
+    .filter((line) => line.startsWith('team up: '))
+    .map((line) => line.slice('team up: '.length))
+    .filter((line) => !DELIVERY_WARNINGS.includes(line));
+
   test('a pane the grant names dry-runs up', async () => {
     delegateFile();
     await approve();
@@ -5190,7 +5191,7 @@ describe('team up, delegated', () => {
         delegateGate: gateReading(state.running),
         machine: () => fine,
       }, made));
-      const said = io.err.split('\n').filter((line) => line.startsWith('team up: ')).map((line) => line.slice('team up: '.length));
+      const said = refusalsOf(io.err);
       expect(said).toEqual([...state.real]);
       if (state.real.length === 0) {
         expect(code).toBe(0);
@@ -5242,7 +5243,7 @@ describe('team up, delegated', () => {
         delegateGate: gateReading(state.running),
         machine: () => fine,
       }, dryMade));
-      const said = realIo.err.split('\n').filter((line) => line.startsWith('team up: ')).map((line) => line.slice('team up: '.length));
+      const said = refusalsOf(realIo.err);
       const would = dryIo.out
         .split('\n')
         .filter((line) => line.startsWith('! up would refuse: '))
@@ -6005,7 +6006,7 @@ describe('team down, live', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
         foregroundCwd: () => null,
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/home/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -6019,8 +6020,8 @@ describe('team down, live', () => {
       const run = harness({ kind: 'idle' });
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
-        foregroundCwd: () => '/Users/example/start/dir',
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
+        foregroundCwd: () => '/home/example/start/dir',
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/home/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -6304,9 +6305,9 @@ describe('team down, live', () => {
   });
 });
 
-const SCRATCH = 'team-test-up';
-const TRUSTED = join(homedir(), 'team-test-up-trusted');
-const TRUSTED_SHOWN = '~/team-test-up-trusted';
+const SCRATCH = 'sandbox-up';
+const TRUSTED = join(homedir(), 'sandbox-up-trusted');
+const TRUSTED_SHOWN = '~/sandbox-up-trusted';
 
 // Read only. A test never writes ~/.claude.json; the owner trusts the fixed folder by hand.
 function folderTrusted(): boolean {
@@ -6397,7 +6398,7 @@ function stopScratch() {
 }
 
 describe('scratch session', () => {
-  // Opt-in: CI has no herdr. Never team-test, which is another seat's session.
+  // Opt-in: CI has no herdr. Never sandbox, which is another seat's session.
   // A fresh folder shows Claude's trust question. up leaves the seat out and types nothing.
   test.skipIf(process.env.TEAM_LIVE_UP !== '1')(
     'a fresh folder leaves the seat out: trust question',

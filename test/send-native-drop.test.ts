@@ -65,7 +65,7 @@ test('the final drop name appears only by rename of a whole temporary file', () 
   expect(statSync(directory).mode & 0o777).toBe(0o700);
 });
 
-test('the pane is given the drop path only once that file holds the whole body', async () => {
+test('no pane messaging: the pane is never given the drop path, and the drop holds the whole body', async () => {
   const made = use(world());
   const body = `S${'n'.repeat(300)}E`;
   const { host, pane } = nativeHost(made, ['idle', 'working']);
@@ -89,6 +89,9 @@ test('the pane is given the drop path only once that file holds the whole body',
   const code = await runSend(['native', body], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(seen).toBe(true);
+  expect(seen).toBe(false);
+  const names = readdirSync(dropDir(made.dir)).filter((name) => !name.includes('.'));
+  expect(names.length).toBe(1);
+  expect(recordBody(join(dropDir(made.dir), names[0] as string))).toBe(filed(body));
   expect(host.frames).toEqual([]);
 });

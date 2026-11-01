@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The send fallback acceptance, against the public `runSend`/`SendHost` seam.
 //
 // FIXED invariants (the reviewed decision, 2026-10-20) this file pins: the message is signed and staged
@@ -39,8 +40,8 @@ import {
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { testIo } from './helpers.ts';
-import { dropDir, fake, NOW, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { recordBody, testIo } from './helpers.ts';
+import { dropDir, fake, filed, NOW, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 const RULE = '─'.repeat(30);
 
@@ -126,7 +127,7 @@ test('a refused socket frame falls through with the same record and message id',
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
   const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-  expect(pane.typed).toEqual([trigger]);
+  expect(pane.typed).toEqual([]);
 
   // The one history line names the socket refusal and the route that took the send.
   const history = readHistory('acme', made.root, made.home);
@@ -134,8 +135,8 @@ test('a refused socket frame falls through with the same record and message id',
   if (!history.ok) return;
   const entry = history.entries[history.entries.length - 1];
   expect(entry?.id).toBe(id);
-  expect(entry?.via).toBe('typed');
-  expect(entry?.failed).toEqual(['socket: the session closed the connection before it took the frame']);
+  expect(entry?.via).toBe('drop');
+  expect(entry?.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`, 'socket: the session closed the connection before it took the frame']);
 });
 
 test('a replayed delivery is served once by the real gate and takes its task once', async () => {
@@ -194,10 +195,10 @@ test('a replayed delivery is served once by the real gate and takes its task onc
   });
 });
 
-test('a held socket frame falls through to the typed route with the same record and id', async () => {
+test('a held socket frame falls through to the drop with the same record and id, and the marker names both attempts', async () => {
   // The frame reaches the transport and the receiver holds it at its dialog: the write landed but
-  // no seat took it, and the receipt stays `unknown` — a transport fact, never a read. A live
-  // route stands behind the socket, so the walk continues with the same signed record and id.
+  // no seat took it, and the receipt stays `unknown` — a transport fact, never a read. The walk
+  // continues with the same signed record and id, and the drop stores the one copy.
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
@@ -207,8 +208,7 @@ test('a held socket frame falls through to the typed route with the same record 
   let frameLanded = false;
   let dialogShown = false;
   const pane = scripted(['idle', 'working']);
-  // The dialog renders right after the frame lands; every later read is the free box the typed
-  // route types into.
+  // The dialog renders right after the frame lands; every later read is the free box.
   pane.paneText = () => {
     if (frameLanded && !dialogShown) {
       dialogShown = true;
@@ -229,30 +229,31 @@ test('a held socket frame falls through to the typed route with the same record 
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-  // One staged record and one frame, both carrying the one message id the typed route took.
+  // One staged record and one frame, both carrying the one message id the drop took.
   const dir = dropDir(made.dir, 'lead');
   const records = readdirSync(dir).filter((name) => MESSAGE_ID.test(name));
   expect(records).toHaveLength(1);
   const id = records[0] as string;
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
-  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-  expect(pane.typed).toEqual([trigger]);
+  expect(pane.typed).toEqual([]);
+  expect(recordBody(join(dir, id))).toBe(filed('hello'));
 
   const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
   const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'delivered', sender: 'owner' });
+  // Nothing live took the message: the drop stores the durable copy, so the episode is
+  // all-failed and schedules the delayed escalation that names an unread message.
+  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'all-failed', sender: 'owner' });
   expect(marker.recipient).toEqual(recipient);
-  expect(marker.dueAt).toBeUndefined();
+  expect(marker.dueAt).toBeDefined();
   expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
     { route: 'socket', outcome: 'held', receipt: { kind: 'unknown' } },
-    { route: 'typed', outcome: 'delivered', receipt: { kind: 'unknown' } },
+    { route: 'drop', outcome: 'held', receipt: { kind: 'unknown' } },
   ]);
   const heldReason = marker.attempts[0]?.reason ?? '';
   expect(heldReason).toContain('Held message from another session');
 
-  // The durable ledger keeps every attempt in the order the walk made them, beside the bounded
-  // marker summary.
+  // The durable ledger keeps every attempt in the order the walk made them.
   const ledger = join(dirname(historyPath('acme', made.root, made.home)), attemptLedgerFileName(recipient, id));
   const attempts = readFileSync(ledger, 'utf8')
     .trim()
@@ -260,23 +261,26 @@ test('a held socket frame falls through to the typed route with the same record 
     .map((line) => JSON.parse(line) as { route: string; outcome: string });
   expect(attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome }))).toEqual([
     { route: 'socket', outcome: 'held' },
-    { route: 'typed', outcome: 'delivered' },
+    { route: 'drop', outcome: 'held' },
   ]);
 
-  // The feed route that actually took the send is the typed one, and its history line names the
-  // held frame it walked past.
+  // The history names both the held frame and the drop that stored the copy.
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
-  const entry = history.entries[history.entries.length - 1];
-  expect(entry?.id).toBe(id);
-  expect(entry?.via).toBe('typed');
-  expect(entry?.failed).toEqual([`socket: ${heldReason}`]);
+  expect(history.entries.map((entry) => ({ id: entry.id, outcome: entry.outcome, via: entry.via }))).toEqual([
+    { id, outcome: 'held', via: 'socket' },
+    { id, outcome: 'sent (unconfirmed)', via: 'drop' },
+  ]);
+  expect(history.entries[1]?.failed).toEqual([
+    "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
+    `socket: ${heldReason}`,
+  ]);
 });
 
 test('an all-failed walk emits the immediate event and the delayed main escalation once', async () => {
-  // No route takes the send: the socket write refuses, and the typed route's seat is not live.
-  // The last route's failure is exhaustion, so the walk emits the immediate all-failed event and
+  // No live route takes the send: the socket write refuses and the drop only stores the copy.
+  // The last route's outcome is held, so the walk emits the immediate all-failed event and
   // schedules the main escalation; the escalation fires once at its due instant, under focused
   // virtual time, and a second pass writes nothing.
   const made = world(['socket', 'typed']);
@@ -289,7 +293,7 @@ test('an all-failed walk emits the immediate event and the delayed main escalati
   });
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
   const dir = dropDir(made.dir, 'lead');
   const records = readdirSync(dir).filter((name) => MESSAGE_ID.test(name));
@@ -306,11 +310,11 @@ test('an all-failed walk emits the immediate event and the delayed main escalati
   expect(marker.outbox).toBeUndefined();
   expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
     { route: 'socket', outcome: 'unreachable', receipt: { kind: 'unknown' } },
-    { route: 'typed', outcome: 'unreachable', receipt: { kind: 'unknown' } },
+    { route: 'drop', outcome: 'held', receipt: { kind: 'unknown' } },
   ]);
 
   // The immediate event: one `message.held` from the sender to the recipient, on the route whose
-  // failure ended the order.
+  // outcome ended the order.
   const log = readEvents('acme', made.root, made.home);
   expect(log.ok).toBe(true);
   if (!log.ok) return;
@@ -325,7 +329,7 @@ test('an all-failed walk emits the immediate event and the delayed main escalati
     to: 'lead',
     seat: 'lead',
     thread: id,
-    via: 'typed',
+    via: 'drop',
     reason: 'all live routes failed',
   });
 
@@ -335,9 +339,8 @@ test('an all-failed walk emits the immediate event and the delayed main escalati
   const loaded = loadTeamFile(made.root, { home: made.home });
   expect(loaded.ok).toBe(true);
   if (!loaded.ok) return;
-  const caller: Caller = { kind: 'owner' };
   const orchestrator = { seat: 'native', team: 'acme', root: made.root, session: 'acme' };
-  const ctx = { caller, team: loaded.team, root: made.root, home: made.home, now: () => new Date(dueAt), orchestrator };
+  const ctx = { team: loaded.team, root: made.root, home: made.home, now: () => new Date(dueAt), orchestrator };
   const due = escalateDue(ctx, { at: new Date(dueAt) });
   expect(due.escalated).toHaveLength(1);
   const escalation = due.escalated[0];

@@ -277,7 +277,7 @@ reply tool writes the reply record. Nothing is typed into the pane.
   record), while the accepted amendment names the lead and the owner. Both positions are kept
   here: the code defines Today, and the amendment's lead-and-owner requirement stands for
   reconciliation.
-- Owner question 5 is settled (OD-20261018-05, under the owner's delegation, revisable by the
+- Owner question 5 is settled (OD-20261018-05, under the owner's direction, revisable by the
   owner): at once, only a blocker or a decision that needs the owner, a release ready for his go,
   and a security refusal or a forged or invalid record; the rest batched in the lead's summary. The
   same word settles which kinds `privileged-kinds` grows to.

@@ -60,11 +60,21 @@ export type RuntimePushOutcome =
   | { kind: 'unsupported'; reason: string }
   | { kind: 'unreachable'; reason: string; timedOut?: boolean };
 
+/** What a native route needs from the seat's own records before it can take a pointer: the
+ *  conversation the CLI holds (`agent_session`, read the way `recordedSeatSession` reads it), or
+ *  only the record that places the seat. */
+export type RuntimePushBinding = 'conversation' | 'seat';
+
 /** One runtime's channel, for the CLI profiles it names. */
 export type RuntimePushAdapter = {
   /** The CLI profiles the adapter serves, as `src/launch/cli-hook.ts` and the team file spell
    *  them (`claude-code`, `codex`, `gemini`, …). */
   readonly clis: readonly string[];
+  /** What the route needs of the seat's records before it can take a pointer: `conversation`
+   *  when it hands the pointer to a threaded runtime the CLI already holds, so the seat's
+   *  recorded `agent_session` is the binding that lets the route resolve it; `seat` when the
+   *  record that places the seat is the route's whole requirement. */
+  readonly binding: RuntimePushBinding;
   /** Hands one pointer to the runtime; resolves with what the runtime said. It must not carry
    *  the message body and must not type into a pane. */
   push(request: RuntimePushRequest): Promise<RuntimePushOutcome>;
@@ -93,4 +103,16 @@ export function pushPointer(id: string, sender: PushSender): string | null {
  */
 export function pushAdapterFor(cli: string, adapters: readonly RuntimePushAdapter[] = RUNTIME_PUSH_ADAPTERS): RuntimePushAdapter | null {
   return adapters.find((adapter) => adapter.clis.includes(cli)) ?? null;
+}
+
+/**
+ * The binding the native route of a seat's CLI needs: the runtime-push adapter this build ships
+ * for that CLI declares it, so the check a launch reads back is the one the adapter itself
+ * resolves — one declaration per route, not a name list kept beside the call. A CLI with no
+ * adapter has no native route in this build, so the record that places the seat is all it can
+ * require. `adapters` is the shipped registry unless a caller hands its own, as
+ * {@link pushAdapterFor}.
+ */
+export function nativePushBindingFor(cli: string, adapters: readonly RuntimePushAdapter[] = RUNTIME_PUSH_ADAPTERS): RuntimePushBinding {
+  return pushAdapterFor(cli, adapters)?.binding ?? 'seat';
 }

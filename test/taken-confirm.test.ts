@@ -1,9 +1,7 @@
-// A send its seat took without showing it: the later confirmation, and the word when it never
-// came. A box that clears with no status or transcript evidence is sent with the note
-// `trigger taken, no read receipt yet`; the watch's later passes read the transcript and the
-// status for the sign the seat acted, and past the window say "taken but never acted on" once. A
-// taken line is never typed again. A trigger left in the box is the other case: not-submitted,
-// and the watch's retry.
+// After 0.5.9 nothing is typed into a seat to talk to it, so a send leaves no "taken" record for
+// a later pass to confirm: the signed drop file is the delivery, and the confirmation passes
+// (transcript rows, status moves, the age bound, a dead pane) all find nothing and say nothing.
+// The retry record a not-submitted line used to leave is gone with the typing that produced it.
 // Fixtures only: a scripted pane, a temporary home, no live session.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -58,8 +56,8 @@ seats:
     model: Test
     version: "1"
     launch: claude
-# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
-# then the line is typed. The team's word keeps the default's drop step out.
+# The word names the inbox leg and the retired typing leg; after 0.5.9 the typing leg is refused
+# everywhere and the transport that carries these scenes is the bus inbox's own drop.
 delivery_order: [mcp-inbox, typed]
 `;
 }
@@ -174,39 +172,24 @@ function dropDirOf(made: World): string {
   return join(made.dir, 'send-drops', 'acme', 'lead');
 }
 
-/** The trigger note on the sender's line, and the record it leaves beside the drop. */
+/** A send in a scene that used to leave a taken record: the drop is the delivery, no taken
+ *  record is written, and the pane is typed nothing. */
 async function sendTaken(made: World, one: Pane): Promise<string> {
   const io = testIo(made.root, { kind: 'owner' });
   expect(await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW))).toBe(0);
-  expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
-  expect(io.out).toContain('trigger taken, no read receipt yet');
-  const taken = readTaken(dropDirOf(made));
-  expect(taken).toHaveLength(1);
-  return (taken[0] as { id: string }).id;
+  // No pane messaging: nothing is typed, so no taken record is left to confirm later.
+  expect(io.out).toContain('lead: sent (unconfirmed) (drop, ');
+  expect(readTaken(dropDirOf(made))).toEqual([]);
+  expect(one.typed).toEqual([]);
+  return '';
 }
 
 describe('a taken delivery, confirmed later', () => {
-  test('a transcript row naming the drop confirms it, and nothing is said', async () => {
+  test('no pane messaging, no taken record is left; was: a transcript row naming the drop confirms it, and nothing is said', async () => {
     const made = world();
     const one = pane(claudeBox(''));
-    const id = await sendTaken(made, one);
-
-    // The seat acted: a row that names the drop and is not the trigger's echo is the sign.
-    one.screen = ['⏺ Explored 1 file (' + id + ')', claudeBox('')].join('\n');
-    const at = scene(made, one, new Date(NOW.getTime() + 5_000));
-    confirmTakenDrops(at);
-
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(at.said).toEqual([]);
-    expect(one.typed).toHaveLength(1);
-
-    // The delivery's own line is the one history entry: a confirmation files nothing new.
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
-      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
-    ]);
+    const retired = await sendTaken(made, one);
+    expect(await retired).toBe('');
   });
 
   test('a status that moved from the one read before Enter confirms it too', async () => {
@@ -226,121 +209,45 @@ describe('a taken delivery, confirmed later', () => {
 });
 
 describe('a taken delivery its seat never acted on', () => {
-  test('past the grace on a free seat it is said once and filed, and the line is never retyped', async () => {
+  test('no pane messaging, no taken record is left; was: past the grace on a free seat it is said once and filed, and the line is never retyped', async () => {
     const made = world();
     const one = pane(claudeBox(''));
-    const id = await sendTaken(made, one);
-
-    // The seat came back idle with no row naming the drop and no status that moved.
-    one.screen = claudeBox('');
-    one.status = 'idle';
-    const later = new Date(NOW.getTime() + TAKEN_IDLE_GRACE_MS + 1_000);
-    const at = scene(made, one, later);
-    confirmTakenDrops(at);
-
-    expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
-    ]);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.note])).toEqual([
-      [id, 'sent (unconfirmed)', 'trigger taken, no read receipt yet'],
-      [id, 'sent (unconfirmed)', 'taken but never acted on'],
-    ]);
-
-    // The record is gone, and neither the retry nor a later look types the line again.
-    expect(readPending(dropDirOf(made))).toEqual([]);
-    const typed = one.typed.length;
-    const enters = one.enters;
-    await retryHeldDrops(at);
-    confirmTakenDrops(at);
-    expect(one.typed.length).toBe(typed);
-    expect(one.enters).toBe(enters);
-    expect(at.said).toHaveLength(1);
+    const retired = await sendTaken(made, one);
+    expect(await retired).toBe('');
   });
 
-  test('a record the age bound runs out on is reported even while the seat reads busy', async () => {
+  test('no pane messaging, no taken record is left; was: a record the age bound runs out on is reported even while the seat reads busy', async () => {
     const made = world();
     // The seat was already working before the line went in, so no later status can be the sign:
     // only the transcript could confirm it, and the window runs out with none.
     const one = pane(claudeBox(''), 'working');
-    const id = await sendTaken(made, one);
-
-    one.screen = claudeBox('');
-    one.status = 'working';
-    const at = scene(made, one, new Date(NOW.getTime() + 31 * 60_000));
-    confirmTakenDrops(at);
-
-    expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
-    ]);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
+    const retired = await sendTaken(made, one);
+    expect(await retired).toBe('');
   });
 
-  test('inside the window a seat with no live pane keeps its record for a later pass', async () => {
+  test('no pane messaging, no taken record is left; was: inside the window a seat with no live pane keeps its record for a later pass', async () => {
     const made = world();
     const one = pane(claudeBox(''));
-    await sendTaken(made, one);
-
-    const at = scene(made, one, new Date(NOW.getTime() + 5_000));
-    at.live = { running: true, agents: [], workspaces: [], screens: {} };
-    confirmTakenDrops(at);
-
-    expect(at.said).toEqual([]);
-    expect(readTaken(dropDirOf(made))).toHaveLength(1);
+    const retired = await sendTaken(made, one);
+    expect(await retired).toBe('');
   });
 
-  test('a record whose seat has no live pane ages out and is reported, as a retry record is', async () => {
+  test('no pane messaging, no taken record is left; was: a record whose seat has no live pane ages out and is reported, as a retry record is', async () => {
     const made = world();
     const one = pane(claudeBox(''));
-    const id = await sendTaken(made, one);
-
-    // The seat is down or was removed: nothing to read, and the age bound still ends the record.
-    const at = scene(made, one, new Date(NOW.getTime() + 31 * 60_000));
-    at.live = { running: true, agents: [], workspaces: [], screens: {} };
-    confirmTakenDrops(at);
-
-    expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
-    ]);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
+    const retired = await sendTaken(made, one);
+    expect(await retired).toBe('');
   });
 });
 
 describe('a trigger left in the box is the other case', () => {
-  test('it is not-submitted, leaves the retry record and no taken record, and the retry submits it', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: it is not-submitted, leaves the retry record and no taken record, and the retry submits it', async () => {
     const made = world();
     const one = pane(claudeBox(''));
     one.submits = false;
     const io = testIo(made.root, { kind: 'owner' });
 
-    expect(await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW))).toBe(1);
-    expect(io.err).toContain('not-submitted');
-    expect(io.err).toContain('after 3 Enters');
-    expect(io.err).toContain('the box holds');
-    expect(readPending(dropDirOf(made))).toHaveLength(1);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(readdirSync(dropDirOf(made)).filter((name) => name.endsWith('.taken'))).toHaveLength(0);
-
-    // The watch's retry submits the trigger left in the box, and the delivery it earns is the
-    // status's, not a taken one: no marker is written.
-    one.submits = true;
-    const later = new Date(NOW.getTime() + 5_000);
-    const at = scene(made, one, later);
-    await retryHeldDrops(at);
-    expect(readPending(dropDirOf(made))).toEqual([]);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(at.said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([
-      ['not-submitted', undefined],
-      ['sent (unconfirmed)', 'trigger taken, no read receipt yet'],
-    ]);
+    const retired = await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW));
+    expect(await retired).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
 // Independent coverage for the whole-graph workflow checker (src/workflow/check.ts, PR #610).
 // Authored from the reviewed contract — wf0-spec-slices-0-1.md §1 (state, wait, transition and
-// effect rules; the reference rules; the findings families and the exit rule) and the Zeus ruling
+// effect rules; the reference rules; the findings families and the exit rule) and the owner's ruling
 // of 2026-10-21 (U5 bare guard names, U6 a note per provisional operation use, U7 roles, U13 the
 // tag sketch's act-as effect with no capability) — against the merged shared module
 // (src/workflow/{types,registry,schema}.ts at main). The checker's public shape and code names
@@ -18,9 +18,10 @@ import {
   type WorkflowResolvers,
 } from '../../src/workflow/index.ts';
 
-// The roles the team file would supply at the tag, plus the round's own terms. `builder` is a
-// team role here; `operator` is deliberately not, so an unknown name stays unknown.
-const ROLES = provisionalResolvers(['builder']);
+// The roles the team file would supply at the tag, plus the round's own terms. `archivist` is a
+// team role here (a name no base role carries); `operator` is deliberately not, so an unknown
+// name stays unknown.
+const ROLES = provisionalResolvers(['builder', 'archivist']);
 
 function checked(text: string, resolvers: WorkflowResolvers = ROLES): CheckResult {
   const parsed = parseWorkflow(text);
@@ -73,7 +74,7 @@ initial: draft
 states:
   draft: {}
 transitions:
-  - { from: draft, to: draft, on: gate-passed, role: builder }
+  - { from: draft, to: draft, on: gate-passed, role: archivist }
 `;
 
 const ALL_ROLES = `workflow: coverage-check

@@ -1,6 +1,6 @@
 # Quickstart for agents
 
-You are an AI session (Iris, Claude, Gemini or another) and the owner said: "install TeamCLI and
+You are an AI session (the orchestrator, Claude, Gemini or another) and the owner said: "install TeamCLI and
 create a team to solve this problem". This page is what you run, in order, and what you must hand
 back to the owner instead of trying to work around it.
 

@@ -29,6 +29,19 @@ export function launchBinary(launch: string): string | null {
   );
 }
 
+/** The CLI binary a launch line ends up running. A line that runs a wrapper script with a shell
+ *  (`zsh ~/tools/as-floor.sh codex resume …`) passes its remaining words to the command the
+ *  script execs, so the CLI is the first word after the script. A wrapper that names no further
+ *  word is its own program, and the script is returned. */
+export function launchedCliBinary(launch: string): string | null {
+  const words = launch.trim().split(/\s+/).filter((word) => word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+  let at = 0;
+  while (at + 2 < words.length && /^(?:\S*\/)?(?:zsh|bash|sh)$/.test(words[at]!) && /\.(?:z|ba)?sh$/.test(words[at + 1]!)) {
+    at += 2;
+  }
+  return words[at] ?? null;
+}
+
 /** Whether the launch line starts something other than the CLI's own binary, or the file
  *  says the launcher chooses the model. A restored process is then the CLI without that program. */
 export function usesLauncher(seat: Pick<Seat, 'cli' | 'launch' | 'modelFrom'>): boolean {
@@ -147,6 +160,80 @@ function programFinding(
 // `sh: no-such-script.sh: No such file or directory`, `zsh no-such-script.sh` prints
 // `zsh: can't open input file: no-such-script.sh`, each exit 127.
 const SHELLS = new Set(['sh', 'bash', 'zsh']);
+
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** A launch-line word as a shell would run it, when this reader can read it with certainty: a
+ *  plain word, or one fully quoted literal with only the quotes removed. A word the shell would
+ *  substitute, escape or glob stays unread. */
+function commandWord(word: string): string | null {
+  const quote = word[0];
+  if (quote !== '"' && quote !== "'") return /[$`\\*?[\]{}]/.test(word) ? null : word;
+  if (word.length < 2 || word[word.length - 1] !== quote) return null;
+  const inner = word.slice(1, -1);
+  if (inner.includes(quote) || /[$`\\*?[\]{}]/.test(inner)) return null;
+  return inner;
+}
+
+/**
+ * The program a launch line really starts, as last path segment, or null when the line's own
+ * plumbing keeps this reader from saying. The plumbing read off first: leading variable
+ * assignments; an `env` prefix with the assignments and options around the program it runs; a
+ * shell that only reads a script (the script is the program the line starts); and the quotes
+ * around a fully quoted literal. `/usr/local/bin/claude`, `env claude`, `VAR=1 claude` and
+ * `"claude"` are all the CLI itself — never a wrapper, whatever directory a path names — while a
+ * word this reader cannot follow names no program at all.
+ */
+export function launchProgram(launch: string): string | null {
+  const words = launch.trim().split(/\s+/).filter((word) => word !== '');
+  let at = 0;
+  while (at < words.length && ASSIGNMENT.test(words[at]!)) at += 1;
+  if (at < words.length && (words[at]!.split('/').pop() ?? words[at]!) === 'env') {
+    at += 1;
+    for (;;) {
+      const word = words[at];
+      if (word === undefined) return null;
+      if (ASSIGNMENT.test(word)) {
+        at += 1;
+        continue;
+      }
+      if (word === '--') {
+        at += 1;
+        break;
+      }
+      if (/^(?:-u|--unset|-C|--chdir)$/.test(word)) {
+        if (words[at + 1] === undefined) return null;
+        at += 2;
+        continue;
+      }
+      if (/^(?:--unset|--chdir)=/.test(word)) {
+        at += 1;
+        continue;
+      }
+      if (word.startsWith('-')) {
+        // An option this reader does not know — `-S`, which splits a command line of its own —
+        // names no program this reader can follow.
+        if (!/^(?:-i|--ignore-environment|-0|--null|-v|--debug)$/.test(word)) return null;
+        at += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  const word = words[at];
+  if (word === undefined) return null;
+  const program = commandWord(word);
+  if (program === null || program === '') return null;
+  const base = program.split('/').pop() ?? program;
+  if (SHELLS.has(base)) {
+    const scriptWord = words[at + 1];
+    if (scriptWord === undefined || scriptWord.startsWith('-')) return null;
+    const script = commandWord(scriptWord);
+    if (script === null || script === '') return null;
+    return script.split('/').pop() ?? script;
+  }
+  return base;
+}
 
 /** The one relative argument that can be refused. An argument's meaning is not knowable in
  *  general, but a shell's first argument is the script it reads: when that is a relative path —

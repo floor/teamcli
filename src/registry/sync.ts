@@ -35,6 +35,12 @@ export type RegistryTeam = {
    *  names the owner as signer and this pane as actor; a delegate authorizes nothing by itself.
    *  Absent: this write ran under no delegation. */
   delegated?: { actor: string; command: ActingCommand };
+  /** This write is the launch that just put the seat where it stands, and `handle` is the live
+   *  seat state's own id. A `seat_handle` the record already holds and that differs is an
+   *  earlier incarnation's (a launch that predates the state's id left it), and is rewritten to
+   *  the live id so the state and the record agree — the agreement every native route binds by.
+   *  Absent, a stable handle is never rewritten: a state mint alone does not rebind the record. */
+  rebindSeatHandle?: boolean;
 };
 
 /** How a seat's agent ends: `stopped` comes back to the same agent, `retired` never does. */
@@ -150,9 +156,13 @@ export function registerLaunch(
       seatHandle: SEAT_HANDLE.test(handle ?? '') ? handle : null,
     });
     const priorSeat = known && known.reach.seat !== seat.name ? known.reach.seat : null;
-    // The seat's stable handle, kept on the agent for continuity: set when the agent has none, and
-    // never changed after, so a handle the state minted later does not rewrite the record.
-    const seatHandle = SEAT_HANDLE.test(handle ?? '') && !known?.seat_handle ? { seat_handle: handle as string } : {};
+    // The seat's stable handle, kept on the agent for continuity: set when the agent has none,
+    // and never changed after, so a handle the state minted later does not rewrite the record.
+    // The exception is the launch that just ran with `rebindSeatHandle`: its handle is the live
+    // state's own id, so a record holding another incarnation's is the one that is stale, and it
+    // is rewritten here rather than left to refuse every native route for the seat.
+    const live = SEAT_HANDLE.test(handle ?? '') ? (handle as string) : null;
+    const seatHandle = live !== null && (input.rebindSeatHandle === true || !known?.seat_handle) ? { seat_handle: live } : {};
     const reach = {
       team: teamId,
       seat: seat.name,

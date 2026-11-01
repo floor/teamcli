@@ -50,7 +50,10 @@ function accepting(made: World): void {
 }
 
 /** The registry records `up` leaves: the team, and the running seat whose pane it is on. The
- *  plain-seat send address resolves through this roster, so the woken worker is recorded. */
+ *  plain-seat send address resolves through this roster, so the woken worker is recorded; the
+ *  address is the socket the seat exposes, as a launched seat's record names it. The pass reads
+ *  that recorded address as proof the seat can hear a push while it is idle, so a pass with
+ *  queued work still spends its attempt on this seat. */
 function registered(made: World): void {
   const id = teamIdOf(made.root);
   const agent = registerAgent(made.home, {
@@ -60,7 +63,7 @@ function registered(made: World): void {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude',
-    reach: { team: id, seat: 'helper', session: SESSION, pane: PANE, address: null },
+    reach: { team: id, seat: 'helper', session: SESSION, pane: PANE, address: join(made.sockets, '222.sock') },
     mcp: [],
     skills: [],
     lifecycle: 'running',
