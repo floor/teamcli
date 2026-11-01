@@ -254,6 +254,43 @@ test('a generation that is recorded but cannot be read is refused', () => {
   expect(refusedWhy(standingOf(root, home))).toContain('generation cannot be read');
 });
 
+test('a link where the generation is is refused, whether or not it points at one', () => {
+  const { root, home } = repo();
+  approve(root, home);
+  const folder = generationsFolder(home);
+  const [entry] = readdirSync(folder);
+  if (entry === undefined) throw new Error('expected a recorded generation');
+  const path = join(folder, entry);
+  const saved = join(home, 'saved-generation.json');
+  renameSync(path, saved);
+  // A link to a generation that is not there, then to one that is: neither is the generation.
+  symlinkSync(join(home, 'no-such-generation.json'), path);
+  expect(refusedWhy(standingOf(root, home))).toContain('is a link');
+  unlinkSync(path);
+  symlinkSync(saved, path);
+  expect(refusedWhy(standingOf(root, home))).toContain('is a link');
+});
+
+test('a generations folder that is a link is refused', () => {
+  const { root, home } = repo();
+  approve(root, home);
+  const folder = generationsFolder(home);
+  renameSync(folder, `${folder}-saved`);
+  symlinkSync(`${folder}-saved`, folder);
+  expect(refusedWhy(standingOf(root, home))).toContain('is a link');
+});
+
+test('a generations folder that is a file is refused, never read as no generation', () => {
+  const { root, home } = repo();
+  const store = approve(root, home);
+  const folder = generationsFolder(home);
+  renameSync(folder, `${folder}-saved`);
+  writeFileSync(folder, 'a file where the generations folder was\n');
+  // The store goes too: the missing store must not be able to answer for the unreadable path.
+  rmSync(store, { recursive: true, force: true });
+  expect(refusedWhy(standingOf(root, home))).toContain('is not a folder');
+});
+
 test('a record whose signature is refused stays refused when the record is unlinked', () => {
   const { root, home } = repo();
   const store = approve(root, home);
