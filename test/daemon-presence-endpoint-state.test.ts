@@ -21,7 +21,9 @@ function scratch(): string {
   return base;
 }
 
-const urlOf = (binding: string): string => `unix:///private/tmp/launch/${binding}.sock`;
+// The URL is plain state data; the folder it names is this machine's runtime temp folder.
+const TEMP = realpathSync(tmpdir());
+const urlOf = (binding: string): string => `unix://${TEMP}/launch/${binding}.sock`;
 
 function record(binding: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   return { url: urlOf(binding), binding, pid: 4242, started_at: '2026-10-20T05:00:00.000Z', ...over };

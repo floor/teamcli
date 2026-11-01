@@ -123,10 +123,11 @@ test('the approval stays in force across the move: it is signed over the canonic
   const read = readTeamConfig(at.root, { home: at.home, source: 'registry' });
   if (!read.ok) throw new Error(JSON.stringify(read.errors));
   expect(approvalDifferences(read.team, at.root, at.home)).toEqual([]);
-  // An owner-section edit through team config is named as no longer approved.
+  // An owner-section edit through team config leaves the gate's own comparison changed, while the
+  // write itself names only the change.
   const edited = await config(at, ['set', 'seats.lead.model', 'Claude Sonnet']);
   expect(edited.code, edited.err).toBe(0);
-  expect(edited.out).toContain('the approval no longer covers');
+  expect(edited.out).not.toContain('the approval no longer covers');
   const after = readTeamConfig(at.root, { home: at.home, source: 'registry' });
   if (!after.ok) throw new Error(JSON.stringify(after.errors));
   expect((approvalDifferences(after.team, at.root, at.home) ?? []).length).toBeGreaterThan(0);

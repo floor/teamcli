@@ -2,8 +2,7 @@
 // written through the writers' seam (src/file/team-text.ts): the registry's record under the
 // registry source, the team file only on the legacy `file` source. Every write is validated by
 // the team-file validator first and refused whole when it does not validate; the edit is the
-// owner's, as editing the file by hand was; and the run names what the approval no longer
-// covers, the way a hand edit of an owner section left the approval stale.
+// owner's, as editing the file by hand was.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,7 +14,6 @@ import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { approvalDifferences } from '../approve/approval.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { labelPersona, nicknameProblem, SEAT_NAME } from '../file/sections/seats.ts';
 import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
@@ -254,7 +252,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     }
   }
   if (next === text) {
-    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: false, source: target.kind, comments_kept: true, approval_differences: [] });
+    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: false, source: target.kind, comments_kept: true });
     else io.stdout(`nothing changed in ${where}\n`);
     // exit: config.unchanged
     return 0;
@@ -307,15 +305,11 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       io.stdout(`roster line of ${seat}: nickname now ${name}\n`);
     }
   }
-  const stale = checked.ok ? (approvalDifferences(checked.team, root, home, { text: next }) ?? []) : [];
   if (!commentsKept) io.stderr(`team config: the record was rewritten whole to change ${rawPath}; its comments were not kept\n`);
   if (json) {
-    writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept, approval_differences: stale });
+    writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept });
   } else {
     io.stdout(`${verb === 'edit' ? 'edited' : verb === 'set' ? `set ${rawPath}` : `unset ${rawPath}`} in ${where}; validated\n`);
-    if (stale.length > 0) {
-      io.stdout(`the approval no longer covers: ${stale.join('; ')}; the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot\n`);
-    }
   }
   // exit: config.written
   return 0;

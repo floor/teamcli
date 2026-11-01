@@ -108,6 +108,23 @@ profiles:
     if (!pattern.ok) expect(pattern.errors[0]?.message).toBe('unknown key "ignore_case"');
   });
 
+  test('refuses a rule of narrowing keys alone, as a shipped profile refuses it', () => {
+    // `live`, `at_composer`, `on_footer` and `without_rule: false` narrow a match a primitive
+    // already makes; a rule built of them alone would pass every screen. The schema refuses
+    // it, and the loader refuses the override that carries it, with the file's line.
+    const parsed = parseOverrides(`format: 1
+profiles:
+  claude-code:
+    screen:
+      permission:
+        - live: false
+`);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.errors[0]?.message).toBe('a rule needs a matching primitive: "any", "all", "footer", "below_last_rule", "none_after", "only_after", "block", or "without_rule: true"');
+    expect(parsed.errors[0]?.line).toBe(6);
+  });
+
   test('refuses a profile this version does not ship', () => {
     const parsed = parseOverrides(`format: 1
 profiles:

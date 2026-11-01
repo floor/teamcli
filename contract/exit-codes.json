@@ -187,7 +187,7 @@
       "code": 1,
       "command": "add",
       "id": "add.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team add worker"
     },
     {
@@ -1698,6 +1698,20 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.install-rollback-failed",
+      "meaning": "the system service manager refused the new unit and the previous one could not be started again, so no daemon was started",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.install-rolled-back",
+      "meaning": "the system service manager refused to start the new unit; the previous unit was put back and its daemon started again",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.not-owner",
       "meaning": "the caller may not install or remove the machine daemon",
       "trigger": "team daemon install"
@@ -1825,7 +1839,7 @@
       "code": 1,
       "command": "doctor",
       "id": "doctor.missing",
-      "meaning": "something is missing",
+      "meaning": "something is missing, including an override rule with no matching primitive",
       "trigger": "team doctor"
     },
     {
@@ -5108,7 +5122,7 @@
       "code": 1,
       "command": "status",
       "id": "status.difference",
-      "meaning": "there is a difference",
+      "meaning": "there is a difference, including an override rule with no matching primitive",
       "trigger": "team status"
     },
     {
@@ -5388,8 +5402,8 @@
       "code": 2,
       "command": "team",
       "id": "team.general-usage",
-      "meaning": "--general is given without --key, or on the grant-issuing command",
-      "trigger": "team status --general <grant.json>"
+      "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
+      "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
     },
     {
       "code": 2,
@@ -5619,7 +5633,7 @@
       "code": 1,
       "command": "up",
       "id": "up.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team up"
     },
     {

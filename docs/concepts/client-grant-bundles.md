@@ -166,8 +166,8 @@ and answers on the owner seat (`team grant --approve-as-owner-seat <request-id> 
 **Never in the bundle, even for a hand-built record:** `grant`, `revoke`, `delegate`, `owner-seat`, `policy`
 (`set`, `unset`), `settings` (`set`, `unset`), `development-mode`, `answer`, `config`, `broker`, `bus`, `daemon`,
 `register`, `client` (key creation) and `init`. The decoder refuses a vocabulary 7 record that lists one, signed
-or not, and the roster rules of the manager (a human's seat and the orchestrator are never touched, a roster change
-is the owner's to approve) apply to `add` and `remove` unchanged.
+or not, and the roster rules of the manager (a human's seat and the orchestrator are never touched) apply to
+`add` and `remove` unchanged.
 
 **Wired (a real `--client` form):** every manager route (`status`, `seats`, `seat`, `sessions`, `send`, `up`,
 `down`, `restart`, `reload`, `add`, `remove`), and `pause`, `resume` and `hold`.

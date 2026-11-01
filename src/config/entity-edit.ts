@@ -203,7 +203,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const changed = withValue(record, [entityName, 'names', 'unique'], word);
   if (!changed.ok) return pathRefused(io, json, `entity "${entityName}" ${KEY}: ${changed.why}; nothing was written`);
   if (!changed.changed) {
-    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${KEY}`, changed: false, source: 'entity', comments_kept: true, approval_differences: [] });
+    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${KEY}`, changed: false, source: 'entity', comments_kept: true });
     else io.stdout(`nothing changed in ${file}\n`);
     // exit: config.entity.unchanged
     return 0;
@@ -211,7 +211,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const edited = editedRecordText(text, [entityName, 'names', 'unique'], word, changed.root);
   writeOwnerFile(file, edited.text);
   if (json) {
-    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${KEY}`, changed: true, source: 'entity', comments_kept: edited.kept, approval_differences: [] });
+    writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${KEY}`, changed: true, source: 'entity', comments_kept: edited.kept });
   } else {
     io.stdout(`set ${entityName}.${KEY}: ${word} in ${file}\n`);
     if (!edited.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${KEY}; its comments were not kept\n`);

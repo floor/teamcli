@@ -33,7 +33,7 @@ import { emptySession, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
 
 const SESSION = 'teamcli';
-const ROOT = '/private/tmp/b7-display-route-root';
+const ROOT = join(realpathSync(tmpdir()), 'b7-display-route-root');
 const CODEX = 'codex-1';
 const HOOK = 'claude-hook';
 const CODEX_BINDING = 'prs_0123456789ab';

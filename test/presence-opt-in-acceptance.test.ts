@@ -267,7 +267,7 @@ describe('the strict endpoint reader behind the opt-in', () => {
 
     const binding = mintPresenceBinding();
     const predecessor = mintPresenceBinding();
-    const url = `unix:///private/tmp/launch/${binding}.sock`;
+    const url = `unix://${join(realpathSync(tmpdir()), 'launch')}/${binding}.sock`;
     const record = (fields: Record<string, unknown>): Record<string, unknown> => ({
       url, binding, pid: 4242, started_at: '2026-10-20T05:00:00.000Z', ...fields,
     });

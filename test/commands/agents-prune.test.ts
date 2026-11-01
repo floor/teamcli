@@ -411,7 +411,7 @@ describe('team agents prune', () => {
       const dry = await runAgents(dryDoor.argv, dryDoor.io, { home: where.home, now: () => NOW });
       const plan = JSON.parse(io.out) as AgentsJson;
       expect(dry).toBe(1);
-      expect(plan.records.map((one) => one.id)).toEqual([inside.id, outside.id]);
+      expect(plan.records.map((one) => one.id).sort()).toEqual([inside.id, outside.id].sort());
       const applyDoor = generalDoor('agents', ['prune', '--apply', '--general', issued.path, '--key', files.keyPath], io, NOW);
       expect(applyDoor.kind).toBe('admitted');
       if (applyDoor.kind !== 'admitted') return;
