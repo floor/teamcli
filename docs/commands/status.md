@@ -200,8 +200,8 @@ are padded on the cleaned text, so a value can never move the cursor, paint the 
 second line. `--json` is the one text not cleaned: the document carries each string as it was read,
 escaped where JSON requires it, for a parser rather than a terminal.
 
-Every row of the seats table ends with the word for the channel a send would take to reach that
-seat. The word is read with the send's own readings — its gate and its choice of address — so,
+Every row of the seats table ends with the word for whether the send's socket leg is eligible for
+that seat. The word is read with the send's own readings — its gate and its choice of address — so,
 over the same resolved registry home and the same snapshot, the table never promises a route the
 send would refuse: `socket` only while the seat is a `claude-code` one,
 the receiving session's launch-effective settings declare `crossSessionInbound: accept`, the

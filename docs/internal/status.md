@@ -60,8 +60,8 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
       claude-keeper  missing  Claude Opus 5.5  -      typed
       claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
-The columns are the seat, its state, the model, the pane, and the word for the channel a send would
-take to reach the seat. The word is read with the send's own readings, not a separate one: its gate
+The columns are the seat, its state, the model, the pane, and the word for whether the send's socket
+leg is eligible — `socket` while it is, `typed` when it is not. The word is read with the send's own readings, not a separate one: its gate
 (`socketIneligibleReason` in `src/send/inbound.ts`) and its choice of address (`socketAddressOf` in
 `src/send/address.ts`) — `socket` only while the seat is a `cli: claude-code` one, the receiving
 session's launch-effective settings declare `crossSessionInbound: accept`, the team file authorizes
@@ -82,8 +82,8 @@ The word is read from the processes the comparison already holds, so no extra te
 made; the seat's own files and the agent record a send would resolve are read from disk.
 The state is what the terminal host says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
 the file parks and `, temporary`
-for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
-types into — holds text in its input box that was never sent; or `<state> (screen not recognised)`
+for a temporary one; or `<state> (unsent text)` when an idle or done seat holds text in its input
+box that was never sent; or `<state> (screen not recognised)`
 when an idle or done seat's screen is not one its profile reads: the terminal host's word alone
 would read a stall as settled, so the row says what could not be read; or `missing` when the seat is in the
 file and nothing is running for it, or when the pane the state recorded for it runs no CLI — the

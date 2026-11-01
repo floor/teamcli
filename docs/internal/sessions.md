@@ -50,12 +50,20 @@ never as zero — TeamCLI did not measure it, and zero would be a claim it never
 
 ## The CLI session id
 
-Where a CLI accepts a session id at launch, TeamCLI sets one and records it. A Claude Code launch
-line that does not already choose a session gets `--session-id <uuid>` appended; a line that
-already carries `--session-id`, `--resume`/`-r`, or `--continue`/`-c` is left as the owner wrote
-it, and an id the line spells is recorded. TeamCLI never reads the CLI's session files or its
-state: the id is the one TeamCLI set, and `resumable` says only that the CLI keeps sessions to
-resume. `team resume` — reading a record back into a launch — is the next release.
+Where a CLI accepts a session id at launch, TeamCLI sets one and records it; in this release that
+CLI is Claude Code alone (`supportsSessionId`). A Claude Code launch line that does not already
+choose a session gets `--session-id <uuid>` appended; a line that already carries `--session-id`,
+`--resume`/`-r`, or `--continue`/`-c` is left as the owner wrote it, and an id the line spells is
+recorded. `team restart` records a second source: the recorded conversation a launch resumes, for
+every CLI with a measured resume form — Codex, Antigravity and Grok as well as Claude Code — so a
+resumed start is `resumable` even where TeamCLI set no id. TeamCLI takes no session id from the
+CLI's session files and reads none of their contents: the id is the one TeamCLI set, or the
+conversation the two records agreed on and the launch resumed. A Claude Code resume does check
+that its conversation file exists before the launch — the pathname alone, by its presence, never
+its contents — and a recorded conversation that file does not hold runs fresh. Reading a record
+back into a launch is `team restart <seat>`, and `team up`
+after `team down`, which resumes what `down` retained; `team resume` is the pause lever, not a
+session command, and reads no record here.
 
 ## Order, grouping, columns
 
@@ -94,7 +102,9 @@ carrying the id `sessions.read` or `sessions.invocation`.
   release, whatever actually stopped it.
 - A CLI that dies without a stop leaves its record open; it closes as `crash` only when the next
   launch finds it. Until then the listing shows it open, which is what TeamCLI knows.
-- Only Claude Code takes a session id at launch in this release: for another CLI the id,
-  `resumable` and `resume_until` stay absent.
+- TeamCLI sets a session id only on a Claude Code launch; a Codex, Antigravity or Grok launch
+  carries one only when `team restart` resumed a recorded conversation, and that start is
+  `resumable` true. Their earlier fresh launches stay absent, and `resume_until` has no writer:
+  it stays absent everywhere.
 - The registry records launches and stops; it does not probe a pane. It can't tell a working
   session from an idle one, and it is not a liveness check.

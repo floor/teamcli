@@ -48,7 +48,9 @@ session's state (`.agents/team.state.json`: the seats it drops after they stop, 
 and start instant, each seat's managed endpoint, and the bus's pane and workspace), and herdr:
 whether the session is running, its agents, each pane's screen and status, and each pane's
 foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped, and a
-bus workspace it closed has its record cleared),
+bus workspace it closed has its record cleared). A stopped seat's handle, its last activity and
+the conversation it ran are kept under the session's `retained_seats`, so the next `up` can resume
+that conversation; a temporary seat retains nothing. It also writes
 `.agents/team.log`, and, through herdr: the exit in each pane, the workspaces it closes, the
 session it stops and the stopped session it clears — its own, just stopped. A seat whose state
 records a managed endpoint for the presence binding it holds now is stopped through it before its

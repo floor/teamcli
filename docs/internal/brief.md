@@ -89,19 +89,19 @@ a failed seat is retried by the next apply with no duplicate.
 
 A held delivery leaves a retry marker — `<id>.pending` beside the record — and the marker is the
 send walk's, not the delivery's: the mcp-inbox and drop legs write one so `team watch` can retry
-the trigger, and a typed delivery leaves none. Two rules retire a launch-brief marker, in the
-watch's retry pass and in `team brief prune` alike. A marker whose id is not the seat's current
-claim is superseded: the seat's reader refuses that older delivery by name, and a retry would hand
-the seat a record it cannot read. A marker whose id is the claim's is retired only when a signed
-read receipt bound to the claim says the seat read it — the typed leg has no other way to show a
-read, and an earlier build's receipt, which bound no claim, proves nothing. A marker of the
-current claim that is not read is exactly what a retry still owes, and is never touched — not by
-the human seat's cleanup, and not by the age bound, however old it is: a read bound to the claim,
+the wake, the retry types nothing in this build, and a delivery that types leaves none. Two rules
+retire a launch-brief marker, in the watch's retry pass and in `team brief prune` alike. A marker
+whose id is not the seat's current claim is superseded: the seat's reader refuses that older
+delivery by name, and a retry would hand the seat a record it cannot read. A marker whose id is
+the claim's is retired only when a signed read receipt bound to the claim says the seat read it;
+nothing else proves a read, and an earlier build's receipt, which bound no claim, proves nothing.
+A marker of the current claim that is not read is exactly what a retry still owes, and is never
+touched — not by the human seat's cleanup, and not by the age bound, however old it is: a read
+bound to the claim,
 or a newer claim, is what ends it.
 
-The retry pass applies the rules before it decides a seat is human (whose typed trigger would be
-given up without them), keeps a native held record, or ages a marker out, and says one line per
-retirement. The current claim's unread marker outlasts all three. A broadcast of a claim the seat
+The retry pass applies the rules before it decides a seat is human (whose marker is given up,
+never typed), keeps a native held record, or ages a marker out, and says one line per retirement. The current claim's unread marker outlasts all three. A broadcast of a claim the seat
 already holds writes no new sidecar at all: the delivery is the claim and the record it names, and
 a repeat is not a new notification. `prune` is the supported maintenance path for the markers
 already on disk: it is the seat's own verb, its dry run is the default, and it only removes the
