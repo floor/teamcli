@@ -248,6 +248,7 @@ function waitIn(dir: string, session: string, name: string, extra: Record<string
           stage: 'launched',
           pane: name === 'lead' ? 'pane1' : 'pane2',
           workspace: 'w1',
+          launched: { shell: 4100, cli: [4200] },
           waiting: { state: 'waiting-owner', classification: 'question', ...extra },
         },
       },
@@ -320,6 +321,7 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     rename() { host.named = true; return true; },
     foreground() { return ['cursor-agent']; },
     foregroundCwd() { return lobbyDir(home); },
+    processInfo() { return { shell: 4100, foreground: [4100, 4200] }; },
     list(dir: string) { return listFolder(dir); },
     status() { return status; },
     type(_session: string, _pane: string, value: string) {
@@ -560,6 +562,47 @@ describe('team answer <seat> question', () => {
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
+  test('a seat with no recorded launch is refused by identity before anything is read', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // The state keeps the pane and the waiting record but records no launch: with no identity
+    // there is no process to compare the pane's with, so the word refuses rather than keying a
+    // pane it cannot identify.
+    updateState(dir, (state) => {
+      delete state.sessions.acme!.seats.lead!.launched;
+    });
+    const host = fake(home, 'lead', 'Which name do you want to use?\nsynthetic-note.txt\n');
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question', '--json'], run, host)).toBe(1);
+    expect(JSON.parse(run.out)).toMatchObject({ error: { id: 'answer.identity' } });
+    expect(host.keys).toEqual([]);
+    expect(host.versions).toBe(0);
+    expect(host.reads).toBe(0);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('a same-process switch to a permission prompt on the last read refuses before the key', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // The process stays the recorded one; only the screen changes, on the read the key path makes
+    // immediately before pressing it. The first two reads agree, so only that last full read can
+    // see the permission prompt.
+    let reads = 0;
+    const host = fake(home, 'lead', '', {
+      reading: () => (++reads < 3 ? readOf('question') : { kind: 'permission' as const, dialog: { dialog: null } as const }),
+    });
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the pane is at a permission prompt, which is never answered\n');
+    expect(host.keys).toEqual([]);
+    expect(host.reads).toBe(3);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
   test('a wrapped question is read to its end, so the two captures differing in the continuation row disagree', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
@@ -775,8 +818,8 @@ describe('team answer <seat> question', () => {
     updateState(dir, (state) => {
       state.sessions.acme = {
         seats: {
-          lead: { stage: 'launched', pane: 'pane1', workspace: 'w1' },
-          helper: { stage: 'launched', pane: 'pane2', workspace: 'w1', waiting: { state: 'waiting-owner', classification: 'question' } },
+          lead: { stage: 'launched', pane: 'pane1', workspace: 'w1', launched: { shell: 4100, cli: [4200] } },
+          helper: { stage: 'launched', pane: 'pane2', workspace: 'w1', launched: { shell: 4100, cli: [4200] }, waiting: { state: 'waiting-owner', classification: 'question' } },
         },
         worktrees: {},
       };

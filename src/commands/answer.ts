@@ -134,7 +134,7 @@ export const realHost: AnswerHost = {
   standing: (root) => approvalStanding(root, homedir()),
 };
 
-type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human' | 'permission' | 'login' | 'not-a-question' | 'incomplete' | 'disagree';
+type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'identity' | 'idle' | 'rule delivery' | 'human' | 'permission' | 'login' | 'not-a-question' | 'incomplete' | 'disagree';
 
 /** A refusal class that is also a contract row: every class word is the row id's last word. */
 type RefusalClass = Exclude<Reason, 'idle' | 'rule delivery'>;
@@ -347,14 +347,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       const again = inspectQuestion(seatName, host, session, pane, profile, recorded?.launched);
       if ('class' in again) return refused(again);
       // Two fresh reads, not one: a pane that changed between them is refused, never answered.
-      if (
-        again.kind !== checked.kind ||
-        again.text !== checked.text ||
-        again.record.kind !== checked.record.kind ||
-        again.record.key !== checked.record.key ||
-        again.record.from !== checked.record.from ||
-        again.record.to !== checked.record.to
-      ) {
+      if (!sameQuestion(checked, again)) {
         return refused(refusedClass('disagree', `${seatName}: the two fresh reads of the pane do not agree on the dialog`));
       }
       // The key is the CLI's recorded let-me-type-or-cancel key, and the closed set holds no
@@ -374,18 +367,24 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       }, pane, workspace)) {
         return refused(refusedClass('state', `${seatName}: its recovery state could not be recorded`));
       }
-      const keyProcessProblem = checkProcess(seatName, host, session, pane, recorded?.launched);
-      if (keyProcessProblem) {
-        // Nothing was sent, so the clean refusal puts the record back exactly as it was. A
-        // rollback that does not take leaves the recovery, the direction that only observes.
-        if (!restoreWaiting(dir, session, seatName, waiting, pane, workspace)) {
-          return refused({ id: keyProcessProblem.id, class: 'state', message: `${keyProcessProblem.message} (it is still recorded as a recovery)` });
-        }
-        return refused(keyProcessProblem);
+      // Nothing has been sent yet: a clean refusal puts the record back exactly as it was, and a
+      // rollback that does not take leaves the recovery, the direction that only observes.
+      const refusedAtKey = (problem: Refusal): Refusal =>
+        restoreWaiting(dir, session, seatName, waiting, pane, workspace)
+          ? problem
+          : { id: problem.id, class: 'state', message: `${problem.message} (it is still recorded as a recovery)` };
+      // The last reading is the one immediately before the key, and it reads the whole pane
+      // again: the dialog's kind included, so a same-process switch to a permission, login or
+      // other prompt after the earlier reads refuses here, and a dialog that no longer reads the
+      // same is refused rather than keyed.
+      const last = inspectQuestion(seatName, host, session, pane, profile, recorded?.launched);
+      if ('class' in last) return refused(refusedAtKey(last));
+      if (!sameQuestion(checked, last)) {
+        return refused(refusedAtKey(refusedClass('disagree', `${seatName}: the last reading of the pane no longer names the dialog`)));
       }
       let sent = false;
       try {
-        sent = host.sendKey(session, pane, checked.record.key);
+        sent = host.sendKey(session, pane, last.record.key);
       } catch {
         sent = false;
       }
@@ -668,8 +667,12 @@ function inspectQuestion(
   profile: Profile | null,
   launched?: LaunchedIdentity,
 ): SeenQuestion | Refusal {
-  const say = (reason: 'version' | 'permission' | 'login' | 'not-a-question' | 'incomplete', text: string): Refusal =>
+  const say = (reason: 'identity' | 'version' | 'permission' | 'login' | 'not-a-question' | 'incomplete', text: string): Refusal =>
     refusedClass(reason, `${seat}: ${text}`);
+  // The process check compares the pane's process with the identity its launch recorded. With no
+  // record there is nothing to compare it with, so the reading cannot be proved this run's seat:
+  // the word refuses instead of pressing a key into a pane it cannot identify.
+  if (!launched) return say('identity', 'its launched identity was not recorded, so the process in its pane cannot be checked');
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
   if (!profile) return say('version', 'this version has no question answer');
@@ -697,6 +700,18 @@ function inspectQuestion(
   const record = printed === null ? null : questionAnswerFor(profile.questionAnswers, dialogs.dialog, printed);
   if (printed === null || record === null) return say('version', 'this version has no question answer');
   return { record, version: printed, kind: dialogs.dialog, text: dialogs.text };
+}
+
+/** Whether two fresh readings of a pane name the same dialog and the same recorded answer. */
+function sameQuestion(left: SeenQuestion, right: SeenQuestion): boolean {
+  return (
+    left.kind === right.kind &&
+    left.text === right.text &&
+    left.record.kind === right.record.kind &&
+    left.record.key === right.record.key &&
+    left.record.from === right.record.from &&
+    left.record.to === right.record.to
+  );
 }
 
 /**
@@ -811,6 +826,7 @@ function refuse(
   // exit: answer.folder
   // exit: answer.action
   // exit: answer.process
+  // exit: answer.identity
   // exit: answer.human
   // exit: answer.permission
   // exit: answer.login

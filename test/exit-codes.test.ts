@@ -3461,6 +3461,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
     rename: () => true,
     foreground: () => ['cursor-agent'],
     foregroundCwd: () => lobbyDir(place.home),
+    processInfo: () => ({ shell: 400, foreground: [400, 401] }),
     list: (dir) => listFolder(dir),
     status: () => status,
     type: (_session, _pane, value) => {
@@ -3503,7 +3504,10 @@ function questionProfile(records: QuestionAnswerRecord[] = [{ kind: 'question', 
 /** A seat waiting at a question dialog, on the pane the host lists it at. */
 function waitingQuestion(place: Place, seat: string, pane: string): void {
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { [seat]: { stage: 'launched', pane, waiting: { state: 'waiting-owner', classification: 'question' } } }, worktrees: {} };
+    state.sessions.acme = {
+      seats: { [seat]: { stage: 'launched', pane, launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'question' } } },
+      worktrees: {},
+    };
   });
 }
 
@@ -3528,6 +3532,18 @@ scene('answer.file-owner', async (place) => {
 scene('answer.human', async (place) => {
   write(place, TWO.replace('    stopped: true\n', '    human: true\n'));
   return show(await answered(place, ['worker', 'trust'], owner, answerHost(place, '')), "worker: the pane is a human's");
+});
+scene('answer.identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'question' } } }, worktrees: {} };
+  });
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
 });
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);

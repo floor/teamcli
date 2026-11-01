@@ -606,6 +606,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.identity",
+      "meaning": "the seat's launched identity was not recorded; no process in its pane can be checked against it",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.incomplete",
       "meaning": "the question runs past the rows this version reads; it is not answered",
       "trigger": "team answer lead question"
