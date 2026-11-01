@@ -47,6 +47,13 @@ function unreadable(io: Io, json: boolean, message: string): number {
   return 2;
 }
 
+/** The invocation, or its path, is not one this command can carry out: one refusal, with the
+ *  command's usage, before any write. Exit 2, always. */
+function usageRefused(io: Io, json: boolean, message: string, usage: string): number {
+  refuse(io, json, 'config', { id: 'config.usage', message, repair: null, usage });
+  return 2; // exit: config.usage
+}
+
 function runEditor(path: string, env: Record<string, string | undefined>): number {
   const editor = env.VISUAL || env.EDITOR || 'vi';
   const ran = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', path], { stdio: 'inherit' });
@@ -72,11 +79,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why === null && args.values.general !== undefined && verb !== 'set' && verb !== 'unset') why = '--general takes set or unset';
   const path = why === null && rawPath !== undefined ? parsePath(rawPath) : [];
   if (why === null && typeof path === 'string') why = path;
-  if (why !== null || typeof path === 'string') {
-    refuse(io, json, 'config', { id: 'config.usage', message: why ?? 'invalid path', repair: null, usage });
-    // exit: config.usage
-    return 2;
-  }
+  if (why !== null || typeof path === 'string') return usageRefused(io, json, why ?? 'invalid path', usage);
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
   const root = realRoot(io.cwd);
@@ -122,14 +125,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   const reserved = parsed === null ? null : reservedKeyIn(parsed, path);
   if (reserved !== null) {
-    refuse(io, json, 'config', {
-      id: 'config.usage',
-      message: `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`,
-      repair: null,
-      usage,
-    });
-    // exit: config.usage
-    return 2;
+    return usageRefused(io, json, `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`, usage);
   }
   if (verb === 'get') {
     if (parsed === null) return unreadable(io, json, `${where} cannot be read: ${unreadableReason(parseError)}`);
