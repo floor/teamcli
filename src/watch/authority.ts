@@ -12,12 +12,19 @@
 // The proof is a diagnostic digest of the snapshot; no other code accepts it as a token. This
 // module reads the state under the state's own lock, so the record it judges is one consistent
 // snapshot, and it refuses on a missing or unknown epoch rather than falling back to a pid.
+//
+// The recorded file and the file the loader resolved are compared by their identity, not by the
+// file's existence (src/watch/binding.ts): the default team's definition is in the registry and
+// its `.agents/team.yaml` is retired, so the loader's resolved path names no file. The identity
+// is then the canonical root that path resolves to — the key the registry addresses the team by
+// — so a registry-only watch is admitted while another root or another file name still refuses.
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { canonical } from '../approve/fingerprint.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { LockBusyError, readState, type State, withLock } from '../state.ts';
+import { teamBindingIdentity } from './binding.ts';
 import {
   isWatchEpoch,
   WATCH_AUTHORITY_FUTURE_SKEW_MS,
@@ -37,6 +44,9 @@ export type WatchAuthorityInput = {
   purpose: typeof WATCH_DIRECT_WORK;
   /** A test seam for the clock; production takes `new Date()`. */
   now?: Date;
+  /** A test seam for the home the team is resolved under (the registry record lives there);
+   *  production takes the process's own. */
+  home?: string;
 };
 
 export type WatchAuthority = {
@@ -44,7 +54,9 @@ export type WatchAuthority = {
   epoch: string;
   heartbeat: string;
   pane?: string;
-  /** The canonical path of the team file `up` recorded. */
+  /** The canonical identity of the team the binding names: the real path of the file `up`
+   *  recorded, or, for a registry-only team, the canonical root's conventional file path, which
+   *  is the key the registry record is addressed by. */
   file: string;
 };
 
@@ -85,19 +97,20 @@ export function verifyWatchAuthority(input: WatchAuthorityInput): WatchActorVerd
 
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = readTeamConfig(realpathSync(input.root));
+    loaded = readTeamConfig(realpathSync(input.root), input.home === undefined ? {} : { home: input.home });
   } catch {
     return refuse('the team root cannot be read');
   }
   if (!loaded.ok) return refuse('the team file cannot be read');
-  let file: string;
   let root: string;
   try {
-    file = realpathSync(loaded.path);
     root = realpathSync(loaded.root);
   } catch {
-    return refuse('the team file cannot be read');
+    return refuse('the team root cannot be read');
   }
+  // The loader resolved this handle for the team; its identity is what the record is judged by,
+  // and a registry-only team's conventional file never has to exist.
+  const file = teamBindingIdentity(loaded.path);
   if (input.session !== loaded.team.session) {
     return refuse('the session is not this team file\'s');
   }
@@ -117,13 +130,9 @@ export function verifyWatchAuthority(input: WatchAuthorityInput): WatchActorVerd
   if (!watchdog || typeof watchdog.file !== 'string' || watchdog.file === '') {
     return refuse('this session records no watch file');
   }
-  let recordedFile: string;
-  try {
-    recordedFile = realpathSync(watchdog.file);
-  } catch {
-    return refuse('the recorded watch file cannot be read');
+  if (teamBindingIdentity(watchdog.file) !== file) {
+    return refuse('the recorded watch file is not this team file');
   }
-  if (recordedFile !== file) return refuse('the recorded watch file is not this team file');
   if (watchdog.pane !== undefined && (typeof watchdog.pane !== 'string' || watchdog.pane === '')) {
     return refuse('the recorded watch pane is not a pane');
   }

@@ -1,14 +1,23 @@
-// The private hosted wrapper: the daemon does not run a route's watch until that route's own
-// state records the watchdog file binding `up` wrote, and the watch holds the session's frozen
-// authority record for as long as it runs. This module is wiring; the store and the lifecycle are
-// `watch/epoch-store.ts` and `watch/authority-lifecycle.ts`, and the loop is the shared
-// `hostedWatchRun`, unchanged.
+// The private hosted wrapper: the daemon runs a route's watch under the route's own watchdog file
+// binding, and holds the session's frozen authority record for as long as it runs. This module is
+// wiring; the store and the lifecycle are `watch/epoch-store.ts` and
+// `watch/authority-lifecycle.ts`, and the loop is the shared `hostedWatchRun`, unchanged.
 //
 // The binding and the authority are read from the state folder beside the team file the daemon
 // itself resolved. Root and session come from the route; the epoch comes from the lifecycle's
-// acquire. No actor value is ever read from argv, JSON or the environment, and this module never
-// writes a watchdog record: a missing or mismatched binding stands the watch down as blocked and
-// says so, and the run never starts.
+// acquire. No actor value is ever read from argv, JSON or the environment. An absent binding is
+// the daemon's own to record — it claims the route's own team file once, under the state lock,
+// before its first pass — so every hosted root watches without a prior `up`. The claim is the
+// one write this module makes to a watchdog record, and it never overwrites one: a record that
+// names another file, or a state that cannot be read, stands the watch down as blocked and says
+// so, and no write happens.
+//
+// The record is the file the loader resolved, and it is compared by that file's identity, not by
+// its existence (src/watch/binding.ts). The default team's definition lives in the registry and
+// its `.agents/team.yaml` is retired, so the resolved path names no file at all; the identity is
+// then the canonical root that path resolves to, which is the key the registry addresses the
+// team by. A record naming another root, or another name in this root's `.agents`, still refuses:
+// the root/session isolation the binding exists for is unchanged.
 //
 // The authority is renewed on the daemon's existing fixed heartbeat, not on the sweep's own wait:
 // the build exposes `tick`, the host calls it on every daemon beat before any due waiter settles,
@@ -25,13 +34,14 @@
 // exactly-once handoff claim and adds no queue, identity or WorkPush request change: drain holds
 // ambiguous work for explicit recovery.
 
-import { realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchSources } from '../commands/watch.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
-import { pidAlive, readState } from '../state.ts';
+import { emptySession, LockBusyError, pidAlive, readState, updateState } from '../state.ts';
 import { createWatchHost, type WatchHostReport } from '../watch/authority-lifecycle.ts';
+import { sameTeamBinding } from '../watch/binding.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
 import type { WatchAuthorityHolder } from '../watch/epoch-store.ts';
 import { clearWatchHandover, readWatchHandover, writeWatchHandover } from '../watch/handover.ts';
@@ -107,30 +117,61 @@ function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sameFile(left: string, right: string): boolean {
-  try {
-    return realpathSync(left) === realpathSync(right);
-  } catch {
-    return false;
-  }
-}
+/** The route's recorded binding, as this module reads it: absent (the daemon's own to claim),
+ *  bound to the route's own team file, or refused (another file, or a state that cannot be
+ *  read). A refusal is never permission to write: the record stays exactly as it stands. */
+type BindingReading =
+  | { kind: 'absent' }
+  | { kind: 'bound'; recorded: { file: string; pane?: string } }
+  | { kind: 'refused'; why: string };
 
-/** The route's binding, or why there is none. The state's watchdog record is the one `up` wrote;
- *  a hosted watch runs only for exactly that file and never stands in for an absent record. */
-function bindingRefusal(stateDir: string, session: string, teamFile: string): string | undefined {
+function readBinding(stateDir: string, session: string, teamFile: string): BindingReading {
   let recorded: { file: string; pane?: string } | undefined;
   try {
     recorded = readState(stateDir).sessions[session]?.watchdog;
   } catch (error) {
-    return `the session state cannot be read: ${textOf(error)}`;
+    return { kind: 'refused', why: `the session state cannot be read: ${textOf(error)}` };
   }
-  if (!recorded) {
-    return `the session "${session}" records no watchdog file binding; a hosted watch does not claim one`;
+  if (!recorded) return { kind: 'absent' };
+  if (!sameTeamBinding(recorded.file, teamFile)) {
+    return { kind: 'refused', why: `the recorded watchdog file "${recorded.file}" is not this route's team file "${teamFile}"` };
   }
-  if (!sameFile(recorded.file, teamFile)) {
-    return `the recorded watchdog file "${recorded.file}" is not this route's team file "${teamFile}"`;
+  return { kind: 'bound', recorded };
+}
+
+type ClaimOutcome =
+  | { kind: 'claimed' }
+  | { kind: 'present' }
+  | { kind: 'refused'; why: string }
+  | { kind: 'busy' };
+
+/** Records the route's own team file as the session's watchdog binding, but only when the
+ *  session records none. The record is read and written under the state lock, so one another
+ *  writer made first is never overwritten: a record naming this file is left as it stands, one
+ *  naming another file refuses, and an unreadable or unwritable state refuses. The lock is tried
+ *  once — a busy one is answered, not waited for — so the caller retries on the daemon's fixed
+ *  beat. The record is keyed by the session the daemon read from this very team file, in the
+ *  state folder beside it: no other checkout's session is addressed. */
+function claimBinding(stateDir: string, session: string, teamFile: string): ClaimOutcome {
+  try {
+    return updateState<ClaimOutcome>(stateDir, (state) => {
+      const current = (state.sessions[session] ??= emptySession());
+      const recorded = current.watchdog;
+      if (recorded !== undefined) {
+        return sameTeamBinding(recorded.file, teamFile)
+          ? { kind: 'present' }
+          : {
+              kind: 'refused',
+              why: `the recorded watchdog file "${recorded.file}" is not this route's team file "${teamFile}"`,
+            };
+      }
+      current.watchdog = { file: teamFile };
+      return { kind: 'claimed' };
+    }, { waitMs: 0, writeWhen: (outcome) => outcome.kind === 'claimed' });
+  } catch (error) {
+    if (error instanceof LockBusyError) return { kind: 'busy' };
+    return { kind: 'refused', why: `the session state cannot be read or written: ${textOf(error)}` };
   }
-  return undefined;
 }
 
 /** What the standing holder is, when the session's record is a pane watch: a watch proven to be
@@ -228,9 +269,16 @@ async function runAuthoritativeHost(
   };
 
   /** The route's own binding, re-read from state: a cleared, repointed or unreadable record
-   *  ends the run. The binding is never rewritten here. */
-  const bindingLoss = (): string | undefined =>
-    bindingRefusal(stateDir, input.route.session, input.teamFile);
+   *  ends the run. The binding is never rewritten here — the one claim happened before the
+   *  acquire, and a record changed after it is the caller's, not this run's. */
+  const bindingLoss = (): string | undefined => {
+    const reading = readBinding(stateDir, input.route.session, input.teamFile);
+    if (reading.kind === 'refused') return reading.why;
+    if (reading.kind === 'absent') {
+      return `the session "${input.route.session}" records no watchdog file binding`;
+    }
+    return undefined;
+  };
 
   // A pulse renews the captured record and rechecks the route's binding. Before acquire
   // completes there is no authority to lose: the beat only drives the same acquisition the
@@ -315,12 +363,52 @@ async function runAuthoritativeHost(
     return true;
   };
 
-  setPulse(pulse);
   try {
     // A request left by a daemon that is not this process was never answered: this run either
     // writes its own or stands by. Leaving it would keep asking for a transfer nobody wants.
     const leftover = readWatchHandover(stateDir);
     if (leftover.kind === 'request' && leftover.request.pid !== process.pid) clearWatchHandover(stateDir);
+    // The route's binding before anything else: an absent record is this daemon's own to make,
+    // and it is made exactly once, under the state lock. A record that is already there is read
+    // lock-free and never rewritten; one that changed since the build refuses like any other
+    // change. A busy lock is retried on the fixed beat; a record naming another file, or a state
+    // that cannot be read, is never overwritten and stands the run down before it acquires
+    // anything. The claim lands before the pulse is installed, so a beat can never mistake the
+    // record this run is about to write for a loss.
+    for (;;) {
+      const before = readBinding(stateDir, input.route.session, input.teamFile);
+      if (before.kind === 'refused') {
+        fail(`the watchdog file binding changed: ${before.why}`);
+        return 0;
+      }
+      if (before.kind === 'bound') break;
+      const claim = claimBinding(stateDir, input.route.session, input.teamFile);
+      if (claim.kind === 'claimed') {
+        input.log(
+          `root ${input.route.root}: the session recorded no watchdog file binding; `
+            + (existsSync(input.teamFile)
+              ? `recorded this route's team file "${input.teamFile}"`
+              // The default team: the definition is in the registry and the conventional file is
+              // retired. The binding still names the loader's resolved handle, and its identity
+              // is the canonical root that handle resolves to.
+              : `recorded this route's team identity "${input.teamFile}" (no file stands there; the root it names is the binding's identity)`),
+        );
+        break;
+      }
+      if (claim.kind === 'present') break;
+      if (claim.kind === 'busy') {
+        if (!(await loop.wait(HOSTED_AUTHORITY_TICK_MS))) return 0;
+        continue;
+      }
+      // A record another writer made between the read and the lock is a change; anything else
+      // is a state this run cannot claim through, and neither is ever written over.
+      const after = readBinding(stateDir, input.route.session, input.teamFile);
+      fail(after.kind === 'refused'
+        ? `the watchdog file binding changed: ${after.why}`
+        : `the watchdog file binding cannot be claimed: ${claim.why}`);
+      return 0;
+    }
+    setPulse(pulse);
     // Acquire before the first pass. Lock contention is retried on the existing fixed tick, and
     // so is a live pane watch once it has been asked to hand over; the route's binding is re-read
     // before every attempt so a record cleared or repointed while this host waited stands the
@@ -503,18 +591,20 @@ async function runAuthoritativeHost(
 }
 
 /**
- * The daemon's route-bound hosted watch. With no recorded binding that names the route's own team
- * file, the watch is blocked: it starts standing down with the reason and runs nothing. Otherwise
- * it acquires the session's authority, renews it on every daemon beat, verifies every effect
- * against it, and releases only the captured epoch. Closing outbound effects and draining are its
- * loss behaviour; it never re-acquires, never hands off live, and never claims exactly-once.
+ * The daemon's route-bound hosted watch. With a recorded binding that names another file, or a
+ * state that cannot be read, the watch is blocked: it starts standing down with the reason and
+ * runs nothing. With none recorded, the run claims the route's own team file first, so every
+ * hosted root watches without a prior `up`. It then acquires the session's authority, renews it
+ * on every daemon beat, verifies every effect against it, and releases only the captured epoch.
+ * Closing outbound effects and draining are its loss behaviour; it never re-acquires, never hands
+ * off live, and never claims exactly-once.
  */
 export function hostedWatchAuthority(input: HostedWatchAuthorityInput): HostedWatchBuild {
   const stateDir = dirname(input.teamFile);
-  const refusal = bindingRefusal(stateDir, input.route.session, input.teamFile);
-  if (refusal !== undefined) {
-    input.log(`root ${input.route.root}: the hosted watch is blocked: ${refusal}`);
-    return { run: async () => 0, effects: 'blocked', standby: refusal };
+  const reading = readBinding(stateDir, input.route.session, input.teamFile);
+  if (reading.kind === 'refused') {
+    input.log(`root ${input.route.root}: the hosted watch is blocked: ${reading.why}`);
+    return { run: async () => 0, effects: 'blocked', standby: reading.why };
   }
   // The daemon's fixed tick reaches the lifecycle host through this seam; the run installs it
   // when it starts and clears it when it leaves.
