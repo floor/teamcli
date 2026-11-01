@@ -19,7 +19,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
-import { resolveTargets, type PauseTarget, type TargetFailure } from '../pause/targets.ts';
+import { resolveTargets, targetName, type PauseTarget, type TargetFailure } from '../pause/targets.ts';
 import { pauseText, stopText, updateState, type PauseRecord } from '../state.ts';
 
 // `team resume` clears the team's pause and restarts the queue: from that instant `team next`
@@ -74,12 +74,12 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
   const all = args.flags.has('all');
   let seat: string | undefined;
   if (args.values.seat !== undefined) {
-    seat = plainLine(args.values.seat).trim();
+    seat = targetName(args.values.seat);
     if (seat === '') return invocation(out, '--seat needs a seat name', json);
   }
   let team: string | undefined;
   if (args.values.team !== undefined) {
-    team = plainLine(args.values.team).trim();
+    team = targetName(args.values.team);
     if (team === '') return invocation(out, '--team needs a team name', json);
   }
   if (args.values.client !== undefined && seat !== undefined) return invocation(out, '--client resumes the one team its grant names and takes no --seat', json);

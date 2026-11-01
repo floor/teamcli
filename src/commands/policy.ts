@@ -436,6 +436,15 @@ type TargetContext = {
   team?: TeamFile | null;
 };
 
+/**
+ * The entity or project name a policy line acts on: the flag's text with the surrounding space
+ * trimmed. The command and the general door's target check both read their names through this
+ * one step, so the entity the door checks against a grant is the entity the rule is written for.
+ */
+export function policyTargetName(raw: string): string {
+  return raw.trim();
+}
+
 function resolveWriteTarget(
   home: string,
   level: PolicyLevel,
@@ -461,7 +470,7 @@ function resolveWriteTarget(
   const sessionLabel = team?.session ?? null;
 
   if (level === 'entity') {
-    const entity = values.entity?.trim() || team?.entity || null;
+    const entity = (values.entity === undefined ? '' : policyTargetName(values.entity)) || team?.entity || null;
     if (!entity) {
       return {
         ok: false,
@@ -482,7 +491,7 @@ function resolveWriteTarget(
   }
 
   if (level === 'project') {
-    const rawProject = values.project?.trim() || team?.inProject || team?.project || null;
+    const rawProject = (values.project === undefined ? '' : policyTargetName(values.project)) || team?.inProject || team?.project || null;
     if (!rawProject) {
       return {
         ok: false,

@@ -5269,7 +5269,7 @@
       "code": 1,
       "command": "team",
       "id": "team.general-target",
-      "meaning": "the team the command would act on cannot be resolved, so the general grant cannot be checked against it; nothing ran",
+      "meaning": "the team the command would act on cannot be resolved, or a target-changing option is named more than once (the command would read one value and the door cannot check the other), so the general grant cannot be checked against it; nothing ran",
       "trigger": "team status --project <name> --general <grant.json> --key <client.key>"
     },
     {
