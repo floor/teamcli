@@ -55,7 +55,8 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
-import { processCommandOf, processCwdOf, processStartOf, watchLaunchOf, watchStopRead } from '../watch/pane.ts';
+import { processCommandOf, processStartOf, watchLaunchOf, watchStopRead } from '../watch/pane.ts';
+import { processWorkingFolderOf } from '../watch/process-adapter.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -177,7 +178,7 @@ export const realSources: DownSources = {
   },
   commandOf: processCommandOf,
   startOf: processStartOf,
-  cwdOf: processCwdOf,
+  cwdOf: processWorkingFolderOf,
   screen(session, pane, cli, cwd) {
     return readScreen(cli, paneRead(pane, 200, aim(session)) ?? undefined, {
       cwd: cwd ?? undefined,

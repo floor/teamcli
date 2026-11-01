@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { readlinkSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
+import type { WorkingFolderReader } from './process-adapter.ts';
 
 export type WatchPlace = { pane: string; workspace: string };
 
@@ -291,32 +292,6 @@ export function processStartOf(pid: number): number | null {
   }
 }
 
-/** The working folder of the process at `pid`, or null when it is gone or cannot be read. Linux
- *  keeps it as a link in `/proc`; every other system is asked through `lsof`, whose `-Fn` output
- *  names the folder on its `n` line — measured here, `lsof -a -d cwd -p 77246 -Fn` printed
- *  `p77246`, `fcwd`, then one line naming the folder, `n<path>`. */
-export function processCwdOf(pid: number): string | null {
-  if (process.platform === 'linux') {
-    try {
-      return readlinkSync(`/proc/${pid}/cwd`);
-    } catch {
-      return null;
-    }
-  }
-  try {
-    const line = execFileSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    for (const entry of line.split('\n')) {
-      if (entry.startsWith('n') && entry.length > 1) return entry.slice(1);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 /** The file a watch line names, resolved the way that process's own read resolves it: an absolute
  *  path as itself, a relative one from the folder the process started in. Null when it resolves
  *  to nothing readable. */
@@ -348,9 +323,10 @@ export function watchStopRead(
     alive(pid: number): boolean;
     commandOf(pid: number): string | null;
     startOf(pid: number): number | null;
-    /** The working folder of the process at a pid; null when it cannot be read. Read only for a
-     *  line that names no team file, where it is the launch's side of the identity. */
-    cwdOf?(pid: number): string | null;
+    /** The process's working folder; null when it cannot be read. Read only for a line that
+     *  names no team file, where it is the launch's side of the identity. Read through the
+     *  process adapter (`process-adapter.ts`), never by this module. */
+    cwdOf?: WorkingFolderReader;
   },
   launch: WatchLaunch,
 ): WatchStopRead {

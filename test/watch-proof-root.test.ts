@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { watchCommandFile, watchLaunchOf, watchStopRead } from '../src/watch/pane.ts';
+import type { WorkingFolderReader } from '../src/watch/process-adapter.ts';
 
 const BASE = realpathSync(mkdtempSync(join(tmpdir(), 'watch-proof-')));
 afterAll(() => rmSync(BASE, { recursive: true, force: true }));
@@ -43,6 +44,18 @@ function read(
     startOf: () => NOW.getTime() - 1_000,
     cwdOf: () => cwd,
   }, launch);
+}
+
+/** A fake process adapter: it answers the one fact the core asks for and records the pids. */
+function fakeAdapter(cwd: string | null): { cwdOf: WorkingFolderReader; asked: number[] } {
+  const asked: number[] = [];
+  return {
+    asked,
+    cwdOf(pid) {
+      asked.push(pid);
+      return cwd;
+    },
+  };
 }
 
 const mine = project('acme');
@@ -96,6 +109,46 @@ test('a working folder that cannot be read leaves a flagless watch unproven', ()
     pid: 4242,
     why: 'pid 4242\'s working folder cannot be read',
   });
+});
+
+test('the working folder is read through the process adapter, and only through it', () => {
+  const launch = watchLaunchOf(mine.file, mine.dir);
+  const adapter = fakeAdapter(mine.root);
+  const proven = watchStopRead(RECORD, 'shared', {
+    alive: () => true,
+    commandOf: () => command(''),
+    startOf: () => NOW.getTime() - 1_000,
+    cwdOf: adapter.cwdOf,
+  }, launch);
+  expect(proven).toEqual({ kind: 'proven', pid: 4242 });
+  expect(adapter.asked).toEqual([4242]);
+
+  // A caller that wires no adapter reads no folder: the core keeps no reader of its own.
+  expect(watchStopRead(RECORD, 'shared', {
+    alive: () => true,
+    commandOf: () => command(''),
+    startOf: () => NOW.getTime() - 1_000,
+  }, launch)).toEqual({
+    kind: 'unproven',
+    pid: 4242,
+    why: 'pid 4242\'s working folder cannot be read',
+  });
+});
+
+test('the adapter\'s folder decides the flagless launch', () => {
+  const launch = watchLaunchOf(mine.file, mine.dir);
+  const elsewhere = fakeAdapter(other.root);
+  expect(watchStopRead(RECORD, 'shared', {
+    alive: () => true,
+    commandOf: () => command(''),
+    startOf: () => NOW.getTime() - 1_000,
+    cwdOf: elsewhere.cwdOf,
+  }, launch)).toEqual({
+    kind: 'unproven',
+    pid: 4242,
+    why: 'pid 4242 is not a watch launched from this team\'s folder',
+  });
+  expect(elsewhere.asked).toEqual([4242]);
 });
 
 test('the command line names the file it carries, or none', () => {
