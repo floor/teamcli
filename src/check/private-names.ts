@@ -587,7 +587,11 @@ export function scanPrivateLines(lines: readonly string[], sources: readonly Pri
   }
   try {
     writeFileSync(join(scratch.path, 'empty.txt'), '', { mode: 0o600 });
-    writeFileSync(join(scratch.path, 'lines.txt'), lines.length === 0 ? '' : `${lines.join('\n')}\n`, { mode: 0o600 });
+    // `git grep -I` reads one NUL anywhere in a file as a binary marker and skips that file whole,
+    // so a single NUL-bearing line would hide every other line. The bytes are removed instead: the
+    // line stays text, its number is unchanged, and a name split by a NUL reads as the name it spells.
+    const corpus = lines.map((line) => line.replace(/\0/g, ''));
+    writeFileSync(join(scratch.path, 'lines.txt'), corpus.length === 0 ? '' : `${corpus.join('\n')}\n`, { mode: 0o600 });
     if (!addScratch(scratch.path, ['empty.txt', 'lines.txt'])) {
       return { problem: 'cannot stage the private diff scratch repository' };
     }

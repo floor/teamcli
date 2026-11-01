@@ -292,6 +292,30 @@ describe('scanPrivateLines', () => {
     if ('problem' in scan) return;
     expect(scan.hits).toHaveLength(0);
   });
+
+  test('a NUL on another line does not hide a match', () => {
+    const sources = [source('names', [{ source: SECRET, scope: ['diff'] }])];
+    const scan = scanPrivateLines([`added ${SECRET}`, 'nul\u0000here'], sources);
+    expect('problem' in scan).toBe(false);
+    if ('problem' in scan) return;
+    expect(scan.hits).toEqual([{ origin: 'names', ordinal: 1, line: 1 }]);
+  });
+
+  test('a NUL on the matching line does not hide the match', () => {
+    const sources = [source('names', [{ source: SECRET, scope: ['diff'] }])];
+    const scan = scanPrivateLines([`added ${SECRET}\u0000tail`], sources);
+    expect('problem' in scan).toBe(false);
+    if ('problem' in scan) return;
+    expect(scan.hits).toEqual([{ origin: 'names', ordinal: 1, line: 1 }]);
+  });
+
+  test('a name split by a NUL is still read as the name', () => {
+    const sources = [source('names', [{ source: SECRET, scope: ['diff'] }])];
+    const scan = scanPrivateLines([`added ${SECRET.slice(0, 5)}\u0000${SECRET.slice(5)}`], sources);
+    expect('problem' in scan).toBe(false);
+    if ('problem' in scan) return;
+    expect(scan.hits).toEqual([{ origin: 'names', ordinal: 1, line: 1 }]);
+  });
 });
 
 describe('the check command', () => {
