@@ -476,10 +476,13 @@ describe('an unprovable line proves no word, and every reader reads it as 0.5.10
       version: '1.0',
       launch: '/bin/sh -c "claude --model gpt-5.5 \'$SYNTHETIC_TAIL\'"',
     } as Seat;
-    expect(readBackOf(seat, 'gpt-5.5 · API Usage Billing\n')).toEqual({ kind: 'match', model: 'gpt-5.5' });
+    // The pane's welcome box, the line the banner reader draws the wrapper's id from: 0.5.11
+    // reads a model line only under its one header line.
+    const box = ' ▐▛███▛█   Claude Code v2.1.291\n▝▜██████▀  gpt-5.5 · API Usage Billing\n';
+    expect(readBackOf(seat, box)).toEqual({ kind: 'match', model: 'gpt-5.5' });
     // A quoted flag name is not an id to 0.5.10 either: the declaration's model is compared.
     const quoted = { ...seat, launch: '/bin/sh -c "claude \'$SYNTHETIC_TAIL\' \'--model\' \'gpt-5.5\'"' } as Seat;
-    expect(readBackOf(quoted, 'gpt-5.5 · API Usage Billing\n')).toEqual({
+    expect(readBackOf(quoted, box)).toEqual({
       kind: 'mismatch',
       expected: 'synthetic-model',
       shown: 'gpt-5.5',
