@@ -330,6 +330,14 @@ describe('a screen is masked before it is printed', () => {
       .toBe('fetch https://[masked]@one.test/a https://[masked]@two.test/b');
   });
 
+  test('userinfo with only a user is masked, not only user and password', () => {
+    // A token in the user slot is userinfo all the same.
+    expect(maskSecretsLine('clone https://ghp_abcdefghijklmnop@example.test/repo.git'))
+      .toBe('clone https://[masked]@example.test/repo.git');
+    expect(maskSecretsLine('visit https://alice@example.test/page'))
+      .toBe('visit https://[masked]@example.test/page');
+  });
+
   test('a token of every key prefix is masked in every wrapper', () => {
     // The body is 16 characters: enough after every prefix, and too plain and too short for the
     // randomness rule, so only the prefix shape can mask these lines.

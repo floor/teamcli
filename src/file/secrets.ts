@@ -34,8 +34,10 @@ export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused
 }
 
 const URL_CREDENTIALS = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i;
-const URL_CREDENTIALS_GLOBAL = new RegExp(URL_CREDENTIALS.source, 'gi');
-const URL_USERINFO = /[^\s/:@]+:[^\s/@]+@$/;
+/** The masker's URL rule is wider than the team-file check's: userinfo with only a user is a
+ *  credential too, so the password is optional here and every URL on the line is masked. */
+const URL_USERINFO_URL = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+(?::[^\s/@]+)?@/gi;
+const URL_USERINFO = /[^\s/:@]+(?::[^\s/@]+)?@$/;
 
 /** The characters a prefixed credential's body is written in. */
 const TOKEN_BODY = '[A-Za-z0-9_+=-]';
@@ -87,7 +89,7 @@ export function maskSecretsLine(line: string, fs: FsReader = defaultFs): string 
 }
 
 function maskOnce(line: string, fs: FsReader): string {
-  let masked = line.replace(URL_CREDENTIALS_GLOBAL, (match) => match.replace(URL_USERINFO, '[masked]@'));
+  let masked = line.replace(URL_USERINFO_URL, (match) => match.replace(URL_USERINFO, '[masked]@'));
   masked = masked.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '[masked]');
   masked = masked.replace(KEY_TOKEN, (_whole, separator: string) => `${separator}[masked]`);
   masked = replaceWords(masked, (word) => looksRandom(word, fs));
