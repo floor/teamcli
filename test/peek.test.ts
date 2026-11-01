@@ -464,9 +464,37 @@ describe('a screen is masked before it is printed', () => {
       .toEqual(['value [masked]', '[masked] end']);
   });
 
-  test('a sha split across two rows stays readable', () => {
+  test('an ordinary row touching a wrapped random-looking credential does not hide it', () => {
+    // Builder-3's probe: the credential's own piece, read from the row start, is still judged
+    // random even though the joined word carries the previous row's text.
+    const word = 'Zx9Kq2LmN4pR7sT1uV3wY6aB8cD0eF2gH5jK9mN';
+    const rows = ['[done', `${word.slice(0, 20)}    `, ` ${word.slice(20)}`];
+    expect(maskSecretsLine(word)).toBe('[masked]');
+    expect(maskSecretRows(rows).map((row) => row.trim())).toEqual(['[done', '[masked]', '[masked]']);
+  });
+
+  test('a wrapped long hex run is masked where a single-row sha stays readable', () => {
+    // A hex alphabet caps entropy at four bits per character, so a hex credential cannot clear
+    // the entropy rule; a wrapped screen cannot tell it from a hash. The line rule keeps a sha
+    // on one row readable.
+    const hex = '0123456789abcdef0123456789abcdef0123456789abcdef';
+    expect(maskSecretsLine(hex)).toBe(hex);
+    const rows = ['done', `${hex.slice(0, 24)}  `, hex.slice(24)];
+    // The ordinary row the joined reading also touched may be masked too (the safe error).
+    expect(maskSecretRows(rows).slice(1).map((row) => row.trim())).toEqual(['[masked]', '[masked]']);
+  });
+
+  test('a private-key header wrapped at a space is masked with its other half', () => {
+    // Trimming removes the space the header rule needs, so each half alone is a match and masks
+    // the row it continues on.
+    expect(maskSecretRows(['-----BEGIN ', 'OPENSSH PRIVATE KEY-----'])).toEqual(['[masked]', '[masked]']);
+    expect(maskSecretRows(['-----BEGIN'])).toEqual(['[masked]']);
+  });
+
+  test('a sha split across two rows is masked: a wrapped hex run cannot be told from a secret', () => {
     const rows = [`commit ${sha.slice(0, 20)}`, `${sha.slice(20)} done`];
-    expect(maskSecretRows(rows)).toEqual(rows);
+    expect(maskSecretsLine(`commit ${sha}`)).toBe(`commit ${sha}`);
+    expect(maskSecretRows(rows)).toEqual(['commit [masked]', '[masked] done']);
   });
 
   test('a uuid split across two rows stays readable', () => {

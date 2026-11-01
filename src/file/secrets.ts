@@ -110,10 +110,14 @@ function maskOnce(line: string, fs: FsReader): string {
  * the screen cannot tell a wrap from a real line break — and the same patterns judge the join as
  * judge a line (one source of truth). Only a span that crosses a join is taken from it: a token
  * (however the wrap fell inside it, even inside its prefix), a URL's userinfo, a private-key
- * header, or a random-looking word. If any reading finds a token, every row it touches is masked
- * on that row; masking an ordinary word the reading also touched is the safe error. The row count
- * never changes: a peek prints the same number of rows it read, and a sha or UUID that spans a
- * wrap stays readable.
+ * header, or a random-looking word. A randomness judgement is made on the run and on every piece
+ * of it between two of its boundaries — a wrap can join an ordinary word to a credential's front,
+ * so the run alone may fail a judgement the credential's own piece passes. A private-key header is
+ * judged by halves too: a row holding a start or an end marker is masked with the row it continues
+ * on, the space a word wrap removes included. If any reading finds a token, every row it touches
+ * is masked on that row; masking an ordinary word the reading also touched is the safe error. The
+ * row count never changes: a peek prints the same number of rows it read; a UUID that spans a wrap
+ * stays readable, while a wrapped long hex run is masked because it cannot be told from a secret.
  */
 export function maskSecretRows(rows: readonly string[], fs: FsReader = defaultFs): string[] {
   // The screen without its padding, and where each character of it sits among the printed rows.
@@ -141,8 +145,12 @@ export function maskSecretRows(rows: readonly string[], fs: FsReader = defaultFs
     const end = originals[span.end - 1];
     if (start !== undefined && end !== undefined) spans.push({ start, end: end + 1 });
   }
-  if (spans.length === 0) return rows.map((row) => maskSecretsLine(row, fs));
+  const headerRows = headerMarkerRows(rows);
+  if (spans.length === 0) {
+    return rows.map((row, index) => (headerRows.has(index) ? '[masked]' : maskSecretsLine(row, fs)));
+  }
   return rows.map((row, index) => {
+    if (headerRows.has(index)) return '[masked]';
     const rowStart = rowStarts[index] ?? 0;
     const rowEnd = rowStart + row.length;
     const fragments: Span[] = [];
@@ -169,6 +177,28 @@ export function maskSecretRows(rows: readonly string[], fs: FsReader = defaultFs
   });
 }
 
+/**
+ * Rows a private-key header marker touches. A wrap can fall at a space, and trimming a row
+ * removes it, so neither the joined header nor one row alone holds the whole marker. A row
+ * holding a start marker without its end half continues on the next row; a row holding the end
+ * half without its start continues from the previous one; an end marker without its end half
+ * continues on the next row too; a header whole on its row needs no neighbour. Masking a
+ * neighbour an ordinary row shares is the safe error.
+ */
+function headerMarkerRows(rows: readonly string[]): Set<number> {
+  const masked = new Set<number>();
+  rows.forEach((row, index) => {
+    const startHalf = row.includes('-----BEGIN');
+    const endHalf = row.includes('PRIVATE KEY-----');
+    const endMarker = row.includes('-----END');
+    if (!startHalf && !endHalf && !endMarker) return;
+    masked.add(index);
+    if (((startHalf || endMarker) && !endHalf) && index + 1 < rows.length) masked.add(index + 1);
+    if (endHalf && !startHalf && index > 0) masked.add(index - 1);
+  });
+  return masked;
+}
+
 /** The secret spans of the screen read without its padding that cross at least one row join. */
 function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Span[] {
   const spans: Span[] = [];
@@ -181,7 +211,18 @@ function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Sp
     // puts the entire credential in the next row, where no line-level URL rule could see it.
     if (crosses(match.index ?? 0, (match.index ?? 0) + match[0].length)) spans.push({ start, end });
   }
-  for (const match of text.matchAll(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g)) {
+  // The space after a marker word can be the one a wrap removes, so the joined pattern lets it
+  // go: the marker words themselves are contiguous in the joined reading whatever the split.
+  for (const match of text.matchAll(/-----BEGIN[A-Z ]*PRIVATE[ ]?KEY-----/g)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (crosses(start, end)) spans.push({ start, end });
+  }
+  // The end line's marker words can wrap anywhere too, and the row halves rule only reaches the
+  // marker's own row and one neighbour: a wrap inside `-----END` two rows above the end half
+  // would leave the first piece. The joined reading has no spaces to lose inside the marker
+  // words, so it matches the end line over any split.
+  for (const match of text.matchAll(/-----END[A-Z ]*PRIVATE[ ]?KEY-----/g)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (crosses(start, end)) spans.push({ start, end });
@@ -207,10 +248,28 @@ function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Sp
     }
     runStart = runEnd;
   }
+  // A randomness judgement is made on every reading of the run: the run itself, and every piece
+  // of it between two of its boundaries — a row start and a row end are both boundaries, and a
+  // wrap can join an ordinary word to the front of a credential. The run alone can fail a
+  // judgement the credential's own piece passes. A match masks that piece: it is bounded by the
+  // same boundaries the judgement used, so no part of the reading is left behind.
   for (const match of text.matchAll(/(^|[\s"'=,;])([^\s"'=,;]+)/g)) {
     const start = (match.index ?? 0) + (match[1] ?? '').length;
     const end = (match.index ?? 0) + match[0].length;
-    if (crosses(start, end) && looksRandom(match[2] ?? '', fs)) spans.push({ start, end });
+    if (!crosses(start, end)) continue;
+    const boundaries = [start, ...joins.filter((boundary) => boundary > start && boundary < end), end];
+    for (let from = 0; from < boundaries.length - 1; from += 1) {
+      for (let to = from + 1; to < boundaries.length; to += 1) {
+        const pieceStart = boundaries[from] ?? 0;
+        const pieceEnd = boundaries[to] ?? 0;
+        const piece = text.slice(pieceStart, pieceEnd);
+        // A base64 word's `=` padding is a separator to the word scan, so it falls outside the
+        // match; it is part of the credential and is masked with it.
+        let maskedEnd = pieceEnd;
+        while (text.charAt(maskedEnd) === '=') maskedEnd += 1;
+        if (looksRandom(piece, fs) || looksHexSecret(piece)) spans.push({ start: pieceStart, end: maskedEnd });
+      }
+    }
   }
   return spans;
 }
@@ -244,6 +303,15 @@ function looksRandom(word: string, fs: FsReader): boolean {
   let entropy = 0;
   for (const count of counts.values()) entropy -= (count / word.length) * Math.log2(count / word.length);
   return entropy > 4;
+}
+
+/**
+ * A plain hex run as long as a key. A hex alphabet caps entropy at four bits per character, so a
+ * hex credential can never clear `looksRandom`'s threshold; a wrapped screen cannot tell it from
+ * a hash, so it is masked there. The line rule keeps a single-row sha readable.
+ */
+function looksHexSecret(word: string): boolean {
+  return word.length >= 32 && /^[0-9a-fA-F]+$/.test(word);
 }
 
 /**
