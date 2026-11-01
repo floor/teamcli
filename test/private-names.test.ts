@@ -269,6 +269,20 @@ describe('scanPrivateTree', () => {
     expect(scan.problem).not.toContain(bad);
     expect(scan.problem).not.toContain('fatal');
   });
+
+  test('a NUL byte in a tracked file does not hide its content hits', () => {
+    const root = tree({
+      'notes/after-nul.txt': `before\u0000${SECRET}\nclean\n`,
+      'notes/later.txt': `nul\u0000here\n${SECRET}\n`,
+    });
+    const scan = scanPrivateTree(root, [source('names', [{ source: SECRET, scope: ['content'] }])]);
+    expect('problem' in scan).toBe(false);
+    if ('problem' in scan) return;
+    expect(scan.hits).toEqual([
+      { origin: 'names', ordinal: 1, path: 'notes/after-nul.txt', line: 1 },
+      { origin: 'names', ordinal: 1, path: 'notes/later.txt', line: 2 },
+    ]);
+  });
 });
 
 describe('scanPrivateLines', () => {
@@ -329,6 +343,14 @@ describe('the check command', () => {
     expect(result.stderr).toContain('private names entry 1');
     expect(result.stderr).not.toContain(SECRET);
     expect(result.stderr).not.toContain(OTHER);
+  });
+
+  test('a NUL byte in a tracked file still fails the check', () => {
+    const root = tree({ 'notes/nul.txt': `before\u0000${SECRET}\n` });
+    const result = run(root, ['--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('notes/nul.txt:1');
+    expect(result.stderr).not.toContain(SECRET);
   });
 
   test('a missing default list is a visible skip, not a failure', () => {

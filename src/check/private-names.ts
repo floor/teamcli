@@ -270,9 +270,11 @@ function addScratch(path: string, files: readonly string[]): boolean {
   return added.status === 0;
 }
 
-/** Runs the authoritative engine with the pattern on standard input; stderr is never forwarded. */
+/** Runs the authoritative engine with the pattern on standard input; stderr is never forwarded.
+ *  `-a` reads every file as text: a NUL byte makes git call a file binary, and skipping it would
+ *  hide the names it carries. */
 function grep(repo: string, pattern: string, pathspec: string): { status: number; stdout: string } {
-  const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-I', '-E', '-f', '-', '--', pathspec], {
+  const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-a', '-E', '-f', '-', '--', pathspec], {
     input: `${pattern}\n`,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -507,11 +509,13 @@ function messageAfterHeaders(object: string): string | null {
  * lines follow, and exactly those lines are consumed, so added content can never be mistaken for
  * a file header and a path is never derived from anything but a `+++ ` header. Renames are turned
  * into a deletion and an addition (`--no-renames`) so the new side always carries a full path.
+ * `--text` gives a binary-looking file the same hunks as a text one: a NUL byte must not keep the
+ * lines it carries out of the corpus.
  */
 export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
   const diff = spawnSync(
     'git',
-    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', base, '--'],
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--text', base, '--'],
     { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
   );
   if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };

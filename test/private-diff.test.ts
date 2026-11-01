@@ -159,6 +159,16 @@ describe('the diff check command', () => {
     expect(result.stderr).not.toContain(SECRET);
   });
 
+  test('a NUL in an added file does not hide its line', () => {
+    const base = repo({ 'keep.txt': 'clean\n' }, 'base');
+    write(base.dir, { 'notes/nul.txt': `before\u0000${SECRET}\n` });
+    commit(base.dir, 'add a NUL-bearing file');
+    const result = run(base.dir, ['--base', base.sha, '--private-names', listFile(`${SECRET}\n`)]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('notes/nul.txt:1');
+    expect(result.stderr).not.toContain(SECRET);
+  });
+
   test('a removed line is not scanned and a clean diff exits 0', () => {
     const base = repo({ 'keep.txt': `${SECRET}\n` }, 'base');
     write(base.dir, { 'keep.txt': 'clean\n' });
