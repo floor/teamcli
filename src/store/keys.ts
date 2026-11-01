@@ -8,7 +8,7 @@
 // own fingerprint. No key store of the system is touched — no Keychain, no
 // prompt — only these files, under the home `team` was given.
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from 'node:crypto';
-import { linkSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -179,6 +179,28 @@ export function recordedGeneration(root: string, home: string = homedir()): Gene
   }
 }
 
+/**
+ * Whether this project's approval generation is there, provably absent, or cannot be told apart
+ * from absent. `recordedGeneration` answers null both for an absent entry and for one it cannot
+ * read — a virgin project and a project whose generation is lost behind a broken file are
+ * different rules, so a reader that must tell them apart asks this first. An entry at the path is
+ * `recorded` whether or not it parses, because the generation is written before the record and
+ * outlives it; a path that cannot be listed is `unknown`, never `absent`.
+ */
+export type GenerationPresence = 'absent' | 'recorded' | 'unknown';
+
+export function generationPresence(root: string, home: string = homedir()): GenerationPresence {
+  try {
+    lstatSync(generationPath(root, home));
+    return 'recorded';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // No entry where the path should be: a project that never recorded one. Any other answer
+    // (an unreadable folder above it) is not an absence, and the reader refuses rather than
+    // calling the project virgin.
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown';
+  }
+}
 
 /**
  * Moves the generation of this root to the next number and returns it, written
