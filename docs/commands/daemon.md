@@ -77,8 +77,11 @@ during that stop is not a verdict on the new unit. When the new daemon still can
 previous unit is put back and the daemon its program names is started again, so a failed refresh
 leaves a running daemon and a failure line rather than an empty machine. The refusal says which
 happened: the previous daemon was put back and started again, or no daemon was started. Either
-way the command exits 1. `--dry-run` prints what it would do, including those steps, and writes
-nothing: `… would install …; nothing was written`.
+way the command exits 1. A failure that leaves no daemon running also names the command that
+starts one again — this install with the roots and opt-ins it recorded — and, when the earlier
+definition is still on disk, where it is kept; the `--json` refusal carries the same command as
+its `repair`. `--dry-run` prints what it would do, including those steps, and writes nothing:
+`… would install …; nothing was written`.
 
 `uninstall` removes the unit. A machine that never carried one is not an error:
 `team daemon: not installed; nothing to remove`, exit 0; a removed unit prints
@@ -117,7 +120,8 @@ Under the machine folder `~/.config/team`: the daemon's state record
 hosted features and stuck requests), the local socket `daemon.sock` (mode 0600 in a 0700 folder),
 the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
 remove the user service unit the platform adapter owns; no command prints that path as prose
-except under `--json`. Each hosted checkout's team file is read to find its send and bus
+except under `--json` and in the refusal of an install that leaves no daemon running, which names
+where a kept unit is. Each hosted checkout's team file is read to find its send and bus
 endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
@@ -154,7 +158,7 @@ no-terminal start admitted; every other no-terminal caller is refused (`daemon.r
 | `run` finds one already serving | `team daemon: already running (pid <pid>)` | 0 |
 | `install --dry-run` | the plan, the steps a refresh takes, and `nothing was written` | 0 |
 | `install` writes and registers the unit | `team daemon: installed for <n> checkout(s); …` | 0 |
-| `install` refused after a refresh: the service manager would not start the new unit | `team daemon: <reason>`, naming whether the previous daemon was put back and started again or no daemon was started | 1 |
+| `install` refused after a refresh: the service manager would not start the new unit | `team daemon: <reason>`, naming whether the previous daemon was put back and started again or no daemon was started; a failure leaving none running adds the owner-runs rerun command and where a kept unit is | 1 |
 | `uninstall` removes the unit, or finds none | `uninstalled; …` or `not installed; nothing to remove` | 0 |
 | `fault-watch` faults the one named route's hosted run | `faulted the hosted watch for <folder> (route <id>); …` | 0 |
 | `fault-watch --dry-run` | the plan and `nothing was written` | 0 |
@@ -174,4 +178,7 @@ plain dry run prints, so a script sees the same stop, retry and rollback plan. A
 `--json` prints the `team.error` document with its `daemon.*` id — `daemon.install-failed` for a
 failed install with no earlier unit, `daemon.install-rolled-back` when the previous unit was put
 back and its daemon started again, and `daemon.install-rollback-failed` when no daemon was
-started.
+started. The two that leave no daemon running set `repair` to the owner-runs sentence naming
+that rerun — `the owner runs` followed by the exact `team daemon install --root <folder> …`
+command, carrying the roots and opt-ins the failed install recorded; `daemon.install-rolled-back`
+leaves `repair` null because a daemon is running again.

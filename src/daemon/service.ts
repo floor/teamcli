@@ -49,18 +49,24 @@ export type ServicePlan = {
 /**
  * What a failed install left behind, named for the daemon it leaves running:
  *
- * - `refused`: there was no earlier unit to go back to, so the failed install leaves none; the
- *   refusal line says so and the command exits non-zero.
+ * - `refused`: nothing was started and no earlier definition was put back — the attempt failed
+ *   before it offered a load, or the manager refused the only definition there was; the refusal
+ *   line says so and the command exits non-zero.
  * - `restored`: the earlier unit was put back and the daemon its program names was started
  *   again, so the machine still has a daemon under the service manager.
- * - `lost`: the earlier unit was put back, but its daemon could not be started again; the
- *   refusal names that plainly and the command exits non-zero, so the failure is never quiet.
+ * - `lost`: nothing was started and the earlier unit could not be put back and started again;
+ *   the refusal names that plainly and the command exits non-zero, so the failure is never quiet.
+ *
+ * `kept` tells the command where the earlier definition stands, so a failure that leaves no
+ * daemon running can say where the unit that was kept is: true when that definition is in place
+ * after the failure (put back, or never overwritten), false when it is not there.
  */
 export type ServiceInstallFailure = {
   ok: false;
   why: string;
   detail: string | null;
   outcome: 'refused' | 'restored' | 'lost';
+  kept: boolean;
 };
 
 export type ServiceInstallResult = { ok: true; unitPath: string } | ServiceInstallFailure;

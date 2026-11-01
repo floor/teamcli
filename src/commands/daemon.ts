@@ -34,6 +34,7 @@ import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
+import { shellQuote } from '../profiles/profile.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
@@ -499,6 +500,20 @@ const INSTALL_STEPS: readonly string[] = [
   'if it still cannot start, the previous unit is put back and its daemon started again',
 ];
 
+/**
+ * The command that starts a daemon again after an install that left none running: this install
+ * with the roots it recorded and the opt-ins it was given, each root quoted so it reaches the
+ * rerun whole. Rerunning install is the whole recovery — the definition a failed refresh kept is
+ * already where the service manager reads it — and nothing here names a platform's own command.
+ */
+function installAgain(roots: readonly string[], parsed: Parsed): string {
+  const parts = ['team', 'daemon', 'install'];
+  for (const root of roots) parts.push('--root', shellQuote(root));
+  if (parsed.presence) parts.push('--presence');
+  if (parsed.watch) parts.push('--watch');
+  return parts.join(' ');
+}
+
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const home = sources.home ?? homedir();
@@ -702,12 +717,27 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // exit: daemon.install-rolled-back
       return 1;
     }
+    // No daemon is running: the line names the command that starts one again, and where a kept
+    // earlier unit is, so the failure is actionable without reading the log afterwards.
+    const again = installAgain(named.roots, parsed);
+    const repair = `the owner runs \`${again}\``;
+    const keptAt = installed.kept ? `; the previous unit is kept at ${plan.unitPath}` : '';
     if (installed.outcome === 'lost') {
-      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rollback-failed', message: installed.why, repair: null });
+      refuse(io, parsed.json, 'daemon', {
+        id: 'daemon.install-rollback-failed',
+        message: installed.why,
+        repair,
+        plain: `${installed.why}; ${repair} to start a daemon again${keptAt}`,
+      });
       // exit: daemon.install-rollback-failed
       return 1;
     }
-    refuse(io, parsed.json, 'daemon', { id: 'daemon.install-failed', message: installed.why, repair: null });
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.install-failed',
+      message: installed.why,
+      repair,
+      plain: `${installed.why}; ${repair} to try again${keptAt}`,
+    });
     // exit: daemon.install-failed
     return 1;
   }

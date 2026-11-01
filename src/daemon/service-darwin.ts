@@ -125,12 +125,12 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const loadDetail = (result: ServiceRunResult): string =>
     `the load exited ${String(result.status)}: ${result.stderr.trim().split('\n').slice(-1)[0] ?? ''}`;
 
-  const refused = (what: string, detail: string, outcome: ServiceInstallFailure['outcome']): ServiceInstallResult => ({
-    ok: false,
-    why: what,
-    detail,
-    outcome,
-  });
+  const refused = (
+    what: string,
+    detail: string,
+    outcome: ServiceInstallFailure['outcome'],
+    kept: boolean,
+  ): ServiceInstallResult => ({ ok: false, why: what, detail, outcome, kept });
 
   /**
    * The earlier definition goes back and its daemon is started again, so a refresh the service
@@ -155,12 +155,14 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
           'the system service manager refused to start the daemon and the service definition could not be removed',
           `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
           'refused',
+          false,
         );
       }
       return refused(
         'the system service manager refused to start the daemon',
         `${failDetail}; no earlier unit was installed, so no daemon is running`,
         'refused',
+        false,
       );
     }
     // The earlier unit goes back before the manager is asked to load it: the file is the
@@ -173,6 +175,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
         `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
         'lost',
+        false,
       );
     }
     run('launchctl', ['bootout', service]);
@@ -182,12 +185,14 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         'the system service manager refused to start the new daemon; the previous one was put back and started again',
         `${failDetail}; the earlier unit was put back and its daemon started`,
         'restored',
+        true,
       );
     }
     return refused(
       'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
       `${failDetail}; the earlier unit was put back, and ${loadDetail(back)}`,
       'lost',
+      true,
     );
   };
 
@@ -211,10 +216,15 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
             why: 'the existing service unit could not be read',
             detail: error instanceof Error ? error.message : null,
             outcome: 'refused',
+            // Unreadable is not a definition the command can point the owner at.
+            kept: false,
           };
         }
       }
       let temporary: string | null = null;
+      // Whether the rename put the new definition at `path`, replacing any earlier one: a failure
+      // after that point leaves no earlier unit for the command to point the owner at.
+      let placed = false;
       try {
         mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
         temporary = `${path}.${String(process.pid)}.tmp`;
@@ -222,6 +232,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         chmodSync(temporary, 0o600);
         renameSync(temporary, path);
         temporary = null;
+        placed = true;
         chmodSync(path, 0o600);
       } catch (error) {
         if (temporary !== null) {
@@ -236,6 +247,8 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
           why: 'the service unit could not be written',
           detail: error instanceof Error ? error.message : null,
           outcome: 'refused',
+          // Before the rename the earlier definition is still on disk; after it, the new one is.
+          kept: placed ? false : prior !== null,
         };
       }
       // A job the manager already holds under our label is the daemon a refresh replaces: the

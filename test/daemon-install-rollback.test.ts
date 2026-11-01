@@ -4,7 +4,9 @@
 // the new load is offered again while the manager refuses (the earlier stop may still be
 // finishing), and a load that still fails puts the previous unit back and starts its daemon
 // again — or says plainly that no daemon was started. The command scenes prove the failure
-// exits non-zero under its own contract row.
+// exits non-zero under its own contract row, and that a failure leaving no daemon running names
+// the recorded rerun command (its roots and opt-ins) and where a kept unit is — the same command
+// in the JSON `repair` — so a rollback that fails is actionable, not just reported.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,7 +15,13 @@ import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { daemonLogPath } from '../src/daemon/paths.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
-import type { ServiceManager, ServiceProgram, ServiceRunResult, ServiceRunner } from '../src/daemon/service.ts';
+import type {
+  ServiceInstallFailure,
+  ServiceManager,
+  ServiceProgram,
+  ServiceRunResult,
+  ServiceRunner,
+} from '../src/daemon/service.ts';
 import { testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -43,10 +51,10 @@ seats:
 
 const bases: string[] = [];
 
-function scratch(): { root: string; home: string } {
+function scratch(name = 'repo'): { root: string; home: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-daemon-install-')));
   bases.push(base);
-  const root = join(base, 'repo');
+  const root = join(base, name);
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
@@ -104,6 +112,19 @@ function managerWith(script: Script, sleeps: number[] = []): { manager: ServiceM
   const { runner, calls } = synthetic(script);
   const manager = darwinServiceManager({ runner, uid: 501, sleep: (ms) => sleeps.push(ms) });
   return { manager, calls };
+}
+
+/** A manager that answers an install with one fixed failure and touches nothing, so a command
+ *  scene can name a failure the live adapter only reaches through an unwritable folder. */
+function fakeManager(failure: ServiceInstallFailure): ServiceManager {
+  const path = (home: string): string => join(home, 'service-unit');
+  return {
+    kind: 'system-service-manager',
+    unitPath: path,
+    plan: (home) => ({ unitPath: path(home), program: ['team'] }),
+    install: () => failure,
+    uninstall: () => ({ ok: false, why: 'an uninstall is not part of this scene', detail: null }),
+  };
 }
 
 /** The earlier unit this refresh replaces: one successful install, read back byte for byte. */
@@ -174,6 +195,8 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('restored');
+    // The earlier definition is the one in place, and it is the one running.
+    expect(result.kept).toBe(true);
     expect(result.why).toBe(
       'the system service manager refused to start the new daemon; the previous one was put back and started again',
     );
@@ -195,6 +218,8 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('lost');
+    // Nothing runs, but the earlier definition is still there for the command to name.
+    expect(result.kept).toBe(true);
     expect(result.why).toBe(
       'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
     );
@@ -213,6 +238,8 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('refused');
+    // The definition it wrote was taken back out, so there is no kept unit to name.
+    expect(result.kept).toBe(false);
     expect(result.why).toBe('the system service manager refused to start the daemon');
     expect(existsSync(manager.unitPath(home))).toBe(false);
     // The offers are bounded: the first, then the nine of the retry, and no more.
@@ -240,6 +267,8 @@ describe('the command reports a failed refresh with its own row and a daemon sti
       'team daemon: the system service manager refused to start the new daemon; the previous one was put back and started again',
     );
     expect(io.err).not.toContain('launchctl');
+    // The rollback left a daemon running, so there is no recovery command to give.
+    expect(io.err).not.toContain('the owner runs');
     // The daemon log carries the technical failure and the rollback, so the incident is
     // diagnosable after the one line has gone by.
     const log = readFileSync(daemonLogPath(home), 'utf8');
@@ -269,6 +298,91 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const document = JSON.parse(io.out) as { error: { id: string; message: string } };
     expect(document.error.id).toBe('daemon.install-rollback-failed');
     expect(document.error.message).toContain('no daemon was started');
+  });
+
+  test('a failure that leaves no daemon names the recorded command that starts one again, and the kept unit', async () => {
+    const { root, home, manager } = refuseRefresh([LOAD_REFUSED]);
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('no daemon was started');
+    // The exact rerun, carrying the root this install recorded, and where the unit it kept is.
+    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to start a daemon again`);
+    expect(io.err).toContain(`; the previous unit is kept at ${manager.unitPath(home)}`);
+    expect(io.err).not.toContain('launchctl');
+  });
+
+  test('install --json sets repair to the same rerun, in the owner-runs shape the other repairs use', async () => {
+    const { root, home, manager } = refuseRefresh([LOAD_REFUSED]);
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { repair: string | null } };
+    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root}\``);
+  });
+
+  test('the opt-ins this install was given are part of the rerun command', async () => {
+    const { root, home, manager } = refuseRefresh([LOAD_REFUSED]);
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install', '--presence', '--watch', '--json'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { repair: string | null } };
+    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root} --presence --watch\``);
+  });
+
+  test('a first install the manager refuses names the rerun to try again and no kept unit', async () => {
+    const { root, home } = scratch();
+    const { manager } = managerWith({ load: [LOAD_REFUSED] });
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to try again`);
+    // Its own definition was taken back out, so there is no unit to point the owner at.
+    expect(io.err).not.toContain('is kept at');
+  });
+
+  test('a lost rollback whose earlier unit could not be put back names no unit path', async () => {
+    const { root, home } = scratch();
+    const manager = fakeManager({
+      ok: false,
+      why: 'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
+      detail: null,
+      outcome: 'lost',
+      kept: false,
+    });
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('could not be put back; no daemon was started');
+    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to start a daemon again`);
+    expect(io.err).not.toContain('is kept at');
+  });
+
+  test('a root with a space reaches the rerun quoted, so the recorded checkout arrives whole', async () => {
+    const { root, home } = scratch('my repo');
+    const manager = fakeManager({
+      ok: false,
+      why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      detail: null,
+      outcome: 'lost',
+      kept: false,
+    });
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain(`--root '${root}'`);
   });
 });
 
