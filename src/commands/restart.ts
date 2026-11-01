@@ -76,7 +76,7 @@ import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../o
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordsOf, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -1252,9 +1252,10 @@ function modelIdWords(text: string): string[] {
   return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
 }
 
-/** The model id a launch line names with `--model`, where it names one. */
-function launchModelId(launch: string): string | null {
-  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(launch);
+/** The model id a launch line names with `--model`, where it names one. Read from the CLI's own
+ *  words, so a flag inside a trailing quoted script counts. */
+function launchModelId(cli: string, launch: string): string | null {
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(cliWordsOf(cli, launch));
   return match?.[1] ?? null;
 }
 
@@ -1276,7 +1277,7 @@ export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
   }
   const banner = bannerModel(screen);
   if (banner !== null) {
-    const expected = launchModelId(seat.launch) ?? seat.model;
+    const expected = launchModelId(seat.cli, seat.launch) ?? seat.model;
     const wanted = modelIdWords(expected);
     const got = modelIdWords(banner);
     const same = wanted.length === got.length && wanted.every((word) => got.includes(word));

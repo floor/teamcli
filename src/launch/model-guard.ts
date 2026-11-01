@@ -13,7 +13,7 @@ import {
   modelRuleSentence,
   modelRuleUnknownSentence,
 } from '../policy/model-rule.ts';
-import { profileFor } from '../profiles/index.ts';
+import { cliWordsOf, profileFor } from '../profiles/index.ts';
 
 export { readEntityModelRule, type EntityModelRule };
 
@@ -28,13 +28,16 @@ export type LaunchModel =
 export function launchModelOf(seat: Pick<Seat, 'cli' | 'launch'>): LaunchModel {
   const profile = profileFor(seat.cli);
   if (profile === null) return { kind: 'none' };
-  const id = profile.modelIdOf(seat.launch);
+  // The CLI's own words: a model flag inside a trailing quoted script counts, and a shell's
+  // options before that script are not the CLI's.
+  const words = cliWordsOf(seat.cli, seat.launch);
+  const id = profile.modelIdOf(words);
   if (id === null) return { kind: 'none' };
   const lab = labOfModel(id);
   if (lab !== undefined) return { kind: 'lab', model: id, lab };
   // The id names no maker this version knows; the profile's own reading of a display word is
   // the only other word the line gives, and it is used only when it proves one.
-  const named = profile.modelOf(seat.launch);
+  const named = profile.modelOf(words);
   const namedLab = named === null ? undefined : labOfModel(named.model);
   if (named === null || namedLab === undefined) return { kind: 'unknown', model: id };
   return { kind: 'lab', model: named.model, lab: namedLab };
