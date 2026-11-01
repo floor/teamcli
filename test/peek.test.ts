@@ -469,6 +469,76 @@ describe('a screen is masked before it is printed', () => {
     expect(maskSecretRows(rows)).toEqual(rows);
   });
 
+  test('a uuid split across two rows stays readable', () => {
+    const rows = [`request ${uuid.slice(0, 18)}`, `${uuid.slice(18)} done`];
+    expect(maskSecretRows(rows)).toEqual(rows);
+  });
+
+  test('terminal padding before the wrap does not expose the token', () => {
+    // Builder-3's measured probe: a prefix and ten body characters, then the padding a terminal
+    // pads the row with, then the remaining twenty-six characters on the next row. Removing the
+    // whitespace from the printed rows must not recover the key.
+    const body = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = `ghp_${body}`;
+    for (const pad of [' ', '    ', ' '.repeat(80)]) {
+      const rows = [`deploy token ${token.slice(0, 14)}${pad}`, `${token.slice(14)} done`];
+      expect({ pad, masked: maskSecretRows(rows) })
+        .toEqual({ pad, masked: ['deploy token [masked]', '[masked] done'] });
+    }
+  });
+
+  test('a prefix split across rows is still a token, whatever precedes it', () => {
+    // Builder-3's second probe: no row holds a full prefix, and the bracket on the first row
+    // blocks the randomness fallback; a row start is a token boundary all the same.
+    const body = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = `ghp_${body}`;
+    const rows = ['[done', 'gh', `p_${body.slice(0, 12)}`, `${body.slice(12)} step`];
+    expect(maskSecretRows(rows)).toEqual(['[done', '[masked]', '[masked]', '[masked] step']);
+    expect(maskSecretRows(rows).join('')).not.toContain(token);
+  });
+
+  test('a prefix split inside itself across two rows is masked for every key prefix', () => {
+    const body = 'abcdefghijklmnopqrstuvwx';
+    for (const prefix of KEY_PREFIXES) {
+      for (let cut = 1; cut < prefix.length; cut += 1) {
+        for (const pad of ['', '    ']) {
+          const rows = [`note ${prefix.slice(0, cut)}${pad}`, `${prefix.slice(cut)}${body}`];
+          expect({ prefix, cut, pad, masked: maskSecretRows(rows) })
+            .toEqual({ prefix, cut, pad, masked: ['note [masked]', '[masked]'] });
+        }
+      }
+    }
+  });
+
+  test('a prefix split inside itself across three rows is masked for every key prefix', () => {
+    const body = 'abcdefghijklmnopqrstuvwx';
+    for (const prefix of KEY_PREFIXES) {
+      for (let first = 1; first < prefix.length; first += 1) {
+        for (let second = first + 1; second < prefix.length; second += 1) {
+          for (const pad of ['', '    ']) {
+            const rows = [
+              `note ${prefix.slice(0, first)}${pad}`,
+              `${prefix.slice(first, second)}${pad}`,
+              `${prefix.slice(second)}${body}`,
+            ];
+            expect({ prefix, first, second, pad, masked: maskSecretRows(rows) })
+              .toEqual({ prefix, first, second, pad, masked: ['note [masked]', '[masked]', '[masked]'] });
+          }
+        }
+      }
+    }
+  });
+
+  test('ordinary prose with no secret in it is printed as it stands', () => {
+    // The cost of treating every row join as a token boundary, on a screen with nothing to mask.
+    const rows = [
+      'the quick brown fox jumps over',
+      'the lazy dog while the build runs',
+      'and then the tests come back green',
+    ];
+    expect(maskSecretRows(rows)).toEqual(rows);
+  });
+
   test('a peek masks a wrapped token, and prints the same number of rows it read', async () => {
     const where = place();
     recordSeat(where, 'worker-1', 'pane1');
