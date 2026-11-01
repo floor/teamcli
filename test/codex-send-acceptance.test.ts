@@ -14,10 +14,15 @@
 // 1. Ready: same bound thread, idle, explicit accepts -> one `codex queue --remote unix://<the
 //    probed socket>` line; the send ends `sent (unconfirmed) (native, ...)`, never read, and the
 //    staged record, the fallback marker and the history line all carry the one message id.
-// 2-4. Would-hold (active thread), a reply for another thread, and an idle thread with no
-//    accepts reading: the probe aborts before any queue process, the walk falls back to the drop
-//    file, and the same id/record, the native attempt in the fallback marker, and the `failed`
-//    reason on the history line are all the production walk's own.
+// 2. An active thread is a hold, not unavailability: the pointer is handed to `codex queue`
+//    under the same bounded budget, the probe still reads it live, and the send stays
+//    `sent (unconfirmed)` on the queue's own acceptance.
+// 3-4. A reply for another thread, and an idle thread with no accepts reading: the probe aborts
+//    before any queue process, the walk falls back to the drop file, and the same id/record, the
+//    native attempt in the fallback marker, and the `failed` reason on the history line are all
+//    the production walk's own.
+// 4b. An idle thread that says it does not accept direct input keeps the refusal: its pointer is
+//    not queued, and the walk falls back to the drop exactly as 3-4 do.
 // 5. A relative `CODEX_HOME` names one socket, resolved absolutely from the queue's inherited
 //    cwd: the same route-through-`runSend` acceptance, with the queue handed that absolute path.
 // 6. A relative control socket is resolved the same way by `deliverCodexNativeRoute` itself.
@@ -34,6 +39,9 @@
 //     each hold the real sender's native leg before any probe connection or queue process, and
 //     the drop leg takes the send. Scenes 1 and 5 remain the measured unbound default: a seat
 //     with no managed binding and no record keeps the runtime's own endpoint.
+// 16. A declared order that puts the drop before the seat's inbox is not walked as written when
+//     a listener is standing: the inbox is walked before the drop, and one plain stderr line
+//     says so. With no listener, the order stands and no such line is printed.
 //
 // Scenes 5 and 12-15 run through `runSend`; scenes 6-11 call `deliverCodexNativeRoute` directly
 // because they need route-only options (`remote`/`socketPath`) that `runSend` never supplies, and
@@ -596,7 +604,7 @@ describe('the ordinary send native leg (Codex)', () => {
     expect(entry.failed).toBeUndefined();
   });
 
-  test('a would-hold thread skips the queue and falls back to the drop, same id and native attempt recorded', async () => {
+  test('an active thread holds the pointer in codex queue: the queue takes it, never read as unavailable', async () => {
     const scene = makeScene();
     const server = await startAppServer(
       join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
@@ -607,28 +615,36 @@ describe('the ordinary send native leg (Codex)', () => {
       }),
     );
 
-    const { code, out, calls } = await sendWith(scene, server);
+    const { code, out, err, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
-    expect(calls).toEqual([]);
-
-    const reason = `codex thread ${THREAD_ID} is active (waitingOnUserInput); codex queue would hold the message`;
+    expect(err).toBe('');
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    // The live probe still read the active thread; the pointer was still handed to its queue.
     expect(server.requests).toEqual([
       { method: 'initialize' },
       { method: 'thread/read', threadId: THREAD_ID },
     ]);
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
     expect(recordBody(join(scene.dropDir, MESSAGE_ID)).endsWith('hello')).toBe(true);
-    expect(markerOf(scene).attempts).toEqual(nativeThenDropAttempts(reason));
+    expect(markerOf(scene).attempts).toEqual([
+      expect.objectContaining({
+        route: 'native',
+        outcome: 'delivered',
+        reason: 'pushed to codex queue; no read receipt yet',
+      }),
+    ]);
     const entry = lastEntry(scene);
     expect(entry).toEqual(
       expect.objectContaining({
         id: MESSAGE_ID,
         outcome: 'sent (unconfirmed)',
-        via: 'drop',
-        failed: [`native: ${reason}`],
+        via: 'native',
       }),
     );
+    expect(entry.failed).toBeUndefined();
   });
 
   test('a reply for another thread is not a readiness answer: no queue, drop fallback', async () => {
@@ -669,6 +685,69 @@ describe('the ordinary send native leg (Codex)', () => {
     const entry = lastEntry(scene);
     expect(entry.id).toBe(MESSAGE_ID);
     expect(entry.failed).toEqual([`native: ${reason}`]);
+  });
+
+  test('an idle thread that declines direct input keeps its refusal: no queue line, drop fallback', async () => {
+    const scene = makeScene();
+    const server = await startAppServer(
+      join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
+      (threadId) => ({ id: threadId, status: { type: 'idle' }, canAcceptDirectInput: false }),
+    );
+
+    const { code, out, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(calls).toEqual([]);
+
+    const reason = `codex thread ${THREAD_ID} does not currently accept direct turn input; codex queue would hold the message`;
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    expect(markerOf(scene).attempts).toEqual(nativeThenDropAttempts(reason));
+    const entry = lastEntry(scene);
+    expect(entry.id).toBe(MESSAGE_ID);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([`native: ${reason}`]);
+  });
+
+  test('a refused queue is a leg not taken: the drop that follows never claims the runtime queue', async () => {
+    const scene = makeScene();
+    const socketPath = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(socketPath, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    // The records bind this seat's managed endpoint and the conversation its queue is addressed
+    // by, so the class read before the walk is between-turns.
+    recordSeatState(scene, recordedEndpointState(socketPath, RECORD_BINDING, RECORD_BINDING));
+    // The scratch queue process records the call and refuses it.
+    writeFileSync(
+      join(scene.binDir, 'codex'),
+      `#!/bin/sh
+{
+  for arg in "$@"; do printf '%s\\036' "$arg"; done
+  printf '\\n'
+} >> "$CODEX_QUEUE_LOG"
+exit 1
+`,
+      { mode: 0o755 },
+    );
+
+    const { code, out, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    // The queue refused the pointer, and the drop leg took the send: the line follows the leg
+    // actually taken, never the runtime queue the attempt just failed to reach.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    const entry = lastEntry(scene);
+    expect(entry.via).toBe('drop');
+    expect((entry.failed as string[])[0]).toMatch(/^native: /);
   });
 
   test('a relative CODEX_HOME resolves once: the probe and the queue name the same absolute socket', async () => {
@@ -1122,5 +1201,35 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
     expect(queueCalls(scene.queueLog)).toEqual([]);
+  });
+
+  test('a live inbox behind the declared drop is walked, and one plain line says the order did not put it there', async () => {
+    const scene = makeScene('delivery_order: [drop, mcp-inbox]\n');
+    liveInbox(scene);
+    const server = await acceptingServer(scene);
+
+    const { code, out, err, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    // The walk is not the order: the seat's own server is listening, so the record goes to the
+    // inbox it reads rather than to the drop file behind it, and the one line says why.
+    expect(err).toBe(`team send: ${SEAT}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(calls).toEqual([]);
+    expect(server.requests).toEqual([]);
+    expect(lastEntry(scene).via).toBe('mcp-inbox');
+    expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(true);
+  });
+
+  test('a declared drop with no listener behind it stays the drop, with no line about the order', async () => {
+    const scene = makeScene('delivery_order: [drop, mcp-inbox]\n');
+    const server = await acceptingServer(scene);
+
+    const { code, out, err } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(err).not.toContain('the delivery order names the drop before its inbox');
+    expect(lastEntry(scene).via).toBe('drop');
   });
 });

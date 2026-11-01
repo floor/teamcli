@@ -1233,7 +1233,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // never falls back to a route that types or stores, whatever hook its caller built.
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const walk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const declaredWalk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  // A live inbox listener is walked even when the delivery order leaves it out or places it
+  // behind the drop: the listener is the seat's own server standing beside its inbox, so reaching
+  // it puts the record in front of the seat, while the drop file behind it would leave a
+  // listening seat to read the message a turn late. The rest of the order is walked exactly as
+  // written. A human's walk is the drop alone and a watch's walk stores nothing, so neither takes
+  // a leg spliced in here. The plain line beside the walk says the order did not put it there.
+  let inboxSplicedAt = -1;
+  const walk: readonly DeliveryLeg[] = (() => {
+    if (human || directWalk) return [...declaredWalk];
+    const dropAt = declaredWalk.indexOf('drop');
+    const inboxAt = declaredWalk.indexOf('mcp-inbox');
+    if (dropAt === -1 || (inboxAt !== -1 && inboxAt < dropAt)) return [...declaredWalk];
+    if (!inboxLive(dropDir, to.root, to.session, to.seat, host.build?.()).live) return [...declaredWalk];
+    inboxSplicedAt = dropAt;
+    return [
+      ...declaredWalk.slice(0, dropAt),
+      'mcp-inbox' as const,
+      ...declaredWalk.slice(dropAt).filter((leg) => leg !== 'mcp-inbox'),
+    ];
+  })();
   // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
   // the socket. When one of them takes the send, a channel push for the same id would wake the
   // seat a second time, so a stale serving channel is held off before the record is written.
@@ -1454,6 +1474,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
   if (host.direct !== undefined && walk.length > 0) await ensureEpisode();
   let socketNote: string | null = null;
+  // The routes this walk has disproved, so the words a fallback prints follow the legs actually
+  // taken: a socket the walk found unusable, a runtime queue its attempt never reached. Each
+  // lowering keeps every route not yet disproved, and the class is re-read with only those.
+  const walkLost: { socket?: boolean; endpoint?: boolean } = {};
+  const lowerDelivery = (): void => {
+    report.deliveryWords = deliveryWords(classWithout(to, host.home, walkLost, declared), to.seat);
+  };
   for (const [at, leg] of walk.entries()) {
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
@@ -1489,6 +1516,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return sentChannel(io, to.seat, report, ms);
     }
     if (leg === 'mcp-inbox') {
+      // The one line a send whose order put the drop first owes its reader: the walk is not the
+      // order, because this seat's inbox server is listening and a stored copy behind it would be
+      // read a turn late. Printed when the leg is reached, not when it takes the send.
+      if (at === inboxSplicedAt) {
+        io.stderr(`team send: ${to.seat}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
+      }
       // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
       // the message names this seat, session and root with a live pid — and, when this process
       // knows its own build, when that listener's marker names the same build. A listener left
@@ -1598,7 +1631,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // recorded one gone, or a session started before its declaration. The class cached before
       // the walk follows that evidence, so a fallback that ends in the bus inbox never claims a
       // wake the fallback itself just disproved.
-      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to, host.home), to.seat);
+      if (attempt.socketUnusable === true) {
+        walkLost.socket = true;
+        lowerDelivery();
+      }
       markLeg('socket', 'attempted', attempt.reason);
       note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
@@ -1696,8 +1732,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           return sentUnconfirmed(io, to.seat, report, ms, 'native');
         }
         // A held thread, an unreachable or refused queue, or an unreadable policy: the route did
-        // not take the send, and the walk moves to the leg behind it.
+        // not take the send, and the walk moves to the leg behind it. The class cached before
+        // the walk follows that evidence, so a fallback that ends in the bus inbox never claims
+        // the runtime queue this attempt just failed to reach.
         failures.push(`native: ${attempt.reason}`);
+        walkLost.endpoint = true;
+        lowerDelivery();
         continue;
       }
       // Any other CLI has no native route this build can walk: the leg is skipped without a
@@ -1839,6 +1879,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
       markLeg('drop', 'attempted');
+      // The bus inbox is not a wake. The runtime queue this seat may record is no way to reach
+      // it either: nothing handed that queue a pointer, so the words a queue-only class would
+      // print are the one claim this ending disproves.
+      walkLost.endpoint = true;
+      lowerDelivery();
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
       // did, and the sender is told so (src/send/no-pane-messaging.ts).
       if (!human && !dry) {
@@ -4527,11 +4572,21 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | n
   return socketAddressOf(to.address, host.processInfo(to.session, pane), sockets);
 }
 
-/** The class the receiving seat reads under once the walk proved its socket unusable: the socket
+/** The class the receiving seat reads under once the walk proved one route unusable: that route
  *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
- *  it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps the
- *  class the launch line the registry carries implies. */
-function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
+ *  it — its other route, its next turn, or nothing. The evidence this walk did not disprove is
+ *  kept: a failed socket leaves the runtime queue and the event adapter standing, and a failed
+ *  queue leaves the socket and the adapter. A record that cannot be read keeps the class the
+ *  launch line the registry carries implies. */
+function classWithout(
+  to: Aim,
+  home: string | undefined,
+  lost: { socket?: boolean; endpoint?: boolean },
+  /** The receiving team file's row for the seat, when the caller has it: the launch line, human
+   *  word and inbound word the class was first read with. Without it the walk's own reading of
+   *  the seat stands in, exactly as the first read did. */
+  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>,
+): DeliveryClass {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
     record = readState(to.dir).sessions[to.session]?.seats[to.seat];
@@ -4543,7 +4598,7 @@ function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
     root: to.root,
     session: to.session,
     seat: to.seat,
-    declared: { cli: to.cli, launch: record?.launch_line ?? '' },
+    declared: declaredRow ?? { cli: to.cli, launch: record?.launch_line ?? '' },
     ...(record === undefined ? {} : { state: record }),
     ...(home === undefined ? {} : { home }),
   });
@@ -4551,10 +4606,15 @@ function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
     declared: read.evidence.declared,
     watcher: read.evidence.watcher,
     channel: read.evidence.channel,
-    socket: false,
-    endpoint: read.evidence.endpoint,
+    socket: lost.socket === true ? false : read.evidence.socket,
+    endpoint: lost.endpoint === true ? false : read.evidence.endpoint,
     ...(read.evidence.human ? { human: true } : {}),
   });
+}
+
+/** The class once the walk proved its socket unusable. */
+function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
+  return classWithout(to, home, { socket: true });
 }
 
 /** The two endings an address that cannot take a frame has, in the words a person reads: nothing
