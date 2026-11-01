@@ -13,7 +13,6 @@ import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { admitGeneral, type GeneralGrant, type GeneralOp } from './general-grant.ts';
-import { clientPaneGuard } from './pane-guard.ts';
 
 /** Commands that parse `--general` themselves. */
 export const OWN_GENERAL = new Set(['up', 'init', 'config']);
@@ -67,11 +66,6 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   if (general.value === undefined) return { kind: 'usage', why: '--general takes <grant.json>', json };
   const key = take(general.rest, 'key');
   if (!key.present || key.value === undefined) return { kind: 'usage', why: '--general needs --key <client.key>', json };
-  // The pane guard, judged before the grant or the key is opened (see pane-guard.ts): a caller
-  // inside a team pane never acts under a client key. It is a machine guard: no dev-mode setting
-  // lifts it (OD-20261019-49).
-  const pane = clientPaneGuard(io);
-  if (!pane.ok) return { kind: 'refused', why: pane.why, json };
   const home = io.env.HOME ?? homedir();
   const grantPath = resolve(io.cwd, general.value);
   const keyPath = resolve(io.cwd, key.value);

@@ -38,14 +38,10 @@ function grant(ops: GrantOp[], entities: string[] = ['*'], expires = new Date(Da
 }
 const all = grant(['*']);
 
-/** The client's own shell, outside every pane: pinned, so the suite's own placement (maybe inside a
- *  pane) cannot decide the answer. The door is a client-key form and runs the pane guard first. */
-const outside = { kind: 'unplaced', reason: "its parent processes can't be read to the top" } as const;
-
 async function run(argv: string[]): Promise<{ code: number; out: string; err: string }> {
   let out = '';
   let err = '';
-  const io: Io = { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: outside };
+  const io: Io = { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false };
   const code = await main(argv, io);
   return { code, out, err };
 }
@@ -70,9 +66,23 @@ for (const [label, argv] of lines) {
   });
 }
 
+const inPane = { kind: 'seat', name: 'builder-5', pane: 'pane1' } as const;
+
+test('a seat inside a team pane is admitted, dev mode on or off: an owner tool applies changes under a general grant', async () => {
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }] as Record<string, string>[]) {
+    let out = '';
+    let err = '';
+    const io: Io = { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: { ...process.env, HOME: home, ...env }, stdinIsTTY: false, caller: inPane };
+    const code = await main(['daemon', 'status', '--general', all, '--key', a.path], io);
+    expect(code).toBe(0);
+    expect(`${err}${out}`).toContain('admitted by general grant');
+    expect(`${err}${out}`).not.toContain('a client key is not used from inside a team pane');
+  }
+});
+
 test('an unplaced caller (parent chain unreadable) is admitted as the owner too', async () => {
   const { generalDoor } = await import('../src/client/general-door.ts');
-  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: outside };
+  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: { kind: 'unplaced', reason: "its parent processes can't be read to the top" } };
   const door = generalDoor('daemon', ['install', '--general', all, '--key', a.path], io);
   expect(door.kind).toBe('admitted');
   if (door.kind === 'admitted') { expect(door.io.caller).toEqual({ kind: 'owner' }); expect(door.argv).toEqual(['install']); }
@@ -149,7 +159,7 @@ test('every command in the contract declares --general and --key, but the grant-
 
 test('an admitted run carries the verified grant and key paths to the command (io.general)', async () => {
   const { generalDoor } = await import('../src/client/general-door.ts');
-  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: outside };
+  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false };
   const door = generalDoor('daemon', ['install', '--general', all, '--key', a.path], io);
   if (door.kind !== 'admitted') throw new Error(door.kind);
   expect(door.io.general).toEqual({ grant: all, key: a.path });
@@ -169,7 +179,7 @@ test('a unit installed under a general grant runs the daemon under the same gran
 
 test('the service-started run line passes the door while the grant holds, and is refused once it does not', async () => {
   const { generalDoor } = await import('../src/client/general-door.ts');
-  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: outside };
+  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: { kind: 'unplaced', reason: "its parent processes can't be read to the top" } };
   const line = ['run', '--started-by', 'service-manager', '--root', '/r', '--general', all, '--key', a.path];
   const ok = generalDoor('daemon', line, io);
   expect(ok.kind).toBe('admitted');

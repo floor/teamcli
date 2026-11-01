@@ -232,22 +232,23 @@ never printed.
 ### The client pane guard
 
 A client key is the client's, never a seat's. `team send --client`, `team messages --client`,
-`team client keygen`, `team grant --client-request`, `team client general-grant --via --key` and
-every `--general <grant.json> --key <client.key>` form (the general door on every command, and the
-own doors of `up`, `init` and `config`) place their caller with the same parent-process walk the
-owner gates use (never an environment variable) and refuse a caller that runs inside a team pane —
-a seat, an agentless team pane, or a process either started — before the grant or the key is
-opened: exit 1, `send.client-pane`, `messages.client-pane`, `client.keygen.pane`, `grant.refused`,
-`client.general-grant.failed`, `team.general-refused`, or the command's own `*.general-refused`
-row. Every grant-verified client form (`team up
---client`, `team down --client`, `team status --client` and the bundle ops such as `pause`,
-`resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`, `restart` and `sessions`) runs the
-same guard inside `verifyClientUp`, so it is refused with that command's own client refusal
-before its grant or key is read. Keys stay under `~/.config/team-client`, and
-an external client outside the terminal host (an agent CLI included) is not refused. A usage
-error is still judged first and keeps exit 2. The guard is a machine guard, not a policy: no
-dev-mode setting lifts it (OD-20261019-49), and a caller inside a team pane is refused alike with
-dev mode on or off — the lift would hand a seat's own process the key the guard keeps out of it.
+`team client keygen`, `team grant --client-request` and `team client general-grant --via --key`
+place their caller with the same parent-process walk the owner gates use (never an environment
+variable) and refuse a caller that runs inside a team pane — a seat, an agentless team pane, or a
+process either started — before the grant or the key is opened: exit 1, `send.client-pane`,
+`messages.client-pane`, `client.keygen.pane`, `grant.refused` or `client.general-grant.failed`.
+Every grant-verified client form (`team up --client`, `team down --client`, `team status --client`
+and the bundle ops such as `pause`, `resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`,
+`restart` and `sessions`) runs the same guard inside `verifyClientUp`, so it is refused with that
+command's own client refusal before its grant or key is read. The general door (`--general
+<grant.json> --key <client.key>`) and the own doors of `up`, `init` and `config` are deliberately
+not placed: an owner tool applies changes under a general grant from inside a team pane, and the
+grant's own bounds — its ops, entities and expiry — cover that call. Keys stay under
+`~/.config/team-client`, and an external client outside the terminal host (an agent CLI included)
+is not refused. A usage error is still judged first and keeps exit 2. The guard is a machine
+guard, not a policy: no dev-mode setting lifts it (OD-20261019-49), and a caller inside a team
+pane is refused alike with dev mode on or off — the lift would hand a seat's own process the key
+the guard keeps out of it.
 Seatbelt confinement of `~/.config/team-client` for guarded seats belongs to the pane guard
 (`src/guard`), which is not on this line yet.
 

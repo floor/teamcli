@@ -6,7 +6,6 @@ import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../app
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
-import { clientPaneGuard } from '../client/pane-guard.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
@@ -1167,18 +1166,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
   // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
   if (args.values.general !== undefined) {
-    // The pane guard, judged before the grant or the key is opened (see ../client/pane-guard.ts):
-    // a caller inside a team pane never acts under a client key. It is a machine guard: no
-    // dev-mode setting lifts it (OD-20261019-49).
-    const pane = clientPaneGuard(io);
     let entity: string | null = null;
     try {
       const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
       if (here.ok) entity = here.team.entity;
     } catch {}
-    const general = !pane.ok
-      ? { ok: false as const, why: pane.why }
-      : admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
+    const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
     if (!general.ok) {
       refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
       // exit: up.general-refused
