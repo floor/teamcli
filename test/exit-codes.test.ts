@@ -3652,7 +3652,9 @@ async function answered(place: Place, argv: string[], caller: Caller, host: Answ
   return { code, out: io.out, err: io.err };
 }
 
-const QUESTION_VERSION = '2026.10.01-14929f9';
+// The version the scene's host prints, so the scene's own record matches it: a record names one
+// printed version exactly, and the capture switch moved the fixture from 2026.10.01-14929f9.
+const QUESTION_VERSION = '2026.10.14-0f9edde';
 const QUESTION_TEXT = 'Which name do you want to use?';
 
 /** The question-answer records a shipped profile does not carry yet: the scene's own, on the
