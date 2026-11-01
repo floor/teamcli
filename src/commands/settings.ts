@@ -709,13 +709,18 @@ function executeWrite(
   const home = options.home ?? homedir();
   const now = options.now ?? new Date();
   const walked = walkCaller(io);
+  let liftAudit: (() => void) | null = null;
   if (!isOwner(walked)) {
     const message = `only the owner sets a seat's settings, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
     // Dev mode's owner admission for exactly this gate, through the one resolver the sibling
     // owner-only writers use: a placed orchestrator continues with the same warning and audit
     // line; the owner's own path is untouched, and every other caller keeps the refusal. A
     // `--file` write names another record and is never this team's to admit: it keeps the gate.
-    const lift = file === undefined ? devModeOwnerLiftAtCwd(io, { command: 'settings', refusal: message, home, now }) : null;
+    // The audit and the team file's `last_valid` copy wait for the write below: this gate answers
+    // before the request is validated, and a refused or dry run writes neither.
+    const lift = file === undefined
+      ? devModeOwnerLiftAtCwd(io, { command: 'settings', refusal: message, home, now, audit: 'later' })
+      : null;
     if (lift === null || !lift.lifted) {
       if (json) {
         writeJsonError(io, 'settings.not-owner', message, 'the owner runs `team settings set` from a terminal outside herdr', 1, 'owner-only');
@@ -725,6 +730,7 @@ function executeWrite(
       // exit: settings.not-owner
       return 1;
     }
+    liftAudit = lift.audit;
     io.stderr(`${lift.warning}\n`);
   }
   if (file !== undefined) {
@@ -732,9 +738,17 @@ function executeWrite(
     if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
   }
 
-  const current = currentTeam(io.cwd, file, now, home, true);
+  const current = currentTeam(io.cwd, file, now, home, liftAudit === null);
   if (!current.ok) return refuseFile(io, json, current);
   const { team } = current;
+  // A lifted run's `last_valid` copy and audit line are written together, and only after a
+  // successful real write. The copy is the one the same read makes with `remember` on — so a
+  // registry team's own text is remembered too — taken now, after the refusal paths returned.
+  const recordAdmission = (): void => {
+    if (liftAudit === null) return;
+    liftAudit();
+    currentTeam(io.cwd, file, now, home, true);
+  };
   const seat = team.seats.find((one) => one.name === parsed.seat);
   if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);
   const found = agentIdOf(home, current.root, seat.name);
@@ -859,6 +873,7 @@ function executeWrite(
     }
     const written = writeConfigSet(home, { ...plan, target: agentId, settings: checked }, { now });
     if (!written.ok) return planExit(io, json, written.kind, written.why);
+    recordAdmission();
     const changesNotice = recordChanges(current, home, seat.name, agentId, settings, written.written);
     logLine(
       join(current.root, '.agents'),
@@ -922,6 +937,7 @@ function executeWrite(
         return planExit(io, json, 'write', `the setting is already unset; ${repair.why}`);
       }
       if (repair.kind === 'repaired') {
+        recordAdmission();
         const word = repair.action === 'cancel'
           ? 'the stale restart swap it left was taken back'
           : 'the queued restart swap now applies the change that remains signed';
@@ -1012,6 +1028,7 @@ function executeWrite(
     if (written.kind === 'value') return notSetExit(io, json, written.why);
     return planExit(io, json, written.kind, written.why);
   }
+  recordAdmission();
   // A removal reports the record it removed from: the seat's agent id when it has one, and the
   // seat's name when the plan found nothing to remove under a declared name.
   const changesNotice = recordRemovals(current, home, seat.name, targetId, removed, now);
