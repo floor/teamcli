@@ -941,18 +941,25 @@ function hasFlag(words: readonly string[], flags: readonly string[]): boolean {
   return words.some((word) => isFlagWord(word, flags));
 }
 
+/** Whether a word can be a flag's value: of `shape`, and never itself an option. A value
+ *  starting with `-` is the next flag, not this flag's value. */
+function isFlagValue(value: string, shape: RegExp): boolean {
+  return !value.startsWith('-') && shape.test(value);
+}
+
 /** The value a flag names: attached (`--flag=value`) or the next word. The first flag carrying
- *  a value of `shape` wins; null when no flag names one. */
+ *  a value of `shape` wins; null when no flag names one. An option after a flag is never its
+ *  value, so `grok -r --model m` names no conversation. */
 function flagValueIn(words: readonly string[], flags: readonly string[], shape: RegExp): string | null {
   for (let at = 0; at < words.length; at += 1) {
     const word = words[at]!;
     for (const flag of flags) {
       if (word === flag) {
         const value = words[at + 1];
-        if (value !== undefined && shape.test(value)) return value;
+        if (value !== undefined && isFlagValue(value, shape)) return value;
       } else if (word.startsWith(`${flag}=`)) {
         const value = word.slice(flag.length + 1);
-        if (shape.test(value)) return value;
+        if (isFlagValue(value, shape)) return value;
       }
     }
   }
@@ -985,7 +992,7 @@ function flagValueSite(
     for (const flag of flags) {
       if (word.text === flag) {
         const next = words[at + 1];
-        if (next !== undefined && wanted(next.text)) {
+        if (next !== undefined && !next.text.startsWith('-') && wanted(next.text)) {
           return {
             flag,
             value: next.text,
@@ -998,7 +1005,7 @@ function flagValueSite(
         }
       } else if (word.text.startsWith(`${flag}=`)) {
         const value = word.text.slice(flag.length + 1);
-        if (wanted(value)) {
+        if (!value.startsWith('-') && wanted(value)) {
           return {
             flag,
             value,
@@ -1023,7 +1030,7 @@ function sessionIdIn(words: readonly string[]): string | undefined {
     const value = word === '--session-id'
       ? words[at + 1]
       : word.startsWith('--session-id=') ? word.slice('--session-id='.length) : undefined;
-    if (value !== undefined && /^[A-Za-z0-9._-]+$/.test(value)) return value;
+    if (value !== undefined && !value.startsWith('-') && /^[A-Za-z0-9._-]+$/.test(value)) return value;
   }
   return undefined;
 }
