@@ -510,6 +510,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // answers. Until the verdict helper below exists the per-seat answer is false, which holds
   // typing instead of reading a helper that is not initialised yet.
   let seatReady = false;
+  // The per-seat health answer is built after the roots loop (`seatVerdict` below). Until then a
+  // probe answers each route's root-level starting record instead of reading a helper that is not
+  // initialised yet: the machine socket is bound before any root starts, and a large store's bus
+  // start can hold the loop for minutes.
+  let seatsReady = false;
   let heartbeatAt = since;
   let closed = false;
   /** The daemon's own log writer. Like its state record, it stops once admission has closed: a
@@ -547,6 +552,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return routes.map((route) => {
       const presence = presenceWork.find((one) => one.route.root === route.root);
       if (presence === undefined) return { root: route.root };
+      if (!seatsReady) {
+        // The route is known and its presence work exists, but the per-seat answer is still being
+        // wired: answer the root-level starting record. This is an answer, not a refusal, so an
+        // install probe sees a running daemon with a starting root instead of an unanswerable
+        // socket that its bounded wait reads as "no daemon".
+        return {
+          root: route.root,
+          presence: {
+            session: route.session,
+            state: 'pending',
+            healthy: false,
+            checkedAt,
+            why: 'the daemon is still starting this root',
+          },
+        };
+      }
       const healthy = !closed && presence.health.healthy(at);
       const why = healthy
         ? null
@@ -1247,6 +1268,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   ): boolean => seatVerdict(one, seat, at).why === null;
   // From here the per-seat answer a hosted send server may ask is the real one.
   seatReady = true;
+  seatsReady = true;
 
   // One watch per hosted route, on the daemon's existing heartbeat. The run starts at once and
   // performs its first pass; no second timer exists, and a pass that hangs holds nothing the
