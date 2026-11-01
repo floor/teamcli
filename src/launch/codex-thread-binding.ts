@@ -7,16 +7,16 @@
 // after the restart is addressed to a real conversation instead of falling to a pull.
 //
 // The bind is deliberately narrow: only an endpoint recorded under the seat's current presence
-// incarnation is read, only exactly one loaded thread is taken as the seat's own, and the state
-// write re-checks the same incarnation under the state lock so a launch that moved on is never
-// bound to a predecessor's thread. A read that proves nothing leaves both records as they were,
-// and the caller reports the seat pull-only rather than claiming a queue that cannot be
-// addressed.
-import type { Seat } from '../file/types.ts';
+// incarnation is read, only the seat's own agent record — the strict door's team, seat, orphan,
+// session, CLI and stable-handle checks, with the handle required to be the one the state names —
+// is written, and only exactly one loaded thread is taken as the seat's own. The record is
+// selected before the endpoint is read, so a record that is another incarnation's is refused
+// before either record changes. A read that proves nothing leaves both records as they were, and
+// the caller reports the seat pull-only rather than claiming a queue that cannot be addressed.
 import type { CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
-import { findAgent, recordAgentSession } from '../registry/agents.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { recordAgentSession, type Agent } from '../registry/agents.ts';
+import { recordedSeatRecord } from '../registry/resume.ts';
 import { readState, updateState, type SeatState } from '../state.ts';
 
 export type CodexThreadBinding =
@@ -28,6 +28,35 @@ type StateWrite = 'written' | 'named' | 'moved' | 'gone';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The seat's agent record by the strict door every binding uses — team, seat, orphan mark, the
+ *  session it was written in, the CLI, and the stable handle — and by the exact handle the state
+ *  names. A name lookup alone is not identity: the same team and seat name can name another
+ *  incarnation's record, and writing that record's conversation would bind a seat to a record the
+ *  native route refuses. The record is selected before anything is read or written, so a refused
+ *  record leaves the seat state untouched. */
+function strictRecordOf(
+  input: { home: string; root: string; session: string; seat: { name: string; cli: string } },
+  state: SeatState,
+): { kind: 'bound'; agent: Agent } | { kind: 'unbound'; why: string } {
+  const read = recordedSeatRecord({
+    home: input.home,
+    root: input.root,
+    herdrSession: input.session,
+    seat: { name: input.seat.name, cli: input.seat.cli },
+    state,
+  });
+  if (read.kind === 'none') {
+    return { kind: 'unbound', why: 'the seat has no agent record to bind its thread to' };
+  }
+  if (read.kind === 'refused') {
+    return { kind: 'unbound', why: `the seat's agent record is not this seat's own (${read.why})` };
+  }
+  if (state.id === undefined || read.agent.seat_handle !== state.id) {
+    return { kind: 'unbound', why: "the seat's agent record carries no stable handle for this seat" };
+  }
+  return { kind: 'bound', agent: read.agent };
 }
 
 /**
@@ -42,12 +71,20 @@ export async function bindCodexSeatThread(input: {
   root: string;
   dir: string;
   session: string;
-  seat: Seat;
+  seat: { name: string; cli: string };
   state: SeatState | undefined;
   read(endpoint: string): Promise<CodexLoadedThreadsRead>;
 }): Promise<CodexThreadBinding> {
   const state = input.state;
   if (state === undefined) return { kind: 'unbound', why: 'the seat state could not be read' };
+  if (state.id === undefined) {
+    return {
+      kind: 'unbound',
+      why: 'the seat state names no stable id, so its record cannot be told from another incarnation’s',
+    };
+  }
+  const entry = strictRecordOf(input, state);
+  if (entry.kind === 'unbound') return entry;
   const recorded = inspectRecordedCodexEndpoint(state.codex_endpoint, state.presence_binding);
   if (recorded.kind !== 'ok') {
     return {
@@ -117,18 +154,10 @@ export async function bindCodexSeatThread(input: {
     }
   }
   // The two records must agree: the delivery class and the native route both read the state and
-  // the registry, so a thread written to one alone binds nothing. The record is found by the
-  // seat's own stable id, which the launch's registry write already rebound to the live state.
+  // the registry, so a thread written to one alone binds nothing. The record is the one the entry
+  // selected by its exact stable handle, never one found by its seat name alone.
   try {
-    const agent = findAgent(input.home, {
-      team: teamIdOf(input.root),
-      seat: input.seat.name,
-      seatHandle: state.id,
-    });
-    if (agent === null) {
-      return { kind: 'unbound', why: 'the seat has no agent record to bind its thread to' };
-    }
-    recordAgentSession(input.home, agent.id, id);
+    recordAgentSession(input.home, entry.agent.id, id);
   } catch (error) {
     return { kind: 'unbound', why: `the seat's agent record could not be written (${errorText(error)})` };
   }

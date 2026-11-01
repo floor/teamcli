@@ -20,7 +20,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readLoadedCodexThreads } from '../src/daemon/presence/codex-source.ts';
+import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../src/daemon/presence/codex-source.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import { bindCodexSeatThread } from '../src/launch/codex-thread-binding.ts';
 import { findAgent, registerAgent } from '../src/registry/agents.ts';
@@ -115,6 +115,37 @@ function writeState(dir: string, seat: SeatState): void {
   updateState(dir, (state) => {
     const session = (state.sessions.teamcli ??= emptySession());
     session.seats.worker = seat;
+  });
+}
+
+/** The binding call every scene makes, with the endpoint read replaced only where the scene
+ *  injects one. */
+function bind(
+  w: ReturnType<typeof world>,
+  state: SeatState,
+  read: (endpoint: string) => Promise<CodexLoadedThreadsRead> = (url) => readLoadedCodexThreads({ endpoint: url }),
+) {
+  return bindCodexSeatThread({
+    home: w.home,
+    root: w.root,
+    dir: w.dir,
+    session: 'teamcli',
+    seat: { name: 'worker', cli: 'codex' },
+    state,
+    read,
+  });
+}
+
+/** The class a send prints for the scene's seat, read from the records as they stand now. */
+function deliveryOf(w: ReturnType<typeof world>) {
+  return seatDeliveryClass({
+    home: w.home,
+    dir: w.dir,
+    root: w.root,
+    session: 'teamcli',
+    seat: 'worker',
+    declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
+    state: readState(w.dir).sessions.teamcli?.seats.worker,
   });
 }
 
@@ -297,5 +328,23 @@ describe('bindCodexSeatThread', () => {
       seat: { name: 'worker', cli: 'codex' },
       state: readState(w.dir).sessions.teamcli?.seats.worker,
     }).kind).toBe('bound');
+  });
+
+  test('a record whose handle is another incarnation\'s is refused before the state is written', async () => {
+    const w = world();
+    await endpoint(w.socketPath, { ids: [THREAD] });
+    registerWorker(w.home, w.root, { agentSession: OLD_THREAD, seatHandle: 'seat_999999999999' });
+    const state = seatRecord(BINDING, w.socketPath);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state);
+
+    // The seat name alone is not identity: the record's stable handle names another incarnation,
+    // so it is refused and left as it was, and the state never gains the thread.
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('another agent for this seat');
+    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 });
