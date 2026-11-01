@@ -152,6 +152,17 @@ function wrappedQuestion(rows: readonly string[]): string {
   return lines.join('\n');
 }
 
+/** The capture's dialog box alone: the prompt the seat wrote above it is pane scrollback, and a
+ *  tall block keeps the box top inside the reader's last-20-row window only when it goes. */
+function boxOnly(screen: string): string {
+  const lines = screen.split('\n');
+  const top = lines.findIndex((line) => line.includes('┌'));
+  if (top < 0) throw new Error('the cursor capture no longer holds its dialog box');
+  const box = lines.slice(top);
+  if (box[box.length - 1] === '') box.pop();
+  return box.join('\n');
+}
+
 /** The team file of another project: a readable team, so the run reaches the cross-team check. */
 function otherRoot(): { root: string; dir: string } {
   const root = join(base, 'other');
@@ -535,6 +546,31 @@ describe('team answer <seat> question', () => {
     expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
     expect(host.keys).toEqual([]);
     expect(reads).toBe(2);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('a question block that runs past the rows a version reads is refused, never answered in part', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // The cursor profile reads six rows of a question block. This block keeps going past the
+    // sixth, so what was read is only part of the question: the command must leave the pane as it
+    // is rather than press the key on a question it half saw.
+    const long = boxOnly(wrappedQuestion([
+      '1. Which name should be used for the',
+      'file we write, and which folder',
+      'should hold it, and who owns it',
+      'once it is written, and where it',
+      'goes if the write fails, and how',
+      'long it stays, and why it matters',
+      'to anyone reading it later?',
+    ]));
+    const host = fake(home, 'lead', long, { shipped: true });
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the question runs past the rows this version reads; left as it is\n');
+    expect(host.keys).toEqual([]);
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
