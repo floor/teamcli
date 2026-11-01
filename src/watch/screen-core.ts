@@ -506,14 +506,15 @@ export type QuestionReading = { text: string; complete: boolean };
  * anchor row itself (`inline`).
  *
  * The live dialog is drawn at the bottom of the pane, and the transcript above it may quote an
- * older dialog with the same anchor. An anchor's block is tried from the window's last match
- * upward, and the first whole block (nearest the bottom) that reaches the profile's end marker
- * wins: a block anchored inside another block's span is that block read from a later row and is
- * passed over, a match that reads no text at all — a profile's frame row can carry the anchor
- * pattern — is passed over too, and the copy a transcript quoted higher is only reached when no
- * block below it reads. When no block reaches its marker, the lowest one that reads any text is
- * returned incomplete, and the answer layer refuses it: a block the reader cannot follow to its
- * end is not quoted as a whole question.
+ * older dialog with the same anchor. The lowest block the screen reads is the live one: a block
+ * that reaches the profile's end marker is read whole, and a block the supported rows cut is
+ * returned cut, even when a whole block above it was quoted earlier — an older block never
+ * certifies the current question. A block anchored inside another block's span is that block
+ * read from a later row (a frame row repeated down the box) and is passed over, and a match that
+ * reads no text at all — a profile's frame row can carry the anchor pattern — is passed over too.
+ * When nothing on the screen reads as a block, the lowest reading that has any text is returned
+ * incomplete, and the answer layer refuses it: a block the reader cannot follow to its end is not
+ * quoted as a whole question.
  *
  * With an end marker named, a blank row (one the strips empty, frame included) is part of the
  * block, not its end: the walk passes it and reads on to the marker, and only reaching the
@@ -534,14 +535,17 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
   };
   const inline = spec.inline !== null;
   const step = spec.before !== null ? -1 : 1;
-  // From one anchor: the rows that survive their strips, ending at the marker. The anchor row
-  // itself is taken in the inline reading and is never tested as its own end marker. `end` is
-  // the marker's row, and -1 when the walk reached none.
-  const walk = (anchorAt: number): { taken: string[]; reached: boolean; end: number } => {
+  // From one anchor: the rows that survive their strips. The anchor row itself is taken in the
+  // inline reading and is never tested as its own end marker. The walk stops at the marker
+  // (`marker`), at the supported row count (`rows`), at a blank row that ends a markerless block
+  // (`blank`), or at the window's edge (`window`); `stop` is the row it stopped on. Rows keep the
+  // pane's order, so a `before` walk prepends the rows it climbs past.
+  type WalkEnd = 'marker' | 'rows' | 'blank' | 'window';
+  const walk = (anchorAt: number): { taken: string[]; stop: number; end: WalkEnd } => {
     const taken: string[] = [];
     let index = inline ? anchorAt : anchorAt + step;
     while (index >= 0 && index < plain.length) {
-      if (!(inline && index === anchorAt) && marker(index)) return { taken, reached: true, end: index };
+      if (!(inline && index === anchorAt) && marker(index)) return { taken, stop: index, end: 'marker' };
       const row = textRow(plain[index] as string, strip);
       if (row === '') {
         // A blank row is the block's own row when the profile names its end; without a marker
@@ -550,15 +554,16 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
           index += step;
           continue;
         }
-        break;
+        return { taken, stop: index, end: 'blank' };
       }
-      if (taken.length === spec.rows) return { taken, reached: spec.until === null, end: -1 };
-      taken.push(row);
+      if (taken.length === spec.rows) return { taken, stop: index, end: 'rows' };
+      if (step < 0) taken.unshift(row);
+      else taken.push(row);
       index += step;
     }
-    // Running out of window or rows before the marker is a cut reading, never the whole
-    // question; a spec with no marker declares no end and is as complete as it gets.
-    return { taken, reached: spec.until === null, end: -1 };
+    // Running out of window is a cut reading, never the whole question; a spec with no marker
+    // declares no end and is as complete as it gets.
+    return { taken, stop: index, end: 'window' };
   };
   const pattern = spec.inline ?? spec.after ?? spec.before;
   if (pattern === null) return null;
@@ -566,28 +571,47 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
   plain.forEach((line, at) => {
     if (pattern.test(line)) anchors.push(at);
   });
+  type Reading = { anchor: number; stop: number; taken: string[]; end: WalkEnd };
+  // The block a reading opens: it reached its end marker, or the supported rows stopped it while
+  // text went on — the reader's own limit cut it. A reading the window's edge stopped proves no
+  // block was there; a spec with no marker declares every reading a block.
+  const isBlock = (reading: Reading): boolean =>
+    spec.until === null || reading.end === 'marker' || reading.end === 'rows';
+  // The span a block covers, for spotting an anchor that sits inside it. A cap-cut block's span
+  // reaches to the end marker the walk did not get to read; a markerless block's is where its
+  // walk stopped.
+  const spanEnd = (reading: Reading): number => {
+    if (reading.end !== 'rows' || spec.until === null) return reading.stop;
+    for (let at = reading.anchor + step; at >= 0 && at < plain.length; at += step) {
+      if (marker(at)) return at;
+    }
+    return reading.stop;
+  };
   // A profile's anchor can sit on rows inside its own block, not only on its first row (a frame
   // row repeated down the box). A block anchored inside another block's span is the same block
   // read from a later row, so the outer reading is the one that quotes the whole question.
-  const inside = (outer: { anchor: number; end: number }, at: number): boolean =>
-    step > 0 ? at > outer.anchor && at < outer.end : at < outer.anchor && at > outer.end;
-  const complete: { anchor: number; end: number; taken: string[] }[] = [];
-  let lowest: string[] | null = null;
+  const inside = (outer: Reading, at: number): boolean => {
+    const end = spanEnd(outer);
+    return step > 0 ? at > outer.anchor && at < end : at < outer.anchor && at > end;
+  };
+  const readings: Reading[] = [];
   for (let at = anchors.length - 1; at >= 0; at -= 1) {
     const anchor = anchors[at] as number;
-    const { taken, reached, end } = walk(anchor);
+    const { taken, stop, end } = walk(anchor);
     if (taken.length === 0) continue;
-    if (reached) complete.push({ anchor, end, taken });
-    lowest ??= taken;
+    readings.push({ anchor, stop, taken, end });
   }
-  // Complete blocks are collected from the bottom up: the first one no block above it contains
-  // is the live dialog's.
-  for (const candidate of complete) {
-    if (!complete.some((other) => inside(other, candidate.anchor))) {
-      return { text: candidate.taken.join(' '), complete: true };
-    }
-  }
-  return lowest === null ? null : { text: lowest.join(' '), complete: false };
+  // The live dialog is drawn at the bottom: the lowest block no block above it contains is the
+  // one on screen now, and its own completeness is the reading — an older block above it never
+  // certifies the current question.
+  const blocks = readings.filter(isBlock);
+  const live = blocks
+    .filter((block) => !blocks.some((other) => other !== block && inside(other, block.anchor)))
+    .reduce<Reading | null>((lowest, block) => (lowest === null || block.anchor > lowest.anchor ? block : lowest), null);
+  if (live !== null) return { text: live.taken.join(' '), complete: spec.until === null || live.end === 'marker' };
+  // No block reads: the lowest reading with text is returned cut, and the answer layer refuses it.
+  const lowest = readings[0];
+  return lowest === undefined ? null : { text: lowest.taken.join(' '), complete: false };
 }
 
 /**
