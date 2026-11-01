@@ -40,17 +40,31 @@ describe('the question-answer records a profile lists', () => {
   test('the shipped profiles carry the dismiss keys their captures recorded', () => {
     const claude = profileFor('claude-code');
     if (!claude) throw new Error('no claude-code profile');
-    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289')?.key).toBe('escape');
-    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')?.key).toBe('escape');
-    expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289')?.key).toBe('escape');
+    // The answer layer compares the version `claude --version` prints, suffix and all.
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289 (Claude Code)')?.key).toBe('escape');
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302 (Claude Code)')?.key).toBe('escape');
+    expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289 (Claude Code)')?.key).toBe('escape');
+    // No question was captured at 2.1.299, and a bare version is not the printed text.
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')).toBeNull();
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')).toBeNull();
     // The held frame was captured but never dismissed: no key is claimed, so the answer layer
     // refuses it rather than pressing a key the run did not record.
-    expect(questionAnswerFor(claude.questionAnswers, 'confirmation', '2.1.302')).toBeNull();
+    expect(questionAnswerFor(claude.questionAnswers, 'confirmation', '2.1.302 (Claude Code)')).toBeNull();
+
+    const codex = profileFor('codex');
+    if (!codex) throw new Error('no codex profile');
+    expect(questionAnswerFor(codex.questionAnswers, 'question', 'codex-cli 0.161.0')?.key).toBe('escape');
+    expect(questionAnswerFor(codex.questionAnswers, 'plan approval', 'codex-cli 0.161.0')?.key).toBe('escape');
+    expect(questionAnswerFor(codex.questionAnswers, 'question', '0.161.0')).toBeNull();
+    // No confirmation dialog was produced by the 0.161.0 probes.
+    expect(questionAnswerFor(codex.questionAnswers, 'confirmation', 'codex-cli 0.161.0')).toBeNull();
 
     const cursor = profileFor('cursor');
     if (!cursor) throw new Error('no cursor profile');
-    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16')?.key).toBe('escape');
-    expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01')?.key).toBe('escape');
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16-e3cb207')?.key).toBe('escape');
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.01-14929f9')?.key).toBe('escape');
+    expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01-14929f9')?.key).toBe('escape');
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16')).toBeNull();
 
     const gemini = profileFor('gemini');
     if (!gemini) throw new Error('no gemini profile');
