@@ -249,13 +249,6 @@
     {
       "code": 1,
       "command": "add",
-      "id": "add.name-taken",
-      "meaning": "a nickname the addition brings is already held by another team's seat; nothing was added",
-      "trigger": "team add worker --like lead"
-    },
-    {
-      "code": 1,
-      "command": "add",
       "id": "add.never-approved",
       "meaning": "the file was never approved",
       "trigger": "team add worker"

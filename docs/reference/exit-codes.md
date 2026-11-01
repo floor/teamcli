@@ -41,7 +41,6 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
-| `add.name-taken` | `add` | 1 | a nickname the addition brings is already held by another team's seat; nothing was added | `team add worker --like lead` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
 | `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
