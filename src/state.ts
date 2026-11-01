@@ -185,6 +185,11 @@ export type SeatState = {
     /** The dialog a question answer dismissed: the three kinds `team answer <seat> question`
      *  answers, kept so a recovery run can name it. Set beside `question-sent-recovery` only. */
     dialog?: DialogKind;
+    /** The send path took the decision line (it delivered it or recorded it for the seat):
+     *  written and read back once the line is out, so a retry that finishes the recovery never
+     *  sends it a second time. Set beside `question-sent-recovery` only, and never removed by a
+     *  readiness-only failure. */
+    delivered?: true;
   };
 };
 

@@ -110,6 +110,31 @@ seats:
 ${stoppedSeat === 'worker' ? '    stopped: true\n' : ''}`;
 }
 
+/** The same team with its lead seat on another CLI: the answer reads that CLI's shipped profile,
+ *  and the send path still addresses the same declared seat. */
+function fileFor(lobby: string, root: string, cli: string): string {
+  const launch = cli === 'claude-code' ? 'claude' : cli === 'antigravity' ? 'agy' : cli;
+  return file(lobby, root).replace(
+    `    name: lead
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor`,
+    `    name: lead
+    cli: ${cli}
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: ${launch}`,
+  );
+}
+
+/** A capture file as the pane handed it over: the whole text, unchanged. */
+function capture(path: string): string {
+  return readFileSync(new URL(`./fixtures/${path}`, import.meta.url), 'utf8');
+}
+
 /** The team file of another project: a readable team, so the run reaches the cross-team check. */
 function otherRoot(): { root: string; dir: string } {
   const root = join(base, 'other');
@@ -151,8 +176,12 @@ async function approve(root: string, home: string): Promise<void> {
 }
 
 function wait(dir: string, name: string, extra: Record<string, unknown> = {}): void {
+  waitIn(dir, 'acme', name, extra);
+}
+
+function waitIn(dir: string, session: string, name: string, extra: Record<string, unknown> = {}): void {
   updateState(dir, (state) => {
-    state.sessions.acme = {
+    state.sessions[session] = {
       seats: {
         [name]: {
           stage: 'launched',
@@ -171,6 +200,12 @@ type Seam = {
   reading?: (read: number) => PaneReading;
   /** The profile's question-answer records; the default answers a question with escape. */
   answers?: readonly QuestionAnswerRecord[];
+  /** The version the CLI prints; the default is this lane's synthetic one. */
+  printed?: string;
+  /** The screen the pane shows once the key is pressed; the default is the cursor idle capture. */
+  afterKey?: string;
+  /** No reading and no profile seam: the shipped reader and the shipped profiles answer. */
+  shipped?: boolean;
 };
 
 type Fake = AnswerHost & {
@@ -209,7 +244,7 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     set screen(value: string) { text = value; },
     version() {
       host.versions += 1;
-      return VERSION;
+      return seam.printed ?? VERSION;
     },
     agents() {
       return [{ name: host.named ? seat : '', pane: seat === 'lead' ? 'pane1' : 'pane2', workspace: 'w1' }];
@@ -217,7 +252,7 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     pane() { return text; },
     sendKey(_session: string, _pane: string, key: string) {
       host.keys.push(key);
-      text = cursorIdle;
+      text = seam.afterKey ?? cursorIdle;
       status = 'idle';
       return true;
     },
@@ -250,6 +285,12 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     home,
     standing: (root: string) => approvalStanding(root, home),
   };
+  if (seam.shipped) {
+    // The shipped reader and the shipped profiles are the subject of the scene: no seam stands
+    // in for either of them.
+    delete (host as AnswerHost).profile;
+    delete (host as AnswerHost).reading;
+  }
   return host;
 }
 
@@ -283,6 +324,19 @@ function dropBodies(dir: string, seat: string): string[] {
     return [];
   }
   return names.map((name) => readFileSync(join(folder, name), 'utf8'));
+}
+
+/** The message records alone: the `<id>.pending` marker a leg writes beside a drop quotes the
+ *  same body, and is not a second message. */
+function messageRecords(dir: string, seat: string): string[] {
+  const folder = join(dir, 'send-drops', 'acme', seat);
+  let names: string[] = [];
+  try {
+    names = readdirSync(folder);
+  } catch {
+    return [];
+  }
+  return names.filter((name) => !name.includes('.')).map((name) => readFileSync(join(folder, name), 'utf8'));
 }
 
 function io(root: string, caller = { kind: 'owner' } as const) {
@@ -490,6 +544,38 @@ describe('team answer <seat> question', () => {
     expect(dropBodies(dir, 'worker').some((body) => body.includes(LINE))).toBe(true);
   });
 
+  test('a line delivered by a run whose readiness never came is not sent again by the retry', async () => {
+    const { root, home, lobby, sockets, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'worker', { classification: 'question' });
+    const questioned = capture('cursor/2026.10.01/question.txt');
+    // The send path takes the line, and the pane never reaches its idle prompt: finish() fails
+    // and leaves the recovery, with the delivery already made.
+    const first = fake(home, 'worker', questioned, { afterKey: questioned });
+    first.sendHost = sendHost(home, sockets);
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'worker', 'question'], run, first)).toBe(1);
+    expect(run.err).toBe('worker: question sent; recovery required\n');
+    expect(first.keys).toEqual(['escape']);
+    expect(messageRecords(dir, 'worker').filter((body) => body.includes(LINE))).toHaveLength(1);
+    expect(readState(dir).sessions.acme?.seats.worker?.waiting?.state).toBe('question-sent-recovery');
+
+    // The retry finishes the readiness, and the one line is still the one already delivered:
+    // no key, no fresh read, no second message record.
+    const retry = fake(home, 'worker', cursorIdle);
+    retry.sendHost = sendHost(home, sockets);
+    const again = io(root);
+    expect(await runAnswer([...FILE, 'worker', 'question'], again, retry)).toBe(0);
+    expect(retry.keys).toEqual([]);
+    expect(retry.reads).toBe(0);
+    // One message record: the retry sent no second line. Its `.pending` marker, written beside
+    // the first send's drop, quotes the same body and is not a message.
+    expect(messageRecords(dir, 'worker').filter((body) => body.includes(LINE))).toHaveLength(1);
+    expect(again.out).toBe(`team acme, session "acme"\nworker: answered question (question)\n`);
+    expect(readState(dir).sessions.acme?.seats.worker?.waiting).toBeUndefined();
+  });
+
   test('the line is never put into another team\'s seat of the same name', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
@@ -503,6 +589,27 @@ describe('team answer <seat> question', () => {
     expect(await runAnswer(['--file', join(dir, 'team.yaml'), 'lead', 'question'], run, host)).toBe(2);
     expect(run.err).toContain('the decision line is sent with the team file of');
     expect(host.keys).toEqual([]);
+  });
+
+  test('the send path must be the team and session this answer read, not another file in the same root', async () => {
+    const { root, home, lobby, sockets, dir } = world();
+    // Two team files in one root: the folder's default is `acme`, and the owner answers through
+    // a file whose own session is `beta`. The send path loads the default, so answering `beta`
+    // would put the line into `acme`'s seat of the same name.
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    writeFileSync(join(dir, 'other.yaml'), file(lobby, root).replace('session: acme', 'session: beta'));
+    await approve(root, home);
+    waitIn(dir, 'beta', 'lead', { classification: 'question' });
+    const host = fake(home, 'lead', 'Which name do you want to use?\n');
+    host.sendHost = sendHost(home, sockets);
+    const run = io(root);
+    expect(await runAnswer(['--file', '.agents/other.yaml', 'lead', 'question'], run, host)).toBe(2);
+    expect(run.err).toBe('team answer: the decision line is sent in session acme, and this answer read session beta\n');
+    // Nothing was read, pressed or delivered: the mismatch is refused before any key.
+    expect(host.keys).toEqual([]);
+    expect(host.reads).toBe(0);
+    expect(dropBodies(dir, 'lead')).toEqual([]);
+    expect(readState(dir).sessions.beta?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
   test('the orchestrator may answer from its own seat; another seat may not', async () => {
@@ -576,4 +683,46 @@ describe('team answer <seat> question', () => {
     await runDoctor(FILE, doctor, doctorSources);
     expect(doctor.out).toContain('lead: question sent; recovery required; a lead runs team answer lead question');
   });
+});
+
+// The captured dialogs, end to end: the pane hands over a real capture file, the shipped screen
+// reader classifies it and places its question text, the shipped profile supplies the record for
+// the version printed, and the whole answer — key, line, readiness — runs with no reading or
+// profile seam. Each scene is the reachability proof for its CLI: data the release ships is all
+// the scene has.
+const CAPTURED = [
+  // The printed version is each capture README's own `--version` string, byte for byte: the
+  // answer layer matches what the CLI prints, not the folder's number.
+  { cli: 'claude-code', printed: '2.1.302 (Claude Code)', question: 'claude-code/2.1.302/question.txt', idle: 'claude-code/2.1.302/idle.txt' },
+  { cli: 'cursor', printed: '2026.10.01-14929f9', question: 'cursor/2026.10.01/question.txt', idle: 'cursor/2026.10.01/idle.txt' },
+  { cli: 'gemini', printed: '0.64.0', question: 'gemini/0.64.0/question.txt', idle: 'gemini/0.64.0/idle.txt' },
+  { cli: 'antigravity', printed: '1.4.2', question: 'antigravity/1.4.2/question.txt', idle: 'antigravity/1.4.2/idle.txt' },
+] as const;
+
+describe('a captured question, read and answered by the shipped data alone', () => {
+  for (const captured of CAPTURED) {
+    test(`${captured.cli} at ${captured.printed}`, async () => {
+      const { root, home, lobby, sockets, dir } = world();
+      writeFileSync(join(dir, 'team.yaml'), fileFor(lobby, root, captured.cli));
+      await approve(root, home);
+      wait(dir, 'lead', { classification: 'question' });
+      const host = fake(home, 'lead', capture(captured.question), {
+        shipped: true,
+        printed: captured.printed,
+        afterKey: capture(captured.idle),
+      });
+      host.sendHost = sendHost(home, sockets);
+      const run = io(root);
+      const code = await runAnswer([...FILE, 'lead', 'question'], run, host);
+      // The refusal is read first: a red scene says why the shipped data alone did not answer.
+      expect(run.err).toBe('');
+      expect(code).toBe(0);
+      expect(host.keys).toEqual(['escape']);
+      expect(host.typed).toEqual([]);
+      expect(host.entered).toBe(0);
+      expect(run.out).toContain('lead: answered question (question)');
+      expect(dropBodies(dir, 'lead').some((body) => body.includes(LINE))).toBe(true);
+      expect(readState(dir).sessions.acme?.seats.lead?.waiting).toBeUndefined();
+    });
+  }
 });

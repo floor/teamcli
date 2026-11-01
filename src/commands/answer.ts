@@ -5,7 +5,7 @@ import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
-import { readTeamConfig } from '../file/team-config.ts';
+import { canonicalTeam, readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -316,13 +316,21 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       if (sendPath !== null) return configuration(io, json, sendPath);
       if (waiting?.state === 'question-sent-recovery') {
         // The dialog is dismissed and the decision line may still be owed: deliver it, and
-        // never a second key. The kind the recovery kept names the dialog in the summary.
+        // never a second key. A delivery an earlier run completed is kept — the record says
+        // so — and only the readiness is finished, so the line is never put in twice. The
+        // kind the recovery kept names the dialog in the summary.
         if (!answerableClassification(waiting.dialog)) {
           return refused(refusedClass('state', `${seatName}: its recovery does not name a dialog this version answers`));
         }
-        if (!(await deliverQuestion(io, host, seatName))) {
-          logLine(dir, 'answer', who, `${seatName}: question sent; delivery required`, host.now());
-          return deliveryFailure(io, json, `${seatName}: the decision line could not be delivered; recovery required`);
+        if (waiting.delivered !== true) {
+          if (!(await deliverQuestion(io, host, seatName))) {
+            logLine(dir, 'answer', who, `${seatName}: question sent; delivery required`, host.now());
+            return deliveryFailure(io, json, `${seatName}: the decision line could not be delivered; recovery required`);
+          }
+          if (!markDelivered(dir, session, seatName, pane, workspace)) {
+            logLine(dir, 'answer', who, `${seatName}: question sent; delivery unrecorded`, host.now());
+            return recovery(io, json, `${seatName}: the decision line was delivered, but its record could not be marked; recovery required`);
+          }
         }
         return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'question', dialog: waiting.dialog }, rulesOriginOf(loaded.source));
       }
@@ -391,6 +399,12 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       if (!(await deliverQuestion(io, host, seatName))) {
         logLine(dir, 'answer', who, `${seatName}: question answered; delivery required`, host.now());
         return deliveryFailure(io, json, `${seatName}: the dialog was dismissed, but the decision line could not be delivered; recovery required`);
+      }
+      // The line is out, and the record says so before readiness is waited on: a retry after
+      // a readiness-only failure finishes the recovery and never sends the line again.
+      if (!markDelivered(dir, session, seatName, pane, workspace)) {
+        logLine(dir, 'answer', who, `${seatName}: question answered; delivery unrecorded`, host.now());
+        return recovery(io, json, `${seatName}: the decision line was delivered, but its record could not be marked; recovery required`);
       }
       return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'question', dialog: checked.kind }, rulesOriginOf(loaded.source));
     }
@@ -492,6 +506,20 @@ function sendPathProblem(io: Io, host: AnswerHost, root: string, session: string
   if (mine === null || theirs === null || mine !== theirs) {
     return `the decision line is sent with the team file of ${io.cwd}, which is not this seat's team`;
   }
+  // The same root can hold more than one team file: `--file` may name another session's file
+  // beside the folder's default. The send path reads the default, so the two teams are compared
+  // whole — roster, session and all — before a key is pressed.
+  let sameTeam: boolean;
+  try {
+    sameTeam = canonicalTeam(team) === canonicalTeam(here.team);
+  } catch {
+    sameTeam = false;
+  }
+  if (!sameTeam) {
+    return here.team.session === team.session
+      ? `the decision line is sent with the team file of ${io.cwd}, which is not the team this answer read`
+      : `the decision line is sent in session ${here.team.session}, and this answer read session ${team.session}`;
+  }
   if (session !== team.session) {
     return `the decision line is sent in the team's own session (${team.session}), and this run answered in ${session}`;
   }
@@ -507,6 +535,30 @@ function sendPathProblem(io: Io, host: AnswerHost, root: string, session: string
 async function deliverQuestion(io: Io, host: AnswerHost, seat: string): Promise<boolean> {
   try {
     return await runSend([seat, QUESTION_LINE], quietIo(io), host.sendHost ?? realSendHost) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Writes the delivered marker onto the recovery record and reads it back: the line the send
+ * path has taken is never sent again by a later run, even when readiness was the only thing
+ * the first run failed. False when the record cannot be marked; the caller then reports the
+ * delivery as unrecorded rather than claiming a clean finish.
+ */
+function markDelivered(
+  dir: string,
+  session: string,
+  name: string,
+  pane: string,
+  workspace: string | undefined,
+): boolean {
+  try {
+    const waiting = readState(dir).sessions[session]?.seats[name]?.waiting;
+    if (waiting?.state !== 'question-sent-recovery') return false;
+    writeWaiting(dir, session, name, { ...waiting, delivered: true }, pane, workspace);
+    const back = readState(dir).sessions[session]?.seats[name]?.waiting;
+    return back?.state === 'question-sent-recovery' && back.delivered === true;
   } catch {
     return false;
   }
