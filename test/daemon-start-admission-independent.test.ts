@@ -348,3 +348,29 @@ for (const json of [false, true]) test('runtime delta: health undo retains a cop
   for (const [relative, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(folder, relative), 'utf8')).toBe(bytes);
   expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
 });
+
+for (const kind of ['writable-0777', 'symlink', 'safe-0755'] as const) test('runtime parent delta: ' + kind, () => {
+  const w = world(), pkg = runtimePackage(w), adapter = inertRuntimeManager(w.home), path = adapter.manager.unitPath(w.home);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  const prior = `<plist><dict><key>Label</key><string>${DAEMON_LABEL}</string><key>ProgramArguments</key><array><string>${process.execPath}</string><string>${w.entry}</string><string>daemon</string><string>run</string></array></dict></plist>\n`;
+  ownedFile(path, prior);
+  const parent = join(w.home, '.config/team/daemon-runtime'), linked = join(w.base, 'linked-runtime');
+  fs.mkdirSync(dirname(parent), { recursive: true });
+  if (kind === 'symlink') { fs.mkdirSync(linked); ownedFile(join(linked, 'sentinel'), 'untouched\n'); fs.symlinkSync(linked, parent, 'dir'); }
+  else { const mask = process.umask(0); try { fs.mkdirSync(parent, { mode: kind === 'writable-0777' ? 0o777 : 0o755 }); } finally { process.umask(mask); } }
+  const before = fs.lstatSync(parent); expect(before.isSymbolicLink()).toBe(kind === 'symlink');
+  if (kind !== 'symlink') expect(before.mode & 0o777).toBe(kind === 'writable-0777' ? 0o777 : 0o755);
+  const observed = observeUnitWrites(path, () => adapter.manager.install(w.home, pkg.program));
+  if (kind === 'safe-0755') {
+    expect(observed.result.ok).toBe(true); expect(observed.writes).toEqual(['write', 'replace']); expect(adapter.calls).toHaveLength(1);
+    const entry = runtimeWords(fs.readFileSync(path, 'utf8'))[1]!; expect(fs.statSync(retainedFolder(w, entry)).mode & 0o777).toBe(0o700);
+    expect(runFixture(w, adapter.active())).toEqual({ ok: true, text: 'prior-program-relay' });
+  } else {
+    expect(observed.result.ok).toBe(false); if (observed.result.ok) throw new Error('unsafe runtime parent accepted');
+    expect(observed.result.detail).toContain(kind === 'symlink' ? 'symbolic link' : 'writable by the group or the world');
+    expect(observed.result.kept).toBe(true); expect(observed.writes).toEqual([]); expect(adapter.calls).toEqual([]); expect(fs.readFileSync(path, 'utf8')).toBe(prior);
+    expect(fs.lstatSync(parent).ino).toBe(before.ino); expect(fs.lstatSync(parent).mode).toBe(before.mode);
+    if (kind === 'symlink') { expect(fs.readlinkSync(parent)).toBe(linked); expect(fs.readdirSync(linked)).toEqual(['sentinel']); expect(fs.readFileSync(join(linked, 'sentinel'), 'utf8')).toBe('untouched\n'); }
+    else expect(fs.readdirSync(parent)).toEqual([]);
+  }
+});
