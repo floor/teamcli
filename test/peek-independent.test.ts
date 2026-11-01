@@ -257,3 +257,20 @@ for (const [name, value] of [['full SHA', sha], ['short SHA', 'abc1234'], ['UUID
     expect(result.out).not.toContain('[masked]');
   });
 }
+
+for (const [leftPad, rightPad] of [['', ' '], ['', '    '], [' ', ''], ['    ', ''], ['  ', '  '], ['    ', '    ']]) {
+  test('a wrapped token stays masked through row padding ' + leftPad.length + '/' + rightPad.length, () => {
+    const result = scene({ text: 'ghp_0123456789' + rightPad + '\n' + leftPad + 'abcdefghijklmnopqrstuvwxyz\n' });
+    expect(result.code).toBe(0);
+    expect(result.out.trimEnd().split('\n').map(row => row.trim())).toEqual(['[masked]', '[masked]']);
+  });
+}
+for (const [prefix, cut] of [['ghp_', 2], ['lin_api_', 5]] as const) {
+  test('a token beginning a new row keeps its boundary after ordinary preceding text: ' + prefix, () => {
+    const token = prefix + 'a'.repeat(36);
+    const rows = ['ordinary context endsx', ...splitRows(token, [cut])];
+    const result = scene({ text: rows.join('\n') + '\n' });
+    expect(result.code).toBe(0);
+    expect(result.out.trimEnd().split('\n').slice(1).map(row => row.trim())).toEqual(['[masked]', '[masked]']);
+  });
+}
