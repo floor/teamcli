@@ -92,6 +92,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
 | `answer.human` | `answer` | 1 | the seat is a human's pane; no dialog key is pressed and no rules line is typed | `team answer lead trust` |
+| `answer.incomplete` | `answer` | 1 | the question runs past the rows this version reads; it is not answered | `team answer lead question` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
 | `answer.login` | `answer` | 1 | the pane is at a login prompt; it is never answered | `team answer lead question` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |

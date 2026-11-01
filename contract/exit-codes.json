@@ -606,6 +606,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.incomplete",
+      "meaning": "the question runs past the rows this version reads; it is not answered",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.label",
       "meaning": "the trust choice is not the recorded one",
       "trigger": "team answer lead trust"

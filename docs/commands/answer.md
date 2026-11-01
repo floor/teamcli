@@ -56,6 +56,10 @@ stays dismissed and the recovery stays recorded: a retry delivers the line and n
 second key. Once the line is out the record says so, and a retry after a readiness-only failure
 finishes the seat without sending it again.
 
+The question text is read to the end of the dialog's block. A question still going when the
+version's supported rows run out is refused, and the pane is left as it is — never answered on
+the part of it that was visible.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

@@ -3732,6 +3732,16 @@ scene('answer.not-a-question', async (place) => {
   host.reading = () => questionReading('idle', null);
   return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'not at a question, plan approval or confirmation dialog');
 });
+scene('answer.incomplete', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', 'Which name should be used for the file we write, and which folder', false);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'runs past the rows this version reads');
+});
 
 // These returns are reached when a second validation disagrees with the first, or when no data
 // this version ships can reach them. The stand-in is the same idea as a fake herdr: the command

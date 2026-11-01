@@ -134,7 +134,7 @@ export const realHost: AnswerHost = {
   standing: (root) => approvalStanding(root, homedir()),
 };
 
-type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human' | 'permission' | 'login' | 'not-a-question' | 'disagree';
+type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human' | 'permission' | 'login' | 'not-a-question' | 'incomplete' | 'disagree';
 
 /** A refusal class that is also a contract row: every class word is the row id's last word. */
 type RefusalClass = Exclude<Reason, 'idle' | 'rule delivery'>;
@@ -668,7 +668,7 @@ function inspectQuestion(
   profile: Profile | null,
   launched?: LaunchedIdentity,
 ): SeenQuestion | Refusal {
-  const say = (reason: 'version' | 'permission' | 'login' | 'not-a-question', text: string): Refusal =>
+  const say = (reason: 'version' | 'permission' | 'login' | 'not-a-question' | 'incomplete', text: string): Refusal =>
     refusedClass(reason, `${seat}: ${text}`);
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
@@ -687,6 +687,11 @@ function inspectQuestion(
   const dialogs = reading.dialog;
   if (dialogs.dialog === null) {
     return say('not-a-question', 'the pane is not at a question, plan approval or confirmation dialog');
+  }
+  // The text is then only the part of the block the version's rows reached: a key pressed here
+  // would answer the part that was read as though it were the whole question.
+  if (!dialogs.complete) {
+    return say('incomplete', 'the question runs past the rows this version reads; left as it is');
   }
   const printed = host.version(profile.binary);
   const record = printed === null ? null : questionAnswerFor(profile.questionAnswers, dialogs.dialog, printed);
@@ -810,6 +815,7 @@ function refuse(
   // exit: answer.permission
   // exit: answer.login
   // exit: answer.not-a-question
+  // exit: answer.incomplete
   // exit: answer.disagree
   return 1;
 }

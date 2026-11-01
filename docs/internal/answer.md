@@ -21,11 +21,14 @@ sends nothing.
 let-me-type-or-cancel key — `escape` or `ctrl+c`, the closed set `src/profiles/question-answer.ts`
 parses. The two fresh reads must agree on the dialog kind and on the text the screen shows, and
 the record each read matched must agree with the other; a pane that changed between the reads is
-refused, never answered. A permission prompt is refused by its screen kind, and so is a login
-prompt; a trust dialog is refused with the word that answers it, `team answer <seat> trust`. A
-screen that reads as none of the three answerable dialogs is refused too: the question word
-answers a question, a plan approval or a confirmation and nothing else. Trust-to-run-a-command
-counts as a permission prompt and is never answered.
+refused, never answered. The text is the dialog's whole block: a profile reads to the row that
+ends it, and a question still going when the version's supported rows run out is refused
+(`answer.incomplete`) rather than answered on the part of it that was visible. A permission
+prompt is refused by its screen kind, and so is a login prompt; a trust dialog is refused with
+the word that answers it, `team answer <seat> trust`. A screen that reads as none of the three
+answerable dialogs is refused too: the question word answers a question, a plan approval or a
+confirmation and nothing else. Trust-to-run-a-command counts as a permission prompt and is
+never answered.
 
 The dismissal key only clears the dialog. It never selects a choice, and no option is marked or
 chosen. Immediately after the key, the seat receives one decision line in its own conversation,
@@ -187,6 +190,7 @@ terminal, judged before the file or the caller is read. The classes are the log 
 | permission | `the pane is at a permission prompt, which is never answered` |
 | login | `the pane is at a login prompt, which is never answered` |
 | not-a-question | `the pane is at a trust dialog; team answer <seat> trust answers it`; `the pane is not at a question, plan approval or confirmation dialog` |
+| incomplete | `the question runs past the rows this version reads; left as it is` |
 | disagree | `the two fresh reads of the pane do not agree on the dialog` |
 
 `action` is a well-formedness defence: it is reached only when a profile records a key byte the
@@ -209,6 +213,7 @@ host does not send, or a question-answer record carries a key outside the closed
 | 1 | `answer.file-owner` | `--file` is the owner's |
 | 1 | `answer.folder` | the dialog's folder is not the lobby's exact trust entry |
 | 1 | `answer.human` | the seat is a human's pane; no dialog key is pressed and no rules line is typed |
+| 1 | `answer.incomplete` | the question runs past the rows this version reads; it is not answered |
 | 1 | `answer.label` | the trust choice is not the recorded one |
 | 1 | `answer.login` | the pane is at a login prompt; it is never answered |
 | 1 | `answer.no-pane` | the state records no pane for the caller's seat |
@@ -255,6 +260,7 @@ unplaced reason.
 | `refused question: permission` | the pane is at a permission prompt, including trust to run a command |
 | `refused question: login` | the pane is at a login prompt |
 | `refused question: not-a-question` | the pane is at a trust dialog, or at none of the three answerable dialogs |
+| `refused question: incomplete` | the question block runs past the rows this version reads |
 | `refused question: disagree` | the two fresh reads of the pane do not agree |
 | `refused trust: idle` | the key was sent; the idle prompt did not come |
 | `refused question: idle` | the key was sent; the idle prompt did not come |
