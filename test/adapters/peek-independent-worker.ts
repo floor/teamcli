@@ -10,7 +10,7 @@ import type { StatusSource, StatusWaitSeat } from '../../src/watch/status-events
 
 type Input = { argv?: string[]; caller?: 'owner' | 'seat' | 'foreign' | 'unplaced' | 'owner-no-tty'; dev?: boolean;
   ops?: string[]; entities?: string[]; text?: string | null; missingMethod?: boolean; missingPane?: boolean;
-  missingFile?: boolean; badFile?: boolean };
+  missingFile?: boolean; badFile?: boolean; invalidState?: boolean };
 const [expectedHome, encoded] = process.argv.slice(2);
 assert.equal(homedir(), realpathSync(expectedHome!));
 const home = homedir();
@@ -59,6 +59,7 @@ updateState(dir, state => {
   session.seats.person = { stage: 'ready', pane: 'synthetic-human', workspace: 'synthetic-workspace' };
   state.sessions['lens-session'] = session;
 });
+if (input.invalidState) writeFileSync(join(dir, STATE_FILE), '{invalid state');
 const status = await import('../../src/watch/status-events.ts');
 const reads: { seat: StatusWaitSeat; lines: number }[] = [];
 const factories: unknown[] = [];
@@ -95,10 +96,12 @@ const beforeState = readFileSync(join(dir, STATE_FILE), 'utf8');
 const beforeFiles = readdirSync(dir).sort();
 const { main } = await import('../../src/cli.ts');
 let code: number;
+let caught: string | undefined;
 try { code = await main(['peek', ...argv], io); }
+catch (error) { caught = String(error); code = -1; }
 finally { stub.mockRestore(); }
 const log = existsSync(join(dir, LOG_FILE)) ? readFileSync(join(dir, LOG_FILE), 'utf8') : '';
-console.log(JSON.stringify({ code, out: io.out, err: io.err, home, log, reads, factories,
+console.log(JSON.stringify({ code, caught, out: io.out, err: io.err, home, log, reads, factories,
   stateUnchanged: beforeState === readFileSync(join(dir, STATE_FILE), 'utf8'),
   configUnchanged: input.missingFile || readFileSync(join(dir, 'team.yaml'), 'utf8') === (input.badFile ? 'format: [broken\n' : file),
   newFiles: readdirSync(dir).sort().filter(name => !beforeFiles.includes(name)),

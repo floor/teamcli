@@ -11,8 +11,8 @@ const bases: string[] = [];
 afterAll(() => { if (bases.length) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
 type Input = { argv?: string[]; caller?: 'owner' | 'seat' | 'foreign' | 'unplaced' | 'owner-no-tty'; dev?: boolean;
   ops?: string[]; entities?: string[]; text?: string | null; missingMethod?: boolean; missingPane?: boolean;
-  missingFile?: boolean; badFile?: boolean };
-type Result = { code: number; out: string; err: string; home: string; log: string; stateUnchanged: boolean; configUnchanged: boolean;
+  missingFile?: boolean; badFile?: boolean; invalidState?: boolean };
+type Result = { caught?: string; code: number; out: string; err: string; home: string; log: string; stateUnchanged: boolean; configUnchanged: boolean;
   newFiles: string[]; reads: { seat: { name: string; pane: string; cli: string; session: string }; lines: number }[]; factories: { session: string }[] };
 function scene(input: Input = {}): Result {
   const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-'))); bases.push(base);
@@ -157,4 +157,36 @@ test('the command AST has only read imports and its sole source member is screen
   visit(ast);
   expect(denied).toEqual([]); expect(sourceMembers.length).toBeGreaterThan(0); expect(new Set(sourceMembers)).toEqual(new Set(['screenText']));
   expect(raw.match(/currentTeam\([^;]+false\)/s)?.[0]).toBeDefined();
+});
+
+
+test('two userinfo URLs on one line are both masked', () => {
+  const result = scene({ text: 'first=https://alice:first-secret@example.invalid/a second=https://bob:second-secret@example.invalid/b\n' });
+  expect(result.code).toBe(0);
+  for (const value of ['alice:first-secret', 'bob:second-secret']) {
+    expect(result.out).not.toContain(value); expect(result.log).not.toContain(value);
+  }
+  expect(result.out.match(/\[masked\]/g)).toHaveLength(2);
+});
+for (const prefix of ['ghp_', 'sk-proj-']) {
+  for (const wrapper of ['backticks', 'parentheses', 'brackets', 'colon']) {
+    test('a ' + prefix + ' token inside ' + wrapper + ' is masked', () => {
+      const token = prefix + 'fixture0123456789abcdefghijklmnop';
+      const frame = wrapper === 'backticks' ? '`' + token + '`' : wrapper === 'parentheses' ? '(' + token + ')' : wrapper === 'brackets' ? '[' + token + ']' : 'credential:' + token;
+      const result = scene({ text: 'visible ' + frame + ' suffix\n' });
+      expect(result.code).toBe(0); expect(result.out).not.toContain(token); expect(result.out).toContain('[masked]');
+      expect(result.log).not.toContain(token);
+    });
+  }
+}
+test('username-only token userinfo is masked without a password delimiter', () => {
+  const token = 'ghp_fixture0123456789abcdefghijklmnop';
+  const result = scene({ text: 'https://' + token + '@example.invalid/path\n' });
+  expect(result.code).toBe(0); expect(result.out).not.toContain(token); expect(result.out).toContain('[masked]');
+  expect(result.log).not.toContain(token);
+});
+test('invalid recorded state refuses with an audit row instead of throwing', () => {
+  const result = scene({ invalidState: true });
+  expect(result.caught).toBeUndefined(); expect(result.code).toBe(2); expect(result.out).toBe('');
+  expect(result.reads).toEqual([]); audited(result, 'owner', 'refused peek.no-screen:');
 });
