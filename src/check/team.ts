@@ -37,7 +37,7 @@ import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, labelPersona, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -826,17 +826,24 @@ function leadRoleNotes(team: TeamFile): string[] {
 }
 
 /**
- * A seat whose `nickname:` field and whose written label name two different people. Display reads
- * the label's persona first (src/send/names.ts:sessionDisplayName, and the roster line the header
- * reads is re-marked from it at src/registry/sync.ts), so the seat sends under the label's name
- * while the field says another. A config set on either name writes the other with it
- * (src/config/edit.ts:syncSeatNames), so this is what a hand edit can leave. A note, not a
- * difference: the team runs either way, and the label's word stands from the next launch.
+ * A seat whose written label names a word that is not the name the seat goes by. A persona the
+ * `nickname:` field could hold is that name (src/file/sections/seats.ts:seatNicknames), so a field
+ * a hand edit left behind means the seat sends under the label's word while the record says
+ * another; a word the field could not hold — a space or an accent, the reserved `lead`, a name
+ * another seat already carries — stays a workspace title, and the record's nickname remains the
+ * address. A config set on either name writes the other with it whenever the pair can be one name
+ * (src/config/edit.ts:syncSeatNames), so this is what a hand edit leaves. A note, not a
+ * difference: the team runs either way.
  */
 function nicknameDriftNotes(team: TeamFile): string[] {
   return team.seats.flatMap((seat) => {
     const persona = labelPersona(seat);
-    if (persona === null || seat.nickname === undefined || persona === seat.nickname) return [];
+    if (persona === null) return [];
+    const name = seatNickname(team.seats, seat);
+    if (name !== persona) {
+      return [`seat "${seat.name}": its written label names "${persona}", but the seat goes by "${name ?? seat.name}" — a space, an accent, the reserved "lead" or a word another seat carries is not a nickname, so the label's word is the workspace title alone; set seats.${seat.name}.nickname to choose the address`];
+    }
+    if (seat.nickname === undefined || seat.nickname === persona) return [];
     return [`seat "${seat.name}": its nickname is "${seat.nickname}" and its written label names "${persona}" — the label wins from the next launch, and a set on seats.${seat.name}.label writes the two together`];
   });
 }

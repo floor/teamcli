@@ -8,7 +8,7 @@
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf, type RosterEntry } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
-import { labelPersona } from '../file/sections/seats.ts';
+import { seatNicknames } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
@@ -70,24 +70,23 @@ function ensureTeam(input: RegistryTeam): string | null {
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** The rule one roster line is re-marked by: its `nickname` from the persona the seat's written
- *  label names, then the file's own `nickname:` field — the label is the seat's own word and
- *  stands first, so a new seat never takes a name a retired seat left on the record — and the
- *  capabilities the file marks, the lead seat `team.orchestrator` and the seat it marks
- *  `assistant: true`, never a role name. So a mark that moved between launches does not linger
- *  on a line that no longer holds it. */
+/** The rule one roster line is re-marked by: its `nickname` from the name the seat goes by — the
+ *  persona its written label names when the `nickname:` field could hold it, else the field
+ *  (src/file/sections/seats.ts:seatNicknames) — and the capabilities the file marks, the lead
+ *  seat `team.orchestrator` and the seat it marks `assistant: true`, never a role name. The
+ *  label stands first, so a new seat never takes a name a retired seat left on the record; and a
+ *  word the field could not hold — a space, an accent, the reserved `lead`, a name another seat
+ *  already carries — never reaches the roster, so a label edit cannot take away an address that
+ *  works. So a mark that moved between launches does not linger on a line that no longer holds it. */
 function rosterMarker(team: TeamFile): (line: { agent: string; seat: string; role: string }) => RosterEntry {
   const leadSeat = team.orchestrator;
   const assistantSeat = team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
-  const nicknames = new Map(team.seats.flatMap((candidate) => {
-    const name = labelPersona(candidate) ?? candidate.nickname;
-    return name === undefined || name === null ? [] : [[candidate.name, name] as const];
-  }));
+  const nicknames = seatNicknames(team.seats);
   return (line) => {
     const nickname = nicknames.get(line.seat);
     return {
       ...line,
-      ...(nickname !== undefined ? { nickname } : {}),
+      ...(nickname !== undefined && nickname !== null ? { nickname } : {}),
       ...(line.seat === leadSeat ? { leads: true } : {}),
       ...(line.seat === assistantSeat ? { assistant: true } : {}),
     };

@@ -21,7 +21,7 @@
 // earlier build printed it.
 
 import { seatOverridesOf } from '../config/apply.ts';
-import { labelPersona } from '../file/sections/seats.ts';
+import { seatNickname } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ofTeam as projectOfTeam, type ProjectRecord } from '../registry/projects.ts';
@@ -184,20 +184,29 @@ export function sessionDisplayName(input: {
 }
 
 /**
- * The display name a seat's own session carries, from the seat the file declares: the persona its
- * written label names (src/file/sections/seats.ts), then the record's nickname, then the seat name
- * — the same order the roster projection and so the message header read. The label stands first
+ * The display name a seat's own session carries, from the seat the file declares: the name the
+ * seat goes by (src/file/sections/seats.ts:seatNicknames) — the persona its written label names
+ * when the `nickname:` field could hold it, else the record's own nickname — then the seat name,
+ * the same answer the roster projection and so the message header read. The label stands first
  * so a new seat launches under its own label, never under a name a retired seat left on the
- * record. Every launch-command writer (`up`, `add`, `restart`, `reload`) reads this one function,
- * so the four cannot drift apart.
+ * record; and a label's word the field could not hold stays a workspace title, so a launch never
+ * takes an address away. Every launch-command writer (`up`, `add`, `restart`, `reload`) reads this
+ * one function, so the four cannot drift apart.
  */
 export function seatSessionName(
   seat: { name: string; nickname?: string; label: string; labelWritten?: boolean },
-  input: { team: string | null; teamName?: string | null; mode: SenderNameMode },
+  input: {
+    team: string | null;
+    teamName?: string | null;
+    mode: SenderNameMode;
+    /** Every seat of the team, so the label's word is judged against the names the other seats
+     *  carry and two seats never launch under one name. */
+    seats: ReadonlyArray<{ name: string; nickname?: string; label: string; labelWritten?: boolean }>;
+  },
 ): string {
   return sessionDisplayName({
     seat: seat.name,
-    persona: labelPersona(seat),
+    persona: seatNickname(input.seats, seat),
     nickname: seat.nickname ?? null,
     team: input.team,
     ...(input.teamName !== undefined ? { teamName: input.teamName } : {}),

@@ -611,6 +611,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       sessionName: seatSessionName(seat, {
         team: teamIdOf(root),
         teamName: team.project,
+        seats: team.seats,
         mode: senderNameModeFor({
           ...(home === undefined ? {} : { home }),
           root,

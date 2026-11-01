@@ -1386,6 +1386,7 @@ function seatPlan(
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+      seats: team.seats,
     }),
     ...seatDeliveryOf(standing, team, seat, root, home, true, origin),
     ...(start.lobby ? { lobby: true } : {}),
