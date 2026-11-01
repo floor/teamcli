@@ -1,4 +1,4 @@
-import { defaultFs, type FsReader } from '../lobby/gate.ts';
+import { defaultFs, type FsReader, type FsStats } from '../lobby/gate.ts';
 import type { YamlNode } from '../yaml.ts';
 import type { Problem } from './types.ts';
 
@@ -91,11 +91,70 @@ function keyRefused(value: string, field: readonly string[], fs: FsReader): bool
     // A trust line keeps the earlier verdict it has always had: a warning, never a refusal, for
     // a token written as part of a path there.
     if (field[0] === 'trust') continue;
-    // A real absolute directory named like a token is a location: no refusal, no warning either.
-    if (isAbsolutePath(word) && isDirectory(fs, word)) continue;
+    // A location the file itself names is exempt: the whole value is one absolute path under a
+    // path-valued field, and it resolves to this user's real directory with no symbolic link in
+    // any component. A launch line, a command and free text are never locations, however a path
+    // shape sits in them.
+    if (locationPath(value, word, field, fs)) continue;
     return true;
   }
   return false;
+}
+
+/**
+ * The schema's path-valued fields: a value here is a location the file names, not free text. A
+ * launch line, a command or any other value is never in this list, however path-shaped it looks.
+ */
+const PATH_FIELDS: readonly (readonly string[])[] = [
+  ['lobby'],
+  ['workspace', 'path'],
+  ['workspace', 'protected'],
+  ['seats', 'reach', 'guard_dir'],
+  ['watch', 'queue_dir'],
+];
+
+/** Whether a value sits under a field the team-file schema types as a path. */
+function pathField(field: readonly string[]): boolean {
+  return PATH_FIELDS.some((path) => path.length === field.length && path.every((key, at) => key === field[at]));
+}
+
+/**
+ * Whether a key-shaped token is part of a location rather than a credential. The exemption is
+ * closed: the whole scalar is exactly that one absolute path — no other words, no punctuation —
+ * under a path-valued field, and the path is a directory this user owns whose every component is
+ * a real name, never a symbolic link. A path with a link anywhere in it could name a folder other
+ * than the one the file writes, so it keeps the token's shape.
+ */
+function locationPath(value: string, word: string, field: readonly string[], fs: FsReader): boolean {
+  if (value !== word) return false;
+  if (!pathField(field)) return false;
+  if (!word.startsWith('/')) return false;
+  return realDirectory(fs, word);
+}
+
+/**
+ * Whether the path names a directory this user owns, with no symbolic link in any component.
+ * Every prefix is lstatted and never followed: following an intermediate link is exactly how a
+ * path-shaped value would reach a folder the file does not appear to name.
+ */
+function realDirectory(fs: FsReader, path: string): boolean {
+  const mine = process.getuid?.() ?? 0;
+  let walked = '';
+  let last: FsStats | null = null;
+  for (const part of path.split('/')) {
+    if (part === '') continue;
+    walked += `/${part}`;
+    let stats: FsStats;
+    try {
+      stats = fs.lstat(walked);
+    } catch {
+      return false;
+    }
+    if (stats.isSymbolicLink()) return false;
+    last = stats;
+  }
+  if (last === null) return false;
+  return last.isDirectory() && last.uid === mine;
 }
 
 /** The whitespace-delimited word around a position: a path is judged whole, as the random rule reads it. */
