@@ -452,7 +452,7 @@ function admitRead(
   const presented = readClientGrantFile(input.home, input.grantFile);
   if (!presented.ok) return { ok: false, kind: 'refused', why: presented.why };
   const grant = presented.grant;
-  const resolved = resolveEntityCoordinator(input.home, grant.entity, { seat: grant.recipientSeat, clientId: grant.clientId, ...(grant.team !== undefined ? { team: grant.team } : {}) });
+  const resolved = resolveEntityCoordinator(input.home, grant.entity, { seat: grant.recipientSeat, clientId: grant.clientId, teamId: grant.teamId, ...(grant.team !== undefined ? { team: grant.team } : {}) });
   if (!resolved.ok) return { ok: false, kind: 'refused', why: resolved.why };
   const coordinator = resolved.coordinator;
   if (
@@ -478,7 +478,7 @@ function admitRead(
   if (!active.ok) return { ok: false, kind: 'refused', why: active.why };
   // The registry binding is re-resolved after the active check: a rebinding that landed before
   // this point is seen here, before any row or claim.
-  const rebound = resolveEntityCoordinator(input.home, active.grant.entity, { seat: active.grant.recipientSeat, clientId: active.grant.clientId, ...(active.grant.team !== undefined ? { team: active.grant.team } : {}) });
+  const rebound = resolveEntityCoordinator(input.home, active.grant.entity, { seat: active.grant.recipientSeat, clientId: active.grant.clientId, teamId: active.grant.teamId, ...(active.grant.team !== undefined ? { team: active.grant.team } : {}) });
   if (!rebound.ok) return { ok: false, kind: 'refused', why: rebound.why };
   const current = rebound.coordinator;
   if (
