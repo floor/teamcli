@@ -37,17 +37,15 @@ timeouts:
   idle: 90s
   exit: 30s
 # The dialog dismiss key the project's own captures recorded, the footer's skip key pressed in
-# a scratch session and the dialog left without an answer, on every version the choice screen was
-# captured on: `1.2.16/question-54.txt`, `1.3.5/question.txt`, `1.4.0/question.txt`,
-# `1.4.1/question.txt` and `1.4.2/question.txt`, each "Escape dismissed it". Only those captured
-# versions are listed, one exact record each: a range would press a key on a version no run
-# pressed it on. The unsent-comments confirmation (`1.2.16/question-unsent-54.txt`) was closed
-# rather than dismissed, so it claims no key.
+# a scratch session and the dialog left without an answer, on every captured version whose own
+# `agy --version` print is saved: `1.3.5/question.txt`, `1.4.0/question.txt`, `1.4.1/question.txt`
+# and `1.4.2/question.txt`, each "Escape dismissed it". Only those versions are listed, one exact
+# record each: a range would press a key on a version no run pressed it on. No record claims
+# 1.2.16: `1.2.16/question-54.txt` records "Escape dismissed it; no option was chosen", but that
+# folder only names its build and saves no `agy --version` print, so the printed spelling would
+# be inferred — the prints are saved from 1.3.5 on. The unsent-comments confirmation
+# (`1.2.16/question-unsent-54.txt`) was closed rather than dismissed, so it claims no key.
 question_answer:
-  - kind: question
-    key: escape
-    from: '1.2.16'
-    to: '1.2.16'
   - kind: question
     key: escape
     from: '1.3.5'
