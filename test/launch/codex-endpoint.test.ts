@@ -6,7 +6,7 @@
 // A socket no record names is left where it is, and said. A missing socket is no proof its
 // server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,9 +32,9 @@ const OTHER = 'prs_fedcba987654';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
 
-// A unix socket path has a hard OS limit, so scenes live under the shortest temp folder this
-// machine offers: macOS's per-user `T` folder is too deep for the endpoint this build names.
-const SHORT_TMP = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+// A unix socket path has a hard OS limit, so scenes live under the runtime temp folder with a
+// short prefix; the scenes that bind a socket measure their endpoint against the limit.
+const SHORT_TMP = realpathSync(tmpdir());
 
 function scratch(): string {
   return mkdtempSync(join(SHORT_TMP, 'te-'));
@@ -78,6 +78,7 @@ describe('the endpoint socket path', () => {
       if (socket === null) throw new Error('expected a socket');
       expect(socket.path).toBe(join(rootOf(dir), `${BINDING}.sock`));
       expect(socket.url).toBe(`unix://${socket.path}`);
+      expect(Buffer.byteLength(socket.path)).toBeLessThanOrEqual(100);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -721,7 +722,7 @@ describe('stopping a recorded endpoint', () => {
 
   test('refuses a record that points outside the seat’s own socket', () => {
     for (const url of [
-      'unix:///private/tmp/elsewhere.sock',
+      `unix://${join(SHORT_TMP, 'elsewhere.sock')}`,
       `unix://${join(rootOf('/tmp'), 'other.sock')}`,
     ]) {
       const dir = scratch();
@@ -730,7 +731,7 @@ describe('stopping a recorded endpoint', () => {
         const record: CodexEndpointRecord = { url, binding: BINDING, pid: 700, started_at: T0 };
         const answer = stopRecordedCodexEndpoint({ dir, session: SESSION, seat: SEAT, record }, {
           alive: () => true,
-          commandOf: () => 'codex app-server --listen unix:///private/tmp/elsewhere.sock',
+          commandOf: () => `codex app-server --listen unix://${join(SHORT_TMP, 'elsewhere.sock')}`,
           startOf: () => T0_MS,
           isPlainDir: () => true,
           isSocket: () => true,

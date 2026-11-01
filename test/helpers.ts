@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
@@ -162,13 +163,17 @@ export function capturedWorkspaceEntry(workspaceId: string, label: string) {
   };
 }
 
+/** The runtime temp folder, the one these captured entries name: the capture's own temp folder is
+ *  not part of any contract a scene reads, so the fixture takes this machine's. */
+const TEMP = realpathSync(tmpdir());
+
 /** The `herdr 0.7.1` `pane list` entry, as captured. */
 export function capturedPaneEntry(paneId: string, workspaceId: string, terminalId = 'term_65dd8274742df1') {
   return {
     agent_status: 'unknown',
-    cwd: '/private/tmp',
+    cwd: TEMP,
     focused: true,
-    foreground_cwd: '/private/tmp',
+    foreground_cwd: TEMP,
     pane_id: paneId,
     revision: 0,
     tab_id: `${workspaceId}:t1`,
@@ -184,7 +189,7 @@ export function capturedProcessInfo(paneId: string, shellPid: number, foreground
   return {
     foreground_process_group_id: shellPid,
     foreground_processes: [
-      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: '/private/tmp', name: 'zsh', pid: foregroundPid },
+      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: TEMP, name: 'zsh', pid: foregroundPid },
     ],
     pane_id: paneId,
     shell_pid: shellPid,
