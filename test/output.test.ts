@@ -864,7 +864,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
         jsonEnvelope('team.reply', {
           format: 1 as const,
           status: 'replied',
-          action_summary: 'worker: replied',
+          action_summary: 'worker: delivered (drop)',
           project: 'beacon',
           session: 'beacon',
           record: '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d',

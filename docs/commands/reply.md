@@ -18,6 +18,16 @@ admitted by the reply rule even between two seats no earlier rule pairs. The rul
 thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
 is closed or the clock or the cap ends it.
 
+The folder is the one the answered seat's own reader reads. A record from a seat of another team
+is answered into that team's transport tree, bound to the root and session that team's live file
+names — the same place a send to that seat writes, and the place its `team messages` and inbox
+server scan. The live file, not the registry's snapshot of it, decides the session: a team that
+moved to another session is answered in the new one. A seat name alone cannot say which team that
+is, because two teams may name a seat alike; the registry id the answered record carries places
+it. A record whose sender the registry cannot place — no id
+on the record, an id the registry does not hold, a retired agent, or an agent that no longer holds
+the seat the record names — is refused, and nothing is written.
+
 A record a client wrote is answered on the client's own thread. A record carrying `from_client` is
 the client's opening record, and only that record is answered: the reply's `to` is
 `client:<client id>`, its `to_id` is null, and its `to_client` names the client and the grant that
@@ -52,8 +62,12 @@ closed thread is refused, naming what ended it, and nothing is written.
 The answered record moves to `replied`: the reply writes a signed receipt (`<id>.replied.json`)
 beside the message it answers, in the answering seat's own folder. The reply is delivered the way
 the drop leg delivers — the record is left in the target's folder, nothing is typed and no frame
-is sent — and the receiving seat's own watch rings the message-display wake line: the rendered
-header and the fixed `Read it with: team drops --read.` hint. A
+is sent — and the outcome line says `delivered (drop)` only after the written record passes the
+checks the recipient's own readers make: its name is the id, its `to`, `root` and `session` bind
+it to that seat and that tree, and its signature verifies. A write that cannot be confirmed says
+the folder it wrote to and that the recipient's reader was not confirmed. The receiving seat's own
+watch rings the message-display wake line: the rendered header and the fixed
+`Read it with: team drops --read.` hint. A
 [team send --wait](send.md) waiting on that thread wakes on the reply record and returns
 `answered`. A reply's text is
 kept in the record, and the project's message history keeps one line for it, with `thread`,
@@ -77,9 +91,11 @@ must not be empty.
 
 ## What it reads and writes
 
-Reads the team file, the caller's placement, the message key, and the record the id names with
-the records and close sidecars of its thread. Writes one signed record,
-`.agents/send-drops/<session>/<seat>/<id>` (mode 0600), into the answered sender's folder, and a
+Reads the team file, the caller's placement, the message key, the record the id names with
+the records and close sidecars of its thread, and — for a sender of another team — that team's
+live file and registry record. Writes one signed record,
+`.agents/send-drops/<session>/<seat>/<id>` (mode 0600), into the answered sender's folder — its
+own team's tree when the record came from another team — and a
 signed `replied` receipt beside the answered record (`<id>.replied.json`); a `--close` writes the
 signed close sidecar `<id>.closed.json` beside it instead. A reply on a client thread is the one
 exception to the destination: its record goes into the client's own inbox folder, and no history
@@ -95,8 +111,12 @@ A reply that is refused writes nothing: no record, no receipt, no close, no hist
 
 The owner, or a seat of the team, from a terminal outside herdr or its own pane. A run with no
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
-the record sits in its own folder — and the reply reaches the seat the record's `from` names: a
-sender the team file no longer declares is not reached by a reply. The owner answers a seat's
+the record sits in its own folder — and the reply reaches the seat the record's `from` names, in
+the team the record's registry id places it: a sender whose own file no longer declares the seat
+is not reached by a reply. Across teams the reply is written into the sender's own tree, under
+the root and session its live file names, and that team's live file is read before anything is
+written. The
+owner answers a seat's
 record through this same path. A record the owner sent is answered at its entity's
 `owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — and the
 `floor` entity answers `orchestrator@floor` when it declares none. The reply is written into that
@@ -113,7 +133,8 @@ then the outcome line. A refused run prints its line on stderr and has none.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| replied | `<seat>: replied` on stdout — the seat the reply went to | 0 |
+| replied | `<seat>: delivered (drop)` on stdout — the seat the reply went to, once its reader's folder holds the verified record | 0 |
+| replied, reader unconfirmed | `<seat>: wrote to <folder>, and could not confirm the recipient's reader will read it` on stdout | 0 |
 | replied to a client | `client:<client id>: replied` on stdout | 0 |
 | closed | `<thread>: closed` on stdout | 0 |
 | refused | `team reply: <reason>` on stderr | 1 |
@@ -199,7 +220,7 @@ The scribe answers it: one signed record, on the same thread, in the coordinator
 ```console caller=claude-scribe
 $ team reply 22222222-2222-4222-8222-222222222222 "the draft reads well" ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: replied
+claude-keeper: delivered (drop)
 exit 0
 ```
 

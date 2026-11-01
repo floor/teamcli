@@ -7,6 +7,10 @@
 // (draft 3 §7, `reply-on-open-thread`) asked last: a reply is admitted while its thread is open,
 // even between seats no other rule pairs.
 //
+// The folder is the one that seat's own reader scans. A seat name is shared by teams, so the name
+// alone cannot place the reply: the registry id on the answered record does, and a sender of
+// another team is answered into that team's tree, bound to that team's root and session.
+//
 // §3.5: a thread ends on `team reply --close` or when `thread-ttl` passes with no record; a reply
 // on a closed thread opens a new one that cites it — its `in_reply_to` names the record it
 // answers, and its `thread` is its own id. `--close` writes a signed sidecar beside the record it
@@ -22,7 +26,9 @@
 // A reply is delivered the way the drop leg delivers: the record is left in the target's folder,
 // nothing is typed and no frame is sent, and the receiving seat's own watch rings its own read
 // (`Team: run team drops --read --seat <seat> --session <session>`). A human's pane takes exactly
-// that, so no separate human rule is needed here.
+// that, so no separate human rule is needed here. The report says `delivered (drop)` only after
+// the written record passes the checks that seat's own readers make (`landsWhereRead`); a write
+// that cannot be confirmed says where it wrote and that the reader was not confirmed.
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -41,8 +47,8 @@ import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
 import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
-import { findAgent } from '../registry/agents.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { findAgent, getAgent } from '../registry/agents.ts';
+import { findTeam, teamIdOf } from '../registry/teams.ts';
 import { sayThreshold } from '../settings/inherit.ts';
 import { senderHeader } from '../send/admit.ts';
 import { namingFor } from '../send/names.ts';
@@ -68,7 +74,7 @@ import {
   type RecordPayload,
   type SignedRecord,
 } from '../send/record.ts';
-import { messageKeyState } from '../store/keys.ts';
+import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { recordDir } from './messages.ts';
 import { admissionOf, sealDropTree, senderIdOf } from './send.ts';
 
@@ -134,6 +140,29 @@ export function samePath(a: string, b: string): boolean {
   } catch {
     return a === b;
   }
+}
+
+/**
+ * Whether the record at `<folder>/<id>` is one the seat's own readers serve: the same checks
+ * `team messages` and the seat's inbox server make before a record reaches the screen — the file
+ * is named for the id, the payload is bound to this root and session, it is addressed to this
+ * seat, and its signature verifies against the checkout's message key. A writer that says a
+ * record was delivered asks this before it says so.
+ */
+export function landsWhereRead(home: string, folder: string, id: string, root: string, session: string, seat: string): boolean {
+  let key: KeyObject;
+  try {
+    key = messageKeyOf(home);
+  } catch {
+    return false;
+  }
+  const read = readRecord(join(folder, id), id);
+  if (!read.ok || read.record === null) return false;
+  const payload = read.record.payload;
+  if (payload.to !== seat) return false;
+  if (!samePath(payload.root, root)) return false;
+  if (payload.session !== session) return false;
+  return verifyRecord(read.record, key);
 }
 
 /** The marker names a send leaves beside a record; none of them is a message record. */
@@ -723,13 +752,22 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     }, `${contextLine(team.project, session)}\n${summary}\n`);
   }
 
-  // The reply goes back to the sender of the record it answers. A seat sender must still be
-  // declared by this file: a seat removed from the file is not reached by a reply either. A
-  // record the owner sent has no seat of this file to answer it: its reply goes to the entity's
-  // declared `owner-reply-to` endpoint — the address the owner-origin frame names — resolved
-  // through the registry, across teams.
+  // The reply goes back to the sender of the record it answers, and lands where that sender's own
+  // reader reads: the transport tree of the team the sender stands in, bound to that team's root
+  // and session. A record the owner sent has no seat of this file to answer it: its reply goes to
+  // the entity's declared `owner-reply-to` endpoint — the address the owner-origin frame names —
+  // resolved through the registry, across teams.
+  //
+  // The record's `from` is a seat name, and two teams can name a seat alike, so the name alone
+  // cannot say which tree the reply belongs in. The registry id the answered record carries does:
+  // the sender agent's own team and seat are where a send to that seat writes, and where its
+  // readers read. A seat sender the registry cannot place — no id on the record, an id the
+  // registry does not hold, or a team that holds no live agent for the named seat — cannot be
+  // replied to anywhere a reader looks, so nothing is written.
   let targetSeat: string;
   let endpoint: Target | null = null;
+  let seatSender: Pick<Target, 'team' | 'agent'> | null = null;
+  let senderFile: TeamFile | null = null;
   if (answered.from === 'owner') {
     const replyTo = resolveOwnerReplyTo(root, host.home, team.entity, host.now());
     if (!replyTo.ok) {
@@ -743,7 +781,48 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     targetSeat = resolved.agent.reach.seat;
   } else {
     targetSeat = answered.from;
-    if (!team.seats.some((seat) => seat.name === targetSeat)) {
+    if (answered.from_id !== null) {
+      const carried = getAgent(host.home, answered.from_id);
+      if (carried === null) {
+        return refused(io, json, `record ${id} names the seat ${targetSeat} of the agent ${answered.from_id}, and the registry holds no record of it; where its reader reads cannot be known; nothing was written`);
+      }
+      // The id places the team; the seat names the folder. A relaunch keeps its id, but a seat
+      // re-created after the record was written carries another one, so the seat's live holder is
+      // asked for by the team the id names when the carried agent no longer holds it.
+      const agent = carried.lifecycle === 'retired' || carried.reach.seat !== targetSeat
+        ? findAgent(host.home, { team: carried.reach.team, seat: targetSeat })
+        : carried;
+      if (agent === null) {
+        return refused(io, json, `record ${id} names the seat ${targetSeat} of the agent ${answered.from_id}, and the registry holds no live agent for that seat in its team; where its reader reads cannot be known; nothing was written`);
+      }
+      const senderTeam = findTeam(host.home, agent.reach.team);
+      if (senderTeam === null) {
+        return refused(io, json, `record ${id} names the agent ${answered.from_id}, and the registry holds no one team record for ${agent.reach.team}; where its reader reads cannot be known; nothing was written`);
+      }
+      // A sender in this checkout answers to this file's seats; a sender of another team or
+      // session answers to its own file, which the reply reads before it writes. A seat removed
+      // from the file its reader reads is not reached by a reply either.
+      if (!samePath(senderTeam.root, root) || senderTeam.session !== session) {
+        const loaded = readTeamConfig(senderTeam.root, { home: host.home });
+        if (!loaded.ok) {
+          return refused(io, json, `record ${id} was sent from the seat ${targetSeat} of another team, and its team file cannot be read (${loaded.errors[0]?.message ?? 'no detail'}); nothing was written`);
+        }
+        if (!loaded.team.seats.some((seat) => seat.name === targetSeat)) {
+          raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
+          return refused(io, json, `${targetSeat}: it is not a declared seat of the sender's team; that file's seats are ${seatList(loaded.team)}; nothing was written`);
+        }
+        // The sender's own reader scans the session the live file names, not the one the
+        // registry snapshot happened to hold when the agent was registered: a file that moved
+        // its session sends the reply to the new one. The root is the live read's own, the same
+        // one that reader resolves from its folder, so an answer reported delivered is bound to
+        // exactly the tree and session `team messages` there reads.
+        senderFile = loaded.team;
+        seatSender = { team: { ...senderTeam, root: loaded.root, session: loaded.team.session }, agent };
+      } else if (!team.seats.some((seat) => seat.name === targetSeat)) {
+        raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
+        return refused(io, json, `${targetSeat}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
+      }
+    } else if (!team.seats.some((seat) => seat.name === targetSeat)) {
       raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
       return refused(io, json, `${targetSeat}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
     }
@@ -755,7 +834,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // first — two seats of one team, and two seats of one entity's teams — so the reply rule
   // admits what no other rule pairs: two seats of different entities. A send never carries the
   // context.
-  const admission = admissionOf(placed, team, endpoint, targetSeat, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
+  const admission = admissionOf(placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
   if (!admission.ok) {
     raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
     return refused(io, json, `refused: ${admission.why}`);
@@ -764,18 +843,20 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const replyId = host.newId?.() ?? randomUUID();
   const thread = state.open ? answered.thread : replyId;
   // The receiving side of this reply: the answered seat's own team, or the owner endpoint's seat
-  // in its team. The headline reads that side's word on how a sender reads — the same line a send
-  // would write into that seat's folder.
-  const toRoot = endpoint === null ? root : endpoint.team.root;
-  const toSession = endpoint === null ? session : endpoint.agent.reach.session;
-  const toDir = endpoint === null ? dir : join(endpoint.team.root, '.agents');
-  const toId = endpoint === null ? answered.from_id : endpoint.agent.id;
+  // in its team. A seat sender's team is read from the record's agent id, never from the bare
+  // name: the same name in another team is another seat. The headline reads that side's word on
+  // how a sender reads — the same line a send would write into that seat's folder.
+  const toRoot = endpoint !== null ? endpoint.team.root : seatSender !== null ? seatSender.team.root : root;
+  const toSession = endpoint !== null ? endpoint.agent.reach.session : seatSender !== null ? seatSender.team.session : session;
+  const toDir = endpoint !== null ? join(endpoint.team.root, '.agents') : seatSender !== null ? join(seatSender.team.root, '.agents') : dir;
+  const toId = endpoint !== null ? endpoint.agent.id : seatSender !== null ? seatSender.agent.id : answered.from_id;
+  const namingFile = endpoint !== null ? null : senderFile ?? team;
   const naming = namingFor({
     home: host.home,
     root: toRoot,
-    viewerTeam: endpoint === null ? teamIdOf(root) : endpoint.agent.reach.team,
+    viewerTeam: endpoint !== null ? endpoint.agent.reach.team : seatSender !== null ? teamIdOf(seatSender.team.root) : teamIdOf(root),
     seat: targetSeat,
-    ...(endpoint === null ? { file: team } : {}),
+    ...(namingFile === null ? {} : { file: namingFile }),
   });
   const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
   const payload: RecordPayload = {
@@ -794,6 +875,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     in_reply_to: answered.id,
   };
 
+  let landed = false;
   const lock = acquireSeatLock(toDir, toSession, targetSeat);
   if (!('release' in lock)) {
     return refused(io, json, `${targetSeat}: another command holds it (pid ${String(lock.held)}); nothing was written`);
@@ -810,8 +892,14 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     } catch {
       return refused(io, json, 'no message key; nothing was written');
     }
-    const written = writeRecord(recordDir(toRoot, toSession, targetSeat), signed);
+    const folder = recordDir(toRoot, toSession, targetSeat);
+    const written = writeRecord(folder, signed);
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
+    // The word the report will use is decided here, by the reader's own checks: the record at the
+    // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
+    // root and session, addressed to that seat, its signature verifying. Only a record that passes
+    // them is called delivered; a write alone is not.
+    landed = landsWhereRead(host.home, folder, replyId, toRoot, toSession, targetSeat);
     // The answered record moves to `replied` — a receipt the receiving side writes, beside the
     // message it answers. The reply record is the message; a receipt that cannot be written is
     // an annotation missing, not a reply lost, so it changes no exit.
@@ -820,10 +908,16 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   } finally {
     lock.release();
   }
-  logLine(dir, 'reply', who, `${targetSeat}: replied`, host.now());
+  // What this run can stand behind: the record is where the recipient's reader reads, or the
+  // write succeeded somewhere and the reader was not confirmed.
+  const summary = landed
+    ? `${targetSeat}: delivered (drop)`
+    : `${targetSeat}: wrote to ${recordDir(toRoot, toSession, targetSeat)}, and could not confirm the recipient's reader will read it`;
+  logLine(dir, 'reply', who, summary, host.now());
   // The history line belongs to the team the record was written into: the answer's own team, which
   // is the owner endpoint's team when the owner asked.
-  appendHistory(endpoint === null ? team.project : endpoint.team.project, toRoot, host.home, {
+  const toProject = endpoint !== null ? endpoint.team.project : seatSender !== null ? seatSender.team.project : team.project;
+  appendHistory(toProject, toRoot, host.home, {
     ts: at,
     from: me,
     to: targetSeat,
@@ -834,12 +928,11 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     id: replyId,
     thread,
     in_reply_to: answered.id,
-    outcome: 'delivered',
+    outcome: landed ? 'delivered' : 'sent (unconfirmed)',
     ms: host.now().getTime() - startedAt,
     via: 'drop',
   });
 
-  const summary = `${targetSeat}: replied`;
   return written(io, json, {
     format: 1,
     status: 'replied',

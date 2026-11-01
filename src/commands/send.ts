@@ -4716,7 +4716,7 @@ export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender
 export function admissionOf(
   caller: Caller,
   team: TeamFile,
-  target: Target | null,
+  target: Pick<Target, 'team' | 'agent'> | null,
   seatName: string,
   home: string,
   fileTeamId: string,
@@ -4793,7 +4793,7 @@ export function admissionOf(
 function watchAdmissionOf(
   caller: Extract<Caller, { kind: 'watch' }>,
   team: TeamFile,
-  target: Target | null,
+  target: Pick<Target, 'team' | 'agent'> | null,
   seatName: string,
   watch: { principal: WatchSendPrincipal; root: string } | undefined,
 ): Admission {
@@ -4949,7 +4949,12 @@ function recordFor(home: string, session: string, seat: string): Agent | null {
  *  sides and from the file's line where it writes one; every other rule reads a place, a
  *  capability or a grant.
  */
-function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Target | null): AdmitTeams {
+function admitRecordsOf(
+  home: string,
+  team: TeamFile,
+  teamId: string,
+  target: Pick<Target, 'team' | 'agent'> | null,
+): AdmitTeams {
   const records = readTeams(home);
   overlayTeam(home, records, team, teamId);
   if (target !== null) {

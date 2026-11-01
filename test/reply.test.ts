@@ -123,7 +123,7 @@ describe('a reply is a record on the thread it answers', () => {
     sentTo('owner', SENT, { from: 'worker' });
     const result = await run([SENT, 'the answer'], { kind: 'owner' }, { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toEqual({
       kind: 'message',
@@ -182,7 +182,7 @@ describe('a reply is a record on the thread it answers', () => {
     sentTo('helper', SENT, { from: 'worker' });
     const result = await run([SENT, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\nworker: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toMatchObject({
       from: 'helper',
@@ -213,7 +213,7 @@ describe('a reply is a record on the thread it answers', () => {
     });
     const code = await runReply([SENT, 'answered'], io, host({ newId: () => REPLY }));
 
-    expect([code, io.out, io.err]).toEqual([0, 'team acme, session "acme"\nworker: replied\n', '']);
+    expect([code, io.out, io.err]).toEqual([0, 'team acme, session "acme"\nworker: delivered (drop)\n', '']);
     const record = recordAt(join(recordDir(root, 'acme', 'worker'), REPLY));
     expect(record.payload).toMatchObject({
       from: 'helper',
@@ -254,7 +254,7 @@ describe('a reply is a record on the thread it answers', () => {
       schema: { name: 'team.reply', version: 1 },
       format: 1,
       status: 'replied',
-      action_summary: 'worker: replied',
+      action_summary: 'worker: delivered (drop)',
       project: 'acme',
       session: 'acme',
       record: REPLY_B,
@@ -508,7 +508,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\norchestrator: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\norchestrator: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(floorRoot, 'floor', 'orchestrator'), REPLY));
     expect(record.payload).toEqual({
       kind: 'message',
@@ -541,7 +541,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
 
-    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\ninbox: replied\n', err: '' });
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\ninbox: delivered (drop)\n', err: '' });
     const record = recordAt(join(recordDir(floorRoot, 'floor', 'inbox'), REPLY));
     expect(record.payload).toMatchObject({
       to: 'inbox',
