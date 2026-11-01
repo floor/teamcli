@@ -3,12 +3,12 @@
 // because the package does not carry a schema validator.
 import { DialectError, compilePattern } from './dialect.ts';
 import { loadProfileModule } from '../profiles/module-loader.ts';
-import type { BlockStep, Border, Composer, FallbackRule, LinePattern, Placeholder, Rule, ScreenData, Stage, StatusBelow, VersionRange, Wrap } from './screen-data.ts';
+import type { BlockStep, Border, Composer, FallbackRule, LinePattern, Placeholder, QuestionText, Rule, ScreenData, Stage, StatusBelow, TextSpec, VersionRange, Wrap } from './screen-data.ts';
 import type { ScreenProfile } from './screen-profile.ts';
 import type { Screen } from './screen.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 
-const STAGES = ['unknown', 'trust', 'permission', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit', 'working'] as const;
+const STAGES = ['unknown', 'trust', 'plan_approval', 'confirmation', 'permission', 'login', 'exit_question', 'question', 'vendor_notice', 'provider_error', 'rate_limit', 'working'] as const;
 const KINDS = ['idle', 'working', 'unsent', 'permission', 'trust', 'question', 'vendor notice', 'provider error', 'rate limit', 'unknown'] as const;
 // The lines a dialog draws for its choices, built from their parts: the mark on the choice
 // the cursor is on (claude-code ❯, codex ›, antigravity >) or the indent of the others, the
@@ -47,7 +47,7 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);
@@ -112,7 +112,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', 'question_text', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -154,6 +154,8 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
     const entry = optional(entries, name);
     if (entry) data[name] = stageOf(entry.value, name);
   }
+  const questionText = optional(entries, 'question_text');
+  if (questionText) data.questionText = questionTextOf(questionText);
   return data;
 }
 
@@ -195,6 +197,61 @@ function stageOf(node: YamlNode, name: (typeof STAGES)[number]): Stage {
   const reason = reasonEntry ? stringOf(reasonEntry.value) : null;
   if (reasonEntry && (reason === null || reason.trim() === '')) fail(reasonEntry.line, '"reason" must be a non-empty string');
   return { rules: rules.value.items.map((item) => ruleOf(item, ignoreCase, true, name === 'rate_limit')), ...(reasonEntry ? { reason: reason! } : {}) };
+}
+
+/** The question text's place, per dialog kind: `any` is the fallback, and each of the three
+ *  kinds may name its own layout. A profile with no such key reads no dialog text, and its
+ *  reports name the dialog without quoting it. */
+function questionTextOf(entry: YamlEntry): QuestionText {
+  const entries = mapping(entry.value, 'question_text');
+  only(entries, ['any', 'question', 'plan_approval', 'confirmation']);
+  const any = optional(entries, 'any');
+  const question = optional(entries, 'question');
+  const plan = optional(entries, 'plan_approval');
+  const confirmation = optional(entries, 'confirmation');
+  if (!any && !question && !plan && !confirmation) fail(entry.line, '"question_text" names no kind');
+  return {
+    any: any ? textSpecOf(any.value) : null,
+    question: question ? textSpecOf(question.value) : null,
+    'plan approval': plan ? textSpecOf(plan.value) : null,
+    confirmation: confirmation ? textSpecOf(confirmation.value) : null,
+  };
+}
+
+/** One kind's anchor: exactly one of `inline`, `after` and `before`, an optional row cap, an
+ *  optional end marker, and the strips applied to each taken row before it is trimmed. */
+function textSpecOf(node: YamlNode): TextSpec {
+  const entries = mapping(node, 'a question_text entry');
+  only(entries, ['inline', 'after', 'before', 'until', 'rows', 'strip']);
+  const chosen = (['inline', 'after', 'before'] as const).filter((key) => optional(entries, key) !== undefined);
+  if (chosen.length !== 1) fail(node.line, 'a question_text entry names exactly one of "inline", "after", "before"');
+  const anchor = (key: 'inline' | 'after' | 'before' | 'until'): RegExp | null => {
+    const found = optional(entries, key);
+    if (!found) return null;
+    const text = stringOf(found.value);
+    if (text === null) fail(found.line, `"${key}" must be a string`);
+    return patternOf(text, false, found.line);
+  };
+  const rowsEntry = optional(entries, 'rows');
+  let rows = 1;
+  if (rowsEntry) {
+    const value = rowsEntry.value;
+    if (value.kind !== 'scalar' || typeof value.value !== 'number' || !Number.isInteger(value.value) || value.value < 1) {
+      fail(rowsEntry.line, '"rows" must be a whole number of rows, one or more');
+    }
+    rows = value.value;
+  }
+  const stripEntry = optional(entries, 'strip');
+  const strip: RegExp[] = [];
+  if (stripEntry) {
+    if (stripEntry.value.kind !== 'seq' || stripEntry.value.items.length === 0) fail(stripEntry.line, '"strip" must be a non-empty list');
+    for (const item of stripEntry.value.items) {
+      const text = stringOf(item);
+      if (text === null) fail(item.line, '"strip" entries must be strings');
+      strip.push(patternOf(text, false, item.line));
+    }
+  }
+  return { inline: anchor('inline'), after: anchor('after'), before: anchor('before'), until: anchor('until'), rows, strip };
 }
 
 /** The `tested:` range of a vendor notice: `from` and `to`, both required. */

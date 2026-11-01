@@ -1739,6 +1739,10 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     // replaces that row with its own stuck-prompt line (`attentionDifferences`).
     case 'question':
       return { what: `${name} asked a question: the operator's to act on`, repair: 'the operator acts in the pane' };
+    case 'plan approval':
+      return { what: `${name} waits at a plan approval prompt: the operator's to act on`, repair: 'the operator acts in the pane' };
+    case 'confirmation':
+      return { what: `${name} waits at a confirmation prompt: the operator's to act on`, repair: 'the operator acts in the pane' };
     case 'vendor notice':
       return { what: `${name} shows a vendor notice: its owner's to act on`, repair: 'the owner acts in the pane', owner: true };
     case 'blocked':

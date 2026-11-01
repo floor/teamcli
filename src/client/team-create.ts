@@ -286,7 +286,7 @@ export function approvalModeHash(p: ApprovalModeParams): string {
   return createHash('sha256').update(JSON.stringify({ action: p.action, mode: p.mode, scope: p.scope }), 'utf8').digest('hex');
 }
 
-/** The owner signs one approval-mode record. Only `none` for `team-create` is stored; `per-action` and `always-rule` revoke the `none` records of that scope. */
+/** The owner signs one approval-mode record. Only `none` for `team-create` is stored; `per-action` and `always-rule` remove the `none` records of that scope. A call admitted by `team init` has passed the owner gate before this runs; a `none` replacement is signed and written before the records it replaces are removed, so a refusal or a signer failure leaves every existing record byte-identical. */
 export function setApprovalMode(
   home: string,
   action: string,
@@ -301,13 +301,9 @@ export function setApprovalMode(
   const seat = readOwnerSeat(home);
   if (seat === null) return { ok: false, why: 'no owner seat is registered: the owner runs team grant --add-owner-seat --team <team> --signer <name>' };
   const folder = canonicalRoot(scope);
-  const revoked: string[] = [];
-  for (const r of listApprovalModes(home, store, now).modes) {
-    if (r.action === action && r.scope === folder) {
-      try { unlinkSync(join(actionApprovalsFolder(home), `${r.mode_id}.json`)); revoked.push(r.mode_id); } catch {}
-    }
-  }
-  if (mode !== 'none') return { ok: true, revoked };
+  const replaced = listApprovalModes(home, store, now).modes.filter((r) => r.action === action && r.scope === folder).map((r) => r.mode_id);
+  // Nothing replaces the record in these two modes; the caller was admitted before this call.
+  if (mode !== 'none') return { ok: true, revoked: removeApprovalModes(home, replaced) };
   const params: ApprovalModeParams = { action, mode: 'none', scope: folder };
   const id = `am_${randomBytes(12).toString('hex')}`;
   const answer: OwnerSeatAnswer = { kind: 'approval-mode', request_id: id, params_sha256: approvalModeHash(params), choice: 'always', team: seat.team, seat: 'owner', at: now.toISOString(), scope: folder };
@@ -315,7 +311,17 @@ export function setApprovalMode(
   if (!signed.ok) return signed;
   mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
   if (writeExclusive(join(actionApprovalsFolder(home), `${id}.json`), `${JSON.stringify({ ...signed.signed, params }, null, 2)}\n`) !== 'written') return { ok: false, why: 'the approval mode could not be written' };
-  return { ok: true, modeId: id, revoked };
+  // The replacement is signed and on disk; only now are the records it replaces removed.
+  return { ok: true, modeId: id, revoked: removeApprovalModes(home, replaced) };
+}
+
+/** Unlinks the named approval-mode records and returns the ids actually removed. */
+function removeApprovalModes(home: string, ids: readonly string[]): string[] {
+  const removed: string[] = [];
+  for (const id of ids) {
+    try { unlinkSync(join(actionApprovalsFolder(home), `${id}.json`)); removed.push(id); } catch {}
+  }
+  return removed;
 }
 
 /** Every approval-mode record whose owner-signer signature verifies now and binds its parameters; others are ignored. */

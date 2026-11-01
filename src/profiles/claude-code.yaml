@@ -27,6 +27,29 @@ exit: /exit
 # pane byte-for-byte to its idle screen. Used only to clear an exit text that did not
 # read back as typed, and only when the box holds exactly that text.
 exit_clear: ctrl+c
+# The dialog dismiss keys this project's own captures recorded, each the footer's cancel key
+# pressed in a scratch session and the dialog left without an answer:
+# - `2.1.289/permission-plan-wide-plain.txt`: the plan-approval dialog, "Denied with Escape".
+# - `2.1.289/question-plain.txt`, `2.1.299/question.txt` and `2.1.302/question.txt`: the question
+#   tool's choice screen, "Dismissed with Escape without selecting anything" and "Escape
+#   dismissed it" on both later captures.
+# The version the answer layer matches is what `claude --version` prints, which carries its own
+# suffix: `2.1.299 (Claude Code)` and `2.1.302 (Claude Code)`, the two prints saved in
+# `2.1.299/README.md` and `2.1.302/README.md`. A range compares whole versions and would match
+# neither print, so each record is one saved printed version exactly, as the loader spells an
+# exact record. No record claims 2.1.289: its dialogs were dismissed with Escape, but no capture
+# or README saves a `claude --version` print at 2.1.289, so its spelling would be inferred — a
+# record that sends a key names one printed version a run saved. The held cross-session frame
+# (`2.1.302/held.txt`) has no recorded dismissal, so no confirmation record is claimed.
+question_answer:
+  - kind: question
+    key: escape
+    from: '2.1.299 (Claude Code)'
+    to: '2.1.299 (Claude Code)'
+  - kind: question
+    key: escape
+    from: '2.1.302 (Claude Code)'
+    to: '2.1.302 (Claude Code)'
 # The measured way into the input box (2026-10-19, herdr 0.7.1, a 54-column pane, 2.1.303): at
 # idle one ctrl+c emptied a five-line draft and the screen returned to its idle prompt, the CLI
 # staying open; a ctrl+c on an already-empty idle box left it idle too. During a running turn
@@ -137,6 +160,50 @@ screen:
         - '^\s*❯\s*No, exit\s*$'
         - '^\s*Yes, I trust this folder\s*$'
         - 'Enter to confirm · Esc to cancel'
+  # A plan the agent wrote and is waiting to execute, from the 2.1.289 captures
+  # (`claude-code/2.1.289/permission-plan-wide-{plain,ansi}.txt`): the plan above the dialog's
+  # own rule, then the sentence, the two "Yes" rows and the change row under it. Read before
+  # `permission`, whose generic numbered choice would otherwise take the same rows for a
+  # permission dialog. A run row is unmarked because the mark moves with the selection; the
+  # sentence is what the reader places as the question.
+  plan_approval:
+    - all:
+        - 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+        - '^\s*[❯›>]?\s*1\. Yes, and use auto mode\s*$'
+        - '^\s*2\. Yes, manually approve edits\s*$'
+      below_last_rule: 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+    # The same dialog in a pane whose rule is out of the window. A plan quoted above an empty
+    # prompt is a transcript: the prompt comes after it.
+    - all:
+        - 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+        - '^\s*[❯›>]?\s*1\. Yes, and use auto mode\s*$'
+        - '^\s*2\. Yes, manually approve edits\s*$'
+      without_rule: true
+      none_after:
+        anchor: '^\s*2\. Yes, manually approve edits\s*$'
+        patterns:
+          - '^\s*[❯›>]\s*$'
+  # A cross-session message held for a person to let through, from the 2.1.302 capture
+  # (`claude-code/2.1.302/held.txt`): a rule, the headline, the frame's own prose, then the two
+  # choices — and no composer under it. A seat at it is not working and not idle. The same words
+  # in a transcript are not the dialog, so every rule needs both choice rows too.
+  confirmation:
+    - all:
+        - 'Held message from another session'
+        - '^\s*[❯›>]\s*Deny — drop it and tell the sender it was declined\s*$'
+        - '^\s*Deliver this message to Claude\s*$'
+      below_last_rule: '^\s*Held message from another session\s*$'
+    # The same three rows with the rule out of the window; a message quoted above an empty
+    # prompt is a transcript.
+    - all:
+        - '^\s*Held message from another session\s*$'
+        - '^\s*[❯›>]\s*Deny — drop it and tell the sender it was declined\s*$'
+        - '^\s*Deliver this message to Claude\s*$'
+      without_rule: true
+      none_after:
+        anchor: '^\s*Deliver this message to Claude\s*$'
+        patterns:
+          - '^\s*[❯›>]\s*$'
   # A quoted question above the composer's rule is not a dialog. The footer is the
   # captured last line and needs the question. A Yes/No choice below the last rule
   # is the other shape; the mark is optional, as on an unmarked "2. No".
@@ -278,6 +345,23 @@ screen:
     - any:
         - '\besc to interrupt\b'
         - '^[^\S\n]*[✢✳✶✻✼✽][^\n]*…\s*\(\s*\d'
+  # Where each dialog's question sits, so a report can quote it. The question tool's `☐` header
+  # row names the field the question is about, never the question itself
+  # (`claude-code/2.1.302/question.txt`, `2.1.289/question-plain.txt`); the sentence is the first
+  # row under it that survives a blank, and the option rows below move with the selection.
+  # The choice question sits under the dialog's `☐ Name` header, and its block ends at the first
+  # option row (`❯ 1. …` or `  2. …`, 2.1.302/question.txt). The question wraps with the pane's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
+  question_text:
+    question:
+      after: '^\s*☐\s'
+      until: '^\s*(?:❯\s*)?[0-9]+\.\s'
+      rows: 6
+    plan_approval:
+      inline: '^\s*Claude has written up a plan and is ready to execute\.'
+    confirmation:
+      inline: '^\s*Held message from another session\s*$'
   composer:
     mode: box-to-rule
     # The prompt sits at the pane's first column, as unsent-typed-ansi.txt draws `❯ Fix the`;

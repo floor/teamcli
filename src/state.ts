@@ -8,6 +8,7 @@ import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 import { cleanIdleClaims, type IdleClaimEntry } from './watch/claim-record.ts';
+import type { DialogKind } from './watch/dialog.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
 import { isPresenceBinding } from './daemon/presence/contract.ts';
 import type { CodexEndpointRecord } from './daemon/presence/endpoint-record.ts';
@@ -170,14 +171,25 @@ export type SeatState = {
   /**
    * Set when a launch left the pane at a dialog. `waiting-owner` is the stored name
    * even when the orchestrator may answer: it is waiting for an authorised human path.
+   * `trust-sent-recovery` and `question-sent-recovery` record a key team answer pressed:
+   * the first is completed by `team answer <seat> trust`, the second by
+   * `team answer <seat> question`, and neither is ever answered twice.
    */
   waiting?: {
-    state: 'waiting-owner' | 'trust-sent-recovery';
+    state: 'waiting-owner' | 'trust-sent-recovery' | 'question-sent-recovery';
     classification: Classification;
     manual?: true;
     sentAt?: string;
     version?: string;
     folder?: string;
+    /** The dialog a question answer dismissed: the three kinds `team answer <seat> question`
+     *  answers, kept so a recovery run can name it. Set beside `question-sent-recovery` only. */
+    dialog?: DialogKind;
+    /** The send path took the decision line (it delivered it or recorded it for the seat):
+     *  written and read back once the line is out, so a retry that finishes the recovery never
+     *  sends it a second time. Set beside `question-sent-recovery` only, and never removed by a
+     *  readiness-only failure. */
+    delivered?: true;
   };
 };
 

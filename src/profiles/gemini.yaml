@@ -33,6 +33,14 @@ exit_clear: ctrl+c
 timeouts:
   idle: 90s
   exit: 30s
+# The dialog dismiss key the project's own capture recorded: `0.64.0/question.txt`, the
+# question tool's box (`No, suggest changes (esc)`, `Esc to cancel`), "Escape dismissed it;
+# nothing was written."
+question_answer:
+  - kind: question
+    key: escape
+    from: '0.64.0'
+    to: '0.64.0'
 # From `--help` and 0.64.0 source: Gemini CLI loads `GEMINI.md` context files and
 # `.gemini/settings.json` from the working directory at start.
 startup_reads:
@@ -110,6 +118,21 @@ screen:
   working:
     - any:
         - '^\s*[⠀-⣿]\s+.*\(esc to cancel'
+  # Where the answer box's question sits, so a report can quote it: the title row, a blank box
+  # row, then the question, all inside the frame (`gemini/0.64.0/question.txt`). The frame is
+  # stripped from each taken row.
+  # The question's block starts under the box's `Answer Questions` row and ends at the first
+  # option row (`● 1. …` or `  2. …`, 0.64.0/question.txt). A question wraps with the box's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
+  question_text:
+    question:
+      after: '^\s*│\s*Answer Questions\s*│\s*$'
+      until: '^\s*│\s*(?:●\s*)?[0-9]+\.\s'
+      rows: 6
+      strip:
+        - '^\s*│\s*'
+        - '\s*│\s*$'
   composer:
     mode: two-rules-footer-below
     # In `--approval-mode yolo`, the prompt glyph is `*` (` * `); in default mode, `>` (` > `).
