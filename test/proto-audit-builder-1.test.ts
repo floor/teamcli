@@ -111,7 +111,7 @@ describe('workflow store payloads', () => {
     expect(Object.getPrototypeOf(items)).toBe(Object.prototype);
   });
 
-  test('a definition naming a state __proto__ is refused', () => {
+  test('a definition naming a state __proto__ is refused at the reader', () => {
     const parsed = parseWorkflow(`workflow: proto-audit
 version: 1
 initial: idle
@@ -120,14 +120,16 @@ states:
   __proto__: {}
 transitions: []
 `);
-    expect('findings' in parsed).toBe(true);
-    if (!('findings' in parsed)) return;
-    expect(parsed.findings.some((finding) => finding.code === 'schema.name' && finding.message.includes('__proto__'))).toBe(true);
+    expect('invalid' in parsed).toBe(true);
+    if (!('invalid' in parsed)) return;
+    expect(parsed.invalid.name).toBe('YamlError');
+    expect(parsed.invalid.line).toBe(6);
+    expect(parsed.invalid.message).toBe('a map key may not be "__proto__"');
   });
 });
 
 describe('evidence a dry script reads', () => {
-  test('an evidence ref named __proto__ is kept as the fixture it declares', () => {
+  test('an evidence ref named __proto__ is refused at the reader', () => {
     const script = `format: 1
 target: floor/teamcli
 artifact: { kind: none }
@@ -140,10 +142,10 @@ signals:
   - { signal: time-reached, at: '2026-10-21T18:00:00Z', request-id: req-1, expected-revision: 0, evidence: [__proto__] }
 `;
     const read = readScript(script);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(Object.keys(read.script.evidence)).toContain('__proto__');
-    expect(Object.hasOwn(read.script.evidence, '__proto__')).toBe(true);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.code).toBe('workflow.script');
+    expect(read.why).toBe('line 7: a map key may not be "__proto__"');
   });
 });
 
