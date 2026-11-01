@@ -15,7 +15,7 @@ type Errors = string[];
 const KNOWN = new Set([
   '$defs', '$schema', '$id', 'title', 'description',
   'type', 'const', 'enum', 'required', 'properties', 'additionalProperties',
-  'items', 'minItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'pattern',
+  'items', 'minItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'pattern', 'minProperties',
   'oneOf', 'anyOf', 'allOf', 'if', 'then', 'not', '$ref',
 ]);
 
@@ -76,6 +76,7 @@ function check(schema: Schema, value: unknown, at: string, root: Schema): Errors
       seen.add(one);
     }
   }
+  if (typeof schema.minProperties === 'number' && isObject(value) && Object.keys(value).length < schema.minProperties) note(`has fewer than ${schema.minProperties} keys`);
   if (typeof schema.minimum === 'number' && typeof value === 'number' && value < schema.minimum) note(`is below ${schema.minimum}`);
   if (typeof value === 'string') {
     if (typeof schema.minLength === 'number' && value.length < schema.minLength) note(`is shorter than ${schema.minLength}`);

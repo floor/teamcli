@@ -4,7 +4,7 @@
 // runs on the plain form, and the styling tells a greyed suggestion from typed text.
 import { readFileSync } from 'node:fs';
 import { stripSgr } from '../ansi.ts';
-import { classifyLines, composerBox, composeLines, foldMarked, foldOf, statusRowOf, type Box, type Fold, type ReadClock, type ScreenOptions } from './screen-core.ts';
+import { classifyLines, composerBox, composeLines, foldMarked, foldOf, questionTextOf, statusRowOf, type Box, type Fold, type ReadClock, type ScreenOptions } from './screen-core.ts';
 import type { ScreenData, VersionRange } from './screen-data.ts';
 import { loadScreen } from './screen-file.ts';
 
@@ -21,6 +21,15 @@ export type Screen =
   | { kind: 'working' }              // a turn is running: herdr's status would already be stale
   | { kind: 'unsent' }               // text left in the input box
   | { kind: 'permission' }           // a permission dialog: its owner's to answer
+  | { kind: 'plan approval' }        // a plan the agent wrote, waiting to execute: read before
+                                     // `permission`, whose generic numbered choice it draws too;
+                                     // the operator's to act on, and answerable
+  | { kind: 'confirmation' }         // a confirmation the CLI or the agent raises before acting —
+                                     // a mode switch, an unsent comment, a held message; read
+                                     // before `permission` for the same reason, and answerable
+  | { kind: 'login' }                // the CLI's own login screen: read after `permission` so a
+                                     // shipped permission pattern keeps the reading it had, and
+                                     // never answered
   | { kind: 'trust' }                // a workspace trust question: left unanswered
   | { kind: 'question' }             // a question the agent asked: the operator's to act on
   | { kind: 'exit question' }        // the CLI's own question after the exit text was sent — its
@@ -124,6 +133,20 @@ export function classifyComposer(cli: string | ScreenData, lines: string[], opti
 export function readScreen(cli: string | ScreenData, screen: string | undefined, options?: ScreenOptions | ReadClock): Screen {
   if (screen === undefined) return { kind: 'unknown' };
   return classify(cli, screen.split('\n'), options);
+}
+
+/** The question text a dialog screen carries, as the profile places it — frame, marker and
+ *  padding stripped, rows joined by one space — or null when the screen is not one of the three
+ *  answerable kinds or nothing of the text survives the strips. The reading is made fresh from
+ *  the screen passed in: it costs one classify, and it never quotes a row the caller did not
+ *  see. */
+export function questionText(cli: string | ScreenData, screen: string | undefined): string | null {
+  const data = typeof cli === 'string' ? DATA[cli] : cli;
+  if (data === undefined || screen === undefined) return null;
+  const lines = linesFor(data, screen.split('\n'));
+  const kind = classifyLines(data, lines).kind;
+  if (kind !== 'question' && kind !== 'plan approval' && kind !== 'confirmation') return null;
+  return questionTextOf(data, lines, kind);
 }
 
 /** The folded form of a paste the pane's composer shows, or null. The shape only; the caller

@@ -284,6 +284,8 @@ function nextStep(why: Refusal): string {
   }
   switch (why.kind) {
     case 'permission':
+    case 'plan approval':
+    case 'confirmation':
     case 'trust':
     case 'question':
     case 'exit question':
@@ -291,6 +293,8 @@ function nextStep(why: Refusal): string {
     case 'provider error':
     case 'rate limit':
       return `answer it in its pane, then run up again`;
+    case 'login':
+      return `log in in its pane, then run up again`;
     case 'working':
       return `wait for its turn to finish, then run up again`;
     case 'unsent':
@@ -383,7 +387,7 @@ export function refusalReport(why: Refusal): string {
  *  whose rows do not read back is cleared with the profile's one key when the box is still the
  *  unsent composer. */
 /** Screens a typed line is never waited past: each asks the seat something, and Enter would answer it. */
-const DIALOGS: ReadonlySet<string> = new Set(['trust', 'permission', 'question', 'exit question', 'vendor notice', 'provider error', 'rate limit']);
+const DIALOGS: ReadonlySet<string> = new Set(['trust', 'permission', 'plan approval', 'confirmation', 'login', 'question', 'exit question', 'vendor notice', 'provider error', 'rate limit']);
 
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
@@ -419,7 +423,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
       if (status === 'working' || start === 'working') {
         return report({ stop: 'working', typed: false, sent: false, kind: 'working', row: null });
       }
-      if (start === 'trust' || start === 'permission' || start === 'question' || start === 'exit question' || start === 'vendor notice' || start === 'provider error' || start === 'rate limit') {
+      if (DIALOGS.has(start)) {
         return report(stopAs(cli, 'screen', io.screen()));
       }
       if ((status === 'idle' || status === 'done' || wordless()) && (start === 'idle' || start === 'unsent')) break;
@@ -523,7 +527,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     // acknowledgement the terminal host's `working` status would have given. The composer must be
     // back to its empty idle row — a box still holding the line is not a submission.
     if (herdrUnreliable(cli) && kind === 'working' && composer.kind === 'idle') return true;
-    if (kind === 'trust' || kind === 'permission' || kind === 'question' || kind === 'exit question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit' || io.now() >= deadline) {
+    if (DIALOGS.has(kind) || io.now() >= deadline) {
       return report(stoppedOn(cli, 'ack', io.screen(), line));
     }
     if (retry && enters < RULES_ENTER_TRIES && io.now() >= retryAt) {
