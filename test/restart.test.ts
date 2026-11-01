@@ -489,7 +489,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(1);
     expect(io.out).toContain('worker: input box: empty\n');
     expect(io.out).toContain('worker: turn: not working (free)\n');
-    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript\n');
+    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation\n');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
 
@@ -1687,7 +1687,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const resumed = 'zsh -lc "claude --model claude-opus-5-5 --resume ses_keep"';
     expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${resumed}`);
     expect(io.out).toContain(
-      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace without passing the old transcript\n`,
+      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
     );
     // The recipe the launch records is the line it ran.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
@@ -2036,6 +2036,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    // The caller's own flag is the reason: the context line does not present it as none recorded.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "codex -m gpt-6.1-sol" in a new workspace without passing the old transcript; abandoned by the caller\n',
+    );
   });
 
   test('a restored Codex seat running another conversation is still left as it is', async () => {
@@ -2128,6 +2132,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
+    // The context line repeats the reason the run gave: it never reads as a silent fresh start.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
+    );
   });
 
   test('a record that changes between the caller\'s read and the run lock is not resumed', async () => {
@@ -2158,6 +2166,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(moved).toBe(true);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
+    // The carried resume was dropped under the run lock: the context line says so, with the why.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
+    );
   });
 
   test('a dry run prints the resume the launch would use, and writes no log line', async () => {

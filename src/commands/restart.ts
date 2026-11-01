@@ -357,6 +357,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     state: recordedSeat,
   });
   let resume: string | undefined;
+  // Plain words for the pre-close context line when no conversation is carried: the line before
+  // the close repeats the reason this run already gave, so it never reads as a resume that
+  // quietly became a fresh start. Set where each decision is made, never inferred from the line.
+  let resumeNote: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
   // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
@@ -378,6 +382,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     else if (dry) out.stdout(`! ${said}\n`);
     else out.stderr(`team restart: ${plainText(said)}\n`);
     if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+    resumeNote = `not resuming its recorded conversation (${why})`;
   };
   // The id to resume is the one the records bind, not one the state copy must also agree with:
   // the registry record is the proof, and a state copy naming no id is a copy that predates the
@@ -416,6 +421,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         // The line selects the recorded id, or names none and takes it appended — never under
         // the caller's `--abandon`, which starts fresh.
         if (!abandon) resume = resumeCandidate.id;
+        else resumeNote = 'abandoned by the caller';
       } else if (pinned) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
@@ -440,6 +446,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         );
       }
     }
+  } else {
+    // Neither record binds a conversation for this seat: the launch starts a fresh one.
+    resumeNote = 'no recorded conversation';
   }
 
   // The client's grant, read once more under its lock immediately before the first effect, and its audit
@@ -478,6 +487,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
@@ -574,6 +584,10 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** Plain words for the pre-close context line when `resume` is absent: no recorded
+   *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
+   *  The line then states why the relaunch starts a fresh conversation. */
+  resumeNote?: string;
   /** The registry-bound session id this restart proves a restored pane against. Absent when no
    *  binding exists, or the CLI has no measured resume form and the state copy names no id: the
    *  pane is then never tied to the launch, and a replaced process is left as it is. */
@@ -713,6 +727,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // losslessly. It is applied before the dry answer so the plan prints the line the launch would
   // run; the log line itself is written once the seat is down and the launch is going out.
   let resumed: string | undefined;
+  // The caller's plain words for why no conversation is carried; the drop below replaces them
+  // with its own reason, so the context line always names the decision that stood last.
+  let resumeNote = input.resumeNote;
   if (input.resume !== undefined) {
     const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
     if (carried.kind === 'line') {
@@ -726,8 +743,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         kind: 'not-ready',
         message: `${name}: its launch line does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
       };
+    } else {
+      // The line this launch would run cannot take the id: the CLI has no measured resume form,
+      // or the line sets a session of its own. The launch runs fresh, and the context line says
+      // so with the same reason, rather than reading as a resume that quietly became a start.
+      resumeNote = `not resuming its recorded conversation (${carried.why})`;
     }
-    // A CLI with no measured resume form runs fresh; the caller already said so.
   }
   // The entity model rule's word on the model the line about to run names, read before the seat
   // is stopped. Two lines can run: the declaration's own (a fresh start, and the line a resume
@@ -810,6 +831,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         planSeat.launch = declaredLaunch;
         resumed = undefined;
         continuitySession = undefined;
+        resumeNote = `its recorded conversation was dropped before the launch (${why})`;
         const said = `${name}: not resuming its recorded session (${why})`;
         if (json) notes.push(said);
         else out.stderr(`team restart: ${plainText(said)}\n`);
@@ -871,7 +893,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript\n`);
+      // A carried conversation is said as one: the old transcript phrase described a fresh start,
+      // and the field read it as one even when the resume was on the line. With nothing carried,
+      // the line states the reason the run already gave, so the terminal never shows a silent
+      // fresh start.
+      const context = resumed !== undefined
+        ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes the recorded conversation ${plainLine(resumed)}`
+        : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; ${context}\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }

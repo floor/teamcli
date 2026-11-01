@@ -160,11 +160,15 @@ launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `co
 <id>`, Antigravity as `--conversation=<id>` appended to the seat's launch line, Grok as
 `-r <id>` appended to the seat's launch line. A line that runs the CLI inside a quoted script
 takes the resume inside that script, where the CLI reads it; a word after the closing quote
-never reaches it. A CLI with
-no measured resume form is left as it is unless the caller abandons the
-conversation with `--abandon`, a state that names another id is relaunched without one, and a
+never reaches it. A CLI with no measured resume form is left as it is unless the caller abandons
+the conversation with `--abandon`, a state that names another id is relaunched without one, and a
 conversation that differs or cannot be read remains refused (`<seat> has a process in its old
 pane that is not the signed seat; left as it is`, exit 1).
+
+The pre-close context line says what happens to that conversation: when the launch carries it, the
+line names the line the relaunch runs and says it resumes the recorded conversation `<id>`; when it
+carries none, the line says why — no recorded conversation, the refusal's own reason, a resume
+dropped before the launch, or the caller's `--abandon`.
 
 A launch line that itself names a conversation — another id, `--last`, or a resume with no id —
 is never run: the repair is refused before the stop, and `--abandon` does not start it fresh
