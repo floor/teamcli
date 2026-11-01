@@ -1,7 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
@@ -26,7 +25,7 @@ import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -208,10 +207,10 @@ describe('the real restart launch', () => {
 });
 
 function makeFixture(rawYaml = TEAM_YAML): Fixture {
-  // The state folder sits under a short base in the runtime temp folder so the endpoint path a
-  // managed launch owns for this seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside
-  // the socket path limit; the scene below measures that path against the limit.
-  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'tr-')));
+  // The state folder sits under the short socket base so the endpoint path a managed launch owns
+  // for this seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path
+  // limit; the scene below measures that path against the limit.
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 'tr-')));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

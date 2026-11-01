@@ -7,7 +7,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalOf } from '../../src/approve/approval.ts';
@@ -19,7 +18,7 @@ import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import type { EndpointStopRead } from '../../src/launch/codex-endpoint.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { gitEnv, shortSocketBase, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const owner = { kind: 'owner' } as const;
@@ -82,7 +81,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function layout(workerCli = 'claude-code', workerName = 'claude', workerModel = 'Claude Opus'): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 't1-a3-down-')));
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 't1-a3-down-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
@@ -527,7 +526,7 @@ const SESSION = 'teamcli';
 const SEAT = 'builder-4';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
-const SHORT_TMP = realpathSync(tmpdir());
+const SHORT_TMP = shortSocketBase();
 
 function scratch(): string {
   return mkdtempSync(join(SHORT_TMP, 't1r2-'));

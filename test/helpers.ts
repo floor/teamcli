@@ -167,6 +167,18 @@ export function capturedWorkspaceEntry(workspaceId: string, label: string) {
  *  not part of any contract a scene reads, so the fixture takes this machine's. */
 const TEMP = realpathSync(tmpdir());
 
+/** The short base for a fixture that binds a unix socket: the POSIX temp folder `/tmp` when it
+ *  exists (4 bytes on Linux, 12 on macOS as the real path), else the runtime temp folder. A unix
+ *  socket path has a 100-byte limit, so a socket fixture must not sit under a deep temp folder;
+ *  every other fixture keeps the runtime temp folder. */
+export function shortSocketBase(): string {
+  try {
+    return realpathSync('/tmp');
+  } catch {
+    return realpathSync(tmpdir());
+  }
+}
+
 /** The `herdr 0.7.1` `pane list` entry, as captured. */
 export function capturedPaneEntry(paneId: string, workspaceId: string, terminalId = 'term_65dd8274742df1') {
   return {

@@ -6,10 +6,10 @@
 // A socket no record names is left where it is, and said. A missing socket is no proof its
 // server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from '../helpers.ts';
 import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state.ts';
 import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
@@ -32,9 +32,9 @@ const OTHER = 'prs_fedcba987654';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
 
-// A unix socket path has a hard OS limit, so scenes live under the runtime temp folder with a
+// A unix socket path has a hard OS limit, so scenes live under the short socket base with a
 // short prefix; the scenes that bind a socket measure their endpoint against the limit.
-const SHORT_TMP = realpathSync(tmpdir());
+const SHORT_TMP = shortSocketBase();
 
 function scratch(): string {
   return mkdtempSync(join(SHORT_TMP, 'te-'));
@@ -107,7 +107,7 @@ describe('the endpoint socket path', () => {
 
 describe('the endpoint socket the app-server makes', () => {
   test('a link to a private socket counts; a link to a shared folder or a plain file does not', async () => {
-    const base = mkdtempSync(join(tmpdir(), 'cx-sock-'));
+    const base = mkdtempSync(join(shortSocketBase(), 'cx-sock-'));
     const hidden = join(base, 'daemon');
     mkdirSync(hidden, { mode: 0o700 });
     const real = join(hidden, 's.sock');

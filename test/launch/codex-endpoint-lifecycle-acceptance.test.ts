@@ -28,7 +28,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
@@ -46,7 +45,7 @@ import {
 } from '../../src/launch/codex-endpoint.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from '../helpers.ts';
 
 const SESSION = 'acme';
 const SEAT = 'worker';
@@ -57,8 +56,8 @@ const STARTED_AT = '2026-10-20T07:59:00.000Z';
 const NOW = new Date('2026-10-20T08:00:00.000Z');
 
 // The endpoint path has a 100-byte contract limit, so the state folder has to be short: these
-// scenes take the runtime temp folder, and the endpoint it builds is measured against the limit.
-const SHORT_TMP = realpathSync(tmpdir());
+// scenes take the short socket base, and the endpoint a scene builds is measured against the limit.
+const SHORT_TMP = shortSocketBase();
 
 let dirs: string[] = [];
 afterEach(() => {
