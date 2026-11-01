@@ -72,6 +72,13 @@ export type ReconcileOptions = {
   /** How long `reconcilePassAsync` runs before it gives the event loop a turn. 0 yields at every
    *  step, which a scene uses to prove the pass yields at all; a negative value never yields. */
   sliceMs?: number;
+  /** How long an append waits for the event lock. Omitted, it waits the lock's own budget (the
+   *  sync driver's behavior); 0 makes every append non-blocking, and a held lock defers the
+   *  record to the async driver's own wait instead of freezing the loop. */
+  appendWaitMs?: number;
+  /** How long `reconcilePassAsync` keeps retrying a deferred append while the lock is held. Past
+   *  it the pass returns; the cursors it did not advance make the next pass try again. */
+  appendRetryMs?: number;
 };
 
 export type ReconcileResult =
@@ -128,6 +135,13 @@ type LogCache = {
 };
 type HistoryCache = { path: string; stamp: string; entries: HistoryEntry[] };
 
+/** An append the pass could not make because another process held the event lock. The async
+ *  driver retries it with its own wait, so the record is neither lost nor allowed to freeze the
+ *  loop; the sync driver's blocking append never produces one. */
+type DeferredAppend =
+  | { kind: 'event'; input: EventAppendInput }
+  | { kind: 'config'; change: ConfigChange };
+
 /** The caches one bus keeps between passes. It is plain state: nothing here is saved to disk,
  *  and a new bus process starts with an empty one, which only costs it one full first pass. */
 export type ReconcileState = {
@@ -140,6 +154,9 @@ export type ReconcileState = {
   signedSenders: Map<string, Map<string, string>>;
   log: LogCache | null;
   history: HistoryCache | null;
+  /** Appends this pass deferred on a held event lock; empty after the async driver retries them
+   *  or gives up, and reset at the start of every pass. */
+  deferred: DeferredAppend[];
   stats: ReconcileStats;
 };
 
@@ -150,6 +167,7 @@ export function createReconcileState(): ReconcileState {
     signedSenders: new Map(),
     log: null,
     history: null,
+    deferred: [],
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
@@ -157,6 +175,11 @@ export function createReconcileState(): ReconcileState {
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 /** The share of the event loop one async pass takes between turns. */
 export const DEFAULT_RECONCILE_SLICE_MS = 8;
+/** How long the async driver keeps retrying a deferred append while the event lock is held: the
+ *  same budget the synchronous lock wait would spend. Past it the next pass tries again. */
+export const DEFAULT_APPEND_RETRY_MS = 5_000;
+/** The pause between two attempts at a held lock; the event loop is free between attempts. */
+const APPEND_RETRY_STEP_MS = 50;
 
 function isRealDir(path: string): boolean {
   try {
@@ -318,6 +341,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   stats.verifies = 0;
   stats.verifiesReused = 0;
   stats.yields = 0;
+  // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
+  state.deferred = [];
   const visited = new Set<string>();
   const nowDate = options.now ?? new Date();
   const nowIso = nowDate.toISOString();
@@ -376,13 +401,17 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   const raised: SignedEventRecord[] = [];
 
-  const raise = (input: EventAppendInput): void => {
+  // The async driver asks for non-blocking appends: a held lock becomes a deferred record that
+  // the driver retries with its own wait, never a pause here that freezes the event loop.
+  const defersBusy = options.appendWaitMs !== undefined && options.appendWaitMs <= 0;
+  const raise = (input: EventAppendInput): boolean => {
     const key = `${input.kind}\0${input.record_id}`;
-    if (seen.has(key)) return;
+    if (seen.has(key)) return true;
     const res = appendEvent(project, root, home, input, {
       maxBytes: options.maxBytes,
       kept: options.kept,
       deduplicate: true,
+      ...(options.appendWaitMs !== undefined ? { lockWaitMs: options.appendWaitMs } : {}),
     });
     if (res.ok) {
       seen.add(key);
@@ -390,7 +419,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         raised.push(res.record);
         options.onEvent?.(res.record);
       }
+      return true;
     }
+    if (res.busy === true && defersBusy) {
+      state.deferred.push({ kind: 'event', input });
+      return false;
+    }
+    // Any other failure is left to the next pass; the caller advances no cursor past it.
+    return false;
   };
 
   // 1. Scan `.agents/send-drops/<session>/<seat>` for drop files, `.pending` markers, and receipts.
@@ -758,7 +794,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       const prevTs = lastSeatEventTs.get(seatName);
       if (prevTs !== undefined && Date.parse(activeTs) <= Date.parse(prevTs)) continue;
       const kind = seatRecord.stage === 'ready' ? 'seat.working' : 'seat.idle';
-      raise({
+      const persisted = raise({
         ts: activeTs,
         kind,
         session,
@@ -766,7 +802,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         seat: seatName,
         subject: seatName,
       });
-      lastSeatEventTs.set(seatName, activeTs);
+      // The watermark moves only once the event is in the log, or was already there. A refused
+      // append leaves it behind, so the next pass raises the same transition again instead of
+      // treating an event that was never written as delivered.
+      if (persisted) lastSeatEventTs.set(seatName, activeTs);
       yield;
     }
   }
@@ -811,8 +850,15 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             ...(source.seat !== undefined ? { seat: source.seat, subject: source.seat } : {}),
             reconciled: true,
           };
-          const res = appendConfigChanged(project, root, home, change);
-          if (!res.ok) continue;
+          const res = appendConfigChanged(project, root, home, change, {
+            ...(options.appendWaitMs !== undefined ? { lockWaitMs: options.appendWaitMs } : {}),
+          });
+          if (!res.ok) {
+            // A held lock is worth retrying in this process; the setting stays unseen otherwise,
+            // so the next pass raises it again when the lock has not freed either.
+            if (res.busy === true && defersBusy) state.deferred.push({ kind: 'config', change });
+            continue;
+          }
           configSeen.add(recordId);
           if (!res.duplicate) {
             raised.push(res.record);
@@ -854,19 +900,83 @@ function yieldTurn(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+type DeferredOutcome =
+  | { state: 'written'; record: SignedEventRecord; duplicate: boolean }
+  | { state: 'busy' }
+  | { state: 'failed' };
+
+/** One non-blocking attempt at a deferred append: 0 for the lock wait means a held lock answers
+ *  at once instead of pausing this process. */
+function tryDeferredAppend(options: ReconcileOptions, item: DeferredAppend): DeferredOutcome {
+  const appended =
+    item.kind === 'event'
+      ? appendEvent(options.project, options.root, options.home, item.input, {
+          maxBytes: options.maxBytes,
+          kept: options.kept,
+          deduplicate: true,
+          lockWaitMs: 0,
+        })
+      : appendConfigChanged(options.project, options.root, options.home, item.change, { lockWaitMs: 0 });
+  if (appended.ok) return { state: 'written', record: appended.record, duplicate: appended.duplicate };
+  return appended.busy === true ? { state: 'busy' } : { state: 'failed' };
+}
+
+/**
+ * Waits for records a pass could not append while another process held the event lock. Every
+ * attempt is non-blocking and the pause between them gives the event loop a turn, so a held lock
+ * costs latency, never liveness. A record still held past the budget is left for the next pass:
+ * the seat watermark and config cursor were not advanced, so the pass will find it again.
+ */
+async function retryDeferredAppends(
+  options: ReconcileOptions,
+  state: ReconcileState,
+  raised: SignedEventRecord[],
+): Promise<void> {
+  let pending = state.deferred;
+  if (pending.length === 0) return;
+  const deadline = performance.now() + (options.appendRetryMs ?? DEFAULT_APPEND_RETRY_MS);
+  for (;;) {
+    const busy: DeferredAppend[] = [];
+    for (const item of pending) {
+      const outcome = tryDeferredAppend(options, item);
+      if (outcome.state === 'busy') busy.push(item);
+      else if (outcome.state === 'written' && !outcome.duplicate) {
+        // The same fan-out the pass would have made for this record.
+        raised.push(outcome.record);
+        options.onEvent?.(outcome.record);
+      }
+      // A failure that is not a held lock is left to the next pass as well.
+    }
+    pending = busy;
+    if (pending.length === 0 || performance.now() >= deadline) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, APPEND_RETRY_STEP_MS));
+  }
+  state.deferred = [];
+}
+
 /**
  * The whole pass in slices. Between slices the event loop is free, so a heartbeat timer, a
  * liveness probe or an incoming request is answered while a large store is being scanned. The
  * result is the same pass `reconcilePass` returns; only the pacing differs.
+ *
+ * Appends are non-blocking here too: a record whose event lock is held is deferred and retried
+ * on this driver's own async wait, so a contending writer slows the pass without stopping the
+ * loop. The pass result carries the records that eventually landed.
  */
 export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
   const state = options.state ?? createReconcileState();
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
-  const steps = reconcileSteps({ ...options, state });
+  const steps = reconcileSteps({ ...options, state, appendWaitMs: 0 });
   let since = performance.now();
   for (;;) {
     const next = steps.next();
-    if (next.done) return next.value;
+    if (next.done) {
+      const result = next.value;
+      if (result.ok) {
+        await retryDeferredAppends(options, state, result.raised);
+      }
+      return result;
+    }
     if (sliceMs < 0 || performance.now() - since < sliceMs) continue;
     state.stats.yields += 1;
     await yieldTurn();

@@ -19,8 +19,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { appendEvent, EVENT_DOMAIN } from '../src/bus/log.ts';
+import { dirname, join } from 'node:path';
+import { appendEvent, eventLogPath, EVENT_DOMAIN } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts';
@@ -29,6 +29,7 @@ import { startMachineDaemon } from '../src/daemon/host.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 import { dropMessage } from '../src/send/native.ts';
 import type { SendDaemonHandle } from '../src/send/daemon.ts';
+import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
 
 const TEAM = `format: 1
@@ -290,6 +291,94 @@ describe('the archive findings are regression probes', () => {
     const read = second.raised.find((record) => record.payload.record_id === 'rec-rewrite:read');
     expect(read?.payload.from).toBe('alice');
   });
+});
+
+describe('a held event lock neither loses the event nor freezes the loop', () => {
+  function holdEventLock(root: string, home: string): string {
+    const dir = join(dirname(eventLogPath('acme', root, home)), 'locks', 'events');
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, LOCK_FILE);
+    writeFileSync(path, `${String(process.pid)}\n`);
+    return path;
+  }
+
+  function seatReady(root: string, ts: string): void {
+    updateState(join(root, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats['worker-1'] = { stage: 'ready', last_active: ts };
+    });
+  }
+
+  test('a refused seat event is raised by the next pass', async () => {
+    const { root, home } = scratch();
+    const input = { project: 'acme', root, session: 'acme', home };
+    const seed = appendEvent('acme', root, home, {
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed',
+      ts: BULK_TS,
+      to: 'worker-1',
+    });
+    if (!seed.ok) throw new Error(seed.reason);
+    const state = createReconcileState();
+    reconcilePass({ ...input, state });
+    seatReady(root, '2026-11-01T01:00:00.000Z');
+    const lock = holdEventLock(root, home);
+    let refused: ReconcileResult | null = null;
+    try {
+      // A short retry budget keeps the scene quick; the lock stays held until the pass returns.
+      refused = await reconcilePassAsync({ ...input, state, sliceMs: 0, appendRetryMs: 120 });
+    } finally {
+      unlinkSync(lock);
+    }
+    if (refused === null) throw new Error('the pass did not return');
+    expect(raisedKeys(refused)).toEqual([]);
+    // The refused append must not move the seat's watermark: the next pass still raises it.
+    const retry = reconcilePass({ ...input, state });
+    expect(raisedKeys(retry)).toContain('seat.working:seat:worker-1:ready:2026-11-01T01:00:00.000Z');
+  }, 15_000);
+
+  test('the async driver waits for a held lock without freezing the loop', async () => {
+    const { root, home } = scratch();
+    const input = { project: 'acme', root, session: 'acme', home };
+    const seed = appendEvent('acme', root, home, {
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed',
+      ts: BULK_TS,
+      to: 'worker-1',
+    });
+    if (!seed.ok) throw new Error(seed.reason);
+    const state = createReconcileState();
+    reconcilePass({ ...input, state });
+    seatReady(root, '2026-11-01T02:00:00.000Z');
+    const lock = holdEventLock(root, home);
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+    }, 1);
+    // The timer releases the lock while the pass is waiting: only a live event loop lets it run.
+    const release = setTimeout(() => {
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }, 200);
+    const began = performance.now();
+    let pass: ReconcileResult | null = null;
+    try {
+      pass = await reconcilePassAsync({ ...input, state, sliceMs: 0 });
+    } finally {
+      clearInterval(timer);
+      clearTimeout(release);
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }
+    const elapsed = performance.now() - began;
+    if (pass === null) throw new Error('the pass did not return');
+    expect(ticks).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(3_000);
+    expect(raisedKeys(pass)).toContain('seat.working:seat:worker-1:ready:2026-11-01T02:00:00.000Z');
+  }, 15_000);
 });
 
 describe('the daemon heartbeat and endpoint supervision', () => {

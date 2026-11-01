@@ -53,6 +53,7 @@ export function appendConfigChanged(
   root: string,
   home: string,
   change: ConfigChange,
+  options: { lockWaitMs?: number } = {},
 ): EventAppendResult {
   const input: EventAppendInput = {
     ts: change.ts,
@@ -68,5 +69,8 @@ export function appendConfigChanged(
     ...(change.value !== null ? { config_new: sayConfigEventValue(change.value) } : {}),
     ...(change.reconciled ? { reconciled: 'true' } : {}),
   };
-  return appendEvent(project, root, home, input, { deduplicate: true });
+  return appendEvent(project, root, home, input, {
+    deduplicate: true,
+    ...(options.lockWaitMs !== undefined ? { lockWaitMs: options.lockWaitMs } : {}),
+  });
 }
