@@ -5,7 +5,7 @@
 // send-only grant opens no conversation, and a revoked grant stops new replies.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clientInboxFolder } from '../src/client/inbox.ts';
@@ -17,7 +17,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
 import { keyOf } from '../src/store/keys.ts';
-import { testIo } from './helpers.ts';
+import { fixtureBase, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T21:00:00Z');
 const made: string[] = [];
@@ -54,7 +54,7 @@ seats:
 `;
 
 function world(inbox: boolean) {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-reply-')));
+  const base = fixtureBase('.client-reply-');
   made.push(base);
   const root = join(base, 'floor');
   const home = join(base, 'home');

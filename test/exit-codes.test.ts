@@ -128,7 +128,7 @@ import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/w
 import { runImport } from '../src/commands/import.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
-import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -1129,9 +1129,10 @@ scene('check.herdr', async (place) => {
 });
 
 // The keygen scenes need a home outside the OS temp tree: the placement rule refuses a key
-// directory that overlaps it, and every other scene's place lives under mkdtemp's tree.
+// directory that overlaps it, and every other scene's place lives under mkdtemp's tree. The base
+// comes from the shared fixture root, so it also stays outside a checkout that sits in temp.
 function clientHome(label: string): string {
-  return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
+  return fixtureBase(`.client-exit-${label}-`);
 }
 
 function ranClient(place: Place, argv: string[], home: string = place.home, caller: Caller = owner): Ran {
@@ -4902,7 +4903,7 @@ function clientWorld(place: Place, options: { inbox?: boolean } = {}): {
   grantId: string;
   recipientId: string;
 } {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
+  const base = fixtureBase('.team-exit-client-');
   const home = join(base, 'home');
   mkdirSync(home, { recursive: true });
   const ownerKey = keyOf(home);

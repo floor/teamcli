@@ -17,7 +17,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
 import { keyOf } from '../src/store/keys.ts';
-import { testIo } from './helpers.ts';
+import { fixtureBase, testIo } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -50,10 +50,10 @@ type World = { base: string; root: string; home: string; grantPath: string; keyP
 /** A team checkout and a temp HOME with the orchestrator registered, and an `--inbox` grant the
  *  owner issued through `team grant`. */
 async function world(): Promise<World> {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-client-reply-')));
+  const base = fixtureBase('.team-client-reply-');
   made.push(base);
-  // The checkout sits in the OS temp folder; the HOME may not, since a client key refuses to
-  // live under it.
+  // The team's own checkout sits in the OS temp folder; the HOME holding the client key may not,
+  // so it sits under the fixture scratch root, outside temp and outside the checkout.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'team-client-reply-')));
   made.push(outside);
   const root = join(outside, 'acme');

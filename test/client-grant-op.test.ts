@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
@@ -28,6 +28,7 @@ import type { Io } from '../src/io.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { keyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
+import { fixtureBase } from './helpers.ts';
 
 const TEAM_ID = 'bbbbbbbbbbbb';
 const made: string[] = [];
@@ -47,7 +48,7 @@ ${extra}`;
 const ENTITIES = 'floor:\n  clients:\n    grok-bot:\n      seats: [orchestrator, zeus]\n    acme-bot:\n      seats: [orchestrator]\n';
 
 function world(label: string) {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), `.client-grant-op-${label}-`)));
+  const base = fixtureBase(`.client-grant-op-${label}-`);
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, 'floor');
