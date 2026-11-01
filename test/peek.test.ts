@@ -507,6 +507,15 @@ describe('a screen is masked before it is printed', () => {
     expect(maskSecretRows(rows)).toEqual(['commit [masked]', '[masked] done']);
   });
 
+  test('a sha complete on its row stays readable beside ordinary rows', () => {
+    // Builder-3's probe: the row ends right after the sha and the next row starts a non-hex
+    // word, so the hex run is complete on its row — neither a wrapped run nor a word to judge.
+    const complete = 'deadbeef0123456789abcdef0123456789abcdef';
+    const rows = ['ordinary status', `commit ${complete}`, 'next step'];
+    expect(maskSecretsLine(`commit ${complete}`)).toBe(`commit ${complete}`);
+    expect(maskSecretRows(rows)).toEqual(rows);
+  });
+
   test('a uuid split across two rows stays readable', () => {
     const rows = [`request ${uuid.slice(0, 18)}`, `${uuid.slice(18)} done`];
     expect(maskSecretRows(rows)).toEqual(rows);
