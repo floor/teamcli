@@ -500,7 +500,13 @@ describe('the display reads identity and source class from the actual health ans
       const shown = await display(world, NATIVE, BINDING);
       if (shown.seats.kind !== 'listed') return null;
       const entry = shown.seats.seats.get(NATIVE);
-      return entry !== undefined && entry.healthy === false && entry.binding === BINDING ? shown : null;
+      if (entry === undefined || entry.healthy !== false || entry.binding !== BINDING) return null;
+      // The successor's first reconcile pass is the event this scene reads: before it the seat
+      // honestly answers "not yet reconciled", and this scene is about the pass that finds the
+      // source with nothing staged. Wait for that word rather than for a clock.
+      const raw = (presenceOf(shown.health)?.seats as Array<Record<string, unknown>> | undefined)
+        ?.find((one) => one.seat === NATIVE);
+      return raw?.state === 'pending' && raw.why === 'the runtime source has staged no event yet' ? shown : null;
     }, 'the successor-bound seat hold');
 
     if (held.seats.kind !== 'listed') throw new Error('the complete list did not read');
