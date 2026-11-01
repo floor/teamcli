@@ -34,7 +34,7 @@ function hookFiles(secret = SECRET): { urlFile: string; secretFile: string } {
   return { urlFile, secretFile };
 }
 
-function withIris(webhook: { urlFile: string; secretFile: string }): World {
+function withHookSeat(webhook: { urlFile: string; secretFile: string }): World {
   made = world(['drop'], [{ name: 'iris', role: 'remote', webhook }]);
   return made;
 }
@@ -42,7 +42,7 @@ function withIris(webhook: { urlFile: string; secretFile: string }): World {
 describe('team send names the webhook route', () => {
   test('a usable adapter is an eligible, waking route in the dry run', async () => {
     const hook = hookFiles();
-    const at = withIris(hook);
+    const at = withHookSeat(hook);
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green', '--dry-run'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -55,7 +55,7 @@ describe('team send names the webhook route', () => {
   });
 
   test('the json document carries the same clause', async () => {
-    const at = withIris(hookFiles());
+    const at = withHookSeat(hookFiles());
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green', '--dry-run', '--json'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -66,7 +66,7 @@ describe('team send names the webhook route', () => {
 
   test('a missing secret is said in plain words, and the route is not claimed', async () => {
     const hook = hookFiles();
-    const at = withIris({ urlFile: hook.urlFile, secretFile: join(hook.urlFile, '..', 'no-such-secret') });
+    const at = withHookSeat({ urlFile: hook.urlFile, secretFile: join(hook.urlFile, '..', 'no-such-secret') });
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green', '--dry-run'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -78,7 +78,7 @@ describe('team send names the webhook route', () => {
   test('a secret readable by group or others is refused with its mode, never its value', async () => {
     const hook = hookFiles('group-readable-secret');
     chmodSync(hook.secretFile, 0o644);
-    const at = withIris(hook);
+    const at = withHookSeat(hook);
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green', '--dry-run'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -89,7 +89,7 @@ describe('team send names the webhook route', () => {
 
   test('a real send keeps the drop file and reports the wake', async () => {
     const hook = hookFiles();
-    const at = withIris(hook);
+    const at = withHookSeat(hook);
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -106,7 +106,7 @@ describe('team send names the webhook route', () => {
 
   test('a real send with an unreadable secret keeps the drop and claims no wake', async () => {
     const hook = hookFiles();
-    const at = withIris({ urlFile: hook.urlFile, secretFile: join(hook.urlFile, '..', 'no-such-secret') });
+    const at = withHookSeat({ urlFile: hook.urlFile, secretFile: join(hook.urlFile, '..', 'no-such-secret') });
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
@@ -123,7 +123,7 @@ describe('team send names the webhook route', () => {
 describe('the delivery class reads the adapter as push evidence', () => {
   test('a readable adapter is push, in the existing words', () => {
     const hook = hookFiles();
-    const at = withIris(hook);
+    const at = withHookSeat(hook);
     const read = seatDeliveryClass({
       dir: at.dir,
       root: at.root,
@@ -140,7 +140,7 @@ describe('the delivery class reads the adapter as push evidence', () => {
 
   test('an adapter that cannot post is no wake, and the evidence says why', () => {
     const hook = hookFiles();
-    const at = withIris(hook);
+    const at = withHookSeat(hook);
     const read = seatDeliveryClass({
       dir: at.dir,
       root: at.root,
@@ -155,7 +155,7 @@ describe('the delivery class reads the adapter as push evidence', () => {
   });
 
   test('a seat with no adapter reads as before', () => {
-    const at = withIris(hookFiles());
+    const at = withHookSeat(hookFiles());
     const read = seatDeliveryClass({
       dir: at.dir,
       root: at.root,
