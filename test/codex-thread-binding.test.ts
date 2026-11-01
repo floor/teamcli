@@ -23,6 +23,9 @@
 // 16. A seat that relaunches while its unnamed thread is read keeps the successor's agreement.
 // 17. A record whose conversation another writer replaced during the read is not overwritten.
 // 18. An endpoint replaced under the same incarnation during the read is refused.
+// 19. A record cleared while its unnamed thread is read keeps the clear; the thread is not
+//     written back.
+// 20. The same clear on the named path is kept too.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -550,6 +553,51 @@ describe('bindCodexSeatThread', () => {
     expect(after?.agent_session).toBeUndefined();
     expect(after?.codex_endpoint?.url).toBe(replaced.url);
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session).toBeUndefined();
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  // A clear is a later writer's word exactly like a recorded conversation: the record must still
+  // hold the conversation it held at selection, and a null is compared like any other value. The
+  // thread just read is the predecessor's, so writing it would resurrect what the clear ended.
+  test('a record cleared while its unnamed thread is read keeps the clear', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
+    const agentId = registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
+    const state = seatRecord(BINDING, socket.path);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      recordAgentSession(w.home, agentId, null);
+      return { kind: 'read', ids: [THREAD] };
+    });
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('lost its conversation');
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session ?? null).toBeNull();
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  // The named path keeps the same rule: the state still names its thread, but the record's own
+  // clear happened after this run read it, so binding the state's thread would write over it.
+  test('a record cleared while its named thread is read keeps the clear', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [OLD_THREAD] });
+    const agentId = registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
+    const state = { ...seatRecord(BINDING, socket.path), agent_session: OLD_THREAD };
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      recordAgentSession(w.home, agentId, null);
+      return { kind: 'read', ids: [OLD_THREAD] };
+    });
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('lost its conversation');
+    expect(readState(w.dir).sessions.tk?.seats.w?.agent_session).toBe(OLD_THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'w' })?.reach.agent_session ?? null).toBeNull();
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 });

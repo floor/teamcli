@@ -84,7 +84,7 @@ incarnation at the socket path that incarnation's launch owns, and not recorded 
 seat — an endpoint belonging to another seat, or one two seats both name, is not read at all. Both
 records are then written only while they still show the incarnation, endpoint, thread and agent
 record the read was made against: a seat that relaunched in between keeps its own records, and a
-conversation another writer recorded first is never replaced. An endpoint that holds no thread yet,
+conversation another writer recorded — or cleared — first is never replaced. An endpoint that holds no thread yet,
 holds more than one, or does not answer proves nothing: the records are left as they were, the
 closing line says `pull-only`, and the log names what the read proved instead
 (`<seat>: no thread was bound from its Codex endpoint (<reason>)`).

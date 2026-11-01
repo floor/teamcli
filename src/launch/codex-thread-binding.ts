@@ -169,9 +169,11 @@ function stateMismatch(file: State, session: string, seat: string, snap: Snapsho
 
 /** Why either record no longer shows the snapshot, or null: the state by {@link stateMismatch},
  *  and the record still the same one by the strict door and the exact handle. The record's own
- *  conversation must also be the one it held at selection, or the one being bound: a conversation
- *  another writer recorded after this run selected the record is a later binding, and replacing it
- *  would overwrite a successor's thread in the registry alone. */
+ *  conversation must also be exactly the one it held at selection, or the one being bound: a
+ *  conversation another writer recorded after this run selected the record is a later binding,
+ *  and a record cleared after it is a later answer too. Either replacing it would overwrite that
+ *  writer's word in the registry alone; a null is compared like any other value, so only a record
+ *  that held none at selection is still a record with none. */
 function fence(
   input: { home: string; root: string; dir: string; session: string; seat: { name: string; cli: string } },
   snap: Snapshot,
@@ -192,8 +194,10 @@ function fence(
     return "the seat's agent record changed while its thread was being bound";
   }
   const conversation = conversationOf(record.agent);
-  if (conversation !== null && conversation !== snap.bind && conversation !== snap.recorded) {
-    return `the seat's agent record names another thread (${conversation})`;
+  if (conversation !== snap.recorded && conversation !== snap.bind) {
+    return conversation === null
+      ? "the seat's agent record lost its conversation while its thread was being bound"
+      : `the seat's agent record names another thread (${conversation})`;
   }
   return null;
 }
