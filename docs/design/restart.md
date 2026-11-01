@@ -161,6 +161,10 @@ Whenever `team restart` closes a running or exited pane, it first prints three l
 <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
 ```
 
+`<launch>` is the line the relaunch runs, never the bare declaration: a conversation resume the
+run carried is already in it, so the line printed before the close, the line the new pane runs and
+the recipe the launch records are one and the same.
+
 If graceful exit on a `free` seat fails to return the pane to its shell or close the workspace, `team restart` aborts (`restart.busy`, exit 1) and never launches a second copy beside the still-open pane.
 
 ---

@@ -422,6 +422,28 @@ describe('the resume line a launch appends', () => {
     expect(withResume('claude-code', 'claude --model deepseek-flash', 'ses_1')).toBe('claude --model deepseek-flash --resume ses_1');
   });
 
+  test('a Claude Code quoted script takes the recorded id inside the script', () => {
+    // A word after the closing quote is an argument of the shell, not of the CLI the script
+    // runs: the id goes inside, as Codex's, Antigravity's and Grok's do.
+    expect(withResume('claude-code', 'zsh -lc "claude --model deepseek-flash"', 'ses_1'))
+      .toBe('zsh -lc "claude --model deepseek-flash --resume ses_1"');
+    expect(withResume('claude-code', "zsh -lc 'claude --model deepseek-flash'", 'ses_1'))
+      .toBe("zsh -lc 'claude --model deepseek-flash --resume ses_1'");
+    // A wrapper that forwards its own arguments keeps the flag after them.
+    expect(withResume('claude-code', 'zsh /home/owner/as-floor.sh claude --model deepseek-flash', 'ses_1'))
+      .toBe('zsh /home/owner/as-floor.sh claude --model deepseek-flash --resume ses_1');
+  });
+
+  test('a Claude Code quoted script that already selects a session keeps its own choice', () => {
+    for (const line of [
+      'zsh -lc "claude --resume abc"',
+      'zsh -lc "claude --continue"',
+      'zsh -lc "claude --session-id abc"',
+    ]) {
+      expect(withResume('claude-code', line, 'ses_1')).toBeNull();
+    }
+  });
+
   test('a Codex line takes the id as the word after its own resume subcommand', () => {
     // `codex resume --help` on 0.161.0: `Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]`.
     // The `-c` here is Codex's config override, not Claude Code's continue flag: it stays.
@@ -513,6 +535,18 @@ describe('a launch line that already selects a conversation', () => {
     expect(namedResumeTarget('antigravity', `agy --conversation ${id}`)).toBe(id);
     expect(namedResumeTarget('antigravity', `zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`)).toBe(id);
     expect(namedResumeTarget('antigravity', `zsh -lc "agy --conversation=${id}"`)).toBe(id);
+  });
+
+  test('a quoted script names its conversation inside the quotes', () => {
+    // `zsh -lc "claude --resume <id>"`: the closing quote is a word boundary, not part of the id.
+    expect(namedResumeTarget('claude-code', 'zsh -lc "claude --resume ses_9"')).toBe('ses_9');
+    expect(namedResumeTarget('claude-code', 'zsh -lc "claude -r ses_9"')).toBe('ses_9');
+    expect(namedResumeTarget('claude-code', 'zsh -lc "claude --resume"')).toBe('');
+    expect(namedResumeTarget('claude-code', 'zsh -lc "claude --continue"')).toBe('');
+    expect(resumeCarry('claude-code', 'zsh -lc "claude --resume ses_9"', 'ses_9'))
+      .toEqual({ kind: 'line', line: 'zsh -lc "claude --resume ses_9"' });
+    expect(resumeCarry('claude-code', 'zsh -lc "claude --resume ses_9"', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
   });
 
   test('a selection that names no id reads as empty', () => {

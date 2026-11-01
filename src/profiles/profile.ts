@@ -386,17 +386,21 @@ export function launchSessionId(command: string): string | undefined {
 /**
  * The command a pane runs, with the session id TeamCLI sets where the CLI takes one. The id is
  * appended after every other argument, so the plan (`team up --dry-run`, `team add`) keeps the
- * deterministic line it had and each launch gets its own id. A line that already names a session
- * id, resumes one (`--resume`/`-r`) or continues one (`--continue`/`-c`) is left as it is: the
- * id it names is the one recorded, and a resumed conversation is not a new session.
+ * deterministic line it had and each launch gets its own id. A wrapper that runs the CLI inside a
+ * quoted script takes the id inside that script, where the CLI reads it; a wrapper that forwards
+ * its own arguments takes it after them. A line that already names a session id, resumes one
+ * (`--resume`/`-r`) or continues one (`--continue`/`-c`) is left as it is: the id it names is the
+ * one recorded, and a resumed conversation is not a new session.
  */
 export function withLaunchSession(cli: string, command: string): { command: string; sessionId?: string } {
   if (!supportsSessionId(cli)) return { command };
   const named = launchSessionId(command);
   if (named !== undefined) return { command, sessionId: named };
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return { command };
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return { command };
   const sessionId = randomUUID();
-  return { command: `${command} --session-id ${sessionId}`, sessionId };
+  // `supportsSessionId` names one CLI, and its launch binary is `claude`: a quoted script that
+  // runs it takes the id inside its quotes, where the CLI reads it, never after them.
+  return { command: appendOnLaunchLine(command, `--session-id ${sessionId}`, 'claude'), sessionId };
 }
 
 /**
@@ -410,8 +414,7 @@ export function withLaunchSession(cli: string, command: string): { command: stri
  * (Grok CLI 1.0.70). A Codex line takes the subcommand, so its id is a word after `resume`,
  * never a flag. An Antigravity line takes one `--conversation=<id>` word. A Grok line takes
  * `-r` and the id as the next word. A wrapper whose last word is a quoted script that itself
- * runs the CLI (`zsh -lc "agy …"`, `zsh -lc "grok …"`, `zsh -lc "codex …"`) gets that addition
- * inside the script; a wrapper that forwards its own arguments (`zsh …/as-floor.sh agy …`)
+ * runs the CLI gets that addition inside the script; a wrapper that forwards its own arguments
  * gets it after them. Null when the CLI cannot resume: the caller hands over instead. Null,
  * too, for a launch line that already names a session — the flags below for Claude Code and
  * Grok, the `resume` subcommand for Codex, `--conversation` for Antigravity: appending ours
@@ -434,8 +437,8 @@ export function withResume(cli: string, command: string, sessionId: string): str
     if (/(^|\s)(--session-id|--resume|-r)(=|\s|$)/.test(command)) return null;
     return appendOnLaunchLine(command, `-r ${sessionId}`, 'grok');
   }
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
-  return `${command} --resume ${sessionId}`;
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return null;
+  return appendOnLaunchLine(command, `--resume ${sessionId}`, 'claude');
 }
 
 /**
@@ -498,9 +501,11 @@ export function namedResumeTarget(cli: string, command: string): string | null {
     return null;
   }
   if (cli !== 'claude-code') return null;
-  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
-  if (named) return named[1] ?? '';
-  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return '';
+  // A closing quote is a word boundary too: a quoted script names the id inside it, and the
+  // quote is not part of the token.
+  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$|["'])/.exec(command);
+  if (named?.[1] && !named[1].startsWith('-')) return named[1];
+  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return '';
   return null;
 }
 

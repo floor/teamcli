@@ -862,7 +862,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (rechecked.agent) {
       // Print the three pre-close facts before stopping or closing the seat's workspace. Under
       // `--json` they are collapsed notes on the document instead. A screen the profile cannot
-      // read is not claimed empty: its input box was not read.
+      // read is not claimed empty: its input box was not read. The context line quotes the line
+      // this run launches (`planSeat`'s, with the resume it carried), never the bare declaration.
       const box = rechecked.unrecognised !== undefined
         ? 'not read (the screen is not recognised)'
         : draftCopy !== undefined
@@ -870,7 +871,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(next.launch)}" in a new workspace without passing the old transcript\n`);
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }

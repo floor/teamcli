@@ -1659,6 +1659,116 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     );
   });
 
+  test('a restored Claude Code wrapper resumes inside its quoted script and says so before the close', async () => {
+    // The launch line runs the CLI inside a quoted script: a word after the closing quote never
+    // reaches `claude`, so the resume goes inside it, and the pre-close line quotes the line the
+    // run launches rather than the bare declaration.
+    const launch = 'zsh -lc "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const resumed = 'zsh -lc "claude --model claude-opus-5-5 --resume ses_keep"';
+    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${resumed}`);
+    expect(io.out).toContain(
+      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace without passing the old transcript\n`,
+    );
+    // The recipe the launch records is the line it ran.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
+  });
+
+  test('a wrapper chain hands the carried resume to the CLI as an argument', async () => {
+    // The field's shape: a shell starts a wrapper that execs the command it is given, which starts
+    // a second wrapper that handles some words itself and collects the rest for the CLI. Running
+    // the line the restart plans proves which words reach the CLI, and in what order.
+    const launch = '/bin/sh as-floor.sh /bin/bash claude-kimi.sh';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    // A stub CLI on PATH records the argv it is handed. The wrappers sit in the seat's folder,
+    // where its launch line runs.
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+    writeFileSync(join(fixture.root, 'as-floor.sh'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(
+      join(fixture.root, 'claude-kimi.sh'),
+      [
+        '#!/bin/bash',
+        'args=()',
+        'while [ "$#" -gt 0 ]; do',
+        '  case "$1" in',
+        '    --model) model="$2"; shift 2 ;;',
+        '    *) args+=("$1"); shift ;;',
+        '  esac',
+        'done',
+        'exec claude --model "${model:-kimi-k2}" "${args[@]}"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('claude-kimi.sh'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // The exact words the CLI receives, in order: the wrapper's own model, then the carried resume,
+    // then the profile's unattended, naming, rules and hook options — and no positional prompt.
+    // The stub terminates each word with NUL, so the multi-line rules text stays one word.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'kimi-k2',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
+  });
+
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
     const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
     const { fixture, run } = seeded({

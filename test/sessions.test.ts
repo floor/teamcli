@@ -443,6 +443,19 @@ describe('the launch session id', () => {
     expect(launchSessionId(launch.command)).toBe(launch.sessionId);
   });
 
+  test('a quoted script takes the minted id inside the script', () => {
+    // A word after the closing quote never reaches the CLI the script runs.
+    const launch = withLaunchSession('claude-code', 'zsh -lc "claude --model claude-opus-5-5"');
+    expect(launch.command).toMatch(/^zsh -lc "claude --model claude-opus-5-5 --session-id [0-9a-f-]{36}"$/);
+    expect(launch.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  test('a quoted script that already selects a session is left alone', () => {
+    for (const command of ['zsh -lc "claude --continue"', 'zsh -lc "claude --resume 2f6d1c1a"']) {
+      expect(withLaunchSession('claude-code', command)).toEqual({ command });
+    }
+  });
+
   test('a line that chooses its own session is left alone', () => {
     for (const command of [
       'claude --resume 2f6d1c1a',

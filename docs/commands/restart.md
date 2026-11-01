@@ -158,7 +158,9 @@ state file written before the id was recorded is no bar to recognizing the seat,
 resuming it either. The seat is then relaunched with that recorded conversation through its
 launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
 <id>`, Antigravity as `--conversation=<id>` appended to the seat's launch line, Grok as
-`-r <id>` appended to the seat's launch line. A CLI with
+`-r <id>` appended to the seat's launch line. A line that runs the CLI inside a quoted script
+takes the resume inside that script, where the CLI reads it; a word after the closing quote
+never reaches it. A CLI with
 no measured resume form is left as it is unless the caller abandons the
 conversation with `--abandon`, a state that names another id is relaunched without one, and a
 conversation that differs or cannot be read remains refused (`<seat> has a process in its old
