@@ -349,6 +349,23 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   root, or the plain folder itself, whose registry record holds the team — so the request and
   its approval work in the team's own folder. The approval rules are unchanged: no team change is
   applied before the owner's verified signature authorizes the exact requested words.
+- **A model word written in a seat's signed version field reads as the same model.** A record
+  naming the model `Gemini` with version `4 Argon` reads as the same model as a screen reading
+  `Gemini Argon 4`, so the seat's sends are no longer held as a false drift. A token carrying a
+  letter word of its own — a capacity such as `2B`, a tag such as `A4` — stays part of the model,
+  never a version's family letter.
+- **A stale team approval report names a removed seat and a step this build has.** The `team
+  config` report adds a seat the approval still holds and the record no longer names, and a
+  default seat ceiling that moved only because the roster did; its session line offers `session:
+  <old>` to keep the old default, never a re-approval this version does not have. `team migrate`
+  says the team record is unchanged only when the stored approval's canonical record and the
+  registry's read-back are equal.
+- **`team reply` to another team lands where that team's reader reads.** The record is written
+  under the root and session the answered team's live file names — the tree its `team messages`
+  and inbox server scan — so a team that moved to another session is answered in the new one. The
+  run says `delivered` only after the record passes that reader's checks, and a write it cannot
+  confirm says so instead of claiming delivery.
+- Configuration paths and parsed team, settings, request and workflow records read only the keys they own.
 
 ## [0.5.5] - 2026-10-26
 
