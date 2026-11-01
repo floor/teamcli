@@ -51,19 +51,24 @@ timeouts:
   exit: 30s
 # The dialog dismiss keys this project's own captures recorded, each the footer's cancel/skip
 # key pressed in a scratch session and the dialog left without an answer:
-# - `2026.10.01/question.txt` and `2026.10.16/question.txt`: the choice box, "Escape each time"
-#   and "Escape dismissed it".
+# - `2026.10.01/question.txt`, `2026.10.14/question.txt` and `2026.10.16/question.txt`: the choice
+#   box, "Escape each time" and "Escape dismissed it" on the two later captures.
 # - `2026.10.01/permission-plan.txt`: the mode switch, "then Escape rejected it".
 # Cursor prints its build suffix in the version (`cursor-agent --version` printed
-# `2026.10.16-e3cb207`), so each record is the
-# printed version exactly — a range compares whole versions and would match neither build. The
-# captures' READMEs name them: `2026.10.01-14929f9` and `2026.10.16-e3cb207`. No confirmation
-# capture exists past the first, so that record is the one version.
+# `2026.10.14-0f9edde` and `2026.10.16-e3cb207`), so each record is the printed version exactly —
+# a range compares whole versions and would match neither build, and would also claim a version
+# no capture pressed a key on. The captures' READMEs name them: `2026.10.01-14929f9`,
+# `2026.10.14-0f9edde` and `2026.10.16-e3cb207`. No confirmation capture exists past the first,
+# so that record is the one version.
 question_answer:
   - kind: question
     key: escape
     from: '2026.10.01-14929f9'
     to: '2026.10.01-14929f9'
+  - kind: question
+    key: escape
+    from: '2026.10.14-0f9edde'
+    to: '2026.10.14-0f9edde'
   - kind: question
     key: escape
     from: '2026.10.16-e3cb207'

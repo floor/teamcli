@@ -335,7 +335,8 @@ describe('version matching', () => {
       'cursor 2026.10.16-e3cb207 -> 2026.10.16-e3cb207',
       'antigravity 1.2.16 -> 1.2.16',
       'antigravity 1.3.5 -> 1.3.5',
-      'antigravity 1.4.0 -> 1.4.1',
+      'antigravity 1.4.0 -> 1.4.0',
+      'antigravity 1.4.1 -> 1.4.1',
       'antigravity 1.4.2 -> 1.4.2',
     ]);
   });

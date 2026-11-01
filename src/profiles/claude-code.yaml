@@ -30,13 +30,15 @@ exit_clear: ctrl+c
 # The dialog dismiss keys this project's own captures recorded, each the footer's cancel key
 # pressed in a scratch session and the dialog left without an answer:
 # - `2.1.289/permission-plan-wide-plain.txt`: the plan-approval dialog, "Denied with Escape".
-# - `2.1.289/question-plain.txt` and `2.1.302/question.txt`: the question tool's choice screen,
-#   "Dismissed with Escape without selecting anything" and "Escape dismissed it".
+# - `2.1.289/question-plain.txt`, `2.1.299/question.txt` and `2.1.302/question.txt`: the question
+#   tool's choice screen, "Dismissed with Escape without selecting anything" and "Escape
+#   dismissed it" on both later captures.
 # The version the answer layer matches is what `claude --version` prints, which carries its own
-# suffix: `2.1.302 (Claude Code)` (`2.1.302/README.md`). A range compares whole versions and
-# would match neither print, so each record is one captured printed version exactly, as the
-# loader spells an exact record. The held cross-session frame (`2.1.302/held.txt`) has no
-# recorded dismissal, so no confirmation record is claimed.
+# suffix: `2.1.299 (Claude Code)` and `2.1.302 (Claude Code)` (`2.1.299/README.md`,
+# `2.1.302/README.md`). A range compares whole versions and would match neither print, so each
+# record is one captured printed version exactly, as the loader spells an exact record. The held
+# cross-session frame (`2.1.302/held.txt`) has no recorded dismissal, so no confirmation record
+# is claimed.
 question_answer:
   - kind: plan approval
     key: escape
@@ -46,6 +48,10 @@ question_answer:
     key: escape
     from: '2.1.289 (Claude Code)'
     to: '2.1.289 (Claude Code)'
+  - kind: question
+    key: escape
+    from: '2.1.299 (Claude Code)'
+    to: '2.1.299 (Claude Code)'
   - kind: question
     key: escape
     from: '2.1.302 (Claude Code)'
