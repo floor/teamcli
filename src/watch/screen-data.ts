@@ -62,11 +62,18 @@ export type Stage = { rules: Rule[]; tested?: VersionRange; reason?: string };
  *  is how many consecutive rows may be taken — the walk stops at the first row that is blank
  *  after the strips — and `strip` removes the frame's own characters from a taken row before it
  *  is trimmed: a box border, the CLI's question counter, the option number. The text the reader
- *  returns is the stripped rows joined by one space; nothing else is added to it. */
+ *  returns is the stripped rows joined by one space; nothing else is added to it.
+ *
+ *  `until` names the row that ends the block — the dialog's options, or its footer — and is
+ *  tested against the raw row, before the strips. A spec that names it is read to that row, and
+ *  a block still going when `rows` runs out is reported cut (`QuestionReading.complete`), never
+ *  answered on part of its text. A spec that names no marker declares no end: its walk stops at
+ *  a blank row or at `rows`, and a cut is not reported. */
 export type TextSpec = {
   inline: RegExp | null;
   after: RegExp | null;
   before: RegExp | null;
+  until: RegExp | null;
   rows: number;
   strip: RegExp[];
 };

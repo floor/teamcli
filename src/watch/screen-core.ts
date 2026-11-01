@@ -490,53 +490,96 @@ function textRow(line: string, strip: readonly RegExp[]): string {
   return text.trim();
 }
 
+/** A dialog's question text and whether its block was read to its end. `complete` is false when
+ *  the walk stopped at `rows` with the block still going: the text is then a cut reading, and
+ *  the answer layer refuses it instead of acting on part of the question. A spec that names no
+ *  end marker (`TextSpec.until`) cannot tell a cut from the dialog's own rows below, so it never
+ *  reports one. */
+export type QuestionReading = { text: string; complete: boolean };
+
 /**
  * The question text a dialog shows, read from the rows the profile names, or null. `lines` is
  * already the window the classifier reads, so the text comes from the same rows the kind did.
  * The three anchors are exclusive — a profile sets one — and the walk takes at most `rows`
  * consecutive rows that survive their strips: above the anchor (`before`), below it (`after`),
- * or the anchor row itself (`inline`). Nothing is invented: a dialog whose text the strips empty
- * reads null, and a reader never falls back to another row.
+ * or from the anchor row itself (`inline`). A row the spec's `until` matches ends the block
+ * wherever it sits. Nothing is invented: a dialog whose text the strips empty reads null, and a
+ * reader never falls back to another row.
  */
-export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['kind']): string | null {
+export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['kind']): QuestionReading | null {
   const spec = textSpecOf(data.questionText, kind);
   if (spec === null) return null;
   const plain = plainLines(lines);
   const matches = (pattern: RegExp) => plain.findIndex((line) => pattern.test(line));
   const strip = spec.strip;
+  const marker = (at: number): boolean => {
+    const line = plain[at];
+    return line !== undefined && spec.until !== null && spec.until.test(line);
+  };
+  // Whether the walk stopped at the row cap with the block still going: the row it did not reach
+  // is neither blank after the strips nor the end marker, so the text is only part of the block.
+  const cut = (at: number, taken: number): boolean =>
+    spec.until !== null
+    && taken === spec.rows
+    && at >= 0
+    && at < plain.length
+    && !marker(at)
+    && textRow(plain[at] as string, strip) !== '';
+  const reading = (taken: string[], complete: boolean): QuestionReading | null =>
+    taken.length === 0 ? null : { text: taken.join(' '), complete };
   if (spec.inline !== null) {
     const at = matches(spec.inline);
     if (at < 0) return null;
-    const text = textRow(plain[at] as string, strip);
-    return text === '' ? null : text;
+    const taken: string[] = [];
+    let index = at;
+    while (index < plain.length && taken.length < spec.rows) {
+      if (index > at && marker(index)) break;
+      const row = textRow(plain[index] as string, strip);
+      if (row === '') break;
+      taken.push(row);
+      index += 1;
+    }
+    return reading(taken, !cut(index, taken.length));
   }
   if (spec.after !== null) {
     const at = matches(spec.after);
     if (at < 0) return null;
     const taken: string[] = [];
-    for (let index = at + 1; index < plain.length && taken.length < spec.rows; index++) {
+    let index = at + 1;
+    while (index < plain.length && taken.length < spec.rows) {
+      if (marker(index)) break;
       const row = textRow(plain[index] as string, strip);
       if (row === '') {
-        if (taken.length === 0) continue;
+        if (taken.length === 0) {
+          index += 1;
+          continue;
+        }
         break;
       }
       taken.push(row);
+      index += 1;
     }
-    return taken.length === 0 ? null : taken.join(' ');
+    return reading(taken, !cut(index, taken.length));
   }
   if (spec.before !== null) {
     const at = matches(spec.before);
     if (at < 0) return null;
     const taken: string[] = [];
-    for (let index = at - 1; index >= 0 && taken.length < spec.rows; index--) {
+    let index = at - 1;
+    while (index >= 0 && taken.length < spec.rows) {
+      if (marker(index)) break;
       const row = textRow(plain[index] as string, strip);
       if (row === '') {
-        if (taken.length === 0) continue;
+        if (taken.length === 0) {
+          index -= 1;
+          continue;
+        }
         break;
       }
       taken.unshift(row);
+      index -= 1;
     }
-    return taken.length === 0 ? null : taken.join(' ');
+    return reading(taken, !cut(index, taken.length));
   }
   return null;
 }

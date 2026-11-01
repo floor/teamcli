@@ -244,10 +244,16 @@ screen:
   # The question each answerable dialog carries, as the 0.161.0 captures draw it: the question
   # dialog's own text row under its `Question N/N (N unanswered)` header, and the plan approval's
   # one-line headline. Each reading is the dialog's words, not the transcript above it.
+  # The question's block starts under the dialog's `Question N/N (N unanswered)` header and ends
+  # at the first option row (`› 1. …` or `  2. …`, 0.161.0/question.txt). A question wraps with
+  # the pane's width, so the walk reads up to the marker rather than one row; six rows is the cap
+  # this profile declares, and a block still going past it is reported cut, never answered
+  # part-way.
   question_text:
     question:
       after: '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
-      rows: 1
+      until: '^\s*›?\s*[0-9]+\.\s'
+      rows: 6
     plan_approval:
       inline: '^\s*Implement this plan\?\s*$'
   composer:

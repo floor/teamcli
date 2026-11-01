@@ -315,6 +315,7 @@
         "inline": { "type": "string", "minLength": 1, "description": "The matched row is the question text." },
         "after": { "type": "string", "minLength": 1, "description": "The rows below the matched row are the question text." },
         "before": { "type": "string", "minLength": 1, "description": "The rows above the matched row are the question text." },
+        "until": { "type": "string", "minLength": 1, "description": "The row that ends the block — the dialog's options or its footer, tested against the raw row. A block still going when `rows` runs out is reported cut rather than read part-way." },
         "rows": { "type": "integer", "minimum": 1, "description": "How many consecutive rows may be taken; the walk stops at the first row that is blank after the strips." },
         "strip": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "description": "Patterns removed from each taken row before it is trimmed: a box border, the CLI's counter, the option number." }
       },

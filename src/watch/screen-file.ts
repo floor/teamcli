@@ -218,14 +218,14 @@ function questionTextOf(entry: YamlEntry): QuestionText {
   };
 }
 
-/** One kind's anchor: exactly one of `inline`, `after` and `before`, an optional row cap, and
- *  the strips applied to each taken row before it is trimmed. */
+/** One kind's anchor: exactly one of `inline`, `after` and `before`, an optional row cap, an
+ *  optional end marker, and the strips applied to each taken row before it is trimmed. */
 function textSpecOf(node: YamlNode): TextSpec {
   const entries = mapping(node, 'a question_text entry');
-  only(entries, ['inline', 'after', 'before', 'rows', 'strip']);
+  only(entries, ['inline', 'after', 'before', 'until', 'rows', 'strip']);
   const chosen = (['inline', 'after', 'before'] as const).filter((key) => optional(entries, key) !== undefined);
   if (chosen.length !== 1) fail(node.line, 'a question_text entry names exactly one of "inline", "after", "before"');
-  const anchor = (key: 'inline' | 'after' | 'before'): RegExp | null => {
+  const anchor = (key: 'inline' | 'after' | 'before' | 'until'): RegExp | null => {
     const found = optional(entries, key);
     if (!found) return null;
     const text = stringOf(found.value);
@@ -251,7 +251,7 @@ function textSpecOf(node: YamlNode): TextSpec {
       strip.push(patternOf(text, false, item.line));
     }
   }
-  return { inline: anchor('inline'), after: anchor('after'), before: anchor('before'), rows, strip };
+  return { inline: anchor('inline'), after: anchor('after'), before: anchor('before'), until: anchor('until'), rows, strip };
 }
 
 /** The `tested:` range of a vendor notice: `from` and `to`, both required. */
