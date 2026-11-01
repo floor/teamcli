@@ -4611,6 +4611,27 @@ scene('daemon.stopped', async (place) =>
     }),
     'team daemon: stopped',
   ));
+scene('daemon.fatal', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async (input) => {
+        // The endpoint supervisor gave up: the run reports the reason and exits non-zero so the
+        // system's service manager starts a fresh daemon instead of reading a stop.
+        input.onFatal?.('the send endpoint could not be kept alive');
+        return {
+          kind: 'serving',
+          daemon: {
+            socketPath: join(place.home, 'daemon.sock'),
+            roots: [],
+            routes: [],
+            health: () => daemonSnapshot,
+            close: async () => {},
+          },
+        };
+      },
+    }),
+    'the send endpoint could not be kept alive',
+  ));
 scene('daemon.uninstalled', async (place) => {
   const service = fakeDaemonService();
   const ran = await daemonRan(place, ['uninstall'], owner, { service });

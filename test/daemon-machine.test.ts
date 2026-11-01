@@ -294,7 +294,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     }
   });
 
-  test('the heartbeat marks a hosted send endpoint that stopped answering', async () => {
+  test('the heartbeat closes and restarts a hosted send endpoint that stopped answering', async () => {
     const { root, home } = scratch();
     const started = await startMachineDaemon({
       home,
@@ -306,21 +306,20 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
-      unlinkSync(sendSocketPath('acme', root, home));
-      await waitFor(async () => (await daemonHealth(home)).roots[0]?.send === 'failed');
+      const socket = sendSocketPath('acme', root, home);
+      expect(existsSync(socket)).toBe(true);
+      unlinkSync(socket);
+      // Three probes in a row fail, the dead handle is closed and the endpoint is started again
+      // in this process: the socket is bound again without the daemon exiting.
+      await waitFor(() => existsSync(socket));
 
       const health = await daemonHealth(home);
-      expect(health.roots[0]).toMatchObject({
-        send: 'failed',
-        bus: 'serving',
-        why: 'the hosted send endpoint stopped answering',
-      });
+      expect(health.roots[0]).toMatchObject({ send: 'serving', bus: 'serving' });
 
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
-      expect(status.out).toContain('roots 1 (send 0, bus 1)');
-      expect(status.out).toContain('1 endpoint not hosted here');
+      expect(status.out).toContain('roots 1 (send 1, bus 1)');
+      expect(status.out).not.toContain('did not start here');
     } finally {
       await started.daemon.close();
     }

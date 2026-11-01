@@ -228,6 +228,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
 | `daemon.entry-missing` | `daemon` | 1 | the CLI entry cannot be found, so the service unit cannot be written | `team daemon install` |
+| `daemon.fatal` | `daemon` | 1 | a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it | `team daemon run` |
 | `daemon.fault-daemon` | `daemon` | 1 | the machine daemon is not running, so there is no hosted watch to fault | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-not-reached` | `daemon` | 1 | the daemon did not fault the watch: it answered not reached, or the wait ended first; nothing was killed | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-pending` | `daemon` | 1 | a fault request is already waiting for the daemon, so no second request was written | `team daemon fault-watch --root <folder> --route <id>` |
