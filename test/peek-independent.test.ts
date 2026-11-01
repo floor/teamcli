@@ -319,3 +319,15 @@ test('a wrapped UUID remains readable as a hard check', () => {
   const result = scene({ text }); expect(result.code).toBe(0); expect(result.out).toBe(text);
   expect(result.out).not.toContain('[masked]');
 });
+
+
+test('a tabbed private-key header over three rows is masked as a hard check', () => {
+  const text = ['-----BEGIN\t', 'OPENSSH\tPRIVATE\t', 'KEY-----'].join('\n') + '\n';
+  const result = scene({ text }); expect(result.code).toBe(0);
+  expect(result.out.trimEnd().split('\n').map(row => row.trim())).toEqual(['[masked]', '[masked]', '[masked]']);
+});
+test('a single-row full SHA between ordinary rows remains readable as a hard check', () => {
+  const rows = ['ordinary before', sha, 'ordinary after']; const result = scene({ text: rows.join('\n') + '\n' });
+  expect(result.code).toBe(0); expect(result.out.trimEnd().split('\n')).toHaveLength(3);
+  expect(result.out.trimEnd().split('\n')[1]).toBe(sha);
+});
