@@ -407,6 +407,138 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     expect(elapsed).toBeLessThan(3_000);
     expect(raisedKeys(pass)).toContain('seat.working:seat:worker-1:ready:2026-11-01T02:00:00.000Z');
   }, 15_000);
+
+  test('a deferred backlog yields the loop between appends, and every record lands', async () => {
+    const { root, home } = scratch();
+    const input = { project: 'acme', root, session: 'acme', home };
+    const state = createReconcileState();
+    const dir = dropsDir(root);
+    const count = 200;
+    for (let n = 0; n < count; n += 1) {
+      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+    }
+    const seed = appendEvent('acme', root, home, {
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed',
+      ts: BULK_TS,
+      to: 'worker-1',
+    });
+    if (!seed.ok) throw new Error(seed.reason);
+    const lock = holdEventLock(root, home);
+    let ticks = 0;
+    let released = false;
+    let firstTicks = 0;
+    let lastTicks = 0;
+    let firstRecord = true;
+    const timer = setInterval(() => {
+      ticks += 1;
+      // The lock stays held until every append is queued, so what the tick count measures is
+      // the drain itself, not the scan that queued it.
+      if (!released && state.deferred.length >= count) {
+        released = true;
+        try {
+          unlinkSync(lock);
+        } catch {}
+      }
+    }, 1);
+    let pass: ReconcileResult | null = null;
+    try {
+      pass = await reconcilePassAsync({
+        ...input,
+        state,
+        sliceMs: 0,
+        onEvent: () => {
+          if (firstRecord) {
+            firstRecord = false;
+            firstTicks = ticks;
+          }
+          lastTicks = ticks;
+        },
+      });
+    } finally {
+      clearInterval(timer);
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }
+    if (pass === null) throw new Error('the pass did not return');
+    expect(released).toBe(true);
+    expect(raisedKeys(pass)).toHaveLength(count);
+    // The timer keeps firing between appends: the drain is sliced like the scan, not one
+    // synchronous run.
+    expect(lastTicks - firstTicks).toBeGreaterThan(0);
+  }, 15_000);
+
+  test('an abort raised during the deferred fan-out stops the remaining appends', async () => {
+    const { root, home } = scratch();
+    const input = { project: 'acme', root, session: 'acme', home };
+    const state = createReconcileState();
+    const dir = dropsDir(root);
+    const count = 3;
+    const stop = new AbortController();
+    for (let n = 0; n < count; n += 1) {
+      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+    }
+    const seed = appendEvent('acme', root, home, {
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed',
+      ts: BULK_TS,
+      to: 'worker-1',
+    });
+    if (!seed.ok) throw new Error(seed.reason);
+    const lock = holdEventLock(root, home);
+    let released = false;
+    const timer = setInterval(() => {
+      if (!released && state.deferred.length >= count) {
+        released = true;
+        try {
+          unlinkSync(lock);
+        } catch {}
+      }
+    }, 1);
+    let pass: ReconcileResult | null = null;
+    let fanOuts = 0;
+    try {
+      pass = await reconcilePassAsync({
+        ...input,
+        state,
+        signal: stop.signal,
+        sliceMs: 0,
+        // The first persisted record aborts the pass from its own fan-out callback.
+        onEvent: () => {
+          fanOuts += 1;
+          stop.abort();
+        },
+      });
+    } finally {
+      clearInterval(timer);
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }
+    if (pass === null) throw new Error('the pass did not return');
+    expect(released).toBe(true);
+    expect(stop.signal.aborted).toBe(true);
+    // The first record is written and fanned out; the abort in its callback stops the rest.
+    expect(fanOuts).toBe(1);
+    expect(raisedKeys(pass)).toHaveLength(1);
+    // What the abort left is not lost: the next pass finds it in the store, and the record that
+    // already landed is deduplicated rather than fanned out again. The store's listing order is
+    // not lexical, so the scene names the set, not which record went first.
+    const retry = await reconcilePassAsync({ ...input, state: createReconcileState(), sliceMs: 0 });
+    const landed = raisedKeys(pass);
+    expect(landed).toHaveLength(1);
+    const recovered = raisedKeys(retry).sort();
+    expect(recovered).toHaveLength(2);
+    expect(recovered).not.toContain(landed[0]);
+    expect([...landed, ...recovered].sort()).toEqual([
+      'message.arrived:defer-0000',
+      'message.arrived:defer-0001',
+      'message.arrived:defer-0002',
+    ]);
+  }, 15_000);
 });
 
 describe('closing the bus cancels the pass it started', () => {

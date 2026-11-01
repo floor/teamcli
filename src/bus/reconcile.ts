@@ -955,8 +955,10 @@ function tryDeferredAppend(options: ReconcileOptions, item: DeferredAppend): Def
 /**
  * Waits for records a pass could not append while another process held the event lock. Every
  * attempt is non-blocking and the pause between them gives the event loop a turn, so a held lock
- * costs latency, never liveness. A record still held past the budget is left for the next pass:
- * the seat watermark and config cursor were not advanced, so the pass will find it again.
+ * costs latency, never liveness. Between items the same boundaries as the main pass apply: an
+ * aborted pass writes nothing else, and a long drain yields on the same slice budget. A record
+ * still held past the budget is left for the next pass: the seat watermark and config cursor
+ * were not advanced, so the pass will find it again.
  */
 async function retryDeferredAppends(
   options: ReconcileOptions,
@@ -966,15 +968,31 @@ async function retryDeferredAppends(
   let pending = state.deferred;
   if (pending.length === 0) return;
   const deadline = performance.now() + (options.appendRetryMs ?? DEFAULT_APPEND_RETRY_MS);
+  const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
+  let since = performance.now();
+  // Read through a call: the abort can arrive while the drain awaits a turn, and a direct
+  // second read would be narrowed to the answer the first one gave.
+  const cancelled = (): boolean => options.signal?.aborted === true;
   for (;;) {
     // A cancelled pass stops retrying before its next attempt; the record stays for the next
     // pass, since no cursor advanced past it.
-    if (options.signal?.aborted === true) {
+    if (cancelled()) {
       state.deferred = [];
       return;
     }
     const busy: DeferredAppend[] = [];
     for (const item of pending) {
+      // The slice boundary and the cancellation point, between items: an abort raised by a
+      // record's own fan-out stops the rest of the batch, and the drain yields like the scan.
+      if (cancelled()) {
+        state.deferred = [];
+        return;
+      }
+      if (sliceMs >= 0 && performance.now() - since >= sliceMs) {
+        state.stats.yields += 1;
+        await yieldTurn();
+        since = performance.now();
+      }
       const outcome = tryDeferredAppend(options, item);
       if (outcome.state === 'busy') busy.push(item);
       else if (outcome.state === 'written' && !outcome.duplicate) {
