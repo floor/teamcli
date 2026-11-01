@@ -17,15 +17,22 @@ const screenOf = (command: string): string => `${command}\nNo conversation found
 
 type Front = 'cli' | 'shell' | 'wrapper' | 'unread' | 'noread';
 
-function hostOf(input: { front: Front; command?: string }): { host: Host; runs: string[]; typed: string[] } {
+function hostOf(input: {
+  front: Front;
+  command?: string;
+  exists?: boolean;
+  refuseRun?: boolean;
+}): { host: Host; runs: string[]; typed: string[]; logs: string[] } {
   const runs: string[] = [];
   const typed: string[] = [];
+  const logs: string[] = [];
   const command = input.command ?? MISSING;
   const host: Host = {
     startServer: () => true,
     sessionUp: () => true,
     createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
-    paneRun: (_session, _pane, command) => { runs.push(command); return true; },
+    paneRun: (_session, _pane, command) => { runs.push(command); return input.refuseRun !== true; },
+    ...(input.exists === undefined ? {} : { conversationExists: () => input.exists! }),
     typeLine: (_session, _pane, text) => { typed.push(text); return false; },
     renameAgent: () => true,
     closeWorkspace: () => true,
@@ -55,9 +62,9 @@ function hostOf(input: { front: Front; command?: string }): { host: Host; runs: 
     running: () => {},
     drop: () => {},
     say: () => {},
-    log: () => {},
+    log: (_who, what) => { logs.push(what); },
   };
-  return { host, runs, typed };
+  return { host, runs, typed, logs };
 }
 
 function steps(command = MISSING): Step[] {
@@ -118,6 +125,28 @@ describe('the runtime relaunch types only once the CLI is gone', () => {
     expect(runs.length).toBe(1);
     expect(runs[0]).toContain(`--resume ${SES}`);
     expect(typed).toEqual([]);
+  });
+
+  test('a fresh start known before launch is logged as launched only once the pane took the line', async () => {
+    const command = `claude --resume ${SES}`;
+    const { host, runs, logs } = hostOf({ front: 'shell', command, exists: false });
+    await executePlan(steps(command), 'acme', host);
+    expect(runs.length).toBe(1);
+    expect(runs[0]).not.toContain('--resume');
+    expect(logs.some((line) => line.includes('launched a fresh one'))).toBe(true);
+  });
+
+  test('a fresh start whose pane refuses the line is logged as not run, never as launched', async () => {
+    const command = `claude --resume ${SES}`;
+    const { host, runs, typed, logs } = hostOf({ front: 'shell', command, exists: false, refuseRun: true });
+    await executePlan(steps(command), 'acme', host);
+    expect(runs.length).toBe(1);
+    expect(runs[0]).not.toContain('--resume');
+    expect(typed).toEqual([]);
+    // The log is the only place this survives: the scrollback loses it. It must say the relaunch
+    // did not run, with the plain reason, and must never claim a launch that did not happen.
+    expect(logs.some((line) => line.includes('launched a fresh one'))).toBe(false);
+    expect(logs.some((line) => line.includes('the fresh launch did not run: the pane did not take its line'))).toBe(true);
   });
 
   test('a resume inside a quoted script is stripped from the fresh line, and the CLI is handed none', async () => {
