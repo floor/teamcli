@@ -793,19 +793,64 @@ type Placement =
   | { kind: 'script'; at: number; layers: readonly ScriptQuote[] }
   | { kind: 'uncertain' };
 
+/** Whether a word written after a plain line reaches the command the line runs. A plain line has
+ *  no shell command string, so the shell that runs it reads the appended word too — unless the
+ *  line swallows the rest of its own text: an unquoted `#` that starts a word is a comment, an
+ *  unquoted top-level operator (`;`, `|`, `&`, `<`, `>`) or a newline ends the command, an
+ *  unclosed quote takes every later character into the quoted word, and a trailing backslash
+ *  escapes the space before the appended word. A `$` expansion or a glob changes its own word
+ *  only, so the words written after it still reach the command and it does not count here. */
+function takesAppendedWord(text: string): boolean {
+  let quote: ScriptQuote | null = null;
+  let at = 0;
+  while (at < text.length) {
+    const char = text[at]!;
+    if (quote === 'single') {
+      if (char === "'") quote = null;
+      at += 1;
+      continue;
+    }
+    if (char === '\\') {
+      if (at + 1 >= text.length) return false;
+      at += 2;
+      continue;
+    }
+    if (quote === 'double') {
+      if (char === '"') quote = null;
+      at += 1;
+      continue;
+    }
+    if (char === "'") {
+      quote = 'single';
+      at += 1;
+      continue;
+    }
+    if (char === '"') {
+      quote = 'double';
+      at += 1;
+      continue;
+    }
+    if (char === '#' && (at === 0 || /\s/.test(text[at - 1]!))) return false;
+    if (';|&<>\n'.includes(char)) return false;
+    at += 1;
+  }
+  return quote === null;
+}
+
 /** Where words written for the CLI are read on a launch line. A plain line and a wrapper that
- *  forwards its arguments take them after the line. A line ending in a quoted script that runs
- *  the CLI takes them inside that script, and one nested shell is followed to the script it
- *  runs. Everything else — an unreadable line, a script word after positional words, a script
- *  file, a bare command word, a shell whose quoting this tool does not write, a
- *  body that is more than one simple command, or a nesting deeper than one shell — is
+ *  forwards its arguments take them after the line, when the line does not swallow the rest of
+ *  its text ({@link takesAppendedWord}). A line ending in a quoted script that runs the CLI takes
+ *  them inside that script, and one nested shell is followed to the script it runs. Everything
+ *  else — an unreadable line, a script word after positional words, a script file, a bare command
+ *  word, a shell whose quoting this tool does not write, a body that is more than one simple
+ *  command, a nesting deeper than one shell, or a plain line that swallows an appended word — is
  *  uncertain, and keeps 0.5.10's placement after the line. */
 function placementOf(binary: string, command: string): Placement {
   const trimmed = command.trimEnd();
   if (trimmed === '') return { kind: 'line' };
   if (shellWords(trimmed) === null) return { kind: 'uncertain' };
   const found = shellScriptWordOf(trimmed);
-  if (found === null) return { kind: 'line' };
+  if (found === null) return takesAppendedWord(trimmed) ? { kind: 'line' } : { kind: 'uncertain' };
   if (found.trailing.length > 0) return { kind: 'uncertain' };
   const shell = shellProgramOf(trimmed);
   if (shell === null || !POSIX_SHELLS.has(shell)) return { kind: 'uncertain' };
@@ -969,7 +1014,8 @@ function cliTextOf(binary: string, command: string): string | null {
 
 /** The CLI's own words on a launch line, decoded by the shell at every layer: the words inside
  *  the innermost shell script that runs it, or the line's own words when there is no shell
- *  command string. A shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the
+ *  command string and the line does not swallow the rest of its text ({@link takesAppendedWord}).
+ *  A shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the
  *  CLI's, and a word after the closing quote is a positional word of the script, not the CLI's
  *  either. A shell script that runs some other program, or one this reader cannot read through,
  *  names no word of this CLI at all. A script word the shell that parses the line may rewrite —
@@ -983,7 +1029,9 @@ function cliWordListOf(binary: string, command: string): string[] | null {
   const trimmed = command.trimEnd();
   const lineWords = shellWords(trimmed);
   if (lineWords === null) return null;
-  if (shellScriptWordOf(trimmed) === null) return lineWords.map((word) => word.text);
+  if (shellScriptWordOf(trimmed) === null) {
+    return takesAppendedWord(trimmed) ? lineWords.map((word) => word.text) : null;
+  }
   const text = cliTextOf(binary, trimmed);
   if (text === null) return null;
   const words = shellWords(text);

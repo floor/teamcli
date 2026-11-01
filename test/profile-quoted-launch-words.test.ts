@@ -572,6 +572,87 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
     expect(cliWordList('claude-code', PROVED)).toContain('--model');
     expect(cliWordsOf('claude-code', PROVED)).toContain('--model');
   });
+
+  // The plain-line rows: no script word stands between the reader and the shell that runs the
+  // line, so the only question left is whether the line swallows a word written after it. A
+  // comment, an operator, a redirect, a newline, an unclosed quote and a trailing backslash do;
+  // an expansion or a glob changes its own word only, so the words written after it still reach
+  // the CLI and the line stays provable — refusing those would lose ids 0.5.10 recorded.
+  const PLAIN_SWALLOWED = [
+    { name: 'a plain comment', line: 'claude --model m # note' },
+    { name: 'a plain semicolon', line: 'claude --model m; :' },
+    { name: 'a plain and', line: 'claude --model m && true' },
+    { name: 'a plain or', line: 'claude --model m || true' },
+    { name: 'a plain pipe', line: 'claude --model m | cat' },
+    { name: 'a plain ampersand', line: 'claude --model m & true' },
+    { name: 'a plain output redirection', line: 'claude --model m > out.txt' },
+    { name: 'a plain input redirection', line: 'claude --model m < in.txt' },
+    { name: 'a plain unclosed quote', line: 'claude --model "m' },
+    { name: 'a plain newline', line: 'claude --model m\ntrue' },
+    { name: 'a plain trailing backslash', line: 'claude --model m \\' },
+  ];
+  const PLAIN_PROVED = [
+    { name: 'a plain variable', line: 'claude --model $X' },
+    { name: 'a plain braced variable', line: 'claude --model ${X}' },
+    { name: 'a plain command substitution', line: 'claude --model $(printf x)' },
+    { name: 'a plain backtick substitution', line: 'claude --model `printf x`' },
+    { name: 'a plain star glob', line: 'claude --model m*' },
+    { name: 'a plain quoted word', line: 'claude --model "m"' },
+    { name: 'a plain single-quoted word', line: "claude --model 'm'" },
+  ];
+
+  test('every plain shape that swallows its tail is refused by the placement and names no word', () => {
+    for (const { name, line } of PLAIN_SWALLOWED) {
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      const placementRefused = warnings.length === 1 && command === baseline(line);
+      const readerUnknown = cliWordList('claude-code', line) === null && cliWordsOf('claude-code', line) === '';
+      expect(`${name}: placement refuses — ${placementRefused}`).toBe(`${name}: placement refuses — true`);
+      expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — true`);
+      expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
+    }
+  });
+
+  test('a plain shape whose tail still reaches the CLI is refused by neither, and its words are read', () => {
+    for (const { name, line } of PLAIN_PROVED) {
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      const placementRefused = warnings.length === 1 && command === baseline(line);
+      const readerUnknown = cliWordList('claude-code', line) === null && cliWordsOf('claude-code', line) === '';
+      expect(`${name}: placement refuses — ${placementRefused}`).toBe(`${name}: placement refuses — false`);
+      expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — false`);
+      expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
+    }
+  });
+});
+
+describe('a plain line that swallows its tail takes no session id, and one that does not keeps it', () => {
+  test('the comment line records no id, and the stub CLI receives only the words before the comment', () => {
+    const line = 'claude --model m # note';
+    const launch = withLaunchSession('claude-code', line);
+    expect(launch.command).toBe(line);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+    // Were the id recorded, it would land inside the comment. The shell hands the CLI the line
+    // without it, so the stub's argv is the measurement.
+    expect(cliArgv(`${line} --session-id declared-1`)).toEqual(['--model', 'm']);
+  });
+
+  test('a variable on a plain line does not swallow the id, and the CLI receives it', () => {
+    const launch = withLaunchSession('claude-code', 'claude --model $X');
+    expect(launch.sessionId).toBeDefined();
+    expect(cliArgv(launch.command, { env: { X: 'm' } })).toEqual([
+      '--model',
+      'm',
+      '--session-id',
+      launch.sessionId!,
+    ]);
+  });
+
+  test('a glob on a plain line does not swallow the id either', () => {
+    const launch = withLaunchSession('claude-code', 'claude --model m*');
+    expect(launch.sessionId).toBeDefined();
+  });
 });
 
 describe('a resume inside a quoted script goes in and comes back out exactly', () => {
