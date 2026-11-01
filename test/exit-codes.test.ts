@@ -3507,10 +3507,10 @@ function waitingQuestion(place: Place, seat: string, pane: string): void {
   });
 }
 
-/** One fresh reading of a pane: the kind word the screen shows, and the question dialog it
- *  reads or none. */
-function questionReading(kind: string, text: string | null): PaneReading {
-  return { kind, dialog: text === null ? { dialog: null } : { dialog: 'question', text } };
+/** One fresh reading of a pane: the kind word the screen shows, the question dialog it reads or
+ *  none, and whether the profile read that block to its end. */
+function questionReading(kind: string, text: string | null, complete = true): PaneReading {
+  return { kind, dialog: text === null ? { dialog: null } : { dialog: 'question', text, complete } };
 }
 
 scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust or question are required'));

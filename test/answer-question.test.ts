@@ -221,7 +221,7 @@ type Fake = AnswerHost & {
 function readOf(dialog: DialogKind | null, text = QUESTION): PaneReading {
   return dialog === null
     ? { kind: 'idle', dialog: { dialog: null } }
-    : { kind: dialog, dialog: { dialog, text } };
+    : { kind: dialog, dialog: { dialog, text, complete: true } };
 }
 
 function record(kind: DialogKind, key: QuestionAnswerRecord['key'] = 'escape'): QuestionAnswerRecord {
@@ -440,7 +440,7 @@ describe('team answer <seat> question', () => {
     // A trust-to-run-a-command prompt is a permission prompt: a question reading beside it does
     // not make it answerable.
     const host = fake(home, 'lead', 'Run this command?\n❯ 1. Yes\n', {
-      reading: () => ({ kind: 'permission', dialog: { dialog: 'question', text: 'Run this command?' } }),
+      reading: () => ({ kind: 'permission', dialog: { dialog: 'question', text: 'Run this command?', complete: true } }),
     });
     const run = io(root);
     expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
