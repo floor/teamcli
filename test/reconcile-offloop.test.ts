@@ -276,6 +276,32 @@ describe('the archive findings are regression probes', () => {
     expect(read?.payload.from).toBeUndefined();
   });
 
+  test('a receipt after an intervening quiet pass still names the sender', () => {
+    const { root, home } = scratch();
+    const dir = dropsDir(root);
+    dropMessage(dir, 'rec-gap', 'from clerk — admitted by: lead\n\nhello');
+    const state = createReconcileState();
+    expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state })))
+      .toContain('message.arrived:rec-gap');
+    // The record is taken and one pass sees the folder without it; only then does the receipt
+    // arrive. The pass's own map has forgotten the sender by now; the log has not.
+    unlinkSync(join(dir, 'rec-gap'));
+    expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state }))).toEqual([]);
+    writeFileSync(join(dir, 'rec-gap.replied'), '{"ok":true}');
+    const last = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
+    if (!last.ok) throw new Error(last.reason);
+    expect(raisedKeys(last)).toContain('message.replied:rec-gap:replied');
+    expect(last.raised.find((record) => record.payload.record_id === 'rec-gap:replied')?.payload.from)
+      .toBe('clerk');
+    // A fresh state has no map at all, only the log: the same answer, an event and a restart later.
+    writeFileSync(join(dir, 'rec-gap.read'), '{"ok":true}');
+    const fresh = reconcilePass({ project: 'acme', root, session: 'acme', home });
+    if (!fresh.ok) throw new Error(fresh.reason);
+    expect(raisedKeys(fresh)).toContain('message.read:rec-gap:read');
+    expect(fresh.raised.find((record) => record.payload.record_id === 'rec-gap:read')?.payload.from)
+      .toBe('clerk');
+  });
+
   test('a record rewritten in place is read again, and a later receipt carries the new sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);

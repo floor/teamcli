@@ -143,6 +143,11 @@ type LogCache = {
   seen: Set<string>;
   configSeen: Set<string>;
   lastSeatEventTs: Map<string, string>;
+  /** Per delivery target and record id, the sender its `message.arrived` event carries. The log
+   *  is the durable place this answer lives: it outlives the drop file that was taken and the
+   *  process that first read it, so a receipt that arrives in a later pass — or after a
+   *  reconnect — still names the sender. */
+  arrivedFrom: Map<string, string>;
 };
 type HistoryCache = { path: string; stamp: string; entries: HistoryEntry[] };
 
@@ -159,7 +164,8 @@ export type ReconcileState = {
   dirs: Map<string, DirCache>;
   /** Per drop folder, the sender each record id carried when the pass saw it. Held across passes
    *  so a receipt that arrives after its record was taken still names the sender; pruned to the
-   *  ids the current listing still holds on every pass. */
+   *  ids the current listing still holds on every pass. When that is not enough — a quiet pass
+   *  in between, or a restart — the sender comes from the arrival event in the log. */
   senders: Map<string, Map<string, string>>;
   /** The same map for signed mailboxes. */
   signedSenders: Map<string, Map<string, string>>;
@@ -382,11 +388,19 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       seen: new Set<string>(),
       configSeen: new Set<string>(),
       lastSeatEventTs: new Map<string, string>(),
+      arrivedFrom: new Map<string, string>(),
     };
     for (const entry of existing.events) {
       if (entry.payload.kind === 'config.changed') cachedLog.configSeen.add(entry.payload.record_id);
       if (entry.payload.session !== session) continue;
       cachedLog.seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
+      if (
+        entry.payload.kind === 'message.arrived' &&
+        entry.payload.to !== undefined &&
+        entry.payload.from !== undefined
+      ) {
+        cachedLog.arrivedFrom.set(`${entry.payload.to}\0${entry.payload.record_id}`, entry.payload.from);
+      }
       if (entry.payload.seat !== undefined) {
         const prev = cachedLog.lastSeatEventTs.get(entry.payload.seat);
         if (prev === undefined || Date.parse(entry.payload.ts) >= Date.parse(prev)) {
@@ -409,6 +423,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   const seen = cachedLog.seen;
   const configSeen = cachedLog.configSeen;
   const lastSeatEventTs = cachedLog.lastSeatEventTs;
+  const arrivedFrom = cachedLog.arrivedFrom;
 
   const raised: SignedEventRecord[] = [];
 
@@ -540,9 +555,9 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       }
 
       // Check receipts (`.delivered`, `.read`, `.replied`) beside drops. A receipt's stat stamp
-      // is enough to raise it; only a new or touched file is stamped again, and the sender comes
-      // from this listing or, for a receipt that arrived after its record was taken, the map the
-      // previous pass left.
+      // is enough to raise it; only a new or touched file is stamped again. The sender comes from
+      // this listing, from the map the preceding pass left, or — after any number of quiet passes,
+      // or a restart — from the arrival event the log still holds for that record.
       for (const file of files) {
         if (file.startsWith('.')) continue;
         const fullPath = join(seatDir, file);
@@ -557,7 +572,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         } else {
           stats.filesReused += 1;
         }
-        const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id);
+        const from = sendersById.get(entry.id) ?? previousSenders?.get(entry.id) ?? arrivedFrom.get(`${seat}\0${entry.id}`);
         raise({
           ts: entry.at,
           kind: entry.receipt === 'delivered' ? 'message.delivered' : entry.receipt === 'read' ? 'message.read' : 'message.replied',
@@ -694,7 +709,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           stats.verifiesReused += 1;
         }
         if (!entry.verified) continue;
-        const from = messageSenders.get(id) ?? previousSenders?.get(id);
+        const from = messageSenders.get(id) ?? previousSenders?.get(id) ?? arrivedFrom.get(`${seat}\0${id}`);
         raise({
           ts: entry.at,
           kind: 'message.read',
