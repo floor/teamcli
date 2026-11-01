@@ -118,6 +118,16 @@ screen:
   working:
     - any:
         - '^\s*[⠀-⣿]\s+.*\(esc to cancel'
+  # Where the answer box's question sits, so a report can quote it: the title row, a blank box
+  # row, then the question, all inside the frame (`gemini/0.64.0/question.txt`). The frame is
+  # stripped from each taken row.
+  question_text:
+    question:
+      after: '^\s*│\s*Answer Questions\s*│\s*$'
+      rows: 1
+      strip:
+        - '^\s*│\s*'
+        - '\s*│\s*$'
   composer:
     mode: two-rules-footer-below
     # In `--approval-mode yolo`, the prompt glyph is `*` (` * `); in default mode, `>` (` > `).

@@ -225,10 +225,12 @@ screen:
           - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
           - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
           - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
-  # A plan-mode switch. The bar is the dialog's own rule; the title, the selected
-  # row, the reject row and the footer sit under it, in that order. The same
-  # words in a transcript or typed into the box are not this dialog.
-  permission:
+  # A plan-mode switch, from the 2026.10.01 capture (`cursor/2026.10.01/permission-plan.txt`):
+  # the CLI asks a person to confirm a mode change before it acts, and takes `y` or `n`. The bar
+  # is the dialog's own rule; the title, the selected row, the reject row and the footer sit
+  # under it, in that order. The same words in a transcript or typed into the box are not this
+  # dialog. It confirms a change rather than asking permission for one.
+  confirmation:
     - all:
         - '^━{8,}\s*$'
         - 'Switch to Plan mode\?'
@@ -241,9 +243,10 @@ screen:
           - 'Switch to Plan mode\?'
           - '→ Approve mode switch \(y\)'
           - 'Reject \(n or esc\)'
+  permission:
     # A shell command that is not on the allowlist, from the 2026.10.14 capture
     # (`cursor/2026.10.14/permission.txt`). The marked row is `Run (once) (y)`.
-    # The plan-mode dialog above does not draw these rows.
+    # The mode-switch dialog above does not draw these rows.
     - all:
         - 'Run this command\?'
         - 'Not in allowlist:'
@@ -300,6 +303,21 @@ screen:
               - '^\s*<workspace>'
               - '^\s*~/'
               - '^\s*❯'
+  # Where each dialog's question sits, so a report can quote it. The question box draws its
+  # counter row, a blank row, then the question numbered above its options
+  # (`cursor/2026.10.16/question.txt`); the frame and the option number are stripped, and the
+  # row below the counter that survives them is the text. The mode switch asks its question on
+  # its title row (`cursor/2026.10.01/permission-plan.txt`).
+  question_text:
+    question:
+      after: '^\s*│\s*Question [0-9]+ of [0-9]+\s*│\s*$'
+      rows: 1
+      strip:
+        - '^\s*│\s*'
+        - '\s*│\s*$'
+        - '^[0-9]+\.\s*'
+    confirmation:
+      inline: '^\s*Switch to Plan mode\?$'
   composer:
     mode: status-then-one
     # The status row is its shape, and its tokens are closed: exactly two spaces, then a known

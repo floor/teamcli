@@ -581,11 +581,12 @@ describe('codex, cursor and antigravity through the screen core', () => {
     // of it over every fixture; the sweep is in the round-2 result). The frozen mainAntigravity
     // is not the oracle here: it has no safety floor, and it reads permission-write-54.txt's
     // numbered options as an unsent box — the shipped main applies the floor and says unknown.
+    // The unsent-comments dialog is the CLI's own confirmation, read on its own stage.
     const kinds: [string, Screen['kind']][] = [
       ['permission-write-54.txt', 'permission'],
       ['permission-edit-54.txt', 'permission'],
       ['question-54.txt', 'question'],
-      ['question-unsent-54.txt', 'question'],
+      ['question-unsent-54.txt', 'confirmation'],
     ];
     for (const [name, kind] of kinds) {
       const text = readFileSync(new URL(`./fixtures/antigravity/1.2.16/${name}`, import.meta.url), 'utf8');
@@ -604,12 +605,13 @@ describe('codex, cursor and antigravity through the screen core', () => {
     expect(classify('codex', text.split('\n')).kind).toBe('permission');
   });
 
-  test('a plan-mode approval and a question box are those screens, which main called unknown', () => {
-    const permission = readFileSync(new URL('./fixtures/cursor/2026.10.01/permission-plan.txt', import.meta.url), 'utf8');
+  test('a plan-mode confirmation and a question box are those screens, which main called unknown', () => {
+    const modeSwitch = readFileSync(new URL('./fixtures/cursor/2026.10.01/permission-plan.txt', import.meta.url), 'utf8');
     const question = readFileSync(new URL('./fixtures/cursor/2026.10.01/question.txt', import.meta.url), 'utf8');
-    expect(mainCursor(windowOf(permission))).toBe('unknown');
-    expect(readScreen('cursor', permission).kind).toBe('permission');
-    expect(classify('cursor', permission.split('\n')).kind).toBe('permission');
+    expect(mainCursor(windowOf(modeSwitch))).toBe('unknown');
+    // The switch confirms a mode change before the CLI acts; it asks no permission for a command.
+    expect(readScreen('cursor', modeSwitch).kind).toBe('confirmation');
+    expect(classify('cursor', modeSwitch.split('\n')).kind).toBe('confirmation');
     expect(mainCursor(windowOf(question))).toBe('unknown');
     expect(readScreen('cursor', question).kind).toBe('question');
     expect(classify('cursor', question.split('\n')).kind).toBe('question');
