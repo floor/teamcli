@@ -45,6 +45,13 @@ const HEADERS = [
   '-----END OPENSSH PRIVATE KEY-----',
   '-----END RSA PRIVATE KEY-----',
   '-----END PRIVATE KEY-----',
+  // A screen can carry a tab where a header has a space, and a wrap can fall anywhere else:
+  // the marker is read across the join, whitespace-insensitively.
+  '-----BEGIN\tOPENSSH PRIVATE KEY-----',
+  '-----BEGIN RSA\tPRIVATE KEY-----',
+  '-----BEGIN\tEC PRIVATE\tKEY-----',
+  '-----END\tOPENSSH PRIVATE KEY-----',
+  '-----END RSA\tPRIVATE\tKEY-----',
 ];
 
 /** The word a base64 credential is written in, ending in `=` padding as a real one can. */

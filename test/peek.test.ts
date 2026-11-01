@@ -491,10 +491,29 @@ describe('a screen is masked before it is printed', () => {
     expect(maskSecretRows(['-----BEGIN'])).toEqual(['[masked]']);
   });
 
+  test('a private-key header split with a tab over three rows masks every row', () => {
+    // Builder-3's probe: the header is contiguous in the joined reading with a tab where the
+    // wrap did not fall; every row the reading touches is masked, the third included.
+    const rows = ['-----BEGIN\tOP', 'ENSSH PRI', 'VATE KEY-----'];
+    expect(maskSecretRows(rows)).toEqual(['[masked]', '[masked]', '[masked]']);
+    const joined = maskSecretRows(rows).join('').replace(/\s+/g, '');
+    const plain = '-----BEGINOPENSSHPRIVATEKEY-----';
+    for (let at = 0; at + 12 <= plain.length; at += 1) expect(joined).not.toContain(plain.slice(at, at + 12));
+  });
+
   test('a sha split across two rows is masked: a wrapped hex run cannot be told from a secret', () => {
     const rows = [`commit ${sha.slice(0, 20)}`, `${sha.slice(20)} done`];
     expect(maskSecretsLine(`commit ${sha}`)).toBe(`commit ${sha}`);
     expect(maskSecretRows(rows)).toEqual(['commit [masked]', '[masked] done']);
+  });
+
+  test('a sha complete on its row stays readable beside ordinary rows', () => {
+    // Builder-3's probe: the row ends right after the sha and the next row starts a non-hex
+    // word, so the hex run is complete on its row — neither a wrapped run nor a word to judge.
+    const complete = 'deadbeef0123456789abcdef0123456789abcdef';
+    const rows = ['ordinary status', `commit ${complete}`, 'next step'];
+    expect(maskSecretsLine(`commit ${complete}`)).toBe(`commit ${complete}`);
+    expect(maskSecretRows(rows)).toEqual(rows);
   });
 
   test('a uuid split across two rows stays readable', () => {
