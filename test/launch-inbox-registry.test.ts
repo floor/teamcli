@@ -10,7 +10,7 @@
 // one; both the registry and the message key live under the scene's own home.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launchTeamFile } from '../src/file/load.ts';
@@ -21,7 +21,7 @@ import { registerInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { registeredRootOf, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord } from '../src/send/record.ts';
 import { gitEnv, testIo } from './helpers.ts';
 import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
@@ -94,6 +94,28 @@ function registryWorld(cli: string): World {
   return { home, root, lobby: temp('team-inbox-lobby-') };
 }
 
+/** A second registered team in the same home, whose roster holds the same seat name: another
+ *  session's team, in another checkout. Its record comes from its own team file, the way
+ *  `team init` + `team migrate` leave one. */
+function otherRegistryTeam(at: World, session = 'other', seat = 'helper'): string {
+  const root = temp('team-inbox-other-');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv() });
+  writeFileSync(
+    join(root, '.agents', 'team.yaml'),
+    teamText('cursor').replace('project: acme', `project: ${session}`).replace(`session: ${SESSION}`, `session: ${session}`),
+  );
+  intoRegistry(root, at.home);
+  rmSync(join(root, '.agents', 'team.yaml'));
+  upsertTeam(at.home, teamIdOf(root), {
+    project: session,
+    session,
+    root,
+    roster: [{ agent: 'agt_000000000003', seat, role: 'worker' }],
+  });
+  return root;
+}
+
 /** The launch's host, with the real registration wired the way `team up` wires it: the
  *  command's own home, the launch's session, and the seat's folder. */
 function launchHost(input: {
@@ -157,9 +179,8 @@ function writeTarget(cli: FileRoute, cwd: string): void {
   throw new Error(`${cli} writes its own file`);
 }
 
-/** Writes a signed drop for `seat`, serves it the way the seat's client would, and asks the
- *  server what is waiting: the send reaching the seat. */
-async function receives(at: World, seat: string, id: string, options: { session?: string } = {}): Promise<void> {
+/** Writes a signed drop for `seat` into the world's own team. */
+function drops(at: World, seat: string, id: string): void {
   const dropDir = join(at.root, '.agents', 'send-drops', SESSION, seat);
   mkdirSync(dropDir, { recursive: true, mode: 0o700 });
   const record = signRecord({
@@ -177,10 +198,19 @@ async function receives(at: World, seat: string, id: string, options: { session?
     thread: id,
   }, at.home);
   writeFileSync(join(dropDir, id), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** The server a launch's arguments start, as the seat's client would start it: the options the
+ *  array names, served in the seat's folder, asked what is unread. */
+async function serveFrom(at: World, args: readonly string[]): Promise<{ code: number; err: string; unread: string[] }> {
+  const value = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index < 0 ? undefined : args[index + 1];
+  };
   const io = testIo(at.lobby);
   const replies: string[] = [];
   const code = await runMcpServe(
-    { seat, session: options.session },
+    { seat: value('--seat'), session: value('--session') },
     io,
     {
       lines: (async function* () {
@@ -190,11 +220,19 @@ async function receives(at: World, seat: string, id: string, options: { session?
     },
     { home: at.home },
   );
-  expect(code).toBe(0);
-  expect(io.err).toBe('');
-  const reply = JSON.parse(replies[0]!) as Record<string, any>;
-  const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
-  expect(listed.unread.map((one) => one.id)).toEqual([id]);
+  const unread = code !== 0 || replies[0] === undefined
+    ? []
+    : (JSON.parse((JSON.parse(replies[0]!) as Record<string, any>).result.content[0].text) as { unread: { id: string }[] })
+      .unread.map((one) => one.id);
+  return { code, err: io.err, unread };
+}
+
+/** The send reaching the seat: a signed drop in the world's team, served the way the seat's
+ *  client would serve it, and read back. */
+async function receives(at: World, seat: string, id: string, options: { session?: string } = {}): Promise<void> {
+  drops(at, seat, id);
+  expect(await serveFrom(at, ['--seat', seat, ...(options.session === undefined ? [] : ['--session', options.session])]))
+    .toEqual({ code: 0, err: '', unread: [id] });
 }
 
 for (const cli of ['cursor', 'gemini', 'grok'] as const) {
@@ -323,11 +361,62 @@ describe('the codex launch line carries the inbox, naming no file', () => {
         filled.set(value.slice(0, equals), value.slice(equals + 1));
       }
       const args = JSON.parse(filled.get('mcp_servers.team_inbox.args')!) as string[];
-      expect(args).toEqual([runner.entry, 'mcp', 'serve', '--seat', 'helper']);
+      // The seat and the launch's session: the registry resolves the team from both, since this
+      // line names no file. `--session` is the only binding a registry team's line can carry.
+      expect(args).toEqual([runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', SESSION]);
       expect(args).not.toContain('--file');
 
       // The server started from that args array serves the registry team's drop folder.
-      await receives(at, 'helper', '7b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e');
+      drops(at, 'helper', '7b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e');
+      expect(await serveFrom(at, args)).toEqual({ code: 0, err: '', unread: ['7b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e'] });
+    });
+  });
+
+  // Two registered teams hold the seat name. A line naming neither a file nor a session leaves
+  // the server two teams to choose from and it refuses; the launch's own session is the one
+  // binding the registry can resolve, and it must be on the line.
+  test('two registered teams holding the seat: the line names the launch session, and serves that team', async () => {
+    await underRegistry(async () => {
+      const at = registryWorld('codex');
+      otherRegistryTeam(at);
+      const runner = selfRunner();
+      const line = launchCommand(codex, 'codex', 'Rules.', undefined, {
+        seat: 'helper',
+        session: SESSION,
+        command: runner.command,
+        entry: runner.entry,
+      });
+      const argv = words(line);
+      const filled = new Map<string, string>();
+      for (const index of argv.flatMap((word, at2) => (word === '-c' ? [at2] : []))) {
+        const value = argv[index + 1] ?? '';
+        const equals = value.indexOf('=');
+        filled.set(value.slice(0, equals), value.slice(equals + 1));
+      }
+      const args = JSON.parse(filled.get('mcp_servers.team_inbox.args')!) as string[];
+      expect(args).toContain('--session');
+      expect(args[args.indexOf('--session') + 1]).toBe(SESSION);
+      drops(at, 'helper', '8c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f');
+      expect(await serveFrom(at, args)).toEqual({ code: 0, err: '', unread: ['8c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f'] });
+    });
+  });
+});
+
+// The roster lookup returns a lone holder of the seat name even when that team is another
+// session's: the registration must check the launch's own session before it writes anything,
+// or the seat reads another team's inbox.
+describe('a lone holder of the seat name in another session is not the seat\'s team', () => {
+  test('the registration is refused, and no config file is written', async () => {
+    await underRegistry(async () => {
+      const at = registryWorld('cursor');
+      const other = otherRegistryTeam(at);
+      // acme's roster no longer holds `helper`: the other team is the registry's lone holder.
+      upsertTeam(at.home, teamIdOf(at.root), { roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }] });
+      expect(registeredRootOf(at.home, 'helper', SESSION)).toEqual({ ok: true, root: other, session: 'other' });
+
+      expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: at.lobby, session: SESSION, home: at.home }))
+        .toEqual({ ok: false, reason: 'the registered team\'s session is "other", not "acme"' });
+      expect(existsSync(join(at.lobby, '.cursor', 'mcp.json'))).toBe(false);
     });
   });
 });

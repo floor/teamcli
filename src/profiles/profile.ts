@@ -189,7 +189,9 @@ export type InboxBlock = {
    *  and `{entry}` are filled from the launch; `{command_json}`, `{entry_json}` and
    *  `{seat_json}` are the same values escaped for a double-quoted string inside a structured
    *  word; `{file_args}` is the team file's `--file` pair as array elements inside such a
-   *  word, and nothing when the launch read no file. Empty when the CLI takes none. */
+   *  word, and nothing when the launch read no file; `{session_args}` is the `--session` pair,
+   *  written only when the launch read no file (the registry's own way of naming the team).
+   *  Empty when the CLI takes none. */
   launchArgs: readonly string[];
   /** The CLI's own project-scope `mcp add` subcommand arguments, run in the seat's folder at
    *  launch. Null when the CLI has no measured add command. */
@@ -216,6 +218,12 @@ export type InboxPlace = { seat: string; session: string; command: string; entry
  *  epoch the seat's brief was delivered under, and nothing when this launch has no claim. A whole `{file}` word is for a command's
  *  own argv (`mcp add`), where the pair is two words and the shell never sees them.
  *
+ *  `{session_args}` is that array form for the launch's own session, and only when the launch
+ *  named no team file: a registry team's server resolves its team from the registry by seat and
+ *  session, and the session is what tells two teams holding the same seat name apart. A named
+ *  file's own session is the team's, so the word is nothing there, and that line stays
+ *  byte-identical to the one it always carried.
+ *
  *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
  *  double-quoted string inside such a structured word, for the profile that supplies the
  *  quotes: a quote or a backslash in a path stays part of the value. The plain forms stay raw
@@ -230,6 +238,7 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{command_json}', inside(place.command))
     .replaceAll('{entry_json}', inside(place.entry))
     .replaceAll('{seat_json}', inside(place.seat))
+    .replaceAll('{session_args}', place.file === undefined ? `,"--session",${JSON.stringify(place.session)}` : '')
     .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`)
     .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
