@@ -2,8 +2,8 @@
 // at which levels, under which policy); it reads no team. `get`, `set`, `unset` and `edit` read and
 // edit this team's own record — what `.agents/team.yaml` used to hold — wherever the team lives
 // (the registry under the registry source): one schema-validated editor in place of editing a
-// file by hand. Every write is validated by the team-file validator before it is stored, is the
-// owner's (as editing the file was), and the run names what the approval no longer covers.
+// file by hand. Every write is validated by the team-file validator before it is stored, and is
+// the owner's, as editing the file was.
 
 import { readArgs } from '../args.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';

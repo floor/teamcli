@@ -15,7 +15,7 @@ import {
 } from '../store/store.ts';
 import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
 import { parseYaml } from '../yaml.ts';
-import { compare, describe, describeWithoutApproval, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
+import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
 /** The launch ceilings declared in the file. An approval also stores a snapshot of them. */
 export function ceilingsOf(team: TeamFile): Ceilings {
@@ -265,71 +265,16 @@ export function recordSeatRenameOf(
   );
 }
 
-/** What the config report writes beside the gate's list: the record text just stored, so a
- *  default can be told from a written value. The gate's own comparison never takes it. */
-export type ApprovalReport = { text: string };
-
 /**
  * The differences of a file against one verified snapshot: the caller's own standing, read once.
- * The gate's list is the default. `report` adds the display lines the config report prints —
- * a seat the approval holds and the file no longer names, and a default seat ceiling that moved
- * only because the roster did — and only beside a difference the gate already reports: a seat
- * taken out on its own needs no new approval.
  */
 export function approvalDifferencesOf(
   standing: Extract<Standing, { kind: 'verified' }>,
   team: TeamFile,
-  report?: ApprovalReport,
 ): string[] {
   const approved = approvedFingerprints(standing.record);
   const current = fingerprints(team);
-  const found = compare(approved, current, team);
-  // The config report is this build's only report surface with no re-approval step to offer:
-  // its session-default line keeps the difference and the option, never the removed command.
-  const lines = found.map(report === undefined ? describe : describeWithoutApproval);
-  if (report === undefined || found.length === 0) return lines;
-  for (const name of Object.keys(approved.seats).sort()) {
-    if (!Object.hasOwn(current.seats, name)) lines.push(describe({ kind: 'seat-missing', name }));
-  }
-  const roster = rosterCeilingLine(standing.record, approved, team, report.text);
-  if (roster !== null) {
-    const bare = lines.indexOf(describe({ kind: 'section', name: 'limits' }));
-    if (bare !== -1) lines.splice(bare, 1);
-    lines.push(roster);
-  }
-  return lines;
-}
-
-/**
- * The line for a default seat ceiling that moved only because the roster did. Proven from both
- * records, never inferred from the absent key alone: both texts omit `limits.seats`, both
- * ceilings are their own roster's default, and `limits.temporary` and `limits.vendors` are
- * unchanged. Any other change keeps the `limits` line the gate printed.
- */
-function rosterCeilingLine(
-  record: ApprovalRecord,
-  approved: Fingerprints,
-  team: TeamFile,
-  text: string,
-): string | null {
-  if (wroteKey(text, 'limits', 'seats')) return null;
-  if (wroteKey(record.file, 'limits', 'seats')) return null;
-  if (!validateTeamFile(record.file).ok) return null;
-  const ceilings = record.approval.ceilings;
-  const approvedSeats = Object.keys(approved.seats).length;
-  if (ceilings.seats !== approvedSeats + ceilings.temporary) return null;
-  if (team.limits.seats !== team.seats.length + team.limits.temporary) return null;
-  if (team.limits.temporary !== ceilings.temporary) return null;
-  if (!sameVendors(team.limits.vendors, ceilings.vendors)) return null;
-  if (team.limits.seats - ceilings.seats !== team.seats.length - approvedSeats) return null;
-  if (team.limits.seats === ceilings.seats) return null;
-  return `the default seat ceiling follows the roster (${team.limits.seats} ${team.limits.seats === 1 ? 'seat' : 'seats'})`;
-}
-
-/** Vendor ceilings are part of the same proof: a map that moved is not the roster's doing. */
-function sameVendors(a: Record<string, number>, b: Record<string, number>): boolean {
-  const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+  return compare(approved, current, team).map(describe);
 }
 
 /**
@@ -342,10 +287,9 @@ export function approvalDifferences(
   team: TeamFile,
   root: string,
   home: string = homedir(),
-  report?: ApprovalReport,
 ): string[] | null {
   const standing = approvalStanding(root, home);
-  return standing.kind === 'verified' ? approvalDifferencesOf(standing, team, report) : null;
+  return standing.kind === 'verified' ? approvalDifferencesOf(standing, team) : null;
 }
 
 /**

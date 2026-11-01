@@ -1,5 +1,6 @@
-// Independent report scenes. Every home, registry, signing key and owner seat is synthetic.
-// No author test fixture is imported, and changed wording is asserted separately from gates.
+// Independent scenes for what a config write says and what it leaves out. Every home, registry,
+// signing key and owner seat is synthetic. No author test fixture is imported, and the absence of
+// approval text is asserted separately from the gate's own list.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,7 +21,7 @@ import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
 const NOW = new Date('2026-10-31T22:00:00.000Z');
 const REMOVED = 'seat observer is missing since the last approval';
-const LIMITS_CHANGED = '\u0060limits\u0060 changed';
+const LIMITS_CHANGED = '`limits` changed';
 const REPAIR = 'this version has no command to refresh that snapshot';
 const OLD_ADVICE = /approve the (?:team|file) again/;
 const owner = { kind: 'owner' } as const;
@@ -117,54 +118,40 @@ async function migrate(afterRead: () => void, afterOutput?: () => void) {
   return io;
 }
 
-test('[changed] config plain explains removed seat, roster ceiling and available repair', async () => {
+test('[changed] config plain names no approval report', async () => {
   approve(THREE); registry();
   const io = await edit(TWO);
   expect(differences(current())).toEqual([LIMITS_CHANGED]);
-  expect(io.out).toContain(REMOVED);
-  expect(io.out).toContain('the default seat ceiling follows the roster (4 seats)');
-  expect(io.out).not.toContain(LIMITS_CHANGED);
-  expect(io.out).toContain('the change was applied');
-  expect(io.out).toContain(REPAIR);
+  expect(io.out).toContain('validated');
+  expect(io.out).not.toContain(REMOVED);
+  expect(io.out).not.toContain('the default seat ceiling follows the roster');
+  expect(io.out).not.toContain(REPAIR);
   expect(io.out).not.toMatch(OLD_ADVICE);
 });
-test('[changed] config JSON gives the same explanation without changing the gate list', async () => {
+test('[changed] config JSON gives no explanation and leaves the gate list alone', async () => {
   approve(THREE); registry();
   const io = await edit(TWO, true);
-  const doc = JSON.parse(io.out);
-  expect(doc.approval_differences).toEqual([REMOVED, 'the default seat ceiling follows the roster (4 seats)']);
+  const doc = JSON.parse(io.out) as Record<string, unknown>;
+  expect(doc.changed).toBe(true);
+  expect(Object.hasOwn(doc, 'approval_differences')).toBe(false);
   expect(differences(current())).toEqual([LIMITS_CHANGED]);
 });
-for (const [label, before, after] of [
-  ['explicit seat limit', THREE + EXPLICIT, TWO + 'limits:\n  seats: 9\n'],
-  ['temporary allowance', THREE, TWO + 'limits:\n  temporary: 3\n'],
-  ['vendor allowance', THREE, TWO + 'limits:\n  vendors:\n    anthropic: 7\n'],
-] as const) {
-  test('[changed] config keeps a real limits difference for ' + label, async () => {
-    approve(before); registry(); const io = await edit(after, true);
-    const lines = JSON.parse(io.out).approval_differences as string[];
-    expect(lines).toContain(REMOVED);
-    expect(lines).toContain(LIMITS_CHANGED);
-    expect(lines.some(line => line.includes('follows the roster'))).toBe(false);
-    expect(differences(current())).toEqual([LIMITS_CHANGED]);
-  });
-}
-for (const json of [false, true]) {
-  test('[changed] legacy session-default config advice is usable, json=' + json, async () => {
-    const text = TWO.replace('project: beacon\n', 'project: beacon\nentity: lab\nsession: beacon\n');
-    approve(text); registry();
-    const io = testIo(root, owner);
-    expect(await runConfig(['unset', 'session', ...(json ? ['--json'] : [])], io, {
-      home, env: { HOME: home, TEAM_CONFIG_SOURCE: 'registry' }, ownerSeatStore: ownerStore,
-    })).toBe(0);
-    expect(io.out).toContain('new default session');
-    expect(io.out).toContain('session: beacon');
-    expect(io.out).not.toMatch(OLD_ADVICE);
-    const gate = differences(current());
-    expect(gate).toHaveLength(1);
-    expect(gate[0]).toContain('approve the file again');
-  });
-}
+test('[changed] a legacy session-default write draws no approval advice', async () => {
+  const text = TWO.replace('project: beacon\n', 'project: beacon\nentity: lab\nsession: beacon\n');
+  approve(text); registry();
+  const io = testIo(root, owner);
+  expect(await runConfig(['unset', 'session'], io, {
+    home, env: { HOME: home, TEAM_CONFIG_SOURCE: 'registry' }, ownerSeatStore: ownerStore,
+  })).toBe(0);
+  expect(io.out).not.toContain('new default session');
+  expect(io.out).not.toContain(REPAIR);
+  expect(io.out).not.toMatch(OLD_ADVICE);
+  const gate = differences(current());
+  expect(gate).toHaveLength(1);
+  expect(gate[0]).toContain('new default session');
+  expect(gate[0]).toContain('to keep the old one');
+  expect(gate[0]).not.toMatch(OLD_ADVICE);
+});
 test('[changed] migrate distinguishes unchanged content from a signature that no longer verifies', async () => {
   approve(TWO);
   const io = await migrate(spoilSignature);
@@ -224,11 +211,11 @@ test('[changed] a valid older text signature with an unparseable copy gives no c
   expect(io.out).not.toContain('earlier team record');
 });
 
-test('[control] removing a seat within an explicit unchanged ceiling needs no new approval', async () => {
+test('[control] removing a seat within an explicit unchanged ceiling draws no report', async () => {
   approve(THREE + EXPLICIT); registry();
   const io = await edit(TWO + EXPLICIT, true);
   expect(differences(current())).toEqual([]);
-  expect(JSON.parse(io.out).approval_differences).toEqual([]);
+  expect(Object.hasOwn(JSON.parse(io.out) as Record<string, unknown>, 'approval_differences')).toBe(false);
 });
 test('[control] changing a seat still gives exactly its original gate refusal', async () => {
   approve(TWO); registry();
@@ -238,7 +225,9 @@ test('[control] changing a seat still gives exactly its original gate refusal', 
 });
 test('[control] a no-op edit changes neither approval nor gate', async () => {
   approve(TWO); registry(); const io = await edit(TWO, true);
-  expect(JSON.parse(io.out).changed).toBe(false);
+  const doc = JSON.parse(io.out) as Record<string, unknown>;
+  expect(doc.changed).toBe(false);
+  expect(Object.hasOwn(doc, 'approval_differences')).toBe(false);
   expect(differences(current())).toEqual([]);
 });
 test('[control] a matching migration leaves the signature and gate approved', async () => {
