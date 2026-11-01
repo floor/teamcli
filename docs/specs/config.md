@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-19
+updated: 2026-11-01
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75) for what exists today (`team add --model --effort`, the team file's seat fields, `team policy`)
@@ -88,6 +88,7 @@ Every change is a signed record in the registry, logged in the team log, and rai
 4. Who may set:
    - the owner, at every level;
    - a team's lead, at `seat` and `team` level within its team, for the keys and values its role's policy allows (for example an allowed-models list);
+   - a seat holding the owner's general grant, for the keys and levels that grant names — the entity's `names.unique` word is written this way today, under a grant that lists the entity and admits `config`;
    - the budget's circuit breaker (008), for the keys its policy names (for example moving a seat to a cheaper model at a pace mark), logged and reversible.
 5. `get` never shows a secret. Keys that reference credentials hold keychain references only.
 6. There are no per-key top-level commands (`team model`, `team effort`): every setting goes through `team config` at the levels above a seat, or through `team settings` for a seat.
@@ -116,6 +117,14 @@ nothing.
 | storage | entity | files, a database, Redis, online (an adapter) | files | next up |
 | sender_name | project, entity | auto, nickname, seat, seat@team | auto | at once |
 
+One key is written today and is not in this proposed table: `<entity>.names.unique`, the word
+saying how far apart seat nicknames stay. It sits at the top of the entity's entry in
+`entities.yaml`, beside `liveness` and `policies` and not under `settings`, and is set today by the
+path form the command has — `team config set <entity>.names.unique <word>` (under the §3 forms,
+`team config set entity <entity> names.unique <word>`) — the owner's, or a seat's under the
+owner's general grant for that entity ([registry](registry.md),
+[config](../commands/config.md)).
+
 ## 7. Open points
 
 Storage (settled 2026-10-19, OD-20261018-08 and the orchestrator's ruling): settings sit beside policies in the registry's own signed records: entity in entities.yaml (<entity>.settings), project in projects.yaml (projects.<id>.settings), team in the registry's team record (teams.yaml teams.<id>.settings, never the team file), seat in agents/<agentId>.yaml (settings). One hierarchy, inheritance by absence, a separate config signature domain. A multi-key write is atomic per record, and a write across levels is applied lowest level first. A change whose signed generation has no config.changed event is reconciled by the bus's reconcile pass, which appends one marked reconciled.
@@ -138,3 +147,7 @@ Storage (settled 2026-10-19, OD-20261018-08 and the orchestrator's ruling): sett
   file) and seat — one hierarchy, inheritance by absence, a separate config signature domain; a
   multi-key write is atomic per record, a cross-level write lowest level first, and a signed change
   with no `config.changed` event is reconciled by the bus's reconcile pass.
+- 2026-11-01: the entity's `names.unique` word named as the one key written today outside this
+  table — set with `team config set <entity>.names.unique <word>` (the path form the command has
+  today), the owner's or a seat's under the owner's general grant for the entity, and edited in
+  place in an entry the file already declares.

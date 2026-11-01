@@ -19,7 +19,9 @@ holds. The entity's `names.unique` word in `.config/team/entities.yaml` — `ent
 `project`, `team` or `off` — says how far apart those names stay, compared case-insensitively;
 every nickname the new team's text carries is newly set here, so a clash refuses the whole run
 with `init.name-taken`, naming the other team and seat and the word that would allow it, and
-nothing is written. A team that already carries a duplicate is never refused by this check.
+nothing is written. A team that already carries a duplicate is never refused by this check. The
+word is set with [`team config set`](config.md) on `<entity>.names.unique` — the owner's, or a
+seat's under the owner's general grant for that entity; this command only reads it.
 
 ## Synopsis
 
