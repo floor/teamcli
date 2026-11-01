@@ -14,6 +14,13 @@ snapshots), it writes `.agents/team.yaml` instead, and the examples below show t
 archives holds, written verbatim. The folder's manifest and the file it hashes are checked first,
 and nothing else in the archive is restored: the state and the queues stay where they are.
 
+A restored file, like a skeleton, must not bring a seat nickname another team's seat already
+holds. The entity's `names.unique` word in `.config/team/entities.yaml` — `entity` (the default),
+`project`, `team` or `off` — says how far apart those names stay, compared case-insensitively;
+every nickname the new team's text carries is newly set here, so a clash refuses the whole run
+with `init.name-taken`, naming the other team and seat and the word that would allow it, and
+nothing is written. A team that already carries a duplicate is never refused by this check.
+
 ## Synopsis
 
     team init [--restore] [--from-archive <folder>] [--json]
@@ -89,7 +96,7 @@ one does.
 | a skeleton was written | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.` | 0 |
 | the stored copy was restored | `Restored .agents/team.yaml from the copy this machine stored.` | 0 |
 | the team file was restored from an archive | `Restored .agents/team.yaml from an archive. The archive is <project>'s, taken at <root> on <moment> by <caller>.` and, when it holds more, `It also holds team.state.json and send-drops (2 files); a restore writes the team file alone.` | 0 |
-| refused: not the owner, the file is tracked or already there, there is nothing to restore, the stored copy no longer validates, or the archive was refused | `team init: <reason>` | 1 |
+| refused: not the owner, the file is tracked or already there, there is nothing to restore, the stored copy no longer validates, the archive was refused, or a restored seat's nickname is already held by another team's seat | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 | both sources were passed | `team init: --restore and --from-archive are two sources for the one file: pass one of them` | 2 |
 

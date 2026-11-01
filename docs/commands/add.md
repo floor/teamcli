@@ -150,8 +150,12 @@ source's last field, takes the source's fields and the title `<name>`, drops its
 `count:` (a counted source is split first), and leaves the source's comments and blank lines where
 they are. The name must be one the file does not declare, and the source one it does. A copy the
 file's own validation refuses — one that repeats the source's `leads`, `assistant` or nickname —
-stops before anything is written or launched. The record keeps its own bytes: the new entry is the
-owner's to approve.
+stops before anything is written or launched. A nickname the new entry brings is also held to the
+entity's `names.unique` word in `.config/team/entities.yaml` — `entity` (the default), `project`,
+`team` or `off`, compared case-insensitively — and a name another team's seat already holds stops
+here with `add.name-taken`, naming that team and seat and the word that would allow it. A plain
+`team add` writes `label: <name>`, the seat's own name, so it brings no nickname to check. The
+record keeps its own bytes: the new entry is the owner's to approve.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -245,6 +249,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: the file has no seat "<name>"` | 1 |
 | `team add: the file already declares "<name>"; --like adds a copy under a new name` — the source of a `--like` copy is a seat the file holds; the new name must not be one it declares | 1 |
+| `team add: the nickname "<n>" is already held by seat "<seat>" of team "<team>"; seat nicknames are unique …; names.unique: … would allow it` — a nickname the new entry brings, under the entity's `names.unique` word; nothing was added | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the file allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
