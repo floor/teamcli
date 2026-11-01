@@ -7,13 +7,14 @@
 // The op is the command's own name, or the one a flag or a grouped verb reaches: `down --abandon`
 // is `abandon`, and `team seat add` is `add` (both from the one mapping in general-grant.ts).
 //
-// The team is the one the line names: `--file`, `--session`, `--root`, a send address, a registry
-// key, a project, the ids `forget` names, or every team a machine-wide flag reads — each resolved
-// from the same source its command reads, so the grant is checked against the team the run will
-// act on rather than the folder the door happens to stand in. A line that names no team is this
-// folder's team, as it always was. A grant that lists entities reads that team first and refuses
-// a target it cannot resolve, before the run; a wildcard grant (`entities: ["*"]`) resolves no
-// target at all and admits exactly what it admitted before.
+// The team is the one the line names: `--file`, `--session`, `--root`, a send address (for
+// `team send`, and each side of a `team grant --send` pair), a registry key, a project, the ids
+// `forget` names, or every team a machine-wide flag reads — each resolved from the same source
+// its command reads, so the grant is checked against the team the run will act on rather than the
+// folder the door happens to stand in. A line that names no team is this folder's team, as it
+// always was. A grant that lists entities reads that team first and refuses a target it cannot
+// resolve, before the run; a wildcard grant (`entities: ["*"]`) resolves no target at all and
+// admits exactly what it admitted before.
 //
 // Left to the command itself: `up`, `init` and `config`, which read `--general` with their own
 // admission (an owner-seat-shaped launch, a first record, a signed edit). Never admitted here:
@@ -26,6 +27,7 @@ import { resolveTargets } from '../pause/targets.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { findTeam, findTeams, readTeams, type TeamRecord } from '../registry/teams.ts';
+import { ORCHESTRATOR_RECEIVER } from '../send/admit.ts';
 import { FLAG_OPS, grantCoversEntity, grantCoversOp, grantKeyMatches, readGeneralGrant, VERB_OPS, type GeneralGrant, type GeneralOp } from './general-grant.ts';
 
 /** Commands that parse `--general` themselves. */
@@ -93,7 +95,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   drops: ['epoch', 'seat', 'session'],
   feed: ['audit', 'briefs', 'limit', 'seat'],
   forget: ['approval'],
-  grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'type', 'via'],
+  grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'from', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'to', 'type', 'via'],
   hold: ['client', 'team', 'until'],
   import: ['approval'],
   init: ['approval-mode', 'approve-as-owner-seat', 'assertion', 'execute', 'from-archive', 'revoke-approval', 'scope', 'signer'],
@@ -341,6 +343,22 @@ function fromAddress(io: Io, home: string, spec: string): Resolved {
   return here(io, home);
 }
 
+/** One side of a `team grant --send` pair: the address forms `fromAddress` reads, the
+ *  `session/seat` form the writer also takes, and — in `to` alone — the reserved
+ *  `orchestrator@<entity>`, which names a lead seat of that entity and never falls back to a
+ *  `seat@team` reading (`src/send/admit.ts`). */
+function fromSendSide(io: Io, home: string, side: 'from' | 'to', spec: string): Resolved {
+  if (side === 'to') {
+    const at = spec.indexOf('@');
+    if (at > 0 && spec.slice(0, at) === ORCHESTRATOR_RECEIVER && spec.indexOf('@', at + 1) < 0 && at < spec.length - 1) {
+      return { ok: true, entities: [spec.slice(at + 1)] };
+    }
+  }
+  const slash = spec.indexOf('/');
+  if (slash > 0 && !spec.includes('@')) return fromSession(io, home, spec.slice(0, slash));
+  return fromAddress(io, home, spec);
+}
+
 /** The targets a pause or a resume acts on, resolved by the commands' own resolver. Never the
  *  owner's remembering read: a refused line writes no state (`remember` is off). */
 function fromPauseTargets(name: string, scanned: Scan, io: Io, home: string, now: Date): Resolved {
@@ -481,6 +499,18 @@ function targetEntities(command: string, scanned: Scan, words: readonly string[]
         const resolved = fromRegistry(home, word.slice(1));
         if (!resolved.ok) return resolved;
         entities.push(...resolved.entities);
+      }
+      // `--send` writes a record for the pair it names: each side is the team the record acts
+      // on, so a listed grant is checked against the pair's entities, never only this folder's.
+      if (scanned.flags.has('send')) {
+        for (const [side, spellings] of [['from', scanned.values.from], ['to', scanned.values.to]] as const) {
+          const spec = spellings?.[0];
+          if (spec === undefined || spec === '') continue;
+          named = true;
+          const resolved = fromSendSide(io, home, side, spec);
+          if (!resolved.ok) return resolved;
+          entities.push(...resolved.entities);
+        }
       }
       return named ? { ok: true, entities } : here(io, home);
     }

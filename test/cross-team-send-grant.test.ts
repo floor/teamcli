@@ -700,4 +700,31 @@ describe('the general door', () => {
       { name: 'builder-at-floor-to-orchestrator-at-floor', from: 'builder@floor', to: 'orchestrator@floor', expires: FUTURE },
     ]);
   }, 30_000);
+
+  test('a listed grant is checked against the send pair, not the folder it runs in', async () => {
+    // The finding: a grant scoped to this folder's entity admitted a record for another entity's
+    // pair, because the door read only the folder's team. The pair is what the record acts on.
+    const w = world({ under: process.cwd() });
+    const pair = newClientKeyPair();
+    const keys = writeClientKeyFiles(join(w.home, '.config', 'team-client', 'scope'), pair);
+    if (!keys.ok) throw new Error(keys.why);
+    const grantFor = (entities: string[]): string => {
+      const grant = issueOwnerGeneralGrant(w.home, {
+        clientId: 'scope', publicKey: pair.publicKey, entities, ops: ['grant'], mayIssue: false,
+        expires: new Date(Date.now() + 86_400_000),
+      });
+      if (!grant.ok) throw new Error(grant.why);
+      return grant.path;
+    };
+    const line = ['grant', '--send', '--from', 'orchestrator@other', '--to', 'orchestrator@other', '--expires', FUTURE, '--name', 'outside'];
+    const refused = await runCli([...line, '--general', grantFor(['floor']), '--key', keys.keyPath], { cwd: w.root, home: w.home });
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('does not cover entity "other"');
+    expect(readSendGrants(w.home)).toEqual([]);
+    const wrote = await runCli([...line, '--general', grantFor(['other']), '--key', keys.keyPath], { cwd: w.root, home: w.home });
+    expect(wrote.code).toBe(0);
+    expect(readSendGrants(w.home)).toEqual([
+      { name: 'outside', from: 'orchestrator@other', to: 'orchestrator@other', expires: FUTURE },
+    ]);
+  }, 30_000);
 });

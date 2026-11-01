@@ -47,11 +47,13 @@ timestamp, `YYYY-MM-DDTHH:MM:SS[.SSS]Z`, in the future and at most 365 days ahea
 spelling, and a date the calendar does not have, are refused. `--name` sets the record's file
 name; without it the name is the pair as one slug, `seat-at-team-to-seat-at-team`. The record is
 signed with the owner's approval key and written whole into the shared grants folder; a write
-never replaces a standing grant, a revocation or a record of another kind under the same name. A same-stem send record is the
-re-issue path and is written over, `<name>.json`; an older file of the same name under another
-extension stays in the folder, admits nothing, and is reported as unsigned. It is owner-only, like
-every grant form, and a general grant that carries `grant` admits it with no prompt. A dry run
-refuses exactly what a write refuses and prints the record it would write.
+never replaces a standing grant, a revocation or a record of another kind under the same name. A
+same-stem send record is the re-issue path and is written over, `<name>.json`; an older file of
+the same name under another extension stays in the folder, admits nothing, and is reported as
+unsigned. It is owner-only, like every grant form, and a general grant that carries `grant` admits
+it with no prompt — a listed grant only for a pair whose two sides it covers by entity, each side
+read as a send address; a wildcard grant is unchanged. A dry run refuses exactly what a write
+refuses and prints the record it would write.
 
 In the third form `--public-key` reads the public side of a client key pair written by
 [`team client`](client.md) `keygen` — `client.pub`, or `client.key`, whose public half is derived.
