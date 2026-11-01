@@ -2,8 +2,14 @@ import type { Section } from './section.ts';
 
 // An entity name is one path segment: the same shape as a project name, so lower-casing it
 // (`lobbySlug`) is the whole slug and never yields "", "." or "..". The slug is the folder the
-// team's lobby lives in, under `~/.config/team/lobbies/`.
-const ENTITY = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// team's lobby lives in, under `~/.config/team/lobbies/`. Exported so the writer of an entity's
+// own word (`team config set <entity>.names.unique …`) holds a name to the same shape.
+export const ENTITY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Whether `name` is an entity name: one path segment, letters, digits, ".", "_" and "-". */
+export function isEntityName(name: string): boolean {
+  return ENTITY_NAME.test(name);
+}
 
 /**
  * The entity the team belongs to, or null when the file names none. When set — and no explicit
@@ -20,7 +26,7 @@ export const entity: Section = {
   validate(entry, ctx) {
     const value = ctx.check.text(entry, 'entity');
     if (value === undefined) return null;
-    if (!ENTITY.test(value)) {
+    if (!isEntityName(value)) {
       ctx.check.fail(
         entry?.line ?? 1,
         'entity must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit',

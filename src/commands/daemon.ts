@@ -26,6 +26,7 @@ import {
   writeFaultRequest,
 } from '../daemon/fault.ts';
 import { daemonHealth } from '../daemon/health.ts';
+import { failureAge } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { routeId, routeOf } from '../daemon/routes.ts';
@@ -273,15 +274,39 @@ function processStop(end: () => void): () => void {
 }
 
 /** The hosted-endpoint summary the run line and status both print, so a daemon that is running
- *  while a checkout's endpoint did not start here never reads as full health. */
-function rootsSummary(roots: MachineRootStatus[]): string[] {
+ *  while a checkout's endpoint did not start here never reads as full health. A failed endpoint
+ *  carries its reason and, when the record kept it, its age; a root still starting says so. */
+function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): string[] {
+  const at = now.toISOString();
   const sendServing = roots.filter((root) => root.send === 'serving').length;
   const busServing = roots.filter((root) => root.bus === 'serving').length;
   const notHosted = roots.reduce(
     (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
     0,
   );
+  const starting = roots.reduce(
+    (count, root) => count + (root.send === 'starting' ? 1 : 0) + (root.bus === 'starting' ? 1 : 0),
+    0,
+  );
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
+  if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
+  const failed = roots.flatMap((root) => {
+    const entries: string[] = [];
+    // Every failed endpoint is named, with its reason. A record written before this build kept
+    // the failure instant has no age to show; losing the failure with the stamp would hide a
+    // real one, so only the age is optional.
+    if (root.send === 'failed') {
+      entries.push(`send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`);
+    }
+    if (root.bus === 'failed') {
+      entries.push(`bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`);
+    }
+    return entries;
+  });
+  if (failed.length > 0) {
+    parts.push(`${String(failed.length)} endpoint${failed.length === 1 ? '' : 's'} failed (${failed.join(', ')})`);
+    return parts;
+  }
   if (notHosted > 0) {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
@@ -476,7 +501,7 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
     ];
     // A daemon can be running while a checkout's send or bus endpoint did not start here; the
     // one line says so instead of reporting plain health, and the detail is in --json and log.
-    parts.push(...rootsSummary(health.roots));
+    parts.push(...rootsSummary(health.roots, new Date(health.probe.at)));
     if (health.probe.state === 'unanswered') {
       parts.push(`probe unanswered (${health.probe.reason})`);
     } else if (health.probe.state === 'refused') {
@@ -583,12 +608,20 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       return 2;
     }
     const roots = 'problem' in named ? [] : named.roots;
+    // A hosted endpoint that cannot be kept alive stops the daemon: this callback ends the
+    // foreground run, and the non-zero exit below hands the restart to the service manager.
+    let fatalWhy: string | null = null;
+    let endRun: (() => void) | null = null;
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
       startedBy,
       version: sources.version ?? installedVersion(),
       gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
+      onFatal: (why: string) => {
+        fatalWhy = why;
+        endRun?.();
+      },
       ...(sources.now !== undefined ? { now: sources.now } : {}),
       ...(sources.heartbeatMs !== undefined ? { heartbeatMs: sources.heartbeatMs } : {}),
       ...(sources.sendHost !== undefined ? { sendHost: sources.sendHost } : {}),
@@ -624,12 +657,23 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       `team daemon: running (pid ${String(process.pid)}); socket ${machine.socketPath}; ${rootsSummary(machine.roots).join('; ')}; broker not hosted\n`,
     );
     let disarm = (): void => {};
-    await new Promise<void>((settle) => {
-      disarm = (sources.stop ?? processStop)(() => settle());
-    });
+    if (fatalWhy === null) {
+      await new Promise<void>((settle) => {
+        endRun = () => settle();
+        disarm = (sources.stop ?? processStop)(() => settle());
+      });
+    } else {
+      io.stderr(`team daemon: ${fatalWhy}\n`);
+    }
     disarm();
     await machine.close();
     appendDaemonLog(home, 'daemon stopped', sources.now?.() ?? new Date());
+    if (fatalWhy !== null) {
+      // The run ended because a hosted endpoint could not be kept alive. The service manager
+      // restarts a program that exits non-zero; a zero here would read as a deliberate stop.
+      // exit: daemon.fatal
+      return 1;
+    }
     io.stdout('team daemon: stopped\n');
     // exit: daemon.stopped
     return 0;

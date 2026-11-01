@@ -5,6 +5,7 @@
 // path and the process uid stay in the health module, because they are plumbing, not a reading.
 import type { DaemonHealth, DaemonProbe } from './health.ts';
 import type { DaemonFeatures, DaemonRootState, DaemonStuckRequest } from './state.ts';
+import type { Difference } from '../status/compare.ts';
 
 /**
  * The reading as the two commands publish it in `--json`: the socket path, the uid and the
@@ -88,7 +89,7 @@ function daemonLine(health: DaemonHealth): string {
   const head = health.since === null
     ? `machine daemon: running (${pid}), ${startedPhrase(health.startedBy)}`
     : `machine daemon: running since ${health.since} (${pid}), ${startedPhrase(health.startedBy)}`;
-  const parts: string[] = rootsPhrase(health.roots);
+  const parts: string[] = rootsPhrase(health.roots, health.probe.at);
   if (health.probe.state === 'unanswered') {
     parts.push(`it did not answer the health probe (${health.probe.reason}), so it may be hung`);
   } else if (health.probe.state === 'refused') {
@@ -116,20 +117,37 @@ function stuckPhrase(stuck: DaemonStuckRequest[]): string {
 
 /**
  * What the daemon's process got for the checkouts it tried to host. A running daemon with a
- * failed endpoint must never read as full health, so a failure is named with its checkout and
- * reason; an endpoint another process already serves is not a failure, but the counts still say
- * it is not hosted here. A record written before roots were recorded reads as none, and then the
- * line says nothing about hosting rather than inventing it.
+ * failed endpoint must never read as full health, so a failure is named with its checkout, its
+ * reason and — where the record kept the instant — how long it has been failing. An endpoint
+ * another process already serves is not a failure, but the counts still say it is not hosted
+ * here. A record written before roots were recorded reads as none, and then the line says
+ * nothing about hosting rather than inventing it.
  */
-function rootsPhrase(roots: DaemonRootState[]): string[] {
+function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
   if (roots.length === 0) return [];
   const sendServing = roots.filter((root) => root.send === 'serving').length;
   const busServing = roots.filter((root) => root.bus === 'serving').length;
+  const starting = roots.reduce(
+    (count, root) => count + (root.send === 'starting' ? 1 : 0) + (root.bus === 'starting' ? 1 : 0),
+    0,
+  );
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
+  if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
-    if (root.send === 'failed') entries.push(`send for ${root.root}: ${root.why ?? 'no reason recorded'}`);
-    if (root.bus === 'failed') entries.push(`bus for ${root.root}: ${root.why ?? 'no reason recorded'}`);
+    // Every failed endpoint is named, with its reason. A record written before this build kept
+    // the failure instant has no age to show; losing the failure with the stamp would hide a
+    // real one, so only the age is optional.
+    if (root.send === 'failed') {
+      entries.push(
+        `send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
+      );
+    }
+    if (root.bus === 'failed') {
+      entries.push(
+        `bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
+      );
+    }
     return entries;
   });
   if (failed.length > 0) {
@@ -146,4 +164,52 @@ function rootsPhrase(roots: DaemonRootState[]): string[] {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
   return parts;
+}
+
+/** How long an endpoint has been failing, measured against this reading's own instant. Empty
+ *  when the record did not keep the failure instant or the reading cannot order the two. */
+export function failureAge(failedAt: string | null | undefined, at: string): string {
+  if (typeof failedAt !== 'string' || failedAt === '') return '';
+  const ageMs = Date.parse(at) - Date.parse(failedAt);
+  if (!Number.isFinite(ageMs) || ageMs < 0) return '';
+  return `, failing for ${durationPhrase(ageMs)}`;
+}
+
+function durationPhrase(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${String(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${String(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${String(hours)}h`;
+  return `${String(Math.floor(hours / 24))}d`;
+}
+
+/**
+ * A failed endpoint as the check and status list carry it: one row per failed endpoint, naming
+ * the checkout, its reason and its age, with the owner's repair. A daemon that is not running is
+ * not this difference — status already says it is absent, and check treats absence as ordinary.
+ * The rows are differences, so both commands count them and status exits non-zero for them.
+ */
+export function daemonDifferences(health: DaemonHealth | null, now: Date): Difference[] {
+  if (health === null || health.state !== 'running') return [];
+  const at = now.toISOString();
+  const rows: Difference[] = [];
+  for (const root of health.roots) {
+    if (root.send === 'failed') {
+      rows.push({
+        what: `machine daemon send endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
+        repair: 'team daemon install',
+        owner: true,
+      });
+    }
+    if (root.bus === 'failed') {
+      rows.push({
+        what: `machine daemon bus endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
+        repair: 'team daemon install',
+        owner: true,
+      });
+    }
+  }
+  return rows;
 }

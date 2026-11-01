@@ -11,6 +11,7 @@ import { registerAgent } from '../../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { readSendGrants } from '../../src/send/grants.ts';
 import { updateState } from '../../src/state.ts';
+import { keyOf, signDomain } from '../../src/store/keys.ts';
 import { recordBody, testIo } from '../helpers.ts';
 import { dropDir, fake, scripted, world, type World } from '../send-native-fixtures.ts';
 
@@ -122,9 +123,15 @@ describe("team send: the file's seat, before its record", () => {
       by: 'test',
     });
     mkdirSync(join(one.home, '.config', 'team', 'grants'), { recursive: true });
+    const expires = '2026-11-16T00:00:00.000Z';
+    const signature = signDomain(
+      'team-send-grant-v1\n',
+      { name: 'labs', send: { from: 'helper@acme', to: 'quill@other' }, expires },
+      keyOf(one.home),
+    );
     writeFileSync(
       join(one.home, '.config', 'team', 'grants', 'labs.yaml'),
-      'send:\n  from: helper@acme\n  to: quill@other\nexpires: "2026-11-16T00:00:00.000Z"\n',
+      `send:\n  from: helper@acme\n  to: quill@other\nexpires: "${expires}"\nsignature: "${signature}"\n`,
     );
     expect(readSendGrants(one.home).length, 'the scene stands on a real standing grant').toBe(1);
     record(one.dir, 'helper', 'w2:p1');

@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-19
+updated: 2026-11-01
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75)
@@ -346,7 +346,22 @@ This area writes no registry of its own; its words are the fields above. It feed
 - **`mcp` and `skills` are declared and empty.** No writer fills either list in this build.
 - **The entity is an entry, not a record.** The team record carries `entity`, and the lobby key
   reads it; the entity's own entry lives in `.config/team/entities.yaml` and may carry `liveness`
-  and `policies`. It has no id, no lifecycle and no record of its own in this registry.
+  and `policies`, and a `names` map whose `unique` word says how far apart seat nicknames stay:
+  `entity` (the default, across every team of the entity), `project` (within one project), `team`
+  (within one team) or `off`. The word is written by hand or set with `team config set
+  <entity>.names.unique <word>` ([config](../commands/config.md)); the command is the owner's, at
+  a terminal, or a seat's under a wildcard general grant that admits `config` — 0.5.10 refuses a
+  grant that lists entities — a charter covers a folder and does not reach it, and it changes that
+  one line of an entry the file already declares, never creating one. A word the file does not
+  spell leaves the default in force. It is read where a nickname is newly set — `team config set`
+  on a seat's label or a whole seat map, and `team init` — against the name a seat goes by: the
+  persona its written label names when the nickname field could hold it, and the field otherwise,
+  compared case-insensitively and never counted when it is the seat's own name. `team add` is not
+  a door: a plain add writes the seat's own name as its label, and a copy repeats the source's
+  `nickname:` line, which the file's own check refuses as a duplicate. A clash refuses, naming
+  the other team and seat and the word that would allow it; a team that already carries a
+  duplicate keeps running, and `team check` notes the pair. It has no id, no lifecycle and no
+  record of its own in this registry.
 - **The legacy project's `deliveryOrder` has no writer.** A hand-written value reads and an upsert
   keeps it; no command writes the legacy field. A signed project-level `delivery-order` policy is
   written by `team policy set`.
@@ -371,3 +386,6 @@ This area writes no registry of its own; its words are the fields above. It feed
   three commands (Runtime commitment 39) for the Runtime fold — one record per session under its seat,
   written by TeamCLI at `up`, `restart`, the swap and `down` and only ever appended; not built at
   the tag.
+- **Amended** (2026-11-01): the entity bullet names the command that writes the `names.unique`
+  word — the owner's, or a seat's under a wildcard general grant that admits `config` — where it
+  said the word was hand-written and the owner's alone.

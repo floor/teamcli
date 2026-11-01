@@ -1362,6 +1362,27 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.entity.unchanged",
+      "meaning": "the entity already writes that names.unique word; nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.value",
+      "meaning": "the entity's names.unique word is printed",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.written",
+      "meaning": "the entity's names.unique word was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.shown",
       "meaning": "the settings registry is printed",
       "trigger": "team config keys"
@@ -1411,6 +1432,48 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.entity.detached",
+      "meaning": "an entity's word was set with no terminal",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.general-refused",
+      "meaning": "the general grant does not cover this entity or admit this set; nothing was written",
+      "trigger": "team config set <entity>.names.unique off --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.names-value",
+      "meaning": "the word is not one of entity, project, team or off; nothing was written",
+      "trigger": "team config set <entity>.names.unique everywhere"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.no-value",
+      "meaning": "the entity's entry writes no names.unique word",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.not-owner",
+      "meaning": "an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.path",
+      "meaning": "the entity's entry cannot be set (no such entry, or a value on the way); nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.general-refused",
       "meaning": "the general grant does not admit this edit; nothing was written",
       "trigger": "team config set <path> <value> --general <grant.json> --key <client.key>"
@@ -1421,6 +1484,13 @@
       "id": "config.invalid",
       "meaning": "the changed record does not validate; nothing was written",
       "trigger": "team config set seats.lead.cli nope"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.name-taken",
+      "meaning": "a nickname the change sets is already held by another team's seat; nothing was written",
+      "trigger": "team config set seats.worker.label \"Cicero · implementer\""
     },
     {
       "code": 1,
@@ -1449,6 +1519,20 @@
       "id": "config.editor",
       "meaning": "the editor exited non-zero; nothing was written",
       "trigger": "team config edit"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.unreadable",
+      "meaning": "the entities file cannot be read",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.usage",
+      "meaning": "an entity-form invocation is not one of its forms",
+      "trigger": "team config set <entity>.names.unique"
     },
     {
       "code": 2,
@@ -1554,6 +1638,13 @@
       "id": "daemon.entry-missing",
       "meaning": "the CLI entry cannot be found, so the service unit cannot be written",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fatal",
+      "meaning": "a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it",
+      "trigger": "team daemon run"
     },
     {
       "code": 1,
@@ -2387,6 +2478,13 @@
       "id": "init.legacy",
       "meaning": "the record predates signed records",
       "trigger": "team init --restore"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.name-taken",
+      "meaning": "a nickname the restored team brings is already held by another team's seat; nothing was written",
+      "trigger": "team init --from-archive <folder>"
     },
     {
       "code": 1,
@@ -4753,6 +4851,13 @@
       "id": "send.detached",
       "meaning": "a run with no terminal",
       "trigger": "team send --list"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.grant-invalid",
+      "meaning": "a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed",
+      "trigger": "team send native@other hello"
     },
     {
       "code": 1,

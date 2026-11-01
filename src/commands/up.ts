@@ -93,7 +93,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -639,12 +639,11 @@ function seatPlan(
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root, undefined, origin),
-    sessionName: sessionDisplayName({
-      seat: seat.name,
-      nickname: seat.nickname ?? null,
+    sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+      seats: team.seats,
     }),
     ...seatDeliveryOf(standing, team, seat, root, home, liveRules, origin),
   };

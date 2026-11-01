@@ -328,6 +328,19 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
   return `${seat.name} · ${seat.role}`;
 }
 
+/**
+ * The persona a written label names: the text before its middle dot, trimmed — the name people
+ * call the seat by, and the name the launch gives its session. A written label with no middle dot
+ * is the name whole. A seat whose label the file did not write has none: its stored label is the
+ * model and version, and its workspace title its seat name and role. Display only; the record's
+ * `nickname:` is the address and is kept equal to this word by every config write.
+ */
+export function labelPersona(seat: { label: string; labelWritten?: boolean }): string | null {
+  if (seat.labelWritten !== true) return null;
+  const name = (seat.label.split('·')[0] ?? '').trim();
+  return name === '' ? null : name;
+}
+
 /** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets
  *  none. A CLI whose launcher takes no effort setting carries the display alone. Herdr writes the
  *  status word and ` · ` in front of this text. */
@@ -519,6 +532,59 @@ export function nicknameProblem(
     }
   }
   return null;
+}
+
+/**
+ * The name each seat goes by, by seat name: the persona its written label names when the
+ * `nickname:` field could hold it, and the record's own `nickname:` field otherwise — null when
+ * the seat carries no name beyond its seat name. A word the field could not hold is display
+ * alone: a space or an accent in a label (a name is letters, digits, ".", "_" and "-"), the
+ * reserved `lead`, and any word another seat's name or `nickname:` already carries stay a
+ * workspace title, never a roster nickname. Every reader of the name — a roster line
+ * (src/registry/sync.ts), each launch name (src/send/names.ts) and the header a message opens
+ * with — reads this one answer, so a label like "Jane Doe · implementer" cannot break the address
+ * that already works, and the record and the label can never name two people.
+ *
+ * Seats are read in file order and one word never names two of them: every seat's name and field
+ * nickname is held from the start, so a label never takes a word the field has already given a
+ * seat, and of two labels naming one word the earlier keeps it and the later keeps its field. A
+ * label that names the seat itself adds no second name — the seat's name is already its own and
+ * unique in the team — so it stands even for the legacy seat named `lead`.
+ */
+export function seatNicknames(
+  seats: ReadonlyArray<{ name: string; nickname?: string; label: string; labelWritten?: boolean }>,
+): Map<string, string | null> {
+  const held = new Set<string>();
+  for (const seat of seats) {
+    held.add(seat.name);
+    if (seat.nickname !== undefined) held.add(seat.nickname);
+  }
+  const out = new Map<string, string | null>();
+  const projected = new Set<string>();
+  for (const seat of seats) {
+    const persona = labelPersona(seat);
+    // Names the field has given another seat: a label's word never takes one.
+    const elsewhere = new Set(held);
+    elsewhere.delete(seat.name);
+    if (seat.nickname !== undefined) elsewhere.delete(seat.nickname);
+    const ownName = persona !== null && persona === seat.name;
+    const usable = persona !== null && SEAT_NAME.test(persona)
+      && (ownName || (persona !== LEAD_NAME && !elsewhere.has(persona) && !projected.has(persona)));
+    const name = usable ? persona : seat.nickname ?? null;
+    out.set(seat.name, name);
+    if (name !== null) projected.add(name);
+  }
+  return out;
+}
+
+/** One seat's name, read by the same rule as `seatNicknames`: the label's persona when the field
+ *  could hold it, else the record's own `nickname:` field. */
+export function seatNickname(
+  seats: ReadonlyArray<{ name: string; nickname?: string; label: string; labelWritten?: boolean }>,
+  seat: { name: string; nickname?: string; label: string; labelWritten?: boolean },
+): string | null {
+  const name = seatNicknames(seats).get(seat.name);
+  return name === undefined ? seat.nickname ?? null : name;
 }
 
 /** One report per nickname: the second seat carrying it, or the seat whose human name an

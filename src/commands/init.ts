@@ -17,7 +17,8 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
-import { noteTeam } from '../registry/teams.ts';
+import { nicknameChangeGate } from '../registry/names.ts';
+import { noteTeam, teamIdOf } from '../registry/teams.ts';
 import { createAtomic, LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
@@ -543,6 +544,19 @@ export async function runInit(
     }
     what = 'wrote a skeleton';
     first = `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team up.\n`;
+  }
+  // A nickname the new team's text carries is held to the entity's `names.unique` word before
+  // anything is written: a restored copy or an archive bringing a name another team's seat holds
+  // is refused whole. The team is new here, so every nickname in it is newly set.
+  const namesHome = sources.registryHome ?? home;
+  const namesParsed = validateTeamFile(text, { home, root });
+  if (namesParsed.ok) {
+    const names = nicknameChangeGate({ home: namesHome, teamId: teamIdOf(root), root, before: null, after: namesParsed.team });
+    if (!names.ok) {
+      refuse(io, json, 'init', { id: 'init.name-taken', message: names.message, repair: null });
+      // exit: init.name-taken
+      return 1;
+    }
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);

@@ -148,6 +148,13 @@ export type StartMachineDaemonInput = {
   /** Starts one root's per-project send server. The default starts the real server; a test
    *  injects its own to read the start input without binding a socket. */
   sendStart?: typeof startSendDaemon;
+  /** Called once when a hosted send endpoint has failed again after its restart budget is spent:
+   *  the process should exit non-zero so the system's service manager starts a fresh daemon. A
+   *  test injects a recorder to observe the decision without ending the process. */
+  onFatal?: (why: string) => void;
+  /** The send restart policy. The defaults are the bus policy's capped backoff and five failed
+   *  restarts in a row before `onFatal`; a scene shortens both. */
+  sendRestart?: { giveUp?: number; backoffMs?: (failures: number) => number };
   /** Starts one root's bus server when the heartbeat finds it stopped. The default starts the
    *  real server; a test injects its own to hold or observe a revive. It is never the start that
    *  hosts the bus beside send: that one is `startBus` itself. */
@@ -251,6 +258,11 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = 5_000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
+/** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
+const SEND_RESTART_GIVE_UP = 5;
+/** How long a restart waits for an old send handle to close before trying the new listener; a
+ *  close that does not settle in this bound is not cancelled, only not awaited. */
+const SEND_CLOSE_BOUND_MS = 1_000;
 /** The longest a close waits for an endpoint refresh sent before its admission. It sits above
  *  the refresh's own bounds (the send probe, the bus probes and the start lock), so only a start
  *  that never answers reaches it; that close answers pending and keeps ownership. */
@@ -364,8 +376,20 @@ type EndpointWatch = {
    *  loop, so one probe can miss while a synchronous herdr read holds the loop; only
    *  SEND_PROBE_MISSES misses in a row mark it failed, and an answer afterwards restores it. */
   sendMisses: number;
-  /** What the send endpoint was before probes marked it failed, to restore on the next answer. */
-  sendWas: 'serving' | 'already-running' | null;
+  /** Starts this root's send endpoint again; null while this daemon never attempted one. The
+   *  closure is the exact start the root got, so a restart reads the same team, host and
+   *  presence answers. */
+  sendStart: (() => Promise<Awaited<ReturnType<typeof startSendDaemon>>>) | null;
+  /** The send handle this daemon owns, so a failed endpoint can be closed before a restart. */
+  sendHandle: SendDaemonHandle | null;
+  /** The restart's own backoff and single-flight flag. */
+  sendState: BusWatch;
+  /** Whether this root's send start attempt has returned; a probe waits for it. */
+  sendStarted: boolean;
+  /** Whether this root's bus start attempt has returned (or was skipped); a bus probe waits. */
+  busStarted: boolean;
+  /** Set once the endpoint's restart budget is spent and `onFatal` has been called. */
+  fatalSent: boolean;
 };
 const SEND_PROBE_MISSES = 3;
 const SEND_PROBE_TIMEOUT_MS = 2_000;
@@ -756,20 +780,56 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** The roots whose team files validated: the only ones the heartbeat's fallback sweep reads. */
   const sweepRoots: SweepRoot[] = [];
 
+  // The heartbeat starts before any endpoint does, and every tick writes the record even while
+  // the roots loop below is still starting endpoints. A root is registered as `starting` before
+  // its first start attempt, so a reader finds a live daemon and the checkouts it is bringing up
+  // instead of a bound socket with no record. The rest of the beat (fault inbox, hosted-watch
+  // ticks, endpoint probes, fallback sweep) is attached once that wiring exists; until then a
+  // tick refreshes the heartbeat and the record alone.
+  let beat: (() => void) | null = null;
+  const timer = setInterval(() => {
+    heartbeatAt = now().toISOString();
+    writeState();
+    beat?.();
+  }, heartbeatMs);
+  timer.unref();
+
   // Staged limitation, and the exact block the extraction replaces: the machine protocol
   // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
   // one process hosts each checkout's existing send and bus listeners beside it. N checkouts
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
   for (const rootArg of input.roots) {
-    const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
+    const status: MachineRootStatus = { root: rootArg, team: null, send: 'starting', bus: 'starting', why: null };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
-    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch(), sendMisses: 0, sendWas: null };
+    const watch: EndpointWatch = {
+      status,
+      sendSocket: null,
+      busSocket: null,
+      busRoot: null,
+      busState: freshBusWatch(),
+      sendMisses: 0,
+      sendStart: null,
+      sendHandle: null,
+      sendState: freshBusWatch(),
+      sendStarted: false,
+      busStarted: false,
+      fatalSent: false,
+    };
     watched.push(watch);
+    let registered = false;
+    const register = (): void => {
+      if (registered) return;
+      registered = true;
+      roots.push(status);
+      writeState();
+    };
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
-      roots.push(status);
+      status.send = 'failed';
+      status.bus = 'failed';
+      register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -778,14 +838,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const canonical = canonicalRoot(loaded.root);
     if (canonical === null) {
       status.why = 'the checkout root cannot be resolved to a folder';
-      roots.push(status);
+      status.send = 'failed';
+      status.bus = 'failed';
+      register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
     if (duplicateRoute(routes, canonical) !== null) {
       status.root = canonical;
       status.why = 'this checkout is already hosted by this daemon';
-      roots.push(status);
+      status.send = 'failed';
+      status.bus = 'failed';
+      register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
@@ -793,6 +857,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     status.team = loaded.team.project;
     watch.busRoot = canonical;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
+    // Registered before any endpoint is started: status can name the root, and a heartbeat
+    // keeps its record fresh, while a large store or a slow start below is still in progress.
+    register();
     const route = routeOf(
       canonical,
       loaded.team.project,
@@ -923,23 +990,37 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // send server's last mile only types when this answer is true. Without presence hosting no
     // work entry exists, so the send start keeps its pre-opt-in input exactly.
     const presence = presenceWork.find((one) => one.route.root === canonical);
-    let send: Awaited<ReturnType<typeof startSendDaemon>>;
-    try {
-      send = await (input.sendStart ?? startSendDaemon)({
+    // The same start is kept for a later restart: a send endpoint that stops answering is
+    // started again from here, with the same team, host and live presence answers, on the
+    // heartbeat's own schedule.
+    const startSend = (): Promise<Awaited<ReturnType<typeof startSendDaemon>>> =>
+      (input.sendStart ?? startSendDaemon)({
         root: canonical, dir: canonical, team: loaded.team, host: sendHost,
         ...(presence === undefined ? {} : {
           presenceStateDir: presence.stateDir,
           presenceChannelHealthy: (seat: string) => seatReady && seatQualified(presence, seat, now()),
         }),
       });
+    watch.sendStart = startSend;
+    let send: Awaited<ReturnType<typeof startSendDaemon>>;
+    try {
+      send = await startSend();
     } catch (error) {
+      watch.sendStarted = true;
+      watch.busStarted = true;
+      status.send = 'failed';
+      status.sendFailedAt = now().toISOString();
+      status.bus = 'failed';
+      status.busFailedAt = status.sendFailedAt;
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      roots.push(status);
+      register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
+    watch.sendStarted = true;
     if (send.kind === 'serving') {
       sendHandles.push(send.handle);
+      watch.sendHandle = send.handle;
       status.send = 'serving';
       watch.sendSocket = send.handle.socketPath;
     } else if (send.kind === 'already-running') {
@@ -947,6 +1028,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.sendSocket = send.socketPath;
     } else {
       status.send = 'failed';
+      status.sendFailedAt = now().toISOString();
       status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
     }
 
@@ -960,9 +1042,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       now: now(),
     });
     if (!thresholds.ok) {
+      watch.busStarted = true;
       status.bus = 'failed';
+      status.busFailedAt = now().toISOString();
       if (status.why === null) status.why = thresholds.refusals.map((refusal) => refusal.message).join('; ');
-      roots.push(status);
+      register();
       logLine(`root ${rootArg}: bus not hosted: ${status.why}`);
       continue;
     }
@@ -977,18 +1061,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         now,
       });
     } catch (error) {
+      watch.busStarted = true;
       status.bus = 'failed';
+      status.busFailedAt = now().toISOString();
       if (status.why === null) status.why = `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
-      roots.push(status);
+      register();
       logLine(`root ${rootArg}: ${status.why}`);
       continue;
     }
+    watch.busStarted = true;
     if (bus.kind === 'serving') {
       busHandles.push(bus.handle);
       status.bus = 'serving';
       watch.busSocket = busSocket(canonical);
     } else {
       status.bus = 'failed';
+      status.busFailedAt = now().toISOString();
       if (status.why === null) {
         status.why =
           bus.kind === 'busy'
@@ -998,7 +1086,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               : 'the bus socket could not be bound';
       }
     }
-    roots.push(status);
+    register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
   }
 
@@ -1500,15 +1588,97 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (revived.kind === 'serving') {
       busHandles.push(revived.handle);
       watch.status.bus = 'serving';
+      watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
       if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
       logLine(`root ${root}: bus restarted`);
     } else if (revived.kind === 'busy' || revived.kind === 'listening') {
       watch.status.bus = 'serving';
+      watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
       if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
     } else if (revived.kind === 'failed') {
       logLine(`root ${root}: bus restart failed (${revived.why})`);
+    }
+  };
+
+  // A send endpoint that stopped answering is closed and started again in this process, on the
+  // same capped backoff as a bus revive. The start is the one the root got at daemon start, so
+  // the team, host and presence answers are read fresh each time. A restart that keeps failing
+  // spends the budget and then stops the daemon: the system's service manager starts a new one.
+  const sendGiveUp = input.sendRestart?.giveUp ?? SEND_RESTART_GIVE_UP;
+  const sendBackoff = input.sendRestart?.backoffMs ?? nextBackoffMs;
+  const fatalSend = (watch: EndpointWatch, reason: string): void => {
+    if (watch.fatalSent) return;
+    watch.fatalSent = true;
+    const why =
+      `the send endpoint for ${watch.status.root} failed ${String(watch.sendState.failures)} restarts in a row (${reason}); ` +
+      "the daemon stops so the system's service manager starts it again";
+    logLine(why);
+    input.onFatal?.(why);
+  };
+  const restartHostedSend = async (watch: EndpointWatch): Promise<void> => {
+    const startSend = watch.sendStart;
+    if (startSend === null || closed || watch.fatalSent || watch.sendState.starting) return;
+    const at = now().getTime();
+    if (at < watch.sendState.nextAt) return;
+    watch.sendState.starting = true;
+    try {
+      const old = watch.sendHandle;
+      watch.sendHandle = null;
+      if (old !== null) {
+        // A close that does not settle is bounded, not cancelled: the restart proceeds and the
+        // old socket path is cleared by the new start when it is stale.
+        await settlesWithin(Promise.resolve(old.close()).catch(() => undefined), SEND_CLOSE_BOUND_MS);
+      }
+      const send = await startSend();
+      if (closed) {
+        if (send.kind === 'serving') {
+          try {
+            await send.handle.close();
+          } catch {
+            // A handle that never bound has nothing left to stop.
+          }
+        }
+        return;
+      }
+      if (send.kind === 'serving') {
+        sendHandles.push(send.handle);
+        watch.sendHandle = send.handle;
+        watch.sendSocket = send.handle.socketPath;
+        watch.status.send = 'serving';
+        watch.status.sendFailedAt = null;
+        watch.status.why = null;
+        watch.sendMisses = 0;
+        watch.sendState.failures = 0;
+        watch.sendState.nextAt = 0;
+        logLine(`root ${watch.status.root}: send restarted`);
+      } else if (send.kind === 'already-running') {
+        watch.sendSocket = send.socketPath;
+        watch.status.send = 'already-running';
+        watch.status.sendFailedAt = null;
+        watch.status.why = null;
+        watch.sendMisses = 0;
+        watch.sendState.failures = 0;
+        watch.sendState.nextAt = 0;
+        logLine(`root ${watch.status.root}: send answering again`);
+      } else {
+        watch.sendState.failures += 1;
+        watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
+        watch.status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
+        watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
+        logLine(`root ${watch.status.root}: send restart failed (${watch.status.why})`);
+        if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+      }
+    } catch (error) {
+      watch.sendState.failures += 1;
+      watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
+      watch.status.why = `the send server could not be restarted: ${messageOf(error)}`;
+      watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
+      logLine(`root ${watch.status.root}: ${watch.status.why}`);
+      if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+    } finally {
+      watch.sendState.starting = false;
     }
   };
   const refreshOnce = async (): Promise<void> => {
@@ -1520,40 +1690,45 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const settled = await Promise.allSettled(
         watched.map(async (watch) => {
           const { status } = watch;
-          const probing = status.send === 'serving' || status.send === 'already-running' || (status.send === 'failed' && watch.sendWas !== null);
-          if (probing && watch.sendSocket !== null) {
-            if (await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS)) {
-              watch.sendMisses = 0;
-              if (status.send === 'failed' && watch.sendWas !== null) {
-                status.send = watch.sendWas;
-                watch.sendWas = null;
-                if (status.why === 'the hosted send endpoint stopped answering' || status.why === 'the send server that was already running stopped answering') status.why = null;
-                logLine(`root ${status.root}: send endpoint answering again`);
-              }
-            } else if (status.send !== 'failed') {
-              watch.sendMisses += 1;
-              if (watch.sendMisses >= SEND_PROBE_MISSES) {
-                status.why ??=
-                  status.send === 'serving'
-                    ? 'the hosted send endpoint stopped answering'
-                    : 'the send server that was already running stopped answering';
-                watch.sendWas = status.send;
-                status.send = 'failed';
-                logLine(`root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`);
+          if (watch.sendStarted && watch.sendStart !== null) {
+            if (status.send === 'failed') {
+              // The record already names the failure and its instant; the restart is the next
+              // step, under the same capped backoff a bus revive uses.
+              await restartHostedSend(watch);
+            } else if (status.send === 'serving' || status.send === 'already-running') {
+              if (watch.sendSocket !== null && !(await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS))) {
+                watch.sendMisses += 1;
+                if (watch.sendMisses >= SEND_PROBE_MISSES) {
+                  watch.sendMisses = 0;
+                  status.why ??=
+                    status.send === 'serving'
+                      ? 'the hosted send endpoint stopped answering'
+                      : 'the send server that was already running stopped answering';
+                  status.send = 'failed';
+                  status.sendFailedAt = now().toISOString();
+                  logLine(`root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`);
+                  await restartHostedSend(watch);
+                }
+              } else {
+                watch.sendMisses = 0;
               }
             }
           }
-          if (watch.busRoot !== null) {
+          if (watch.busStarted && watch.busRoot !== null) {
             const socket = busSocket(watch.busRoot);
             const up = await probeBusSocket(socket);
             if (up) {
               watch.busState.failures = 0;
               watch.busState.nextAt = 0;
-              if (status.bus === 'serving') watch.busSocket = socket;
+              if (status.bus === 'serving') {
+                watch.busSocket = socket;
+                status.busFailedAt = null;
+              }
             } else {
               if (status.bus === 'serving') {
                 status.why ??= 'the hosted bus endpoint stopped answering';
                 status.bus = 'failed';
+                status.busFailedAt = now().toISOString();
                 logLine(`root ${status.root}: bus endpoint stopped answering`);
               }
               await reviveHostedBus(watch);
@@ -1595,11 +1770,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   // The first state write happened before hosting so a reader never finds a bound socket with no
   // record; this one records what each checkout actually got, failures and reasons included, and
-  // every heartbeat refreshes it after asking the hosted sockets whether they still answer.
+  // every heartbeat refreshes it after asking the hosted sockets whether they still answer. The
+  // timer itself started before the roots loop; this attaches the rest of the beat to it.
   writeState();
 
-  const timer = setInterval(() => {
-    heartbeatAt = now().toISOString();
+  beat = () => {
     try {
       faultInbox.consume(faultTargets);
     } catch (error) {
@@ -1634,8 +1809,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
       );
     }
-  }, heartbeatMs);
-  timer.unref();
+  };
 
   let admissionClosed = false;
   let ownershipReleased = false;

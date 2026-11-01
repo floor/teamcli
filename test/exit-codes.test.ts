@@ -101,6 +101,7 @@ import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
@@ -182,6 +183,32 @@ workspace:
   mode: shared
 seats:
 ${LEAD}${WORKER}`;
+
+/** The same team, of the `floor` entity: a nickname check reads the entity entry the file names. */
+const FLOOR = TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n');
+
+/** A seat whose written label names a person: the nickname another team's seat holds. */
+const CICERO = `  - role: implementer
+    name: reviewer
+    nickname: Cicero
+    label: Cicero · implementer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+/** A second team of the same entity, its seat already carrying Cicero. */
+const SITE = `format: 1
+project: site
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`;
 
 const BUDGET = `format: 1
 project: acme
@@ -274,6 +301,35 @@ function layout(repo: boolean): Place {
 
 function write(place: Place, text: string): void {
   writeFileSync(place.file, text);
+}
+
+/** A home where `floor` holds seat nicknames across the entity, and a registered `site` team of
+ *  that entity already carries Cicero: the state a newly set nickname is refused from. The
+ *  registry and its stored text are the scene's own, under its temp home. */
+function floorHoldingCicero(place: Place): void {
+  const entities = join(place.home, '.config', 'team', 'entities.yaml');
+  mkdirSync(dirname(entities), { recursive: true });
+  writeFileSync(entities, `floor:\n  roots:\n    - ${place.base}\n  names:\n    unique: entity\n`);
+  const root = join(place.base, 'site');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.agents', 'team.yaml'), SITE);
+  intoRegistry(root, place.home);
+  const parsed = validateTeamFile(SITE);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  // The record `team up` writes: the index the nickname scan reads, beside the stored text.
+  upsertTeam(place.home, teamIdOf(root), {
+    project: parsed.team.project,
+    session: parsed.team.session,
+    root,
+    entity: parsed.team.entity ?? null,
+    roster: parsed.team.seats.map((seat, at) => ({
+      agent: `agt_${String(at + 1).padStart(12, '0')}`,
+      seat: seat.name,
+      role: seat.role,
+    })),
+    at: NOW.toISOString(),
+  });
 }
 
 function approve(place: Place, text: string): void {
@@ -1925,6 +1981,23 @@ scene('init.restored-archive', async (place) => {
   const dir = archiveIn(place, readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8'));
   return show(await initial(place, ['--from-archive', dir]), 'from an archive');
 });
+scene('init.name-taken', async (place) => {
+  // Every nickname the archive's file carries is newly set here: one another team of the entity
+  // already holds refuses the whole run, before anything is written.
+  floorHoldingCicero(place);
+  const dir = archiveIn(place, `format: 1
+project: newteam
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`);
+  const ran = show(await initial(place, ['--from-archive', dir]), 'seat nicknames are unique across entity "floor"');
+  expect(existsSync(place.file), 'nothing written').toBe(false);
+  return ran;
+});
 scene('init.skeleton', async (place) => {
   const root = join(place.base, 'a b');
   mkdirSync(root);
@@ -2506,6 +2579,79 @@ scene('seats.not-yours', async (place) => {
   scene('config.written', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'seats.lead.label', 'boss']), 'set seats.lead.label');
+  });
+  scene('config.name-taken', async (place) => {
+    // The label names a person another team of the entity holds: refused before the record is
+    // touched, so the file still reads as it did.
+    write(place, FLOOR);
+    floorHoldingCicero(place);
+    const ran = show(
+      await recordRun(place, ['set', 'seats.lead.label', 'Cicero · coordinator']),
+      'seat nicknames are unique across entity "floor"',
+    );
+    expect(readFileSync(place.file, 'utf8'), 'nothing written').toBe(FLOOR);
+    return ran;
+  });
+
+  /** The owner's entities file in the place's home: `floor` writes the word, `material` has no
+   *  `names` map, and nothing else does. */
+  function entities(place: Place, word = 'project'): string {
+    const file = join(place.home, '.config', 'team', 'entities.yaml');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `floor:\n  roots:\n    - ~/Code\n  names:\n    unique: ${word}\nmaterial:\n  roots:\n    - ~/Work\n`);
+    return file;
+  }
+  async function entityRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runConfig([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('config.entity.unchanged', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'project']), 'nothing changed');
+  });
+  scene('config.entity.value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'floor.names.unique']), 'project');
+  });
+  scene('config.entity.written', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'team']), 'set floor.names.unique');
+  });
+  scene('config.entity.detached', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], detachedCaller), 'terminal');
+  });
+  scene('config.entity.general-refused', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.names.unique', 'off', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller),
+      'cannot be read as a general grant',
+    );
+  });
+  scene('config.entity.names-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'everywhere']), 'is not a names.unique word');
+  });
+  scene('config.entity.no-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'material.names.unique']), 'writes no names.unique');
+  });
+  scene('config.entity.not-owner', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], other), "only the owner, or a seat holding the owner's general grant");
+  });
+  scene('config.entity.path', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
+  });
+  scene('config.entity.unreadable', async (place) => {
+    entities(place);
+    writeFileSync(join(place.home, '.config', 'team', 'entities.yaml'), 'floor:\n\troots: x\n');
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off']), 'a tab in the indentation');
+  });
+  scene('config.entity.usage', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique']), 'a value is required');
   });
 }
 
@@ -4627,6 +4773,27 @@ scene('daemon.stopped', async (place) =>
     }),
     'team daemon: stopped',
   ));
+scene('daemon.fatal', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async (input) => {
+        // The endpoint supervisor gave up: the run reports the reason and exits non-zero so the
+        // system's service manager starts a fresh daemon instead of reading a stop.
+        input.onFatal?.('the send endpoint could not be kept alive');
+        return {
+          kind: 'serving',
+          daemon: {
+            socketPath: join(place.home, 'daemon.sock'),
+            roots: [],
+            routes: [],
+            health: () => daemonSnapshot,
+            close: async () => {},
+          },
+        };
+      },
+    }),
+    'the send endpoint could not be kept alive',
+  ));
 scene('daemon.uninstalled', async (place) => {
   const service = fakeDaemonService();
   const ran = await daemonRan(place, ['uninstall'], owner, { service });
@@ -5280,6 +5447,69 @@ scene('send.configuration', async (place) =>
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
+});
+scene('send.grant-invalid', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  // The caller is the file's own lead, placed on the pane the registry records for it: a seat
+  // sends only from the seat its session says it stands in.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'launched', workspace: 'w1', pane: leadSeat.pane };
+  });
+  // The team the record's `to` names, registered and laid out the way `up` writes both: the
+  // registry record answers `builder-1@teamcli`, and its folder holds the file the send reads.
+  // The receiver is not that team's lead, so no rule admits the pair: only the grant can.
+  const outsideRoot = join(place.base, 'teamcli');
+  mkdirSync(join(outsideRoot, '.agents'), { recursive: true });
+  writeFileSync(
+    join(outsideRoot, '.agents', 'team.yaml'),
+    `format: 1\nproject: teamcli\ncoordinator: lead\noperator: lead\nworkspace:\n  mode: shared\nseats:\n${LEAD}  - role: builder\n    name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n`,
+  );
+  const outsideBuilder = registerAgent(place.home, {
+    name: 'builder-1',
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: 'teamcli', seat: 'builder-1', session: 'teamcli', pane: 'pane9', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(place.home, 'teamcli', {
+    project: 'teamcli',
+    entity: 'acme',
+    session: 'teamcli',
+    root: outsideRoot,
+    lobby: lobbyDir(place.home),
+    roster: [{ agent: outsideBuilder.id, seat: 'builder-1', role: 'builder' }],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  // The record the owner wrote before signatures were read: it names the pair and admits nothing,
+  // and the refusal names it and prints the exact line that re-issues it signed.
+  const folder = join(place.home, '.config', 'team', 'grants');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'old-grant.yaml'),
+    `send:\n  from: lead@acme\n  to: builder-1@teamcli\nexpires: "2027-06-01T00:00:00.000Z"\n`,
+  );
+  const plain = await sent(place, ['builder-1@teamcli', 'hello'], leadSeat, sendHost(place));
+  expect(plain.code).toBe(1);
+  expect(plain.err).toContain('not signed by the owner');
+  expect(plain.err).toContain('"old-grant"');
+  expect(plain.err).toContain(
+    "team grant --send --from 'lead@acme' --to 'builder-1@teamcli' --expires '2027-06-01T00:00:00.000Z' --name 'old-grant'",
+  );
+  // The same refusal in the structured form, so the id the contract row names is the one a caller
+  // reads off the machine path.
+  const structured = await sent(place, ['builder-1@teamcli', 'hello', '--json'], leadSeat, sendHost(place));
+  expect(structured.code).toBe(1);
+  expect((JSON.parse(structured.out) as { error: { id: string } }).error.id).toBe('send.grant-invalid');
+  return plain;
 });
 scene('send.brief-memory', async (place) => {
   // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
