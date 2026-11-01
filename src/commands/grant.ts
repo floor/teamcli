@@ -68,11 +68,11 @@ export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEdit
   } else if (args.error === undefined && args.values.answer !== undefined && args.rest.length === 1 && args.values.client === undefined) {
     result = runAnswerGrantMode(rawIo, io, args.values.answer, args.rest[0]!, json, home, options.now);
   } else if (alone && args.values.deny !== undefined) {
-    result = runDenyGrantMode(rawIo, io, args.values.deny, json, home);
+    result = runDenyGrantMode(rawIo, io, args.values.deny, json, home, approval);
   } else if (alone && args.flags.has('approvals')) {
     result = runListApprovalsMode(io, json, home);
   } else if (alone && args.values['revoke-approval'] !== undefined) {
-    result = runRevokeApprovalMode(rawIo, io, args.values['revoke-approval'], json, home);
+    result = runRevokeApprovalMode(rawIo, io, args.values['revoke-approval'], json, home, approval);
   } else if (args.values.execute !== undefined && args.error === undefined && args.rest.length === 0 && !args.flags.has('request') && !args.flags.has('client-request')) {
     result = runExecuteGrantMode(rawIo, io, args, json, options.home ?? homedir(), approval);
   } else if (args.flags.has('send')) {
