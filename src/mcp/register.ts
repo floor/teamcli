@@ -129,6 +129,16 @@ export function registerInbox(input: {
     if (!found.ok) return { ok: false, reason: registryReason(found, input.seat) };
     loaded = readTeamConfig(found.root, { ...(input.home === undefined ? {} : { home: input.home }) });
     if (!loaded.ok) return { ok: false, reason: 'the registered team could not be read' };
+    // The roster lookup returns a lone holder even when it is another session's team, so this
+    // run's own session is checked here, before any config is written: a launch that asked for
+    // one team must never be registered against another team's inbox. The server makes the same
+    // two checks after the same lookup; a seat the found record does not declare is refused too.
+    if (input.session !== undefined && input.session !== loaded.team.session) {
+      return { ok: false, reason: `the registered team's session is ${JSON.stringify(loaded.team.session)}, not ${JSON.stringify(input.session)}` };
+    }
+    if (!loaded.team.seats.some((one) => one.name === input.seat)) {
+      return { ok: false, reason: `the registered team declares no seat ${JSON.stringify(input.seat)}` };
+    }
   }
   const epoch = input.epoch ?? claimEpochOf(dirname(loaded.path), loaded.team.session, input.seat);
   const place: InboxPlace = {
