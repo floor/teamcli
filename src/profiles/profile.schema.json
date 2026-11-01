@@ -70,6 +70,36 @@
       "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
     },
     "compose_module": { "$ref": "#/$defs/screenModule" },
+    "session_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "created", "pull"],
+      "description": "optional: the CLI's own session-creating and session-pulling calls, as a run measured them — the whole body rides the creating call as one argument; absent, its seats have no session leg",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words; the task argument follows them"
+        },
+        "repo_flag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the option a repository is passed as, before the task; absent when the CLI takes none and chooses from its working folder"
+        },
+        "created": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the line prefix the CLI prints once a session exists; the session id follows it"
+        },
+        "pull": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words for pulling one session's result; --session <id> --apply follow them"
+        }
+      }
+    },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],

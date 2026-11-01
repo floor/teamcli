@@ -286,10 +286,14 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * development-channels flag and whose server is listening takes it, and every other receiver
  * walks its order exactly as written. Its delivery is the notification itself, ended as
  * `sent (channel)`; a push no signed receipt confirms in time is redelivered once by the watch.
+ * `session` is the receiving CLI's own session-creating call (`src/send/session-cli.ts`): the
+ * whole body goes as one argument, the CLI runs in the seat's own folder, and the delivery is
+ * the session line it prints. A seat whose profile declares one walks it first while no level
+ * of its chain declares an order, and no fallback adds it.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session'];
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
@@ -313,6 +317,12 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * `hold` or `refuse` opts out, and with no word only a launch this build attested is authorized),
  * and no level of the chain names an order — the one implied default that adds it
  * (`src/commands/send.ts`).
+ * The `session` leg is the receiving CLI's own session-creating call
+ * (`src/send/session-cli.ts`): the whole body goes as one argument, the CLI runs in the seat's
+ * own folder, and the delivery is the session line it prints. It is not in the fallback: a
+ * profile that declares `session_cli` puts it first for its seats while no level names an order,
+ * and a level that wants it names it. A seat whose profile declares no session call records the
+ * leg as unavailable rather than attempting it.
  * A declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
  * own — entity, project, team, seat — because the order says how that seat's messages may travel.
  */

@@ -50,7 +50,8 @@
           "enum": [
             "created",
             "removed",
-            "record-gone"
+            "record-gone",
+            "pulled"
           ]
         },
         "action_summary": {
@@ -69,7 +70,8 @@
           "type": "string",
           "enum": [
             "new",
-            "remove"
+            "remove",
+            "pull"
           ]
         },
         "task": {
@@ -81,6 +83,10 @@
           "minLength": 1
         },
         "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remote_session": {
           "type": "string",
           "minLength": 1
         },

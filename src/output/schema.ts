@@ -2112,7 +2112,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', 'channel', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', 'channel', 'session', null] },
         to: { type: 'string', minLength: 1 },
         confirm: { type: 'string', minLength: 1 },
         message: { type: 'string' },
@@ -2433,7 +2433,7 @@ export const PROC_OUTPUT_SCHEMA: CommandSchemaSpec = {
   oneOf: [PROC_ACTION_BRANCH, PROC_LIST_BRANCH],
 };
 
-/** The `team.worktree` action envelope, on `new` and `remove`. */
+/** The `team.worktree` action envelope, on `new`, `pull` and `remove`. */
 const WORKTREE_ACTION_BRANCH: JsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -2442,14 +2442,15 @@ const WORKTREE_ACTION_BRANCH: JsonSchema = {
     schema: schemaTagFragment('team.worktree', 1),
     format: { type: 'integer', const: 1 },
     dry_run: { type: 'boolean' },
-    status: { type: 'string', enum: ['created', 'removed', 'record-gone'] },
+    status: { type: 'string', enum: ['created', 'removed', 'record-gone', 'pulled'] },
     action_summary: { type: 'string', minLength: 1 },
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
-    action: { type: 'string', enum: ['new', 'remove'] },
+    action: { type: 'string', enum: ['new', 'remove', 'pull'] },
     task: { type: 'string', minLength: 1 },
     branch: { type: 'string', minLength: 1 },
     path: { type: 'string', minLength: 1 },
+    remote_session: { type: 'string', minLength: 1 },
     notice: { type: ['string', 'null'] },
   },
 };

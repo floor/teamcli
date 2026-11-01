@@ -39,6 +39,7 @@ import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
@@ -126,11 +127,14 @@ the socket leg a Claude receiver's files keep out.
 A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
 default. For Codex with no declared order, the runtime queue leads when its signed
 codex-daemon setting is on, followed by a typed wake before the inbox fallback; when off,
-the typed wake leads. A declared order is followed as written. A level of that seat's own
+the typed wake leads. A receiving CLI whose profile declares its own session call is walked
+that call first while no level declares an order. A declared order is followed as written.
+A level of that seat's own
 chain, entity, project, team, seat, may drop legs from the order or put the legs it keeps in a
 different order, and may add
 native, the sender's own frame, headless-resume, a headless runtime's own turn,
-or place socket anywhere: a word naming a leg the order does not have, or naming
+session, a CLI's own session-creating call, or place socket anywhere: a word naming a leg
+the order does not have, or naming
 one twice, is set aside and the order in force stands. Each leg in turn
 either takes the send, which ends the walk, or definitely cannot take it, which
 hands the send to the next leg and is recorded as a failure. A typed leg that
@@ -953,6 +957,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // The receiving CLI's own session call, when its profile declares one (`session_cli`): the leg
+  // that hands the whole body to the CLI as one argument, in the seat's own folder. A profile
+  // without the block gives its seats no session leg, and a level of the chain that names the
+  // leg for such a seat hears it recorded as unavailable rather than attempted.
+  const sessionCli: SessionCliSpec | null = profileFor(to.cli)?.sessionCli ?? null;
   // The receiving seat's delivery class, read once for this send. An outcome that cannot claim
   // delivery appends it, so `sent (unconfirmed)` never stands as the whole answer to whether the
   // seat will read the message: the line says whether it is woken, holds the message between
@@ -1179,11 +1188,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const staleChannel = channelProbe !== null && channelProbe.live === false && channelProbe.listener?.channel === true
     ? channelProbe
     : null;
+  // The fourth implied default: a receiving CLI whose profile declares its own session call
+  // (`session_cli`) takes the send there first, while no level of its chain declares an order.
+  // The call is the only route such a CLI has that reaches an agent at all — it has no inbox, no
+  // runtime queue and no pane to wake — and it is never forced ahead of an order a level wrote.
+  const sessionFirst = !declaredOrder && sessionCli !== null;
   const impliedFirst: readonly DeliveryLeg[] = !declaredOrder && to.cli === 'claude-code' && socketNow
     ? ['socket', ...order]
     : !declaredOrder && to.cli === 'codex'
       ? codexWakeOrder
-      : order;
+      : sessionFirst
+        ? ['session', ...order]
+        : order;
   const declaredWithWake = channelFirst ? ['channel', ...impliedFirst] as DeliveryLeg[] : [...impliedFirst];
   // No pane messaging: a declared order's `typed` word asked for a wake. With typing retired, the
   // seat's own event adapters stand where it stood — the live channel, then the socket its launch
@@ -1209,6 +1225,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       now: host.now(),
     }) === 'on') {
     declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'native');
+  }
+  // The same for a seat whose CLI creates a session from its own argv: the retired wake word
+  // stands where the seat's own session call can, and every other route the order names is kept
+  // exactly as written.
+  if (declaredOrder && sessionCli !== null && !human0(overrides, declared) && declaredWithWake.includes('typed')
+    && !declaredWithWake.includes('session')) {
+    declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'session');
   }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
@@ -1834,6 +1857,47 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       failures.push(`headless-resume: ${attempt.reason}`);
       continue;
     }
+    if (leg === 'session') {
+      // The receiving CLI's own call creates a remote session from the brief: the whole body —
+      // the rules, the sender header and the message — goes as ONE argument, never through a
+      // shell string, and the CLI runs in the seat's own folder. Delivered is the session line
+      // the CLI prints with an id; every other ending is a route that did not take the send, and
+      // the walk moves to the leg behind it with the reason recorded.
+      if (sessionCli === null) {
+        const why = `${to.cli} has no session-creating command in this build`;
+        failures.push(`session: ${why}`);
+        markLeg('session', 'skipped', why);
+        note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      // The signed record is staged before the call: a session the CLI created and then failed to
+      // report still leaves the seat a durable copy of what it was asked to do.
+      await ensureEpisode();
+      const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      const attempt = await createSession({
+        spec: sessionCli,
+        cwd: seatCwd,
+        repo: originRepoOf(seatCwd),
+        body,
+      });
+      markLeg('session', 'attempted', attempt.outcome === 'created' ? undefined : attempt.reason);
+      if (attempt.outcome === 'created') {
+        report.sent = msgId;
+        note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
+        const ms = host.now().getTime() - startedAt;
+        const failed = failures.length > 0 ? { failed: [...failures] } : {};
+        const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
+        logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered', ms, via: 'session', session: attempt.session, ...failed });
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'session', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        return deliveredSession(io, to.seat, report, attempt.session);
+      }
+      failures.push(`session: ${attempt.reason}`);
+      note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
+      continue;
+    }
     // The drop leg: the same 0600 drop file the typed leg writes, and no keystroke at all — no
     // trigger line, no socket frame, no daemon round trip. It is the channel for a seat whose
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
@@ -1981,6 +2045,7 @@ function humanSkipReason(leg: DeliveryLeg): string | null {
   if (leg === 'mcp-inbox') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'channel') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'headless-resume') return "the pane is a human's, and the drop leg is the only one walked";
+  if (leg === 'session') return "the pane is a human's, and no session is created for it";
   return null;
 }
 
@@ -2006,7 +2071,9 @@ function dryDeliveryPlan(input: {
           ? nativeIneligibleReason(input.cli, input.handoffEligible)
           : leg === 'headless-resume'
             ? 'this build carries no headless resume runtime'
-            : null;
+            : leg === 'session' && profileFor(input.cli)?.sessionCli == null
+              ? `${input.cli} has no session-creating command in this build`
+              : null;
     return reason === null
       ? { leg, state: 'candidate', eligible: true }
       : { leg, state: 'skipped', eligible: false, reason };
@@ -2064,6 +2131,7 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
     if (leg === 'headless-resume') return 'its headless session resume';
     if (leg === 'channel') return 'its own development channel';
     if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
+    if (leg === 'session') return 'the CLI\'s own session call, with the brief as one argument';
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
   };
@@ -2075,7 +2143,8 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
       || leg === 'typed'
       || (leg === 'socket' && socketWalkable)
       || (leg === 'native' && nativeWalkable)
-      || (leg === 'headless-resume' && resumeWalkable),
+      || (leg === 'headless-resume' && resumeWalkable)
+      || (leg === 'session' && profileFor(cli)?.sessionCli != null),
   );
   const [first] = walkable;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
@@ -2928,7 +2997,7 @@ async function finishThreadWait(
   seatName: string,
   dropDir: string,
   payload: RecordPayload,
-  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel',
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session',
   timeoutS: number,
   host: SendHost,
   report: Report,
@@ -5081,6 +5150,21 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
   return 0; // exit: send.delivered
 }
 
+/** The session leg's ending: the receiving CLI printed its own session line with an id, and that
+ *  session is the delivery. There is no read receipt to wait for — the agent runs in the CLI's
+ *  own remote session, which writes no team record — so the printed line is the whole proof, and
+ *  the id is what the sender and the history line keep. Exit 0. */
+function deliveredSession(io: Io, seat: string, report: Report, session: string): number {
+  const summary = withDelivery(`${seat}: delivered (session ${session})`, report);
+  if (report.json) {
+    writeAction(io, report, { status: 'delivered', summary, channel: 'session' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.session-created
+}
+
 /** A leg's success with no read receipt: on the mcp-inbox and drop legs the message is the 0600
  *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
  *  composer and the drop is still the message. The `note` says which — a typed send's names the
@@ -5116,7 +5200,7 @@ function answered(
   seat: string,
   read: { reply: string; msg_id: string | null },
   report: Report,
-  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' = 'socket',
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' = 'socket',
   thread: string | null = report.sent,
 ): number {
   const summary = `${seat}: answered`;
@@ -5255,8 +5339,9 @@ type ActionFields = {
   summary: string;
   dryRun?: boolean;
   /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, `headless-resume`,
-   *  `channel` for the seat's own development channel, or `native` for a record or handoff. */
-  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | null;
+   *  `channel` for the seat's own development channel, `session` for the CLI's own
+   *  session-creating call, or `native` for a record or handoff. */
+  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply record's own id, on an answered wait. */

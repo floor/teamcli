@@ -712,6 +712,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-channel` | `send` | 0 | the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read | `team send lead hello` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.session-created` | `send` | 0 | the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows | `team send worker hello` |
 | `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
 | `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
@@ -890,6 +891,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `workflow.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
 | `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
+| `worktree.pulled` | `worktree` | 0 | the seat CLI's own pull call applied the remote session's patch in the worktree; nothing was committed, branched or pushed | `team worktree pull task --remote-session 123456` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |
 | `worktree.removed` | `worktree` | 0 | the worktree was removed | `team worktree remove task` |
 | `worktree.another-pane` | `worktree` | 1 | the state records another pane for the caller's seat | `team worktree new task` |
@@ -918,6 +920,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.path-kind` | `worktree` | 1 | workspace.path must not contain {kind} | `team worktree new task` |
 | `worktree.placeholder` | `worktree` | 1 | the branch or path pattern has an unknown placeholder | `team worktree new task` |
 | `worktree.published` | `worktree` | 1 | the branch already exists on a remote | `team worktree new task --kind fix` |
+| `worktree.pull-elsewhere` | `worktree` | 1 | the task is recorded in another session; nothing was pulled | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-failed` | `worktree` | 1 | the seat CLI's pull call failed; no patch was applied | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-gone` | `worktree` | 1 | the worktree is recorded but its folder is not on disk | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-missing` | `worktree` | 1 | no worktree of that name is recorded; nothing was pulled | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-seat` | `worktree` | 1 | no seat's CLI pull command resolves for the worktree, so no pull was run | `team worktree pull task --remote-session 123456` |
+| `worktree.pull-task` | `worktree` | 1 | the task name is not a single segment | `team worktree pull ../task --remote-session 123456` |
 | `worktree.recorded` | `worktree` | 1 | the task is already recorded | `team worktree new task --kind fix` |
 | `worktree.recorded-elsewhere` | `worktree` | 1 | the task is recorded in another session | `team worktree new task --kind fix` |
 | `worktree.remove-branch` | `worktree` | 1 | the --branch given does not name the branch the worktree is on | `team worktree remove task --branch fix/other` |
@@ -939,6 +947,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.file-invalid` | `worktree` | 2 | the team file can't be parsed | `team worktree new task --file team.yaml` |
 | `worktree.invocation` | `worktree` | 2 | the invocation can't be read | `team worktree --nope` |
 | `worktree.not-a-repo` | `worktree` | 2 | not inside a git repository | `team worktree new task` |
+| `worktree.pull-flags` | `worktree` | 2 | pull takes no --kind | `team worktree pull task --remote-session 123456 --kind fix` |
+| `worktree.pull-remote` | `worktree` | 2 | pull needs --remote-session, and no other subcommand takes it | `team worktree pull task` |
 | `worktree.remove-flags` | `worktree` | 2 | remove takes no --kind or --seat | `team worktree remove task --kind fix` |
 | `worktree.subcommand` | `worktree` | 2 | a subcommand is required | `team worktree` |
 | `worktree.task-required` | `worktree` | 2 | a task name is required | `team worktree new` |

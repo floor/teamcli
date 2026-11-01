@@ -92,6 +92,9 @@ export type HistoryEntry = {
   ms?: number;
   /** The path the message travelled: `typed` (a composer trigger) or `socket` (a frame); absent when it never left the sender. */
   via?: string;
+  /** On a line the `session` leg carried: the id the receiving CLI printed on its own session
+   *  line, so a reader can pull that session's result. Absent on every other line. */
+  session?: string;
   /** The legs of the delivery order that did not take the send, each `<leg>: <reason>`, in the
    *  order they were tried; absent when the walk had none to pass on — the leg that carried the
    *  send was reached without a failure behind it, or there was no walk at all. */
@@ -241,6 +244,7 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
+  if (entry.session !== undefined) record.session = entry.session;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
   if (entry.note !== undefined) record.note = entry.note;
   if (entry.thread !== undefined) record.thread = entry.thread;
@@ -363,7 +367,7 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `from_team`, `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  // `from_team`, `spec`, `resolved`, `ms`, `via`, `session`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
   if (typeof obj.from_team === 'string' && obj.from_team !== '') {
     entry.from_team = obj.from_team;
   }
@@ -378,6 +382,9 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   }
   if (typeof obj.via === 'string' && obj.via !== '') {
     entry.via = obj.via;
+  }
+  if (typeof obj.session === 'string' && obj.session !== '') {
+    entry.session = obj.session;
   }
   if (Array.isArray(obj.failed) && obj.failed.length > 0 && obj.failed.every((one) => typeof one === 'string')) {
     entry.failed = obj.failed as string[];

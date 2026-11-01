@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
+import type { SessionCliSpec } from '../send/session-cli.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
 import type { ComposeProfile } from './compose.ts';
@@ -91,6 +92,10 @@ export interface Profile {
   /** A module that drives a typed delivery the CLI's own screens require, or null when the
    *  generic drop-file trigger reaches this CLI. See ComposeProfile. */
   compose: ComposeProfile | null;
+  /** The CLI's own session call, when it creates a remote session from argv and takes the brief
+   *  as one argument (the `session` delivery leg), or null when no run measured one. See
+   *  SessionCliSpec. */
+  sessionCli: SessionCliSpec | null;
   /** The one key that empties the CLI's input box, sent to clear an exit text that did not
    *  read back as typed. Null when no key is established for this CLI: the text is left. */
   exitClear: string | null;
@@ -723,7 +728,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1131,6 +1136,7 @@ function launchOf(root: YamlNode): Shipped {
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
+  const sessionCliEntry = optional(entries, 'session_cli');
   const standingRulesEntry = optional(entries, 'standing_rules');
   const herdrStatusEntry = optional(entries, 'herdr_status');
   const modelsEntry = optional(entries, 'models');
@@ -1166,6 +1172,7 @@ function launchOf(root: YamlNode): Shipped {
       exit: exitEntry ? text(exitEntry, 'exit') : null,
       exitKeys: exitKeysEntry ? exitKeysOf(exitKeysEntry) : [],
       compose: composeEntry ? composeOf(composeEntry) : null,
+      sessionCli: sessionCliEntry ? sessionCliOf(sessionCliEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
       input: inputEntry ? inputOf(inputEntry) : null,
@@ -1457,6 +1464,22 @@ function composeOf(entry: YamlEntry): ComposeProfile {
     fail(entry.line, `profile: "compose_module" module "${specifier}" exports "reposArgs" that is not a list of strings`);
   }
   return { module: specifier, compose: mod.compose as ComposeProfile['compose'], repos: (repos as string[] | undefined) ?? [] };
+}
+
+/** The value of `session_cli`: the CLI's own session-creating and session-pulling calls, as a
+ *  run measured them. `argv` and `pull` are non-empty lists of words; `repo_flag` names the
+ *  option a repository is passed as, or is absent when the CLI takes none; `created` is the line
+ *  prefix the CLI prints once a session exists. */
+function sessionCliOf(entry: YamlEntry): SessionCliSpec {
+  const entries = mapping(entry.value, 'session_cli');
+  only(entries, ['argv', 'repo_flag', 'created', 'pull']);
+  const repoFlagEntry = optional(entries, 'repo_flag');
+  return {
+    argv: strings(required(entries, 'argv', entry.line).value, 'argv'),
+    repoFlag: repoFlagEntry ? text(repoFlagEntry, 'repo_flag') : null,
+    created: text(required(entries, 'created', entry.line), 'created'),
+    pull: strings(required(entries, 'pull', entry.line).value, 'pull'),
+  };
 }
 
 function loginOf(node: YamlNode): { check: string[] | null; hint: string } {

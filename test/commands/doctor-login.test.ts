@@ -114,6 +114,7 @@ describe('checkLogin with fake command results', () => {
       exitConfirm: null,
       input: null,
       compose: null,
+      sessionCli: null,
       lobbyFiles: [],
       startupReads: [],
       mcpInbox: null,
