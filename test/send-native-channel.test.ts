@@ -26,7 +26,7 @@ import {
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
-import { recordBody, testIo, type TestIo } from './helpers.ts';
+import { recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -210,7 +210,7 @@ test('a Claude family spelled in lower case is read off the CLI screen, never as
 test('an unrecognized launcher leaves a foreign model unread: its banner is not a measured match', async () => {
   const made = world(['typed']);
   cleanup = made.cleanup;
-  const pane = scripted(['idle', 'working'], `glm-5.4 · API Usage Billing\n${OPUS_SCREEN}`);
+  const pane = scripted(['idle', 'working'], wrapperPane('glm-5.4') + OPUS_SCREEN);
   const host = fake(made, { native: pane });
   registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'unknown-wrapper');
   const io = owner(made.root);
@@ -234,7 +234,7 @@ test('a wrapper banner naming the signed model in its own words is not a drift',
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
@@ -252,7 +252,7 @@ test('a wrapper banner naming the signed model in its own words is not a drift',
 test('a wrapper banner naming another version is still held', async () => {
   const made = world(['typed']);
   cleanup = made.cleanup;
-  const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  glm-5.4 · API Usage Billing\n`);
+  const pane = scripted(['idle', 'working'], wrapperPane('glm-5.4') + OPUS_SCREEN);
   const host = fake(made, { native: pane });
   registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'claude-glm.sh');
   const io = owner(made.root);
@@ -275,7 +275,7 @@ test('a wrapper banner holding the signed version in another order is held', asy
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
@@ -299,7 +299,7 @@ test('a declaration that spells the family inside its model matches the banner',
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
@@ -323,7 +323,7 @@ test('a declaration that spells the family inside its model holds another versio
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
     const io = owner(made.root);
@@ -355,7 +355,7 @@ test('a number inside a model word is model identity, never part of the version'
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, one.signing, 'claude-glm.sh');
     const io = owner(made.root);
@@ -382,7 +382,7 @@ test('a version the id spells with a different run is another version', async ()
   ];
   for (const one of cases) {
     const made = world(['typed']);
-    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const pane = scripted(['idle', 'working'], wrapperPane(one.banner) + OPUS_SCREEN);
     const host = fake(made, { native: pane });
     registerLeadWith(made, host, one.signing, 'claude-kimi.sh');
     const io = owner(made.root);
