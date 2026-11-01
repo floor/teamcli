@@ -10,7 +10,7 @@
 // file, caller, key and pane below is synthetic.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runConfig } from '../src/commands/config.ts';
@@ -110,6 +110,24 @@ function teamFile(root: string): string {
 function logOf(root: string): string {
   const path = join(root, '.agents', 'team.log');
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+/** Every file under the project's `.agents` folder and the synthetic home, by path, as base64:
+ *  the strongest no-write check a scene can make — a created audit log or a rewritten state
+ *  shows up here. */
+function snapshot(root: string, home: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (dir: string): void => {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else files[path] = readFileSync(path).toString('base64');
+    }
+  };
+  walk(join(root, '.agents'));
+  walk(home);
+  return files;
 }
 
 async function config(root: string, home: string, caller: { kind: string; name?: string; pane?: string; session?: string }, env: Record<string, string>): Promise<{ code: number; out: string; err: string }> {
@@ -237,6 +255,23 @@ test('config set: the team rules section is the same record write, refused off a
   expect(teamFile(root)).toContain('- never force');
 });
 
+test('config set: a lifted change that refuses writes no audit and changes no file', async () => {
+  const { root, home } = repo();
+  const before = snapshot(root, home);
+  for (const args of [
+    ['set', 'seats.missing.inbound', 'accept'],
+    ['set', 'seats.worker.cli', 'no-such-cli'],
+  ] as const) {
+    const io = testIo(root, LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runConfig([...args], io, { home, env: { TEAMCLI_DEV_MODE: '1' }, now: () => NOW })).toBe(1);
+    // The admission is still printed: only its audit line waits for a record that was written.
+    expect(io.err).toContain(`warning: ${CONFIG_LINE}; dev mode continues\n`);
+  }
+  expect(snapshot(root, home)).toEqual(before);
+  expect(logOf(root)).toBe('');
+});
+
 // --- team settings set ------------------------------------------------------------------------
 test('settings set: dev mode off refuses byte for byte and records nothing', async () => {
   const { root, home } = repo();
@@ -284,6 +319,40 @@ test('settings set: another seat of the team is refused in every mode', async ()
     expect(ran.code).toBe(1);
     expect(ran.err).toBe("team settings: only the owner sets a seat's settings, from a terminal outside herdr; this call is worker\n");
   }
+  expect(logOf(root)).toBe('');
+});
+
+test('settings set/unset: a lifted refusal writes neither the audit nor the remembered team file', async () => {
+  const { root, home } = repo();
+  const before = snapshot(root, home);
+  // A setting the file's own parser rejects is an invocation problem (exit 2); a seat or a key
+  // the record does not hold is an ordinary refusal (exit 1).
+  for (const [args, code] of [
+    [['set', 'worker', 'nope=1'], 2],
+    [['set', 'worker', 'model=nope'], 2],
+    [['set', 'missing', 'nickname=Hera'], 1],
+    [['unset', 'worker', 'nickname'], 1],
+  ] as const) {
+    const io = testIo(root, LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runSettings([...args], io, { home, now: NOW })).toBe(code);
+    expect(io.err).toContain(`warning: ${SETTINGS_LINE}; dev mode continues\n`);
+  }
+  // The gate admits before the request is validated; neither the admission's audit line nor
+  // `currentTeam`'s `last_valid` copy may land for a write the command then refused.
+  expect(snapshot(root, home)).toEqual(before);
+  expect(logOf(root)).toBe('');
+});
+
+test('settings set: a lifted dry run writes neither the audit nor the remembered team file', async () => {
+  const { root, home } = repo();
+  const before = snapshot(root, home);
+  const io = testIo(root, LEAD);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runSettings(['set', 'worker', 'nickname=Hera', '--dry-run'], io, { home, now: NOW })).toBe(0);
+  expect(io.out).toContain('would set nickname=Hera');
+  expect(io.err).toContain(`warning: ${SETTINGS_LINE}; dev mode continues\n`);
+  expect(snapshot(root, home)).toEqual(before);
   expect(logOf(root)).toBe('');
 });
 
