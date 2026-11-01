@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync,
+  statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -258,6 +259,64 @@ describe('an existing copy that is not what its name claims is refused', () => {
     expect(installed.why).toContain('could not be kept whole');
     expect(installed.detail ?? '').toContain('is not a directory');
     expect(existsSync(manager.unitPath(home))).toBe(false);
+  });
+});
+
+describe('the runtime folder is this user\'s own and no other user can write it', () => {
+  test('a runtime folder the group or the world can write refuses the install before the unit is written', () => {
+    const { home } = scratch();
+    const entry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(entry)).ok).toBe(true);
+    const before = readFileSync(manager.unitPath(home), 'utf8');
+    const retained = unitWords(before)[1]!;
+    chmodSync(copyRoot(home), 0o777);
+
+    const again = manager.install(home, programOf(entry));
+
+    expect(again.ok).toBe(false);
+    if (again.ok) return;
+    expect(again.why).toContain('could not be kept whole');
+    expect(again.detail ?? '').toContain('writable by the group or the world');
+    expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(before);
+    // The copy the unit already runs is untouched: the install changed nothing it refused.
+    expect(readFileSync(retained, 'utf8')).toBe(readFileSync(entry, 'utf8'));
+  });
+
+  test('a runtime folder that is a symbolic link is refused, never followed', () => {
+    const { home } = scratch();
+    const entry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(entry)).ok).toBe(true);
+    const before = readFileSync(manager.unitPath(home), 'utf8');
+    const root = copyRoot(home);
+    const moved = join(home, 'runtime-elsewhere');
+    renameSync(root, moved);
+    symlinkSync(moved, root);
+
+    const again = manager.install(home, programOf(entry));
+
+    expect(again.ok).toBe(false);
+    if (again.ok) return;
+    expect(again.why).toContain('could not be kept whole');
+    expect(again.detail ?? '').toContain('is a symbolic link');
+    expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(before);
+    // The link is left where it was: the install follows nothing and writes nothing through it.
+    expect(lstatSync(root).isSymbolicLink()).toBe(true);
+  });
+
+  test('a runtime folder with no group or other write is used as it is', () => {
+    const { home } = scratch();
+    const entry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(entry)).ok).toBe(true);
+    const [sha] = copies(home);
+    chmodSync(copyRoot(home), 0o755);
+
+    const again = manager.install(home, programOf(entry));
+
+    expect(again.ok, again.ok ? '' : again.why).toBe(true);
+    expect(copies(home)).toEqual([sha!]);
   });
 });
 
