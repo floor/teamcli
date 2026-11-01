@@ -14,7 +14,7 @@ import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwne
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
-import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
+import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -705,7 +705,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
   const launched = args.values.file || clientDown !== null ? undefined : launchedTeamFile(io, sources.home);
-  const file = branching() ? undefined : (args.values.file ?? launched);
+  // A launched pointer names where this session was launched from, not a copy to read: the run
+  // reads the team where the edits write it, so the session it stops and the seats it knows are
+  // the registry's record, never missed over the file the session launched from. A `--file`
+  // names its file, and is read as that file.
+  const pointer = branching() ? undefined : launched;
+  const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
 
   // The run's file. The load is today's: `currentTeam` falls back to the last copy that
@@ -723,7 +728,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? currentTeam(io.cwd, file, loadedAt!, sources.home, false);
+  const current: Current = liveCurrent ?? (pointer !== undefined
+    ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
+    : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
