@@ -342,6 +342,7 @@
     },
     "rule": {
       "type": "object",
+      "description": "A rule matches on one of these primitives: any, all, footer, below_last_rule, none_after, only_after, block, or without_rule: true. on_footer, live and at_composer narrow a match one of them makes, and reason labels a rate-limit match; none of them matches alone.",
       "additionalProperties": false,
       "anyOf": [
         { "required": ["any"] },
@@ -350,7 +351,8 @@
         { "required": ["below_last_rule"] },
         { "required": ["none_after"] },
         { "required": ["only_after"] },
-        { "required": ["block"] }
+        { "required": ["block"] },
+        { "required": ["without_rule"], "properties": { "without_rule": { "const": true } } }
       ],
       "if": { "required": ["block"] },
       "then": {
@@ -359,7 +361,7 @@
       },
       "allOf": [
         {
-          "if": { "required": ["live"] },
+          "if": { "required": ["live"], "properties": { "live": { "const": true } } },
           "then": {
             "anyOf": [{ "required": ["any"] }, { "required": ["all"] }],
             "not": {
