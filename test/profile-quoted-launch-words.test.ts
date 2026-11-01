@@ -467,6 +467,93 @@ describe('an unprovable line proves no word, and every reader reads it as 0.5.10
       shown: 'gpt-5.5',
     });
   });
+
+  // Builder-3's round-7 probes: the outer word is single-quoted, so the shell that parses the
+  // line hands the script through unchanged and only the body decides. The script's own shell
+  // reads a comment (or a second command) and the CLI never receives the words the decoded
+  // source appears to name. The body proof is the one the placement asks, so the reader names
+  // no word here either, and no id is recorded.
+  const COMMENTED_ID = '/bin/sh -c \'claude --model m # "--session-id" "declared-session"\'';
+  const SECOND_COMMAND_ID = '/bin/sh -c \'claude --model m; : "--session-id" "declared-session"\'';
+
+  test('a comment inside the script is no word list: the CLI receives only the words before it', () => {
+    expect(cliArgv(COMMENTED_ID)).toEqual(['--model', 'm']);
+    expect(cliWordList('claude-code', COMMENTED_ID)).toBeNull();
+    expect(cliWordsOf('claude-code', COMMENTED_ID)).toBe('');
+    const launch = withLaunchSession('claude-code', COMMENTED_ID);
+    expect(launch.command).toBe(COMMENTED_ID);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+  });
+
+  test('a second command after a semicolon names no word either: the declared id never reaches the CLI', () => {
+    expect(cliArgv(SECOND_COMMAND_ID)).toEqual(['--model', 'm']);
+    expect(cliWordList('claude-code', SECOND_COMMAND_ID)).toBeNull();
+    expect(cliWordsOf('claude-code', SECOND_COMMAND_ID)).toBe('');
+    const launch = withLaunchSession('claude-code', SECOND_COMMAND_ID);
+    expect(launch.command).toBe(SECOND_COMMAND_ID);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+  });
+});
+
+describe('one proof decides both: a reader is unknown exactly where the placement refuses', () => {
+  const baseline = (line: string): string =>
+    `AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt Rules.`;
+
+  // The whole unprovable-shape table. The first rows write the construct inside a single-quoted
+  // script word — literal to the shell that parses the line, so only the body's own proof can
+  // refuse them — and the last rows put the construct where the outer shell reads it, so no
+  // proof of the body reaches that shell at all. Each row is asked of both readers: the
+  // placement (a warned launchCommand, options after the line) and the word read
+  // (cliWordList/cliWordsOf). They must answer the same thing on every row.
+  const SHAPES = [
+    { name: 'a comment', line: "/bin/sh -c 'claude --model m # note'" },
+    { name: 'a semicolon', line: "/bin/sh -c 'claude --model m; :'" },
+    { name: 'a pipe', line: "/bin/sh -c 'claude --model m | cat'" },
+    { name: 'an ampersand', line: "/bin/sh -c 'claude --model m & true'" },
+    { name: 'an output redirection', line: "/bin/sh -c 'claude --model m > out.txt'" },
+    { name: 'an input redirection', line: "/bin/sh -c 'claude --model m < in.txt'" },
+    { name: 'an opening parenthesis', line: "/bin/sh -c '(claude --model m)'" },
+    { name: 'a closing parenthesis', line: "/bin/sh -c 'claude --model m)'" },
+    { name: 'a newline', line: "/bin/sh -c 'claude --model m\ntrue'" },
+    { name: 'a variable', line: "/bin/sh -c 'claude --model $X'" },
+    { name: 'a braced variable', line: "/bin/sh -c 'claude --model ${X}'" },
+    { name: 'a command substitution', line: "/bin/sh -c 'claude --model $(printf x)'" },
+    { name: 'a backtick substitution', line: "/bin/sh -c 'claude --model `printf x`'" },
+    { name: 'a star glob', line: "/bin/sh -c 'claude --model m*'" },
+    { name: 'a question-mark glob', line: "/bin/sh -c 'claude --model m?'" },
+    { name: 'a bracket glob', line: "/bin/sh -c 'claude --model [m]'" },
+    { name: 'an unclosed inner quote', line: '/bin/sh -c \'claude --model "m\'' },
+    { name: 'a variable the outer shell expands', line: '/bin/sh -c "claude --model m $TAIL"' },
+    { name: 'a backtick the outer shell runs', line: '/bin/sh -c "claude --model m `printf x`"' },
+    { name: 'a star the outer shell globs', line: '/bin/sh -c "claude --model *"' },
+    // A shell whose syntax this reader does not model: the body may be one simple command in
+    // POSIX terms and still mean something else to that shell, so no word is proved.
+    { name: 'a shell this reader does not write inside', line: "/usr/bin/fish -c 'claude --model m'" },
+  ];
+  const PROVED = "/bin/sh -c 'claude --model m'";
+
+  test('every unprovable shape is refused by the placement and names no word', () => {
+    for (const { name, line } of SHAPES) {
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      const placementRefused = warnings.length === 1 && command === baseline(line);
+      const readerUnknown = cliWordList('claude-code', line) === null && cliWordsOf('claude-code', line) === '';
+      expect(`${name}: placement refuses — ${placementRefused}`).toBe(`${name}: placement refuses — true`);
+      expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — true`);
+      // The agreement itself: neither answer can move without the other.
+      expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
+    }
+  });
+
+  test('the proved control is refused by neither, and its words are read', () => {
+    const warnings: string[] = [];
+    launchCommand(claude, PROVED, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+    expect(warnings).toEqual([]);
+    expect(cliWordList('claude-code', PROVED)).toContain('--model');
+    expect(cliWordsOf('claude-code', PROVED)).toContain('--model');
+  });
 });
 
 describe('a resume inside a quoted script goes in and comes back out exactly', () => {

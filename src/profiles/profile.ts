@@ -751,6 +751,21 @@ function isSimpleCommand(text: string): boolean {
   return true;
 }
 
+/** The one proof a script word carries, asked by every reader: the shell that parses it hands
+ *  it on exactly as this reader decoded it — one quoted source word whose raw text keeps every
+ *  character that shell reads inside it ({@link outerWordKeepsText}) — and the body it runs is
+ *  one simple command for that shell ({@link isSimpleCommand}). A placement never writes inside
+ *  a script that fails either proof, and a word read reports no word from one. Both ask this
+ *  same function, so they refuse the same lines by construction. Returns the body and the quote
+ *  the shell reads inside it, or null when the word proves neither. */
+function provenScriptWord(text: string, word: ShellWord): { body: string; layer: QuotedWord } | null {
+  const layer = quotedWordOf(text, word);
+  if (layer === null) return null;
+  if (!outerWordKeepsText(text.slice(word.start + layer.openLen, word.end - 1), layer.quote)) return null;
+  if (!isSimpleCommand(word.text)) return null;
+  return { body: word.text, layer };
+}
+
 /** `text` written so one shell quoting layer hands it on exactly as written: a double-quoted
  *  script's shell reads `\`, `"`, `$` and a backtick back to themselves; a single-quoted one
  *  takes everything literally, with quotes spliced as `'\''`. */
@@ -786,16 +801,12 @@ function placementOf(binary: string, command: string): Placement {
   if (found.trailing.length > 0) return { kind: 'uncertain' };
   const shell = shellProgramOf(trimmed);
   if (shell === null || !POSIX_SHELLS.has(shell)) return { kind: 'uncertain' };
-  const layer = quotedWordOf(trimmed, found.word);
-  if (layer === null) return { kind: 'uncertain' };
-  if (!outerWordKeepsText(trimmed.slice(found.word.start + layer.openLen, found.word.end - 1), layer.quote)) {
-    return { kind: 'uncertain' };
+  const proof = provenScriptWord(trimmed, found.word);
+  if (proof === null) return { kind: 'uncertain' };
+  if (startsWithCli(binary, proof.body)) {
+    return { kind: 'script', at: found.word.end - 1, layers: [proof.layer.quote] };
   }
-  if (startsWithCli(binary, found.word.text)) {
-    if (!isSimpleCommand(found.word.text)) return { kind: 'uncertain' };
-    return { kind: 'script', at: found.word.end - 1, layers: [layer.quote] };
-  }
-  return nestedPlacement(binary, trimmed, found.word, layer) ?? { kind: 'uncertain' };
+  return nestedPlacement(binary, trimmed, found.word, proof.layer) ?? { kind: 'uncertain' };
 }
 
 /** The script one nested shell runs, when that script runs the CLI: the outer body's source is
@@ -818,22 +829,18 @@ function nestedPlacement(
   if (inner === null || inner.trailing.length > 0) return null;
   const shell = shellProgramOf(body);
   if (shell === null || !POSIX_SHELLS.has(shell)) return null;
-  const innerLayer = quotedWordOf(body, inner.word);
-  if (innerLayer === null) return null;
-  if (!outerWordKeepsText(body.slice(inner.word.start + innerLayer.openLen, inner.word.end - 1), innerLayer.quote)) {
-    return null;
-  }
-  if (!startsWithCli(binary, inner.word.text)) return null;
-  if (!isSimpleCommand(inner.word.text)) return null;
+  const proof = provenScriptWord(body, inner.word);
+  if (proof === null) return null;
+  if (!startsWithCli(binary, proof.body)) return null;
   const source = command.slice(outer.start + layer.openLen, outer.end - 1);
   if (source === body) {
     return {
       kind: 'script',
       at: outer.start + layer.openLen + inner.word.end - 1,
-      layers: [layer.quote, innerLayer.quote],
+      layers: [layer.quote, proof.layer.quote],
     };
   }
-  if (layer.quote !== 'double' || innerLayer.quote === 'double') return null;
+  if (layer.quote !== 'double' || proof.layer.quote === 'double') return null;
   const tail = source.replace(/\s+$/, '');
   if (!tail.endsWith("'")) return null;
   let backslashes = 0;
@@ -842,7 +849,7 @@ function nestedPlacement(
   return {
     kind: 'script',
     at: outer.start + layer.openLen + tail.length - 1,
-    layers: [layer.quote, innerLayer.quote],
+    layers: [layer.quote, proof.layer.quote],
   };
 }
 
@@ -897,8 +904,10 @@ function placedOnLaunchLine(command: string, addition: string, binary: string): 
 
 /** Where a line's CLI words sit in the line's source: the innermost shell script that runs the
  *  CLI, with the span of its body text. Every layer's source must be exactly the text this
- *  reader decoded, so a position in the body is a position in the line. Null when the line has
- *  no shell command string, or one this reader cannot read through. */
+ *  reader decoded, so a position in the body is a position in the line, and every layer's body
+ *  must be one simple command ({@link provenScriptWord}) — a reader that rewrites words inside a
+ *  script asks the same proof a placement and a word read ask. Null when the line has no shell
+ *  command string, or one this reader cannot read through. */
 type CliBody = { text: string; start: number; end: number };
 function cliBodyOn(binary: string, command: string): CliBody | null {
   let text = command;
@@ -906,10 +915,13 @@ function cliBodyOn(binary: string, command: string): CliBody | null {
   for (let depth = 0; depth < 4; depth += 1) {
     const found = shellScriptWordOf(text);
     if (found === null) return null;
+    const shell = shellProgramOf(text);
+    if (shell === null || !POSIX_SHELLS.has(shell)) return null;
     const layer = quotedWordOf(text, found.word);
     if (layer === null) return null;
     const raw = text.slice(found.word.start + layer.openLen, found.word.end - 1);
     if (raw !== found.word.text) return null;
+    if (!isSimpleCommand(found.word.text)) return null;
     const start = offset + found.word.start + layer.openLen;
     if (startsWithCli(binary, found.word.text)) {
       return { text: found.word.text, start, end: start + found.word.text.length };
@@ -920,22 +932,13 @@ function cliBodyOn(binary: string, command: string): CliBody | null {
   return null;
 }
 
-/** Whether the shell that parses this text hands a script word on unchanged: the word is one
- *  quoted string in the source whose raw text keeps every character that shell reads inside it
- *  ({@link outerWordKeepsText}). A word written `"…'$VAR'…"` does not: the shell that parses the
- *  command line expands the variable before any inner shell ever sees the single quotes, so the
- *  text decoded from the source is not the script the inner shell runs. A spliced single-quoted
- *  word this tool wrote (`'\''`) is followed as that shell reads it and stays literal. */
-function scriptWordIsLiteral(text: string, word: ShellWord): boolean {
-  const layer = quotedWordOf(text, word);
-  if (layer === null) return false;
-  return outerWordKeepsText(text.slice(word.start + layer.openLen, word.end - 1), layer.quote);
-}
-
 /** The text of the innermost shell script that runs the CLI, read through the decoded words of
  *  every layer. Null when the line has no shell command string, or none this reader can follow to
- *  the CLI, and null when a script word is not literal on the line: a text the outer shell may
- *  rewrite is not the script this line runs, whatever its decoded words say. Reading needs no
+ *  the CLI, and null when a script word is not proved on the line ({@link provenScriptWord}): a
+ *  word the shell that parses it may rewrite, a body that is more than one simple command, or a
+ *  shell whose syntax this reader does not model, names no word of this CLI, whatever its
+ *  decoded words appear to say. The proof is the one the placement asks, so a reader is unknown
+ *  exactly where a placement refuses. Reading needs no
  *  source positions, so a line this tool has already written into — one whose inner quotes are
  *  spliced as `'\''` — still reads exactly as the CLI receives it. */
 function cliTextOf(binary: string, command: string): string | null {
@@ -943,10 +946,13 @@ function cliTextOf(binary: string, command: string): string | null {
   for (let depth = 0; depth < 4; depth += 1) {
     const found = shellScriptWordOf(text);
     if (found === null) return null;
-    if (!scriptWordIsLiteral(text, found.word)) return null;
-    if (startsWithCli(binary, found.word.text)) return found.word.text;
+    const shell = shellProgramOf(text);
+    if (shell === null || !POSIX_SHELLS.has(shell)) return null;
+    const proof = provenScriptWord(text, found.word);
+    if (proof === null) return null;
+    if (startsWithCli(binary, proof.body)) return proof.body;
     if (found.trailing.length > 0) return null;
-    text = found.word.text;
+    text = proof.body;
   }
   return null;
 }
@@ -958,8 +964,10 @@ function cliTextOf(binary: string, command: string): string | null {
  *  either. A shell script that runs some other program, or one this reader cannot read through,
  *  names no word of this CLI at all. A script word the shell that parses the line may rewrite —
  *  an unescaped `$` or backtick inside the double quotes the word opens with — proves no word
- *  either: the text decoded from the source is not the script the inner shell runs. Null when
- *  the line, or the script that runs the CLI, cannot be proved: no caller may treat an unproved
+ *  either, and a body that is more than one simple command — a comment, an operator, a
+ *  substitution, a glob — names none: the words after such a construct are not the argv the
+ *  script hands its CLI. Null when the line, or the script that runs the CLI, cannot be proved
+ *  ({@link provenScriptWord}, the proof a placement asks too): no caller may treat an unproved
  *  line as a word list. */
 function cliWordListOf(binary: string, command: string): string[] | null {
   const trimmed = command.trimEnd();
