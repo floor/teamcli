@@ -6,14 +6,15 @@
 // A socket no record names is left where it is, and said. A missing socket is no proof its
 // server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { shortSocketBase } from '../helpers.ts';
 import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state.ts';
 import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
+  endpointSocketOf,
   ensureCodexEndpoint,
   isSocketFile,
   launchCodexEndpoint,
@@ -69,6 +70,32 @@ function ownedRecord(dir: string, extra: Partial<CodexEndpointRecord> = {}): Cod
   return { url: `unix://${socketPath}`, binding: BINDING, pid: 700, started_at: T0, ...extra };
 }
 
+/** A state folder over 100 bytes on its own, so its seat's socket cannot live under it. */
+function deepScratch(): string {
+  let deep = scratch();
+  while (deep.length < 120) deep = join(deep, 'nested-folder-name');
+  mkdirSync(deep, { recursive: true });
+  return deep;
+}
+
+/** A scene's own runtime folder: nothing here touches the machine's real one. */
+function runtimeRootOf(base: string): string {
+  return join(base, 'rt');
+}
+
+function stemOf(socketPath: string): string {
+  return basename(socketPath, '.sock');
+}
+
+/** The strict owner record a launch writes beside a runtime socket, as a different process would
+ *  find it: a plain file this user owns, 0600, small. */
+function writeOwnerRecordOf(socketPath: string, record: { dir: string; binding: string; pid: number; at: string }): string {
+  const path = join(dirname(socketPath), `${stemOf(socketPath)}.owner.json`);
+  writeFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
 describe('the endpoint socket path', () => {
   test('is binding-scoped, under the seat’s own run folder', () => {
     const dir = scratch();
@@ -94,11 +121,41 @@ describe('the endpoint socket path', () => {
     }
   });
 
-  test('refuses a path this build would ask the OS to bind over its limit', () => {
-    let deep = scratch();
+  test('a state folder over the limit moves its socket to the short runtime folder, within the limit', () => {
+    const deep = deepScratch();
+    const base = scratch();
     try {
-      while (deep.length < 120) deep = join(deep, 'nested-folder-name');
-      expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING)).toBeNull();
+      const runtimeRoot = runtimeRootOf(base);
+      const socket = endpointSocketOf(deep, SESSION, SEAT, BINDING, runtimeRoot);
+      expect(socket.kind).toBe('ok');
+      if (socket.kind !== 'ok') return;
+      expect(socket.runtime).toBe(true);
+      expect(socket.path).toBe(join(runtimeRoot, `${stemOf(socket.path)}.sock`));
+      expect(stemOf(socket.path)).toMatch(/^[0-9a-f]{32}$/);
+      expect(Buffer.byteLength(socket.path)).toBeLessThanOrEqual(100);
+      // The name hashes the binding too: another incarnation is another file, never this one.
+      const other = endpointSocketOf(deep, SESSION, SEAT, OTHER, runtimeRoot);
+      expect(other.kind).toBe('ok');
+      if (other.kind === 'ok') expect(other.path).not.toBe(socket.path);
+      // The same seat, session, binding and folder always name the same file.
+      expect(endpointSocketOf(deep, SESSION, SEAT, BINDING, runtimeRoot)).toEqual(socket);
+    } finally {
+      rmSync(deep, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses when neither the state folder nor the runtime folder can hold the path', () => {
+    const deep = deepScratch();
+    try {
+      const tooLong = join(deep, 'runtime', 'x'.repeat(40));
+      const socket = endpointSocketOf(deep, SESSION, SEAT, BINDING, tooLong);
+      expect(socket.kind).toBe('none');
+      if (socket.kind === 'none') {
+        expect(socket.why).toContain('bytes');
+        expect(socket.why).toContain('100');
+      }
+      expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING, tooLong)).toBeNull();
     } finally {
       rmSync(deep, { recursive: true, force: true });
     }
@@ -631,6 +688,214 @@ describe('ensuring the endpoint', () => {
       expect(answer.kind).toBe('unmanaged');
       if (answer.kind === 'unmanaged') expect(answer.why).toBe('the endpoint folder is not a plain directory');
       expect(spawned).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a deep state folder', () => {
+  test('still gets a managed endpoint, in the short runtime folder, owner-only', async () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    try {
+      seed(dir);
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      let listening = false;
+      const spawned: string[] = [];
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          runtimeRoot,
+          spawn: (input) => {
+            spawned.push(input.url);
+            // The server creates its socket where it was told to listen; the OS's own default
+            // mode is what the launch has to narrow from.
+            writeFileSync(expected.path, '');
+            chmodSync(expected.path, 0o644);
+            listening = true;
+            return { pid: 9010 };
+          },
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === expected.path,
+          alive: () => false,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer).toEqual({ kind: 'up', url: `unix://${expected.path}`, started: true });
+      expect(spawned).toEqual([`unix://${expected.path}`]);
+      expect(Buffer.byteLength(expected.path)).toBeLessThanOrEqual(100);
+      expect(recordedAt(dir)).toEqual({
+        url: `unix://${expected.path}`,
+        binding: BINDING,
+        pid: 9010,
+        started_at: '2026-10-01T10:00:05.000Z',
+        config: [],
+      });
+      // The folder and everything the launch writes into it are this user's alone.
+      expect(statSync(runtimeRoot).mode & 0o777).toBe(0o700);
+      expect(statSync(expected.path).mode & 0o777).toBe(0o600);
+      const ownerPath = join(runtimeRoot, `${stemOf(expected.path)}.owner.json`);
+      expect(statSync(ownerPath).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(ownerPath, 'utf8'))).toEqual({
+        dir,
+        binding: BINDING,
+        pid: 9010,
+        at: '2026-10-01T10:00:05.000Z',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('clears the runtime sockets whose recorded process has gone, and only those', async () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    try {
+      seed(dir);
+      mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+      chmodSync(runtimeRoot, 0o700);
+      const dead = join(runtimeRoot, `${'a'.repeat(32)}.sock`);
+      const live = join(runtimeRoot, `${'b'.repeat(32)}.sock`);
+      const unnamed = join(runtimeRoot, `${'d'.repeat(32)}.sock`);
+      writeFileSync(dead, '');
+      writeFileSync(live, '');
+      writeFileSync(unnamed, '');
+      // Two sockets a launch named, one whose server is alive; an owner record whose socket is
+      // already gone; and a socket no owner record names.
+      const deadOwner = writeOwnerRecordOf(dead, { dir, binding: BINDING, pid: 9101, at: T0 });
+      const liveOwner = writeOwnerRecordOf(live, { dir, binding: BINDING, pid: 9102, at: T0 });
+      const orphan = join(runtimeRoot, `${'c'.repeat(32)}.owner.json`);
+      writeFileSync(orphan, `${JSON.stringify({ dir, binding: BINDING, pid: 9103, at: T0 })}\n`, { mode: 0o600 });
+      chmodSync(orphan, 0o600);
+
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      const sockets = new Set([dead, live, unnamed]);
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          runtimeRoot,
+          spawn: () => {
+            sockets.add(expected.path);
+            writeFileSync(expected.path, '');
+            return { pid: 9104 };
+          },
+          isPlainDir: () => true,
+          isSocket: (path) => sockets.has(path),
+          alive: (pid) => pid === 9102,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer.kind).toBe('up');
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(deadOwner)).toBe(false);
+      expect(existsSync(live)).toBe(true);
+      expect(existsSync(liveOwner)).toBe(true);
+      expect(existsSync(orphan)).toBe(false);
+      // Nothing proves the unnamed socket's process has gone, so it is left exactly where it is.
+      expect(existsSync(unnamed)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('the seat is found from the runtime socket through its owner record', () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    try {
+      mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+      chmodSync(runtimeRoot, 0o700);
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      const record: CodexEndpointRecord = {
+        url: `unix://${expected.path}`, binding: BINDING, pid: 700, started_at: T0, config: [],
+      };
+      seedRecord(dir, record);
+      writeOwnerRecordOf(expected.path, { dir, binding: BINDING, pid: 700, at: T0 });
+      const proof = {
+        alive: () => true,
+        commandOf: () => `codex app-server --listen ${record.url}`,
+        startOf: () => T0_MS,
+        runtimeRoot,
+      };
+      expect(seatOfManagedEndpoint(700, proof)).toEqual({ dir, session: SESSION, seat: SEAT });
+      // The owner record names the process the launch recorded: another pid is another server.
+      expect(seatOfManagedEndpoint(701, proof)).toBeNull();
+      // The record and the process proof still decide, exactly as for a socket under the state.
+      expect(seatOfManagedEndpoint(700, { ...proof, startOf: () => T0_MS + 3_600_000 })).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('a runtime endpoint’s stop removes its socket and the owner record beside it', () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    try {
+      mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+      chmodSync(runtimeRoot, 0o700);
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      writeFileSync(expected.path, '');
+      const ownerPath = writeOwnerRecordOf(expected.path, { dir, binding: BINDING, pid: 700, at: T0 });
+      seedRecord(dir, {
+        url: `unix://${expected.path}`, binding: BINDING, pid: 700, started_at: T0, config: [],
+      });
+      const stopped = stopSeatCodexEndpoint(
+        { dir, session: SESSION, seat: SEAT },
+        { runtimeRoot, alive: () => false, isPlainDir: () => true, isSocket: () => true },
+      );
+      expect(stopped).toEqual({ stopped: true });
+      expect(existsSync(expected.path)).toBe(false);
+      expect(existsSync(ownerPath)).toBe(false);
+      expect(recordedAt(dir)).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the launch remembers why its managed endpoint fell back', () => {
+  test('a launch with no server records why; a later launch that starts one clears it', async () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      const one = () => readState(dir).sessions[SESSION]?.seats[SEAT];
+      const fell = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: { spawn: () => null, now: () => new Date('2026-10-01T10:00:05.000Z') },
+      });
+      expect(fell).toEqual({ kind: 'unmanaged', why: 'the Codex app-server did not start' });
+      expect(one()?.codex_endpoint_unmanaged).toEqual({
+        why: 'the Codex app-server did not start',
+        at: '2026-10-01T10:00:05.000Z',
+      });
+
+      let listening = false;
+      const up = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { listening = true; return { pid: 9020 }; },
+          isPlainDir: () => true,
+          isSocket: () => listening,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:06.000Z'),
+        },
+      });
+      expect(up.kind).toBe('up');
+      expect(one()?.codex_endpoint_unmanaged).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

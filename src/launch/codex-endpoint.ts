@@ -28,11 +28,39 @@
 //   created that socket within 10 s, its `ps -o comm= -p <pid>` printed `codex`, and SIGTERM
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
+//
+// A deep project folder would push `<state>/run/<session>/<seat>/<binding>.sock` past the socket
+// path limit above, and a seat in such a folder used to launch unmanaged. When the state folder's
+// own path is over the limit, the socket is placed instead in one short per-user runtime folder
+// under the machine's temporary folder, named by a hash of exactly what the state-folder path
+// named: the state folder, the session, the seat and the binding. The hash means two seats, two
+// sessions or two incarnations can never share a name, and the binding is still carried by the
+// name — a predecessor's socket is a different file. The state folder keeps the record: the
+// seat's `codex_endpoint.url` names the runtime socket, and the runtime folder carries a strict
+// owner record beside it that names the state folder, so a walk up from the app-server process
+// can find the seat again (`seatOfManagedEndpoint`). The runtime folder is this user's alone:
+// a plain directory with no group or other access, its own owner's, checked before every launch
+// and made so when it is this user's; the socket is narrowed to 0600 after it appears (measured:
+// codex-cli 0.161.0 leaves it 0755), and a launch that cannot narrow it falls back. Sockets whose
+// owner record names a process that is gone are removed from that folder on every launch there;
+// a socket nothing proves is left where it is, as it always is.
+//
+// Measured on this machine (2026-11-01): `os.tmpdir()` printed `/tmp` (4 bytes), and the runtime
+// folder `/tmp/team-endpoints` was 19 bytes, created 0700 — the same string `join(tmpdir(), …)`
+// gives here. The hashed socket name is
+// 37 bytes (`<32 lowercase hex>.sock`), so the runtime path is 57 bytes here. The build's 100-byte
+// bound is the conservative one: codex-cli 0.161.0 bound and answered a client dial at 132 bytes,
+// the next lengths bound but the dial failed with EINVAL, and past 250 the bind itself failed
+// ("File name too long", os error 63) — so this platform's own limit is not the bound relied on.
+// The other supported platform is unmeasured here: this build asks it for no more than the same
+// 100 bytes, and the runtime-folder fallback has not been run there.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { sessionList } from '../herdr.ts';
-import { lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
+import { isPresenceBinding, isPresenceTime, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import {
   codexEndpointPath,
   readCodexEndpointRecord,
@@ -40,11 +68,25 @@ import {
   type CodexEndpointRecord,
 } from '../daemon/presence/endpoint-record.ts';
 import { isPresenceSeatName, presenceSessionFolder } from '../daemon/presence/spool.ts';
-import { readState, updateState } from '../state.ts';
+import { readState, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import type { Seat } from '../file/types.ts';
 
 /** The longest unix socket path this build will ask Codex to bind: macOS refuses paths over 104
  *  bytes, and a shorter bound leaves room for the OS's own accounting. */
 const MAX_SOCKET_PATH_BYTES = 100;
+
+/** The role-named runtime folder a socket moves to when the state folder's own path is over the
+ *  limit, and the machine's temporary folder it is normally under. Measured here: 19 bytes. */
+const RUNTIME_FOLDER = 'team-endpoints';
+
+/** The hashed socket name's length: 128 bits in lowercase hex, so a name collision between two
+ *  seats, sessions or incarnations is not something any launch or cleanup has to reason about. */
+const RUNTIME_STEM = /^[0-9a-f]{32}$/;
+
+/** The strict owner record beside a runtime socket: the state folder the socket's seat lives in.
+ *  Never trusted alone — its `dir` is only where a reader starts; the state's own record and the
+ *  process proof still decide (`seatOfManagedEndpoint`). */
+const OWNER_SUFFIX = '.owner.json';
 
 export type ManagedEndpointRead =
   | {
@@ -71,6 +113,64 @@ function endpointFolder(dir: string, session: string, seat: string): string | nu
   return join(dir, 'run', folder, seat);
 }
 
+/** The folders a runtime socket may live in, in the order they are tried: the short runtime
+ *  folder both supported platforms name at the same place (measured here: 19 bytes), then this
+ *  process's temporary folder. The fixed one comes first because a stop, a restart and a walk up
+ *  from the app-server run in other processes, and `TMPDIR` is a per-process reading: a folder
+ *  chosen by it could differ between the launch and the reader, while the fixed one cannot. A
+ *  machine whose `/tmp` is itself too long for a hashed socket still gets a bindable path. */
+function runtimeFolders(): string[] {
+  return [...new Set([`/tmp/${RUNTIME_FOLDER}`, join(tmpdir(), RUNTIME_FOLDER)])];
+}
+
+/** The runtime socket's name for one seat incarnation: a hash of the state folder, the session,
+ *  the seat and the binding — exactly what the state-folder path named. It can never equal another
+ *  seat's, another session's or another incarnation's, and it names no project folder. */
+function runtimeSocketName(dir: string, session: string, seat: string, binding: string): string {
+  const stem = createHash('sha256')
+    .update(`team-endpoints\0v1\0${dir}\0${session}\0${seat}\0${binding}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${stem}.sock`;
+}
+
+/** The socket this seat incarnation gets, and why not when it cannot have one. Under the state
+ *  folder while that fits the limit; in the short per-user runtime folder otherwise, with the
+ *  state-folder path's own words hashed into the name. `runtimeRoot` is a scene's own folder;
+ *  the machine's folders are tried when absent. */
+export type EndpointSocket =
+  | { kind: 'ok'; url: string; path: string; runtime: false }
+  | { kind: 'ok'; url: string; path: string; runtime: true; root: string }
+  | { kind: 'none'; why: string };
+
+export function endpointSocketOf(
+  dir: string,
+  session: string,
+  seat: string,
+  binding: string,
+  runtimeRoot?: string,
+): EndpointSocket {
+  const folder = endpointFolder(dir, session, seat);
+  if (folder === null) return { kind: 'none', why: 'the session or seat cannot name an endpoint folder' };
+  if (!isPresenceBinding(binding)) return { kind: 'none', why: 'the seat records no valid presence binding' };
+  const own = join(folder, `${binding}.sock`);
+  const ownBytes = Buffer.byteLength(own);
+  if (ownBytes <= MAX_SOCKET_PATH_BYTES) return { kind: 'ok', url: `unix://${own}`, path: own, runtime: false };
+  const name = runtimeSocketName(dir, session, seat, binding);
+  const roots = runtimeRoot === undefined ? runtimeFolders() : [runtimeRoot];
+  let shortest: number | null = null;
+  for (const root of roots) {
+    const path = join(root, name);
+    const bytes = Buffer.byteLength(path);
+    shortest = shortest === null || bytes < shortest ? bytes : shortest;
+    if (bytes <= MAX_SOCKET_PATH_BYTES) return { kind: 'ok', url: `unix://${path}`, path, runtime: true, root };
+  }
+  return {
+    kind: 'none',
+    why: `the state folder’s socket path would be ${String(ownBytes)} bytes and the runtime folder’s ${String(shortest)}; this build binds at most ${String(MAX_SOCKET_PATH_BYTES)}`,
+  };
+}
+
 /** The explicit endpoint a managed launch would give this seat incarnation. Null when the state
  *  folder, the session or the seat cannot name one this build can bind to. */
 export function codexEndpointSocket(
@@ -78,29 +178,59 @@ export function codexEndpointSocket(
   session: string,
   seat: string,
   binding: string,
+  runtimeRoot?: string,
 ): { url: string; path: string } | null {
-  const folder = endpointFolder(dir, session, seat);
-  if (folder === null || !isPresenceBinding(binding)) return null;
-  const path = join(folder, `${binding}.sock`);
-  if (Buffer.byteLength(path) > MAX_SOCKET_PATH_BYTES) return null;
-  return { url: `unix://${path}`, path };
+  const read = endpointSocketOf(dir, session, seat, binding, runtimeRoot);
+  return read.kind === 'ok' ? { url: read.url, path: read.path } : null;
 }
 
-/** The path a record names, when it is one this seat's own launch folder owns. Both the record's
- *  binding and the file name are checked: a record pointing anywhere else is never touched. */
+/** The path a record names, when it is one this seat incarnation's own launch owns, and whether
+ *  it is the runtime folder's. The whole path is recomputed from the record's binding and must
+ *  equal what the record names: a record pointing anywhere else is never touched. */
 function ownedSocketPath(
   dir: string,
   session: string,
   seat: string,
   record: CodexEndpointRecord,
-): string | null {
-  const folder = endpointFolder(dir, session, seat);
-  if (folder === null) return null;
+  runtimeRoot?: string,
+): { path: string; runtime: boolean } | null {
+  const expected = endpointSocketOf(dir, session, seat, record.binding, runtimeRoot);
+  if (expected.kind !== 'ok') return null;
   const path = codexEndpointPath(record);
-  if (path === null) return null;
-  if (dirname(path) !== folder) return null;
-  if (basename(path) !== `${record.binding}.sock`) return null;
-  return path;
+  if (path === null || path !== expected.path) return null;
+  return { path, runtime: expected.runtime };
+}
+
+/** The strict owner record beside a runtime socket: its path, its state folder, its binding and
+ *  the process the launch recorded. Read only through this door: a plain file this user owns with
+ *  no group or other access, small, and every field shaped as a launch writes it. */
+export type EndpointOwnerRecord = { dir: string; binding: string; pid: number; at: string };
+
+function ownerRecordPathOf(socketPath: string): string {
+  return join(dirname(socketPath), `${basename(socketPath, '.sock')}${OWNER_SUFFIX}`);
+}
+
+export function readEndpointOwnerRecord(
+  path: string,
+  uid: number | undefined = process.getuid?.(),
+): EndpointOwnerRecord | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    if (uid !== undefined && stat.uid !== uid) return null;
+    if ((stat.mode & 0o077) !== 0) return null;
+    if (stat.size > 4_096) return null;
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const one = value as Partial<EndpointOwnerRecord>;
+    if (typeof one.dir !== 'string' || !isAbsolute(one.dir) || /[\u0000-\u001f\u007f]/.test(one.dir)) return null;
+    if (typeof one.binding !== 'string' || !isPresenceBinding(one.binding)) return null;
+    if (typeof one.pid !== 'number' || !Number.isSafeInteger(one.pid) || one.pid <= 0) return null;
+    if (typeof one.at !== 'string' || !isPresenceTime(one.at)) return null;
+    return { dir: one.dir, binding: one.binding, pid: one.pid, at: one.at };
+  } catch {
+    return null;
+  }
 }
 
 function pidAlive(pid: number): boolean {
@@ -229,7 +359,98 @@ export type CodexEndpointDeps = {
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
   waitMs?: number;
+  /** The runtime folder a deep state folder's socket moves to. The machine's own folders when
+   *  absent; a scene hands its own so no test writes outside its scratch folder. */
+  runtimeRoot?: string;
 };
+
+/** Makes `root` this user's own plain folder with no group or other access, and returns why not
+ *  when it cannot. A folder this user already owns is narrowed; a folder anyone else owns, or a
+ *  link, is refused rather than used or replaced. */
+function ensureRuntimeRoot(root: string, plainDir: (path: string) => boolean): string | null {
+  try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+  } catch {
+    return 'the runtime folder could not be made';
+  }
+  if (!plainDir(root)) return 'the runtime folder is not a plain directory';
+  let at;
+  try {
+    at = lstatSync(root);
+  } catch {
+    return 'the runtime folder cannot be read';
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && at.uid !== uid) return 'the runtime folder is not this user’s own';
+  if ((at.mode & 0o077) !== 0) {
+    try {
+      chmodSync(root, 0o700);
+      at = lstatSync(root);
+    } catch {
+      return 'the runtime folder cannot be made owner-only';
+    }
+    if ((at.mode & 0o077) !== 0) return 'the runtime folder cannot be made owner-only';
+  }
+  return null;
+}
+
+/** Narrows a runtime socket to this user alone (measured: codex-cli 0.161.0 leaves it 0755), or
+ *  says why it could not. */
+function lockDownSocket(path: string): string | null {
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    return 'the endpoint socket could not be made owner-only';
+  }
+  return null;
+}
+
+/** Writes the strict owner record beside a runtime socket, owner-only, or says why not. */
+function writeOwnerRecord(socketPath: string, record: EndpointOwnerRecord): string | null {
+  const path = ownerRecordPathOf(socketPath);
+  try {
+    writeFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
+  } catch {
+    return 'the record beside the endpoint socket could not be written';
+  }
+  return null;
+}
+
+/** Removes the runtime sockets and owner records whose recorded process is gone. A socket whose
+ *  owner record is absent or unreadable, or whose process is still alive, is left exactly where
+ *  it is: nothing here proves its server has ended. */
+function sweepRuntimeSockets(
+  root: string,
+  deps: Pick<CodexEndpointDeps, 'alive' | 'isSocket' | 'drop'>,
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return;
+  }
+  const alive = deps.alive ?? pidAlive;
+  const socket = deps.isSocket ?? isSocketFile;
+  const drop = deps.drop ?? dropFile;
+  for (const name of names) {
+    if (name.endsWith('.sock')) {
+      const stem = name.slice(0, -'.sock'.length);
+      if (!RUNTIME_STEM.test(stem)) continue;
+      const path = join(root, name);
+      const owner = readEndpointOwnerRecord(ownerRecordPathOf(path));
+      if (owner === null || alive(owner.pid) || !socket(path)) continue;
+      drop(path);
+      drop(ownerRecordPathOf(path));
+    } else if (name.endsWith(OWNER_SUFFIX)) {
+      const stem = name.slice(0, -OWNER_SUFFIX.length);
+      if (!RUNTIME_STEM.test(stem) || names.includes(`${stem}.sock`)) continue;
+      const owner = readEndpointOwnerRecord(join(root, name));
+      if (owner === null || alive(owner.pid)) continue;
+      drop(join(root, name));
+    }
+  }
+}
 
 /**
  * The environment herdr's Codex hook needs to report the seat's turns. Measured: with the TUI
@@ -318,10 +539,11 @@ export function stopRecordedCodexEndpoint(
   const socket = deps.isSocket ?? isSocketFile;
   const drop = deps.drop ?? dropFile;
 
-  const path = ownedSocketPath(input.dir, input.session, input.seat, input.record);
-  if (path === null) {
+  const owned = ownedSocketPath(input.dir, input.session, input.seat, input.record, deps.runtimeRoot);
+  if (owned === null) {
     return { stopped: false, why: 'the record does not name this seat’s own socket' };
   }
+  const path = owned.path;
   if (!plainDir(dirname(path))) {
     return { stopped: false, why: 'the endpoint folder is not a plain directory; nothing was removed' };
   }
@@ -335,7 +557,11 @@ export function stopRecordedCodexEndpoint(
     terminate(pid);
   }
   // Only the socket this record owns is removed; a path that holds something else is left as it is.
-  if (socket(path)) drop(path);
+  if (socket(path)) {
+    drop(path);
+    // A runtime socket's owner record is the pointer to this seat; it goes with the socket.
+    if (owned.runtime) drop(ownerRecordPathOf(path));
+  }
   return { stopped: true };
 }
 
@@ -440,9 +666,17 @@ export async function ensureCodexEndpoint(
   if (!isPresenceBinding(binding)) {
     return { kind: 'unmanaged', why: 'the seat records no valid presence binding' };
   }
-  const socketPath = codexEndpointSocket(input.dir, input.session, input.seat, binding);
-  if (socketPath === null) {
-    return { kind: 'unmanaged', why: 'the session or seat cannot name a short enough endpoint path' };
+  const socketPath = endpointSocketOf(input.dir, input.session, input.seat, binding, deps.runtimeRoot);
+  if (socketPath.kind !== 'ok') {
+    return { kind: 'unmanaged', why: socketPath.why };
+  }
+  if (socketPath.runtime) {
+    // The runtime folder is this user's own, with no group or other access, before anything is
+    // placed in it; the sweep before every launch there removes only sockets and records whose
+    // recorded process has gone.
+    const rootProblem = ensureRuntimeRoot(socketPath.root, plainDir);
+    if (rootProblem !== null) return { kind: 'unmanaged', why: rootProblem };
+    sweepRuntimeSockets(socketPath.root, deps);
   }
 
   // A predecessor incarnation's record is read by shape (its binding is not the current one, by
@@ -457,7 +691,10 @@ export async function ensureCodexEndpoint(
   // that names no config is never reused; the endpoint is stopped and a fresh one started.
   if (prior !== null && prior.binding === binding && prior.url === socketPath.url
     && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })
-    && sameEndpointConfig(prior.config, config)) {
+    && sameEndpointConfig(prior.config, config)
+    // A reused runtime socket is narrowed again before it serves this launch: a server is
+    // reused only while it is the one the launch started and only while it stays its owner's.
+    && (!socketPath.runtime || lockDownSocket(socketPath.path) === null)) {
     return { kind: 'up', url: socketPath.url, started: false };
   }
 
@@ -482,24 +719,30 @@ export async function ensureCodexEndpoint(
     }
   }
 
-  const folder = endpointFolder(input.dir, input.session, input.seat);
-  if (folder === null) {
-    return { kind: 'unmanaged', why: 'the session or seat cannot name an endpoint folder' };
-  }
-  try {
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-  } catch {
-    return { kind: 'unmanaged', why: 'the endpoint folder could not be made' };
-  }
-  if (!plainDir(folder)) {
-    return { kind: 'unmanaged', why: 'the endpoint folder is not a plain directory' };
-  }
-  // A socket is only ever removed through the record that names it, before the new server binds.
-  // A socket no record names is reported and left: nothing proves its process has gone.
-  const priorPath = prior === null ? null : ownedSocketPath(input.dir, input.session, input.seat, prior);
-  const leftAlone = socketsLeftAlone(folder, [socketPath.path, priorPath], socket);
-  if (leftAlone.length > 0) {
-    notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
+  // A runtime socket's root was checked and swept above; the state folder has nothing of this
+  // seat's to leave in place, because this seat's path was never short enough for a socket there.
+  if (!socketPath.runtime) {
+    const folder = endpointFolder(input.dir, input.session, input.seat);
+    if (folder === null) {
+      return { kind: 'unmanaged', why: 'the session or seat cannot name an endpoint folder' };
+    }
+    try {
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+    } catch {
+      return { kind: 'unmanaged', why: 'the endpoint folder could not be made' };
+    }
+    if (!plainDir(folder)) {
+      return { kind: 'unmanaged', why: 'the endpoint folder is not a plain directory' };
+    }
+    // A socket is only ever removed through the record that names it, before the new server binds.
+    // A socket no record names is reported and left: nothing proves its process has gone.
+    const priorPath = prior === null
+      ? null
+      : ownedSocketPath(input.dir, input.session, input.seat, prior, deps.runtimeRoot)?.path ?? null;
+    const leftAlone = socketsLeftAlone(folder, [socketPath.path, priorPath], socket);
+    if (leftAlone.length > 0) {
+      notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
+    }
   }
   const hookEnv = input.pane === undefined ? null : (deps.herdrEnv ?? herdrHookEnv)(input.session, input.pane);
   if (input.pane !== undefined && hookEnv === null) notes.push('herdr did not name the session\'s socket, so its turn hooks cannot report this seat');
@@ -508,14 +751,43 @@ export async function ensureCodexEndpoint(
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
 
+  // What this call started is this call's to clean: the process, its socket, and — in the runtime
+  // folder — the owner record that points at it.
+  const discard = () => {
+    terminate(started.pid);
+    drop(socketPath.path);
+    if (socketPath.runtime) drop(ownerRecordPathOf(socketPath.path));
+  };
+
   const deadline = Date.now() + waitMs;
   while (!socket(socketPath.path)) {
     if (Date.now() >= deadline) {
-      terminate(started.pid);
-      drop(socketPath.path);
+      discard();
       return { kind: 'unmanaged', why: 'the Codex app-server did not create its socket in time' };
     }
     await sleep(25);
+  }
+
+  const startedAt = now().toISOString();
+  if (socketPath.runtime) {
+    // The socket the server made is this user's alone (measured: codex-cli 0.161.0 leaves it
+    // 0755), and the record beside it is what lets a walk up from the process find the seat
+    // again. Either failing means this launch has no owner-only endpoint to hand the TUI.
+    const narrowed = lockDownSocket(socketPath.path);
+    if (narrowed !== null) {
+      discard();
+      return { kind: 'unmanaged', why: narrowed };
+    }
+    const pointed = writeOwnerRecord(socketPath.path, {
+      dir: input.dir,
+      binding,
+      pid: started.pid,
+      at: startedAt,
+    });
+    if (pointed !== null) {
+      discard();
+      return { kind: 'unmanaged', why: pointed };
+    }
   }
 
   const recorded = updateState(
@@ -529,7 +801,7 @@ export async function ensureCodexEndpoint(
         url: socketPath.url,
         binding,
         pid: started.pid,
-        started_at: now().toISOString(),
+        started_at: startedAt,
         // What this server was started with, so a later launch can tell whether this very
         // incarnation can serve its line or must be replaced.
         config,
@@ -541,8 +813,7 @@ export async function ensureCodexEndpoint(
   if (!recorded) {
     // The server this call started is this call's to clean: it was never attached, and its
     // successor's record must not be overwritten by a stale incarnation.
-    terminate(started.pid);
-    drop(socketPath.path);
+    discard();
     return { kind: 'unmanaged', why: 'the seat binding changed while the endpoint started' };
   }
   return {
@@ -576,49 +847,137 @@ export async function launchCodexEndpoint(
         if (current !== undefined) current.presence_binding = binding;
       });
     } catch {
-      return {
-        kind: 'unmanaged',
-        why: "the seat's fresh presence binding could not be recorded; the endpoint under an older binding is not reused",
-      };
+      const why = "the seat's fresh presence binding could not be recorded; the endpoint under an older binding is not reused";
+      rememberEndpointFallback(input, why);
+      return { kind: 'unmanaged', why };
     }
   }
-  return ensureCodexEndpoint(input);
+  const read = await ensureCodexEndpoint(input);
+  rememberEndpointFallback(input, read.kind === 'unmanaged' ? read.why : null);
+  return read;
+}
+
+/** Writes the launch's answer where `team status` and `team check` read it: the reason this
+ *  launch's managed endpoint was not started, or nothing once one is. Best effort: a state that
+ *  cannot be written keeps the previous answer, and the launch's own line still says why. */
+function rememberEndpointFallback(
+  input: { dir: string; session: string; seat: string; deps?: CodexEndpointDeps },
+  why: string | null,
+): void {
+  const now = input.deps?.now ?? (() => new Date());
+  try {
+    updateState(
+      input.dir,
+      (state) => {
+        const current = state.sessions[input.session]?.seats[input.seat];
+        if (current === undefined) return false;
+        if (why === null) {
+          if (current.codex_endpoint_unmanaged === undefined) return false;
+          delete current.codex_endpoint_unmanaged;
+          return true;
+        }
+        if (current.codex_endpoint_unmanaged?.why === why) return false;
+        current.codex_endpoint_unmanaged = { why, at: now().toISOString() };
+        return true;
+      },
+      { writeWhen: (wrote) => wrote },
+    );
+  } catch {
+    // Status and check say nothing rather than guess; the launch's own answer still carries why.
+  }
 }
 
 /** The seat a recorded managed endpoint serves, read from the process at `pid`; null unless the
  *  full ownership proof holds. With the TUI attached by `--remote`, a Codex seat's tools run as
  *  children of its app-server, which the launch started outside the seat's pane, so the walk up
  *  from a seat's own `team` call meets that app-server and no herdr server. The app-server is
- *  placed as its seat only when its command line is `app-server --listen <url>` for a seat's
- *  endpoint folder, the team state records that very url and pid for the seat's current presence
- *  binding, and the process started in the window the record was written in (the proof a stop
- *  needs). The socket's folder is the user's own 0700 run folder. */
+ *  placed as its seat only when its command line is `app-server --listen <url>` for a path this
+ *  seat incarnation's own launch gives it — its run folder, or the runtime folder's hash of it,
+ *  whose strict owner record names the state folder the search starts in — the team state records
+ *  that very url and pid for the seat's current presence binding, and the process started in the
+ *  window the record was written in (the proof a stop needs). The state's own record and the
+ *  process proof decide; the owner record is only where the search starts. */
 export function seatOfManagedEndpoint(
   pid: number,
-  deps: Pick<CodexEndpointDeps, 'alive' | 'commandOf' | 'startOf'> = {},
+  deps: Pick<CodexEndpointDeps, 'alive' | 'commandOf' | 'startOf' | 'runtimeRoot'> = {},
 ): { dir: string; session: string; seat: string; pane?: string } | null {
   const commandOf = deps.commandOf ?? codexCommandOf;
   const command = commandOf(pid);
   if (command === null) return null;
-  const listen = /(?:^|\s)app-server --listen unix:\/\/(\/\S+)\/run\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\.sock(?:\s|$)/.exec(command);
+  const listen = /(?:^|\s)app-server --listen unix:\/\/(\/\S+?\.sock)(?:\s|$)/.exec(command);
   if (listen === null) return null;
-  const [, dir, folder, seat, binding] = listen as unknown as [string, string, string, string, string];
-  if (!isPresenceBinding(binding) || !isPresenceSeatName(seat)) return null;
-  let state;
+  const socketPath = (listen as unknown as [string, string])[1];
+  const proof = { alive: deps.alive ?? pidAlive, commandOf, startOf: deps.startOf ?? processStartOf };
+  const seatProof = (
+    dir: string,
+    session: string,
+    seat: string,
+    binding: string,
+    seatState: SeatState | undefined,
+  ): { dir: string; session: string; seat: string; pane?: string } | null => {
+    if (seatState?.presence_binding !== binding) return null;
+    const record = readCodexEndpointRecord(seatState.codex_endpoint);
+    const expected = endpointSocketOf(dir, session, seat, binding, deps.runtimeRoot);
+    if (record === null || expected.kind !== 'ok' || expected.path !== socketPath || expected.url !== record.url) return null;
+    if (record.pid !== pid || record.binding !== binding) return null;
+    if (!provenOwner(record, proof)) return null;
+    return { dir, session, seat, ...(typeof seatState.pane === 'string' ? { pane: seatState.pane } : {}) };
+  };
+
+  // The state folder's own shape: `<dir>/run/<folder>/<seat>/<binding>.sock`.
+  const own = /^(.*)\/run\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\.sock$/.exec(socketPath);
+  if (own !== null) {
+    const [, dir, folder, seat, binding] = own as unknown as [string, string, string, string, string];
+    if (isPresenceBinding(binding) && isPresenceSeatName(seat)) {
+      const state = readStateOrNull(dir);
+      if (state !== null) {
+        for (const [session, one] of Object.entries(state.sessions)) {
+          if (presenceSessionFolder(session) !== folder) continue;
+          const found = seatProof(dir, session, seat, binding, one.seats[seat]);
+          if (found !== null) return found;
+        }
+      }
+    }
+  }
+  // The runtime folder's shape, `<root>/<hash>.sock`: the strict owner record beside the socket
+  // names the state folder the seat lives in. It is only a pointer — the seat's own record, the
+  // recomputed socket path and the process proof still decide, exactly as for the folder shape.
+  const owner = readEndpointOwnerRecord(ownerRecordPathOf(socketPath));
+  if (owner === null || owner.pid !== pid) return null;
+  const state = readStateOrNull(owner.dir);
+  if (state === null) return null;
+  for (const [session, one] of Object.entries(state.sessions)) {
+    for (const seat of Object.keys(one.seats)) {
+      if (one.seats[seat]?.presence_binding !== owner.binding) continue;
+      const found = seatProof(owner.dir, session, seat, owner.binding, one.seats[seat]);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+/** The state at `dir`, or null when it cannot be read: a walk up names no seat it cannot prove. */
+function readStateOrNull(dir: string): State | null {
   try {
-    state = readState(dir);
+    return readState(dir);
   } catch {
     return null;
   }
-  for (const [session, one] of Object.entries(state.sessions)) {
-    if (presenceSessionFolder(session) !== folder) continue;
-    const seatState = one.seats[seat];
-    if (seatState?.presence_binding !== binding) continue;
-    const record = readCodexEndpointRecord(seatState.codex_endpoint);
-    const socket = codexEndpointSocket(dir, session, seat, binding);
-    if (record === null || socket === null || record.pid !== pid || record.url !== socket.url || record.binding !== binding) continue;
-    if (!provenOwner(record, { alive: deps.alive ?? pidAlive, commandOf, startOf: deps.startOf ?? processStartOf })) continue;
-    return { dir, session, seat, ...(typeof seatState.pane === 'string' ? { pane: seatState.pane } : {}) };
+}
+
+/** The seats whose launch could not start their managed endpoint, one line each, in the same
+ *  words for `team status` and `team check`. A declared Codex seat is noted only when its last
+ *  launch recorded a fallback and the seat holds no usable endpoint record: a newer launch that
+ *  did start an endpoint is the answer that stands, and its record is the proof. */
+export function unmanagedEndpointNotes(seats: readonly Seat[], state: SessionState): string[] {
+  const notes: string[] = [];
+  for (const seat of seats) {
+    if (seat.cli !== 'codex') continue;
+    const one = state.seats[seat.name];
+    const fell = one?.codex_endpoint_unmanaged;
+    if (fell === undefined) continue;
+    if (readRecordedCodexEndpoint(one?.codex_endpoint, one?.presence_binding) !== null) continue;
+    notes.push(`${seat.name}: the managed Codex endpoint did not start at its last launch: ${fell.why}`);
   }
-  return null;
+  return notes;
 }

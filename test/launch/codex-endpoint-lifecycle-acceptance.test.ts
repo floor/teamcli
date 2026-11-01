@@ -73,8 +73,8 @@ function stateDir(): string {
 
 function socketOf(dir: string, binding = BINDING): string {
   const path = join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
-  // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
-  // path over 100 bytes.
+  // Measured, not assumed: the runtime temp folder can be deep, and the build never binds a
+  // socket path over 100 bytes.
   expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
   return path;
 }
@@ -176,11 +176,17 @@ describe('the endpoint path and the recorded start', () => {
     // The session is the presence tree's own encoding, so a name cannot escape its folder.
     expect(codexEndpointSocket(dir, 'a b', SEAT, BINDING)?.path).toBe(join(dir, 'run', 'a%20b', 'worker', `${BINDING}.sock`));
     // Nothing this build cannot bind to names a socket: a bad binding, a seat that is not a path
-    // segment, an empty session, and a path over the 100-byte limit.
+    // segment and an empty session.
     expect(codexEndpointSocket(dir, SESSION, SEAT, 'prs_nothex')).toBeNull();
     expect(codexEndpointSocket(dir, SESSION, 'bad/name', BINDING)).toBeNull();
     expect(codexEndpointSocket(dir, '', SEAT, BINDING)).toBeNull();
-    expect(codexEndpointSocket(`/${'x'.repeat(90)}`, SESSION, SEAT, BINDING)).toBeNull();
+    // A state folder over the 100-byte limit is not refused: its socket moves to the short
+    // runtime folder, within the same limit. Only a folder that cannot hold it either is null.
+    const deep = `/${'x'.repeat(90)}`;
+    const moved = codexEndpointSocket(deep, SESSION, SEAT, BINDING);
+    expect(moved?.path).toMatch(/\/team-endpoints\/[0-9a-f]{32}\.sock$/);
+    if (moved !== null) expect(Buffer.byteLength(moved.path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING, join(deep, 'runtime'))).toBeNull();
   });
 
   test('a start binds that path, records the pid under it, and says it started', async () => {
