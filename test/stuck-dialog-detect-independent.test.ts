@@ -1,5 +1,5 @@
 // Independent capture replay through the shipped profiles, screen reader and periodic pass.
-// No reader or profile override is installed, and no terminal pane or human dialog is opened.
+// No reader override, terminal pane or human dialog. The before-anchor probe loads synthetic profile data.
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { profileFor } from '../src/profiles/profile.ts';
@@ -9,6 +9,8 @@ import { EVENT_THRESHOLDS } from '../src/policy/events.ts';
 import { emptySession } from '../src/state.ts';
 import { newMemory, pass, type Memory } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
+import { readDialog } from '../src/watch/dialog.ts';
+import { loadScreen } from '../src/watch/screen-file.ts';
 
 type Kind = 'question' | 'plan approval' | 'confirmation';
 type AnswerRecord = { kind: Kind; key: string; from: string; to: string };
@@ -26,18 +28,20 @@ function capture(path: string): string {
   return readFileSync(new URL('./fixtures/' + path, import.meta.url), 'utf8');
 }
 type Case = { cli: string; printed: string; path: string; kind: Kind; key: string | null };
+// The older Claude, Cursor and Antigravity folders save no version print; their READMEs
+// explain why a measured dismissal alone supplies no answer record. Classification still applies.
 const cases: Case[] = [
   ...['plan-approval.txt', 'plan-approval-ansi.txt'].map(name => ({ cli: 'codex', printed: 'codex-cli 0.161.0', path: 'codex/0.161.0/' + name, kind: 'plan approval' as const, key: 'escape' })),
   ...['question.txt', 'question-ansi.txt'].map(name => ({ cli: 'codex', printed: 'codex-cli 0.161.0', path: 'codex/0.161.0/' + name, kind: 'question' as const, key: 'escape' })),
-  ...['permission-plan-wide-plain.txt', 'permission-plan-wide-ansi.txt'].map(name => ({ cli: 'claude-code', printed: '2.1.289 (Claude Code)', path: 'claude-code/2.1.289/' + name, kind: 'plan approval' as const, key: 'escape' })),
-  ...['question-plain.txt', 'question-ansi.txt', 'question-wide-plain.txt', 'question-wide-ansi.txt'].map(name => ({ cli: 'claude-code', printed: '2.1.289 (Claude Code)', path: 'claude-code/2.1.289/' + name, kind: 'question' as const, key: 'escape' })),
+  ...['permission-plan-wide-plain.txt', 'permission-plan-wide-ansi.txt'].map(name => ({ cli: 'claude-code', printed: '2.1.289 (Claude Code)', path: 'claude-code/2.1.289/' + name, kind: 'plan approval' as const, key: null })),
+  ...['question-plain.txt', 'question-ansi.txt', 'question-wide-plain.txt', 'question-wide-ansi.txt'].map(name => ({ cli: 'claude-code', printed: '2.1.289 (Claude Code)', path: 'claude-code/2.1.289/' + name, kind: 'question' as const, key: null })),
   { cli: 'claude-code', printed: '2.1.299 (Claude Code)', path: 'claude-code/2.1.299/question.txt', kind: 'question', key: 'escape' },
   { cli: 'claude-code', printed: '2.1.302 (Claude Code)', path: 'claude-code/2.1.302/question.txt', kind: 'question', key: 'escape' },
-  { cli: 'cursor', printed: '2026.10.01-14929f9', path: 'cursor/2026.10.01/question.txt', kind: 'question', key: 'escape' },
-  { cli: 'cursor', printed: '2026.10.01-14929f9', path: 'cursor/2026.10.01/permission-plan.txt', kind: 'confirmation', key: 'escape' },
+  { cli: 'cursor', printed: '2026.10.01-14929f9', path: 'cursor/2026.10.01/question.txt', kind: 'question', key: null },
+  { cli: 'cursor', printed: '2026.10.01-14929f9', path: 'cursor/2026.10.01/permission-plan.txt', kind: 'confirmation', key: null },
   { cli: 'cursor', printed: '2026.10.14-0f9edde', path: 'cursor/2026.10.14/question.txt', kind: 'question', key: 'escape' },
   { cli: 'cursor', printed: '2026.10.16-e3cb207', path: 'cursor/2026.10.16/question.txt', kind: 'question', key: 'escape' },
-  { cli: 'antigravity', printed: '1.2.16', path: 'antigravity/1.2.16/question-54.txt', kind: 'question', key: 'escape' },
+  { cli: 'antigravity', printed: '1.2.16', path: 'antigravity/1.2.16/question-54.txt', kind: 'question', key: null },
   // This capture records the dialog but no measured dismiss key; classification grants none.
   { cli: 'antigravity', printed: '1.2.16', path: 'antigravity/1.2.16/question-unsent-54.txt', kind: 'confirmation', key: null },
   ...['1.3.5', '1.4.0', '1.4.1', '1.4.2'].map(version => ({ cli: 'antigravity', printed: version, path: 'antigravity/' + version + '/question.txt', kind: 'question' as const, key: 'escape' })),
@@ -223,3 +227,42 @@ for (const cli of ['codex', 'claude-code', 'gemini']) {
     expect(cycle(cli, text, memory, AT + WINDOW * 2).work).toEqual([]);
   });
 }
+
+
+test('reader delta: a capped current block wins over an older whole question', () => {
+  const rows = Array.from({ length: 7 }, (_, index) => 'Current visible row ' + (index + 1));
+  const screen = ['Question 1/1 (1 unanswered)', 'Earlier transcript question?', '1. earlier option', '',
+    'Question 1/1 (1 unanswered)', ...rows, '› 1. current option', 'esc to interrupt', ''].join('\n');
+  expect(readDialog('codex', screen)).toEqual({ dialog: 'question', text: rows.slice(0, 6).join(' '), complete: false });
+  // A changed live row must change the incomplete reading rather than reuse transcript text.
+  expect(readDialog('codex', screen.replace('Current visible row 3', 'Changed visible row three'))).toEqual({
+    dialog: 'question', text: rows.slice(0, 6).map(row => row === rows[2] ? 'Changed visible row three' : row).join(' '), complete: false,
+  });
+});
+
+test('reader delta: a before anchor preserves the visible question row order', () => {
+  // No shipped profile uses before; synthetic data exercises the real reader's supported shape.
+  const data = loadScreen(`format: 1
+cli: sample
+screen:
+  question:
+    - any: ['^ANSWER$']
+  question_text:
+    question:
+      before: '^ANSWER$'
+      until: '^START$'
+      rows: 2
+  composer:
+    mode: box-to-rule
+    prompt: '^>'
+    rule: '^-{8}'
+    placeholders:
+      - equals: ''
+`);
+  expect(readDialog(data, 'START\nFirst visible question row\nSecond visible question row\nANSWER\n')).toEqual({
+    dialog: 'question', text: 'First visible question row Second visible question row', complete: true,
+  });
+  expect(readDialog(data, 'START\nChanged first row\nSecond visible question row\nANSWER\n')).toEqual({
+    dialog: 'question', text: 'Changed first row Second visible question row', complete: true,
+  });
+});
