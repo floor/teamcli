@@ -1204,6 +1204,8 @@ export async function executePlan(
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
             hold(op.seat, `${op.seat}: its recorded conversation ${resumeTarget} is not on disk; launched a fresh one\n`);
+            // The fallback is also evidence the terminal's scrollback loses: the log keeps it.
+            host.log(op.seat, `its recorded conversation ${resumeTarget} is not on disk; launched a fresh one`);
             command = fresh;
           }
         }
@@ -1416,6 +1418,9 @@ export async function executePlan(
               const relaunch = withLaunchSession(op.cli ?? '', fresh);
               if (host.paneRun(session, here.pane, relaunch.command)) {
                 hold(op.seat, `${op.seat}: its recorded conversation was not found by the CLI; launched a fresh one\n`);
+                // The runtime refusal is logged too: the pane's own error text never reaches the
+                // log, so this line is the log's only record that the resume fell back.
+                host.log(op.seat, 'its recorded conversation was not found by the CLI; launched a fresh one');
                 launchedCommands.set(op.seat, relaunch.command);
                 if (relaunch.sessionId !== undefined) launchSessions.set(op.seat, relaunch.sessionId);
                 else launchSessions.delete(op.seat);
