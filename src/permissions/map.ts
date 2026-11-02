@@ -454,6 +454,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the list reads team-create and owner-action always rules and writes nothing',
     },
+    'approvals:details': {
+      kind: 'any-caller',
+      why: 'the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out',
+    },
     'approvals:revoke': {
       kind: 'owner-only',
       why: 'removing an always rule is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that revoke',

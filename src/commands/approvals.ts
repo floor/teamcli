@@ -5,34 +5,38 @@
 // it does not grant, and it does not change owner-signers or approval-mode. The owner at a
 // terminal revokes, or the owner seat signs a `team-revoke-approval` answer for that id.
 
-import { lstatSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { canonicalScope } from '../client/emission.ts';
-import { listOwnerActionRules, OWNER_ACTION_ID_PATTERN, revokeOwnerActionRule } from '../client/owner-action.ts';
+import { ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
+import { listOwnerActionRules, OWNER_ACTION_ID_PATTERN, readOwnerActionRecord, revokeOwnerActionRule } from '../client/owner-action.ts';
 import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { actionApprovalsFolder, listTeamCreateRules, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
+import { actionApprovalsFolder, actionAuditFolder, listTeamCreateRules, readTeamCreateRecord, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
 import { describeCaller, detachedRefusal } from '../caller.ts';
 import { hasJsonFlag } from '../output/index.ts';
 import type { Command, Io } from '../io.ts';
 
 export const USAGE = `Usage: team approvals list [--json]
+       team approvals details <id> [--json]
        team approvals revoke <id...> [--json]
-       team approvals revoke <id...> --request [--json]
+       team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
 
 Lists the owner seat's always rules — team-create (tc_…) and owner-action (oa_…) — or removes
-every id in the one command. Listing reads the owner's folder and changes nothing. Revoking is
-the owner's, from a terminal outside the terminal host, or an owner-seat answer for that revoke:
---request records every id as one request and --approval <request-id> runs it once the owner has
-answered on the owner page. One card and one Touch ID cover the whole list. A signed always rule
-for team-revoke-approval covering the folder of every rule named admits the revoke with no
-request. A bad id revokes nothing.
+every id in the one command. Listing reads the owner's folder and changes nothing. Details prints
+one request's full record — request id, repository, HEAD, bound arguments, hashes — and the audit
+entries written for it; the card the owner answers never carries them. Revoking is the owner's,
+from a terminal outside the terminal host, or an owner-seat answer for that revoke: --request records every
+id as one request (--reason <text> is the short reason the card shows) and --approval <request-id> runs it once the owner has answered on the owner
+page. One card and one Touch ID cover the whole list. A signed always rule for
+team-revoke-approval covering the folder of every rule named admits the revoke with no request. A bad id revokes
+nothing.
 
-Exits 0 when the rules are listed, the rules are revoked, or a request is recorded, 1 when the
-revoke is refused, 2 when the invocation can't be read.
+Exits 0 when the rules are listed, the details are printed, the rules are revoked, or a request
+is recorded, 1 when the details or the revoke are refused, 2 when the invocation can't be read.
 `;
 
 export type ApprovalsSources = { home?: string; now?: () => Date; ownerSeatStore?: OwnerSeatKeyStore };
@@ -41,11 +45,12 @@ export const approvals: Command = (argv, io) => runApprovals(argv, io);
 export default approvals;
 
 export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSources = {}): Promise<number> {
-  const args = readArgs(argv, ['approval'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'reason'], ['json', 'request']);
   const json = hasJsonFlag(argv);
   const verb = args.rest[0];
-  if (args.error || (verb !== 'list' && verb !== 'revoke') || (verb === 'list' && args.rest.length !== 1) || (verb === 'revoke' && args.rest.length < 2)) {
-    const why = args.error ?? (verb === undefined ? 'a verb is required: list or revoke' : verb === 'revoke' ? 'an id is required' : `unexpected "${args.rest[args.rest.length - 1]}"`);
+  const verbs = verb === 'list' || verb === 'revoke' || verb === 'details';
+  if (args.error || !verbs || (verb === 'list' && args.rest.length !== 1) || (verb === 'details' && args.rest.length !== 2) || (verb === 'revoke' && args.rest.length < 2)) {
+    const why = args.error ?? (verb === undefined ? 'a verb is required: list, details or revoke' : verb === 'revoke' ? 'an id is required' : verb === 'details' && args.rest.length < 2 ? 'an id is required' : `unexpected "${args.rest[args.rest.length - 1]}"`);
     io.stderr(`team approvals: ${why}\n${USAGE}`);
     // exit: approvals.invocation
     return 2;
@@ -53,6 +58,30 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
+  if (verb === 'details') {
+    const id = args.rest[1]!;
+    const teamCreate = TEAM_CREATE_ID_PATTERN.test(id);
+    const ownerAction = OWNER_ACTION_ID_PATTERN.test(id);
+    if (!teamCreate && !ownerAction) return refused(io, json, `"${id}" is not an owner-seat request id`);
+    let request: unknown;
+    let lines: string[];
+    if (teamCreate) {
+      const record = readTeamCreateRecord(home, id);
+      if (typeof record === 'string') return refused(io, json, record);
+      request = record;
+      lines = teamCreateDetails(record);
+    } else {
+      const record = readOwnerActionRecord(home, id);
+      if (typeof record === 'string') return refused(io, json, record);
+      request = record;
+      lines = ownerActionDetails(record);
+    }
+    const audit = auditNames(home, id);
+    if (json) io.stdout(`${JSON.stringify({ format: 1, request, audit })}\n`);
+    else io.stdout(`${lines.join('\n')}\n${audit.map((name) => `audit ${name}`).join('\n')}${audit.length > 0 ? '\n' : ''}`);
+    // exit: approvals.details
+    return 0;
+  }
   if (verb === 'list') {
     const created = listTeamCreateRules(home, store, now);
     const actions = listOwnerActionRules(home, store, now);
@@ -88,7 +117,7 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
       }
     }
     if (!seatRefused) {
-      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, seatSources);
+      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, seatSources);
       if (seat.kind === 'requested') {
         // exit: approvals.approval-requested
         return 0;
@@ -117,6 +146,15 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   else io.stdout(`team approvals: revoked ${ids.join(', ')}\n`);
   // exit: approvals.revoked
   return 0;
+}
+
+/** The audit entries written for `id`, by file name, oldest name first. Reading only. */
+function auditNames(home: string, id: string): string[] {
+  try {
+    return readdirSync(actionAuditFolder(home)).filter((name) => name.startsWith(`${id}.`) && name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)).sort();
+  } catch {
+    return [];
+  }
 }
 
 /** The shared check for changing approval records (src/client/owner-action-step.ts): the owner's
@@ -155,7 +193,8 @@ function recordGate(
 }
 
 /** Every id is one rule file. Nothing is unlinked here. */
-function rulesReady(home: string, ids: string[]): { ok: true } | { ok: false; why: string } {  for (const id of ids) {
+function rulesReady(home: string, ids: string[]): { ok: true } | { ok: false; why: string } {
+  for (const id of ids) {
     const teamCreate = TEAM_CREATE_ID_PATTERN.test(id);
     const ownerAction = OWNER_ACTION_ID_PATTERN.test(id);
     if (!teamCreate && !ownerAction) return { ok: false, why: `"${id}" is not an approval rule id` };

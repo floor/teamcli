@@ -84,7 +84,7 @@ test('a fresh install writes no client key or general grant into the unit', asyn
   writeFileSync(key, keyMaterial, { mode: 0o600 });
   writeFileSync(grant, JSON.stringify({ synthetic: true, proof: 'synthetic-grant-proof-DO-NOT-PRINT' }), { mode: 0o600 });
   const io = testIo(fixture.root, { kind: 'owner' });
-  io.general = { key, grant };
+  io.general = { key, grant, grantId: 'gg_synthetic', clientId: 'synthetic-client' };
 
   const code = await runDaemon(['install', '--json'], io, sources(fixture));
 
