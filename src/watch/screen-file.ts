@@ -47,7 +47,7 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);
@@ -448,11 +448,12 @@ function composerOf(node: YamlNode): Composer {
   const frameEntry = optional(entries, 'frame_rows');
   const frameRows = frameEntry ? frameRowsOf(frameEntry) : 0;
   if (name === 'box-to-rule') {
-    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows']);
+    only(entries, ['mode', 'prompt', 'rule', 'footers', 'status', 'placeholders', 'placeholder_style', 'strip_suffix', 'wrap', 'frame_rows', 'own_rows']);
     // For a scrolled-out box, the non-blank lines under the closing rule must match
     // every pattern, in order, and the counts must be equal.
     const footers = optional(entries, 'footers');
     const suffix = optional(entries, 'strip_suffix');
+    const own = optional(entries, 'own_rows');
     return {
       mode: name,
       prompt: regexField(entries, 'prompt', node.line),
@@ -464,6 +465,7 @@ function composerOf(node: YamlNode): Composer {
       placeholderStyle,
       wrap,
       frameRows,
+      ...(own ? { ownRows: ownRowsOf(own.value) } : {}),
     };
   }
   if (name === 'status-last') {

@@ -1,4 +1,4 @@
-# Exit-typing captures, three CLIs
+# Exit-typing captures, four CLIs
 
 What `team down` and `team remove` see between typing an exit text and the Enter, captured on
 2026-10-06 to prove `typeExit` (src/commands/down.ts) against real screens.
@@ -258,3 +258,48 @@ first row doubled (a copy above the block is a transcript, the dialog under it i
 reading as `claude-code-exit-question-below-quote.txt`), and the footer dropped (no line carries a
 footer at all, so the screen reads `unknown` and nothing sends a key on it). The rows above the
 block are swept too: no change to a transcript reaches the reading.
+
+## Muse Code 1.4.14: the box draws a completion row for the exit text
+
+Muse Code 1.4.14 draws its composer as a box between two rules on the pane's own screen, and
+typing `/exit` makes it draw its completion row *inside the box*, under the input row:
+
+    ❯ /exit
+      /exit  Quit when idle
+    ─────────────────────────────────────────────────────
+
+The row is the pane's, not the person's text: the box read takes the rows between the input row
+and the closing rule, and src/profiles/muse.yaml declares the row in the composer's `own_rows`,
+so the box reads back as exactly `/exit`. The row appears about 21 ms after the text is typed;
+an Enter that lands before the row has settled is drawn as a typed newline instead of running
+the command, and the frame then holds `/exit` and one empty row.
+
+Captured 2026-11-02 from Muse Code 1.4.14 (`Muse Code 1.4.14 (1.4.14-R7309.1)`) launched as
+`muse --provider echo --yolo --no-session-log` in a pane of my scratch herdr session (herdr
+0.7.1, synthetic HOME), its working folder `/private/tmp/muse-exit-fixtures-proj` — a scratch
+project created for the capture, so no path needed replacing. Read with `pane read <pane>
+--source visible --lines 200 --format ansi`, CRLF folded to LF as `paneRead` returns it. The
+launcher's own shell rows above the banner are left out of each copy, the way the 1.4.11
+fixtures in test/fixtures/muse/ are; every other byte, SGR included, is the capture's own.
+
+- `muse-idle-ansi.txt`: the ready box. Reads `idle`. 651 bytes, SHA256
+  `01b362f8c59a296cdfe1e7519c6a4e7fd93c02a566c89ddbeb21b93c98c9b310`.
+- `muse-unsent-ansi.txt`: the box after `/exit` was sent and the completion row drawn — the
+  frame the production restart found. Reads `unsent`, box exactly `/exit`. 809 bytes, SHA256
+  `a55716a00139102a46f9b30034b64e8fdad30bb34cba97605327bb1ffa4133cd`.
+- `muse-unsent-newline-ansi.txt`: the box after an Enter pressed the instant after the send,
+  before the row settled: `/exit` on the input row and one empty row under it, the row gone.
+  Reads `unsent`, and the box does not read back as `/exit`. 686 bytes, SHA256
+  `435f1e9b097ed8c27ac841a7d8e47fedd783d28c23ee9b4831b31197cb799fa9`.
+
+Measured on the same pane (echo provider, synthetic HOME), each case on a fresh Muse:
+
+- The completion row appeared about 21 ms after the text was typed. Enter delays after the row
+  appeared: 0 ms and 50 ms typed the newline in 2/2 runs each; 100, 150 and 250 ms ran `/exit`
+  in 2/2 runs each. The profile's exit typing waits 250 ms after the box reads back.
+- On the newline frame, a second Enter exits: 10/10 runs (and 4/4 in an earlier round).
+- On the completion frame, ctrl+u clears the draft back to the idle box and Muse keeps running;
+  on the newline frame ctrl+u does nothing, escape does nothing, backspace deletes the newline
+  and brings the row back, and backspace then ctrl+u clears it.
+- `/quit` behaves as `/exit`. ctrl+c twice and ctrl+d twice exit from an empty box; no exit
+  question was seen.

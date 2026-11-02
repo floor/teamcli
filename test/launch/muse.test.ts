@@ -42,6 +42,7 @@ describe('muse launch and captured screens', () => {
     expect(muse.exit).toBe('/exit');
     expect(muse.exitClear).toBe('ctrl+u');
     expect(muse.exitConfirm).toBeNull();
+    expect(muse.exitCompletion).toBe(true);
     expect(muse.idleTimeout).toBe(90);
     expect(muse.exitTimeout).toBe(30);
     expect(muse.processNames).toEqual(['muse', 'muse-bin-*']);
@@ -115,8 +116,8 @@ describe('muse launch and captured screens', () => {
     expect(classifyComposer('muse', text.split('\n')).kind).toBe(composer);
   });
 
-  test('the 1.4.11 ready footer names Wonder Full, and the tested range carries it', () => {
-    expect(muse.tested).toEqual({ from: '1.4.9', to: '1.4.11' });
+  test('the 1.4.11 ready footer names Wonder Full, and the tested range carries it and 1.4.14', () => {
+    expect(muse.tested).toEqual({ from: '1.4.9', to: '1.4.14' });
     expect(runningModel('muse', fixture1411('idle'))).toEqual({ model: 'Muse Wonder Full', version: '1.0' });
     expect(boxHoldsText('muse', 'anything', fixture1411('idle'))).toBe(false);
   });

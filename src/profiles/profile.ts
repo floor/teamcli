@@ -100,6 +100,10 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
+  /** Whether the CLI draws its own completion row for the exit text inside the box, so the exit
+   *  typing has to wait for that row to settle and an Enter that lands early is drawn as a typed
+   *  newline. False where no capture shows one. */
+  exitCompletion: boolean;
   /** The measured way into this CLI's box — its clear keys and paste surface. Null when no run
    *  measured them: a delivery that finds unsent text there holds, and a restart refuses. */
   input: InputBlock | null;
@@ -1507,7 +1511,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1908,6 +1912,7 @@ function launchOf(root: YamlNode): Shipped {
   const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
+  const exitCompletionEntry = optional(entries, 'exit_completion');
   const inputEntry = optional(entries, 'input');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
@@ -1952,6 +1957,7 @@ function launchOf(root: YamlNode): Shipped {
       compose: composeEntry ? composeOf(composeEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
+      exitCompletion: exitCompletionEntry ? boolOf(exitCompletionEntry.value, 'exit_completion') : false,
       input: inputEntry ? inputOf(inputEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],

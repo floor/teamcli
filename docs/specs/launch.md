@@ -179,7 +179,8 @@ fields:
 | `login.check`, `login.hint` | string[] / string | the arguments that exit 0 only when logged in, and the login command |
 | `exit` | string | the text typed at an idle prompt to exit; absent when the CLI exits by key |
 | `exit_keys` | string[] | the keys that exit an idle CLI; empty when `exit` is used |
-| `exit_clear`, `exit_confirm` | string | the one key that empties the box, and the one that confirms the CLI's exit question |
+| `exit_clear`, `exit_confirm` | string / string | the one key that empties the box, and the one that confirms the CLI's exit question |
+| `exit_completion` | boolean | the CLI draws its own completion row for the exit text inside the box, so the Enter waits the measured settle and an early Enter's typed-newline frame is retried once; the composer declares the row in `own_rows` |
 | `lobby_files` | string[] | the regular files the CLI may leave in its working folder |
 | `startup_reads` | string[] | relative paths the CLI reads at start; a trailing `/` names a directory |
 | `timeouts.idle`, `timeouts.exit` | duration | the waits for the idle prompt and for the pane's shell after exit |
@@ -204,7 +205,7 @@ The shipped profiles at the tag:
 | `antigravity` | `agy` | `message` | `none` | 1.2.16 to 1.4.1 |
 | `grok` | `grok` | `option` (`--rules`) | `pull-on-turn` | 1.0.50 to 1.0.52 |
 | `gemini` | `gemini` | `message` | `pull-on-turn` | 0.64.0 to 0.64.0 |
-| `muse` | `muse` | `message` | `none` | 1.4.9 to 1.4.9 |
+| `muse` | `muse` | `message` | `none` | 1.4.9 to 1.4.14 |
 | `jules` | `jules` | `prepend` | `none` | 0.1.42 to 0.1.42 |
 
 A version against a profile's range reads `tested`, `older`, `newer` or `unread`; `team doctor`
