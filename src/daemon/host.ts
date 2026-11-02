@@ -66,6 +66,7 @@ import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
+import { reminderTick, type ReminderSend, type ReminderSpec } from '../reminder/run.ts';
 import {
   ensureMachineDir,
   writeDaemonState,
@@ -290,6 +291,19 @@ export type StartMachineDaemonInput = {
   /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
+  /**
+   * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
+   * picked up without a restart. Absent, no reminder runs; resolving the config file into these
+   * specs is the caller's business. A reader that throws is logged and fires nothing on that
+   * beat, and a reminder is machine-scoped: the one list serves every hosted root.
+   */
+  reminders?: () => readonly ReminderSpec[];
+  /**
+   * The transport a reminder uses. The default is the verified daemon sender, which proves this
+   * process's own state record, lock and heartbeat before every leg; a test injects its own so a
+   * synthetic scene reaches no socket.
+   */
+  reminderSend?: ReminderSend;
 };
 
 export type StartMachineDaemonResult =
@@ -2101,6 +2115,32 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
   // due instant never advances into a store pass.
   let lastStorePassAt = now().getTime();
+  // Reminders ride this same beat and are machine-scoped: one list for every hosted root,
+  // re-read each beat so an edited config runs without a restart. The tick is never awaited — a
+  // send that walks does not hold the beat — and a closed daemon starts none; a walk already
+  // under way has each later leg refused by the sender's own authority recheck. The module keeps
+  // its own per-reminder guard, so a beat that lands mid-walk skips that reminder and runs the
+  // others.
+  const reminderBeat = (): void => {
+    if (closed || input.reminders === undefined) return;
+    let specs: readonly ReminderSpec[];
+    try {
+      specs = input.reminders();
+    } catch (error) {
+      logLine(`reminders: the configured list could not be read — ${messageOf(error)}; nothing fires this beat`);
+      return;
+    }
+    if (specs.length === 0) return;
+    void reminderTick({
+      home,
+      now: now(),
+      specs,
+      ...(input.reminderSend === undefined ? {} : { send: input.reminderSend }),
+      log: (line) => logLine(line),
+    }).catch((error: unknown) => {
+      logLine(`reminders: the beat failed — ${messageOf(error)}`);
+    });
+  };
   /** The fallback pass in flight, if any: one walk at a time, so two beats never read the same
    *  store side by side. A pass reads the durable markers itself, so the beat after it settles
    *  starts the next pass and nothing a skipped beat would have escalated is lost. */
@@ -2160,6 +2200,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // inline, plus any root it does not host at all: a root never handed to a child must never
     // go unswept here. With none left, the beat does nothing at this point.
     if (closed) return;
+    reminderBeat();
     const fleet = choresFleet;
     const inlineRoots = fleet === null
       ? sweepRoots
