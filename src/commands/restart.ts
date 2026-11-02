@@ -99,10 +99,10 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --file and --session are the owner's and take no --client), and is never the owner.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --file and --session are the owner's and take no --client), and is never the owner.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -191,11 +191,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'dry-run', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'fresh', 'dry-run', 'json']);
   const clientProblem = args.error === undefined && args.rest.length === 1
     ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
-      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))
-        ? "--client restarts a seat of the one team its grant names: --file, --session and --abandon are the owner's and take no --client"
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon and --fresh are the owner's and take no --client"
         : null)
     : null;
   if (args.error || args.rest.length !== 1 || clientProblem !== null) {
@@ -204,6 +204,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
   const name = args.rest[0] ?? '';
   const abandon = args.flags.has('abandon');
+  // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
+  // stop may do to a pane.
+  const fresh = args.flags.has('fresh');
   const dry = args.flags.has('dry-run');
   // Collapsed notes: what plain output writes to stdout while it works (the pre-close readings,
   // the stop's own lines) ride on the document instead.
@@ -414,16 +417,18 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    // The recorded launcher's own selection, read before anything is stopped: `--abandon` is the
-    // caller's fresh start, and a line that itself names a conversation — the recorded id or any
-    // other — cannot be run fresh. It is never rewritten, so the flag is refused here rather than
-    // pretending the line it would run is a fresh one.
+    // The recorded launcher's own selection, read before anything is stopped: `--abandon` and
+    // `--fresh` are the caller's fresh start, and a line that itself names a conversation — the
+    // recorded id or any other — cannot be run fresh. It is never rewritten, so the flag is
+    // refused here rather than pretending the line it would run is a fresh one.
     const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
-    if (pinned && abandon) {
+    if (pinned && (abandon || fresh)) {
       return notReadyRefused(
         out,
         json,
-        `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`,
+        abandon
+          ? `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`
+          : `${name}: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)`,
       );
     }
     if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
@@ -434,9 +439,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       const carried = resumeCarry(declared.cli, resumeCandidate.launch, resumeCandidate.id);
       if (carried.kind === 'line') {
         // The line selects the recorded id, or names none and takes it appended — never under
-        // the caller's `--abandon`, which starts fresh.
-        if (!abandon) resume = resumeCandidate.id;
-        else resumeNote = 'abandoned by the caller';
+        // the caller's `--abandon` or `--fresh`, which both start a new conversation.
+        if (!abandon && !fresh) resume = resumeCandidate.id;
+        else resumeNote = abandon ? 'abandoned by the caller' : 'started fresh by the caller';
       } else if (pinned) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
@@ -447,7 +452,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           json,
           `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
         );
-      } else if (abandon) {
+      } else if (abandon || fresh) {
         // The caller's fresh start: the id the records bind is not put on the line. The line
         // names no conversation of its own here, so running it as it is starts one.
         if (carried.kind === 'refuse') noResume(carried.why);
