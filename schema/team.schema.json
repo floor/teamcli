@@ -649,6 +649,20 @@
                 "type": "string",
                 "minLength": 1,
                 "$comment": "absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path's value nor its contents are ever printed or logged"
+              },
+              "header": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+                "$comment": "an HTTP field name; the secret file's line is sent as this header's value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>"
+              },
+              "body": {
+                "enum": [
+                  "event",
+                  "inbox"
+                ],
+                "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
               }
             },
             "required": [
