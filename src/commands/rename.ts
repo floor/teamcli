@@ -51,7 +51,7 @@ import {
 } from '../store/keys.ts';
 import { approvalStanding, storePath, type Standing } from '../store/store.ts';
 import { renameSeatLeases } from '../tasks/lease.ts';
-import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -467,10 +467,15 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
-    home,
-  });
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team add` put into the registry's record is
+  // found by the name the record gives it, never missed over the file the session launched from.
+  // A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { file: args.values.file, home })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, { home })
+      : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);

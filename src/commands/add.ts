@@ -72,7 +72,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -331,12 +331,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+  const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-  });
+  };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team rename` wrote into the registry's record is
+  // started under the name the record gives it, never missed over the file the session launched
+  // from. A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     if (json) {
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))

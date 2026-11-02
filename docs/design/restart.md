@@ -49,10 +49,11 @@ Given `<seat>`:
    ```
    team restart: <seat> is not a signed declared seat
    ```
-3. **Parked or stopped seat (`restart.signed-off`, exit 1)**: if the declared seat has `parked: true` or `stopped: true`, `team restart` refuses:
+3. **Stopped seat (`restart.signed-off`, exit 1)**: a declared seat with `stopped: true` is signed off. The owner, or a seat this team's map admits as `leads` on its own recorded pane, restarts it: the run clears the mark in the same write that records the launch, then relaunches the seat, and a launch that does not reach ready — a failed workspace creation or launch command — puts the mark back in its own validated write. A failed revival leaves the seat stopped. Anyone else refuses:
    ```
-   team restart: <seat> is signed off; the owner takes the sign-off off in the file and runs team up
+   team restart: <seat> is signed off; a `leads` seat of its own team clears it with `team restart <seat>`
    ```
+   `team up` keeps leaving a stopped seat out of its plan; `team restart <seat>` is the single-seat path that brings one back.
 
 ---
 
@@ -242,7 +243,7 @@ Once the old pane is stopped and closed:
 | `1` | `restart.replaced` | the old pane holds a process that is not the seat's CLI |
 | `1` | `restart.run-lock` | another session-mutating run holds the session lock |
 | `1` | `restart.self` | a seat caller tried to restart its own recorded pane |
-| `1` | `restart.signed-off` | the seat is parked or stopped |
+| `1` | `restart.signed-off` | the seat is stopped, and the caller is not the owner or its own team's `leads` seat |
 | `1` | `restart.temporary` | the seat is a temporary copy |
 | `1` | `restart.unknown` | the seat is not a declared seat |
 | `2` | `restart.configuration` | the team file cannot be read or validated, or the cwd is not a git repository |
