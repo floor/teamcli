@@ -3,15 +3,17 @@
 // and serves the machine socket); `run --presence` additionally hosts the presence pipeline, and
 // `run --watch` hosts one watch per checkout on the same heartbeat; without a flag the daemon
 // hosts neither. `install` and `uninstall` write and register the user service unit through a
-// neutral interface, with the platform's own file and command only inside the adapter. `status`
-// is the one-line health reading every other command and person reads. `fault-watch` asks a
-// running daemon to inject one diagnostic fault into exactly one hosted watch: one request,
-// one route id, no process killed.
+// neutral interface, with the platform's own file and command only inside the adapter; `restart`
+// stops the daemon that installed unit runs and starts that same unit again, writing nothing.
+// `status` is the one-line health reading every other command and person reads. `fault-watch`
+// asks a running daemon to inject one diagnostic fault into exactly one hosted watch: one
+// request, one route id, no process killed.
 //
 // The daemon's own start is admitted by the service manager's record of the job it started and
 // the unit file that job was started from — never by a process walk, which cannot tell a
-// service-managed child from an orphan reparented to the top. An install reports success only
-// after that daemon answers the machine socket, and takes the unit back out when it does not.
+// service-managed child from an orphan reparented to the top. An install or restart reports
+// success only after that daemon answers the machine socket; an install takes the unit back out
+// when it does not, and a restart offers the installed unit again.
 //
 // The machine daemon holds no credential and reads no credential store. The broker feature is
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
@@ -22,6 +24,7 @@ import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
+import { admitGeneral } from '../client/general-grant.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import {
   FAULT_POLL_MS,
@@ -54,6 +57,7 @@ import { version as installedVersion, gitHead as installedGitHead } from '../ver
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
        team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+       team daemon restart [--dry-run] [--json]
        team daemon uninstall [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
@@ -67,8 +71,9 @@ does not read presence at all.
 \`run --watch\` additionally hosts one watch per checkout on the daemon's existing heartbeat.
 Without the flag no checkout's watch is hosted, and the daemon reads no pane for one.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
-it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
-unknown.
+it after a failure; \`restart\` stops the daemon that unit runs and starts that same unit again,
+writing nothing; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
+unknown. A restart reports success only after the daemon answers.
 \`fault-watch\` asks the running daemon to inject one diagnostic fault into exactly one hosted
 watch, named by the route id its record already carries. One request is written, the daemon
 consumes it on its next heartbeat, and only that route's loop is ended and restarted; no
@@ -138,9 +143,10 @@ function parse(argv: string[]): Parsed {
   const isStatus = verb === 'status';
   const isRun = verb === 'run';
   const isInstall = verb === 'install';
+  const isRestart = verb === 'restart';
   const isUninstall = verb === 'uninstall';
   const isFaultWatch = verb === 'fault-watch';
-  const known = isStatus || isRun || isInstall || isUninstall || isFaultWatch;
+  const known = isStatus || isRun || isInstall || isRestart || isUninstall || isFaultWatch;
   // `--root` is repeatable; `readArgs` keeps one value per option, so a second pass collects
   // every occurrence for the daemon to host.
   const roots: string[] = [];
@@ -174,11 +180,11 @@ function parse(argv: string[]): Parsed {
 
 function verbProblem(parsed: Parsed): string | null {
   if (parsed.error !== null) return parsed.error;
-  if (parsed.verb === undefined) return 'a subcommand is required (status, run, install, uninstall or fault-watch)';
+  if (parsed.verb === undefined) return 'a subcommand is required (status, run, install, restart, uninstall or fault-watch)';
   if (!parsed.known) return `unknown subcommand "${parsed.verb}"`;
   if (parsed.extra !== undefined) return `unexpected "${parsed.extra}"`;
-  if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install, uninstall or fault-watch';
-  if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
+  if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install, restart, uninstall or fault-watch';
+  if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install, restart or fault-watch';
   if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
@@ -189,11 +195,13 @@ function verbProblem(parsed: Parsed): string | null {
     if (parsed.route === undefined || parsed.route === '') return 'fault-watch needs --route <routeId>';
   }
   if (parsed.verb !== 'fault-watch' && parsed.route !== undefined) return '--route belongs to fault-watch';
-  if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
+  if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install, restart or fault-watch';
   if (parsed.verb === 'status' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'status' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (parsed.verb === 'install' && parsed.startedBy !== undefined) return '--started-by belongs to run';
-  if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
+  if (parsed.verb === 'restart' && parsed.roots.length > 0) return '--root belongs to run or install';
+  if (parsed.verb === 'restart' && parsed.startedBy !== undefined) return '--started-by belongs to run';
+  if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install, restart or fault-watch';
   if (parsed.verb === 'uninstall' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'uninstall' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (
@@ -268,17 +276,39 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
 }
 
 /**
- * The owner's gate of the daemon's three owner-only verbs — install, uninstall and fault-watch.
- * The owner's widening (OD-20261019-49) admits a placed team orchestrator here, through the same
- * central admission every owner-only command shares; the admission is the file's lead on the pane
- * its team's state records, never a bare name or a role claim. `run` is not this gate: a
- * no-terminal start by the service manager is `runAllowed`'s separate answer, and no dev-mode
- * setting admits a seat or a pane to it.
+ * The owner's gate of the daemon's owner-gated verbs — install, restart, uninstall and
+ * fault-watch. Two admissions widen it:
+ *
+ * - a verified general grant recorded on this run (`io.general`), for install and restart: the
+ *   dispatcher's door verified the grant's chain, its key and the `daemon` op once, and this
+ *   command verifies them again here, so a grant whose chain, key or ops no longer admit
+ *   `daemon` cannot act. A grant holder needs no terminal and no owner seat;
+ * - the owner's widening (OD-20261019-49), which admits a placed team orchestrator through the
+ *   same central admission every owner-only command shares; the admission is the file's lead on
+ *   the pane its team's state records, never a bare name or a role claim.
+ *
+ * `run` is not this gate: a no-terminal start by the service manager is `runAllowed`'s separate
+ * answer, and no dev-mode setting admits a seat or a pane to it.
  */
-function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean): boolean {
+function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb: string | undefined): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
-  const message = `only the owner installs or removes the machine daemon; this call is ${describeCaller(caller)}`;
+  if ((verb === 'install' || verb === 'restart') && io.general !== undefined) {
+    const verified = admitGeneral(
+      sources.home ?? homedir(),
+      io.general.grant,
+      io.general.key,
+      'daemon',
+      null,
+      sources.now?.() ?? new Date(),
+    );
+    if (verified.ok) return true;
+    // The grant the run was admitted with no longer stands: say which check failed, in the
+    // grant's own words, instead of describing the caller the door already answered.
+    refuse(io, json, 'daemon', { id: 'daemon.grant-refused', message: verified.why, repair: null, rule: 'general-grant' });
+    return false;
+  }
+  const message = `only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is ${describeCaller(caller)}`;
   const lift = devModeOwnerLiftAtCwd(io, {
     command: 'daemon',
     refusal: message,
@@ -723,7 +753,7 @@ async function reportInstallFailure(
   // No daemon is running: the line names the command that starts one again, and where a kept
   // earlier unit is, so the failure is actionable without reading the log afterwards.
   const again = installAgain(roots, parsed);
-  const repair = `the owner runs \`${again}\``;
+  const repair = `the owner or a general-grant holder runs \`${again}\``;
   const keptAt = failure.kept ? `; the previous unit is kept at ${unitPath}` : '';
   if (outcome === 'lost') {
     refuse(io, parsed.json, 'daemon', {
@@ -741,6 +771,116 @@ async function reportInstallFailure(
     repair,
     plain: `${why}; ${repair} to try again${keptAt}`,
   });
+}
+
+/**
+ * The restart's steps, in the neutral words the dry run prints before anything runs: the daemon
+ * the manager holds under the installed unit is stopped, that same unit is loaded again with the
+ * same bounded, growing retry an install gives a load, and nothing on disk changes.
+ */
+const RESTART_STEPS: readonly string[] = [
+  'the daemon the system\'s service manager holds under the installed unit is stopped',
+  'that same unit is loaded again, offered again with a bounded, growing wait while the manager refuses',
+  'nothing is written: the definition, its checkouts and its opt-ins stay the last install\'s',
+];
+
+/** The command that writes and starts a unit when a restart leaves no daemon: an install is the
+ *  whole recovery, and naming each checkout keeps the rerun's hosted set the owner's choice. */
+const RESTART_REPAIR = 'run `team daemon install --root <folder>` with each checkout to host';
+
+/**
+ * `team daemon restart`: stops the daemon the service manager holds under the installed unit and
+ * loads that same unit again, writing nothing. Success is reported only after the restarted
+ * daemon answers the machine socket; one that does not is undone — stopped, and the installed
+ * unit offered again — and the restart is reported as undone only after the daemon it started
+ * answers. Exits 1 with the repair whenever it leaves no daemon running.
+ */
+async function restartInstalled(
+  manager: ServiceManager,
+  io: Io,
+  parsed: Parsed,
+  home: string,
+  sources: DaemonCommandSources,
+): Promise<number> {
+  if (parsed.dryRun) {
+    if (parsed.json) {
+      writeJson(io, 'team.daemon-restart', {
+        format: 1,
+        command: 'restart',
+        dry_run: true,
+        restarted: false,
+        unit_path: manager.unitPath(home),
+        steps: [...RESTART_STEPS],
+      });
+    } else {
+      io.stdout(
+        `team daemon: would restart the installed machine daemon; nothing is written\n${RESTART_STEPS.map((step) => `  - ${step}\n`).join('')}`,
+      );
+    }
+    // exit: daemon.restart-dry-run
+    return 0;
+  }
+  const restarted = manager.restart(home);
+  if (!restarted.ok) {
+    appendDaemonLog(home, `restart: ${restarted.detail ?? restarted.why}`, sources.now?.() ?? new Date());
+    if (restarted.reason === 'not-installed') {
+      refuse(io, parsed.json, 'daemon', {
+        id: 'daemon.not-installed',
+        message: restarted.why,
+        repair: RESTART_REPAIR,
+      });
+      // exit: daemon.not-installed
+      return 1;
+    }
+    const why = `${restarted.why}; no daemon is running`;
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.restart-failed',
+      message: why,
+      repair: RESTART_REPAIR,
+      plain: `${why}; ${RESTART_REPAIR} to start a daemon again`,
+    });
+    // exit: daemon.restart-failed
+    return 1;
+  }
+  // A load the manager accepted is registration, not proof that a program runs: the restarted
+  // daemon must answer before this restart is called one.
+  if (await daemonAnswers(home, sources)) {
+    if (parsed.json) {
+      writeJson(io, 'team.daemon-restart', {
+        format: 1,
+        command: 'restart',
+        dry_run: false,
+        restarted: true,
+        unit_path: restarted.unitPath,
+      });
+    } else {
+      io.stdout('team daemon: restarted; the system\'s service manager runs the installed unit again\n');
+    }
+    // exit: daemon.restarted
+    return 0;
+  }
+  appendDaemonLog(home, 'restart: the restarted daemon did not answer the health probe', sources.now?.() ?? new Date());
+  const undone = restarted.undo();
+  if (undone.ok && (await daemonAnswers(home, sources))) {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.restart-rolled-back',
+      message: 'the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers',
+      repair: null,
+    });
+    // exit: daemon.restart-rolled-back
+    return 1;
+  }
+  const message = undone.ok
+    ? 'the restarted daemon did not answer the health probe, and the daemon started again did not answer either; no daemon is running'
+    : `the restarted daemon did not answer the health probe, and the installed daemon could not be started again: ${undone.why}; no daemon is running`;
+  refuse(io, parsed.json, 'daemon', {
+    id: 'daemon.restart-rollback-failed',
+    message,
+    repair: RESTART_REPAIR,
+    plain: `${message}; ${RESTART_REPAIR} to start a daemon again`,
+  });
+  // exit: daemon.restart-rollback-failed
+  return 1;
 }
 
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
@@ -857,11 +997,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return 0;
   }
 
-  // The three verbs left here are owner-only: install, uninstall and fault-watch. The owner's
-  // widening admits a placed orchestrator under dev mode (OD-20261019-49), through `ownerAllows`'s
-  // one admission; status returned above, and run has its own gate.
-  if (!ownerAllows(io, sources, parsed.json)) {
+  // The four verbs left here are owner-gated: install, restart, uninstall and fault-watch. Two
+  // admissions widen the gate through `ownerAllows`: the owner's dev-mode lift admits a placed
+  // orchestrator (OD-20261019-49), and install and restart also admit a verified general grant
+  // whose ops name `daemon`. status returned above, and run has its own gate.
+  if (!ownerAllows(io, sources, parsed.json, parsed.verb)) {
     // exit: daemon.not-owner
+    // exit: daemon.grant-refused
     return 1;
   }
 
@@ -878,6 +1020,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     });
     // exit: daemon.service-unavailable
     return 1;
+  }
+
+  if (parsed.verb === 'restart') {
+    return await restartInstalled(manager, io, parsed, home, sources);
   }
 
   if (parsed.verb === 'uninstall') {

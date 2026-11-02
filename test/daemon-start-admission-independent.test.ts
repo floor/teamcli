@@ -60,6 +60,7 @@ function fake(w: World, over: { job?: () => Job | null; unit?: () => Unit | null
     kind: 'system-service-manager', unitPath: home => { assert.equal(home, w.home); return w.unitPath; },
     plan: (home, program) => { assert.equal(home, w.home); return { unitPath: w.unitPath, program: [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'] }; },
     install: () => { throw new Error('install is outside start-admission scene'); }, uninstall: () => { throw new Error('uninstall forbidden'); },
+    restart: () => { throw new Error('restart forbidden'); },
     job: home => { assert.equal(home, w.home); trace.push('job'); if (over.job) return over.job();
       return fs.existsSync(w.jobPath) ? JSON.parse(fs.readFileSync(w.jobPath, 'utf8')) as Job : null; },
     unit: home => { assert.equal(home, w.home); trace.push('unit'); if (over.unit) return over.unit();
@@ -151,6 +152,7 @@ function installer(w: World, prior: boolean, restoredAnswers: boolean) {
     plan: (_home, program) => ({ unitPath: w.unitPath, program: [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'] }),
     job: () => { throw new Error('install read job'); }, unit: () => { throw new Error('install read unit'); },
     uninstall: () => { throw new Error('command must use the accepted install undo, not uninstall'); },
+    restart: () => { throw new Error('command must use the accepted install undo, not restart'); },
     install: (_home, program: ServiceProgram) => {
       trace.push('install'); fs.writeFileSync(w.unitPath, JSON.stringify({ words: manager.plan(w.home, program).program })); unitPresent.push(fs.existsSync(w.unitPath));
       const undo = (): ServiceInstallFailure => {

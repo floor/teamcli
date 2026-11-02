@@ -23,6 +23,7 @@ import {
   type SeatStanding,
 } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { labelPersona, nicknameProblem, SEAT_NAME } from '../file/sections/seats.ts';
@@ -193,6 +194,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.charter
     return 1;
   }
+  let liftAudit: (() => void) | null = null;
   if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
@@ -204,16 +206,29 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // A stopped seat's sign-off is its own team's to lift: the lead clears exactly
     // `seats.<seat>.stopped`, with no card, dev mode on or off — the same admission
     // `team restart` makes when it revives that seat. Every other key, verb and seat keeps the
-    // owner door.
+    // owner door. This allowance is the team's own power, not dev mode's: it takes no warning
+    // and leaves no audit line, and it reaches no further than the one key it names.
     if (!isOwner(caller) && !liftsStopped(caller, verb, path, rawIo, root, home, sources)) {
-      refuse(io, json, 'config', {
-        id: 'config.not-owner',
-        message: `only the owner edits the team's record, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
-        repair: null,
-        rule: 'owner-only',
+      const message = `only the owner edits the team's record, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+      // Dev mode's owner admission for exactly this gate, read through the one resolver the
+      // sibling owner-only writers use: a placed orchestrator continues with the warning and
+      // the audit line; the owner's own path above is untouched, and every other caller keeps
+      // this refusal byte for byte. The audit waits for the write below: this gate answers
+      // before the change is validated, and a refused or unchanged run writes no record line.
+      const lift = devModeOwnerLiftAtCwd(rawIo, {
+        command: 'config',
+        refusal: message,
+        home,
+        audit: 'later',
+        ...(sources.now !== undefined ? { now: sources.now() } : {}),
       });
-      // exit: config.not-owner
-      return 1;
+      if (lift === null || !lift.lifted) {
+        refuse(io, json, 'config', { id: 'config.not-owner', message, repair: null, rule: 'owner-only' });
+        // exit: config.not-owner
+        return 1;
+      }
+      liftAudit = lift.audit;
+      io.stderr(`${lift.warning}\n`);
     }
   }
   let next: string;
@@ -302,6 +317,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.invalid
     return 1;
   }
+  // The record is on disk: only now does the lead's admission leave its audit line. Every
+  // refusal above returned with the folder as it was.
+  if (liftAudit !== null) liftAudit();
   if (kept !== null) rmSync(resolve(kept, '..'), { recursive: true, force: true });
   const checked = validateTeamFile(next);
   // A seat whose launch line this edit changed: its agent record's launch recipe follows, so the

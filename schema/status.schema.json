@@ -177,6 +177,47 @@
                 "type": "boolean",
                 "const": true
               },
+              "seat_wake": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "class",
+                  "wakeable",
+                  "conversation",
+                  "endpoint",
+                  "listener",
+                  "oldest_unread_seconds"
+                ],
+                "properties": {
+                  "class": {
+                    "type": "string",
+                    "enum": [
+                      "push",
+                      "between-turns",
+                      "pull-on-turn",
+                      "none"
+                    ]
+                  },
+                  "wakeable": {
+                    "type": "boolean"
+                  },
+                  "conversation": {
+                    "type": "boolean"
+                  },
+                  "endpoint": {
+                    "type": "boolean"
+                  },
+                  "listener": {
+                    "type": "boolean"
+                  },
+                  "oldest_unread_seconds": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              },
               "blind": {
                 "type": "boolean",
                 "const": true

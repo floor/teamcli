@@ -326,7 +326,7 @@ describe('Codex launch and captured screens', () => {
     );
     expectResume(
       `zsh -lc "${flagged}"`,
-      `AGENT_UNATTENDED=1 zsh -lc "${flagged} resume ${id}" ${tail}`,
+      `AGENT_UNATTENDED=1 zsh -lc "${flagged} resume ${id} ${tail} -c`,
     );
   });
 });
