@@ -21,14 +21,14 @@
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
 import {
-  closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
-  writeSync, type Stats,
+  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, renameSync,
+  unlinkSync, writeSync, type Stats,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
-import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
+import { inboundPolicyOf, wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
 import { stableHookPath } from '../daemon/runtime-entry.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { cliWordList, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
@@ -392,20 +392,69 @@ function holdsText(path: string, text: string): boolean {
   }
 }
 
+/** A settings file is small; a file past this is not one this writer made, and its word is not
+ *  guessed from a prefix. */
+const MAX_SETTINGS_BYTES = 262_144;
+
+/** The top-level `crossSessionInbound` word one settings text declares: `null` for a document
+ *  that omits it or names a value the CLI does not accept, the way the send side reads it. */
+function declaredWordIn(text: string): CrossSessionInbound | null {
+  try {
+    return inboundPolicyOf(JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/** The word the settings file at `path` already declares, read without following a link.
+ *  `undefined` when the file cannot be read whole — a fault, another owner, a link, or a file
+ *  past the size cap: the caller then treats the write as a real change rather than guessing
+ *  that the declaration stood still. A document that does not parse declares no word, the same
+ *  reading the send side makes of it. */
+function declaredWordAt(path: string): CrossSessionInbound | null | undefined {
+  const held = lstatOrNull(path);
+  if (held === null || !held.isFile() || !mine(held) || held.size > MAX_SETTINGS_BYTES) return undefined;
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const buffer = Buffer.alloc(held.size);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    if (read !== buffer.length) return undefined;
+    return declaredWordIn(buffer.toString('utf8'));
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Writes one settings file without following a link: the name may hold this user's regular
  *  file or nothing at all, the open carries `O_NOFOLLOW`, and the mode is set on the descriptor
  *  so an existing wider file comes out `0600`. False on every fault — the seat then launches
  *  without the flag, exactly as it does today.
  *
  *  A file already holding this text at `0600` is left untouched. Its mtime is the seat's
- *  `declaredAt` (`src/send/inbound.ts` compares it with a running seat's socket), so a rewrite
- *  of identical bytes would make a live session look stale — the fault `up` hit when it
- *  installed hooks for every seat, launched or not. A real change, a fresh launch's new
- *  binding, or a wider mode is still written. */
+ *  `declaredAt` (`src/send/inbound.ts` compares it with a running seat's socket), so the times
+ *  mean the declaration, not the last write: a rewrite whose top-level `crossSessionInbound`
+ *  word is unchanged — a new command path, a claim epoch, a presence binding — puts the old
+ *  atime and mtime back after writing, and a running session stays live. A real word change
+ *  (unset to `accept`), a fresh file, or one whose current bytes cannot be read whole lets the
+ *  mtime advance; the seat is then stale until its next launch, the declaration rule's question. */
 function writeSettings(path: string, text: string): boolean {
   const held = lstatOrNull(path);
   if (held !== null && (!held.isFile() || !mine(held))) return false;
-  if (held !== null && (held.mode & 0o777) === 0o600 && holdsText(path, text)) return true;
+  const privateHeld = held !== null && (held.mode & 0o777) === 0o600;
+  if (privateHeld && holdsText(path, text)) return true;
+  const before = held === null ? undefined : declaredWordAt(path);
+  // The declaration time stands only when the file was already the private declaration and
+  // still holds the same word: then the rewrite changed nothing but the command paths. A
+  // wider mode is a protection change rather than a command-path-only rewrite, and an
+  // unreadable file or a different word is a new declaration either way.
+  const kept = privateHeld && before !== undefined && before === declaredWordIn(text) ? held : null;
   let fd;
   try {
     fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW, 0o600);
@@ -419,12 +468,21 @@ function writeSettings(path: string, text: string): boolean {
     }
     // `O_CREAT` leaves an existing file's mode alone: the descriptor sets the one we keep.
     fchmodSync(fd, 0o600);
-    return true;
   } catch {
     return false;
   } finally {
     closeSync(fd);
   }
+  // The link form: a name swapped for a link between the write and here has its own times set,
+  // never the target's. A failure to restore them leaves the write in place.
+  if (kept !== null) {
+    try {
+      lutimesSync(path, kept.atime, kept.mtime);
+    } catch {
+      // The file still holds the new text; only the declaration time moved.
+    }
+  }
+  return true;
 }
 
 /** The runtime epoch the seat's current claim names, when this run has written one. A state

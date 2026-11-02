@@ -146,6 +146,23 @@ describe('what a run plans and what it installs', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
   });
 
+  test('a rewrite whose command paths moved keeps the declaration time', () => {
+    // The bytes change for a reason that is not the declaration: this run resolved the CLI a
+    // hook command runs to a different entry, and every presence and drop command names it. The
+    // top-level word is the same (none), so the file is the same declaration and its times stay
+    // the seat's declaredAt — a running session does not become stale for a moved command path.
+    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    const path = landed.worker!;
+    const declaredAt = new Date('2026-10-21T06:46:42Z');
+    utimesSync(path, declaredAt, declaredAt);
+    const before = statSync(path).mtimeMs;
+    expect(installCliHooks(dir, SESSION, [seat('worker')], undefined, join(base), '/opt/team/dist/cli.js'))
+      .toEqual({ worker: path });
+    const text = readFileSync(path, 'utf8');
+    expect(text).toContain('/opt/team/dist/cli.js drops --read');
+    expect(statSync(path).mtimeMs).toBe(before);
+  });
+
   test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
     // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
     // cross-session frames in the team file launches the seat able to take them.
