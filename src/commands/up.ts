@@ -18,7 +18,7 @@ import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, l
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { TEAM_FILE } from '../file/load.ts';
+import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -64,6 +64,9 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
+import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
+import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -94,6 +97,7 @@ import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -160,6 +164,10 @@ export type UpSources = {
   logGranted?: typeof logGranted;
   // Present on the shipped command. A dry run never calls it.
   launch?: Launch;
+  // The loaded threads a managed Codex endpoint holds, for binding a ready seat whose records
+  // name no conversation to the one thread its endpoint proves. Absent in a world that binds
+  // nothing: the launch's summary then names no pull-only reason.
+  codexThreads?(endpoint: string): Promise<CodexLoadedThreadsRead>;
 };
 
 export type Launch = {
@@ -171,10 +179,11 @@ export type Launch = {
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
   /** Registers the seat's team inbox with its CLI, in the seat's folder, before its launch
-   *  command. `teamFile` is the team file the run read; the seat's folder may be a lobby with
-   *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
-   *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
-  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+   *  command. `session` is the launch's own, which narrows the registry to the team the seat is
+   *  on; `teamFile` is the team file the run read, absent for a registry team's launch, whose
+   *  file need not exist. Null when the profile carries no file route; a refusal that stands
+   *  leaves the seat out. Absent on a world that registers nothing: fake launches and reads. */
+  registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Starts and stops the managed Codex app-server endpoint a launch owns. Present on the shipped
    *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
    *  process. */
@@ -295,8 +304,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
@@ -360,6 +369,7 @@ export const realSources: UpSources = {
   busCommand,
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
+  codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
   superviseBus: true,
 };
@@ -857,6 +867,9 @@ function seatPlan(
           launched: next,
           session: restoredSession,
           detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
+          // The pane and workspace the seat holds now: `up` paints both sidebar lines there.
+          pane: onRecordedPane?.pane ?? recorded.pane,
+          workspace: onRecordedPane?.workspace || recorded.workspace,
         },
       };
     }
@@ -1910,7 +1923,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
     ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
-    teamFile: loaded.path,
+    teamFile: launchTeamFile(loaded),
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
     home: sources.home,
@@ -2412,7 +2425,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
             stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
           }),
       ...(launch.registerInbox
-        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+        ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
@@ -2896,7 +2909,49 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // The sweep's outcome summary: ready-confirmed repairs, working skips, and refusals with
     // per-seat reasons, emitted once per pass even on 0/0/0.
     const restoreSummary = restoreSummaryOf(report.restoreBuckets);
-    const summaryLine = plainText(restoreSummary.line);
+    // A ready Codex seat whose records name no conversation is bound to the one thread its own
+    // managed endpoint holds — the same bind a restart makes, under the same proofs: the endpoint
+    // is the seat's own, the registry record is this seat's own, and a read that proves nothing
+    // (no thread, several, or an endpoint that does not answer) leaves both records exactly as
+    // they were. A seat this run refused is never bound: its identity is in doubt. The summary
+    // names each seat left pull-only and the binder's own reason, so a seat this run could not
+    // bind is never mistaken for one it healed.
+    const refusedSeats = new Set(restoreSummary.refused_seats.map((entry) => entry.seat));
+    const pullOnly: { seat: string; why: string }[] = [];
+    for (const seat of team.seats) {
+      if (refusedSeats.has(seat.name)) continue;
+      const held = afterwards[seat.name];
+      if (held === undefined || held.stage !== 'ready') continue;
+      if (nativePushBindingFor(seat.cli) !== 'conversation' || sources.codexThreads === undefined) continue;
+      if (inspectRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding).kind !== 'ok') continue;
+      const read = recordedSeatSession({
+        home: sources.home,
+        root,
+        herdrSession: session,
+        seat: { name: seat.name, cli: seat.cli },
+        state: held,
+      });
+      if (read.kind === 'bound') continue;
+      const bound = await bindCodexSeatThread({
+        home: sources.home,
+        root,
+        dir,
+        session,
+        seat: { name: seat.name, cli: seat.cli },
+        state: held,
+        read: sources.codexThreads,
+      });
+      if (bound.kind === 'bound') {
+        logLine(dir, 'up', callerLabel(caller), `${seat.name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, now());
+      } else {
+        pullOnly.push({ seat: seat.name, why: bound.why });
+        logLine(dir, 'up', callerLabel(caller), `${seat.name}: no thread was bound from its Codex endpoint (${bound.why})`, now());
+      }
+    }
+    const pullOnlyLine = pullOnly
+      .map((one) => `pull-only: ${plainText(one.seat)} (${plainText(one.why)})`)
+      .join('; ');
+    const summaryLine = plainText(restoreSummary.line) + (pullOnlyLine === '' ? '' : `; ${pullOnlyLine}`);
     const cleanedRestoreSummary: RestoreSweepSummary = {
       ...restoreSummary,
       refused_seats: restoreSummary.refused_seats.map((entry) => ({

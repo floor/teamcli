@@ -91,3 +91,21 @@ test('a signed-off seat is left out of a registry team\'s up plan, over the stal
     expect(io.out).toContain('worker: stopped in the file; start it with `team add worker`');
   });
 });
+
+test('a signed-off seat stays out of the plan with dev mode unset: restart is the single-seat path', async () => {
+  // `team restart` reviving a stopped seat is that command's own path; `up` still plans nothing
+  // for a seat the file stops, dev mode on or off.
+  const { home, root, file } = scene();
+  await underRegistry(async () => {
+    expect(writeTeamText(file, markStopped(readTeamText(file, { home }), 'worker'), { home, command: 'remove' }))
+      .toEqual({ ok: true, target: 'registry' });
+    const io = testIo(root, { kind: 'owner' });
+    expect(io.env.TEAMCLI_DEV_MODE).toBeUndefined();
+    const code = await runUp(['--dry-run'], io, { home, sessionRunning: () => false, agents: () => [], now: () => NOW });
+    expect(code).toBe(0);
+    expect(io.out).toContain('worker: stopped in the file; start it with `team add worker`');
+    // The plan creates the lead's workspace and the watch's; the stopped worker's is absent.
+    expect(io.out).toContain(`--label 'lead · coordinator'`);
+    expect(io.out).not.toContain(`--label 'worker`);
+  });
+});

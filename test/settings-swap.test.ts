@@ -4,8 +4,9 @@
 // its fail-closed reads, the queued record's recipe down to its launch line, the settings that
 // ask for no restart (already in force, already queued, dry run, refused, a human's pane), and
 // the unset that takes a config swap back.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -400,12 +401,21 @@ function declaration(): { cli: string; vendor: string; model: string; version: s
   return { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' };
 }
 
-/** Holds the state lock path a command's state write would take: a directory where the atomic
- *  writer wants its temporary file makes the write fail after the signed setting already stands. */
-function blockStateWrites(): string {
-  const blocker = join(stateDir(), `team.state.json.${process.pid}.tmp`);
-  mkdirSync(blocker);
-  return blocker;
+/** Makes a command's state write fail after the signed setting already stands: the atomic
+ *  temporary for the state file cannot be created, so the write throws. The fault sits at the
+ *  write seam itself because the temporary's name is random, so a file planted at a name guessed
+ *  from the pid would never be the one the writer opens. */
+function blockStateWrites(): () => void {
+  const original = fs.writeFileSync;
+  const prefix = join(stateDir(), 'team.state.json.');
+  const spy = spyOn(fs, 'writeFileSync').mockImplementation(((...args: Parameters<typeof fs.writeFileSync>) => {
+    const target = args[0];
+    if (typeof target === 'string' && target.startsWith(prefix) && target.endsWith('.tmp')) {
+      throw new Error('synthetic state write failure');
+    }
+    return original(...args);
+  }) as typeof fs.writeFileSync);
+  return () => spy.mockRestore();
 }
 
 describe('a change derives the target from the remaining signed words', () => {
@@ -580,7 +590,7 @@ describe('a retry repairs the queue', () => {
 describe('a queue write that fails after the signing is a partial', () => {
   test('a set reports it, keeps the signed record and repairs on the next attempt', async () => {
     const agentId = registerLead();
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       const set = await run(['set', 'lead', 'model=claude-haiku-5-5', '--json']);
       expect(set.code).toBe(2);
@@ -593,7 +603,7 @@ describe('a queue write that fails after the signing is a partial', () => {
       expect(text).toContain('value: "claude-haiku-5-5"');
       expect(queue()['lead']).toBeUndefined();
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
 
     const retry = await run(['set', 'lead', 'model=claude-haiku-5-5'], new Date('2026-10-19T10:10:00Z'));
@@ -604,7 +614,7 @@ describe('a queue write that fails after the signing is a partial', () => {
   test('an unset whose cancel fails reports it and leaves the removal signed', async () => {
     registerLead();
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       const unset = await run(['unset', 'lead', 'model', '--json'], new Date('2026-10-19T10:10:00Z'));
       expect(unset.code).toBe(2);
@@ -614,7 +624,7 @@ describe('a queue write that fails after the signing is a partial', () => {
       expect(doc.error.message).toContain('could not be cancelled');
       expect(queue()['lead']).toMatchObject({ reason: 'config' });
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
 
     const read = await run(['lead', '--json']);
@@ -627,12 +637,12 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
   test('retrying the same unset takes the stale config record back', async () => {
     registerLead();
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
       expect(queue()['lead']).toMatchObject({ reason: 'config' });
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
 
     // The key is gone, but the restart record its failed cancel left is still the queue's to
@@ -647,12 +657,12 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
     registerLead();
     expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       // The removal signs, and the queue update that would keep the effort intent fails.
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
     expect(queue()['lead']).toMatchObject({ reason: 'config', to: { model: 'Claude Haiku', effort: 'low' } });
 
@@ -670,11 +680,11 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
     registerLead();
     expect((await run(['set', 'lead', 'effort=low'])).code).toBe(0);
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
     enqueueSwap(stateDir(), {
       seat: 'lead',
@@ -705,11 +715,11 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
   test('a retry with nothing left to apply leaves another command request standing', async () => {
     registerLead();
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
     enqueueSwap(stateDir(), {
       seat: 'lead',
@@ -739,11 +749,11 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
   test('a dry run of the repeated unset writes nothing', async () => {
     registerLead();
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
 
     const dry = await run(['unset', 'lead', 'model', '--dry-run'], new Date('2026-10-19T10:15:00Z'));
@@ -755,11 +765,11 @@ describe('a repeated unset finishes the queue its interrupted predecessor left',
   test('the repaired retry answers --json with the unset result and its notice', async () => {
     registerLead();
     expect((await run(['set', 'lead', 'model=claude-haiku-5-5'])).code).toBe(0);
-    const blocker = blockStateWrites();
+    const unblock = blockStateWrites();
     try {
       expect((await run(['unset', 'lead', 'model'], new Date('2026-10-19T10:10:00Z'))).code).toBe(2);
     } finally {
-      rmSync(blocker, { recursive: true, force: true });
+      unblock();
     }
 
     const retry = await run(['unset', 'lead', 'model', '--json'], new Date('2026-10-19T10:15:00Z'));

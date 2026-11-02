@@ -36,6 +36,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
@@ -69,6 +70,7 @@ import { realSources as realProjectSources, type ProjectSources } from './projec
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
+import { seatWakeOf, wakeCell, type SeatWake } from '../status/wake.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
@@ -211,6 +213,9 @@ export interface StatusJson {
     seat_presence?: PresenceObservation;
     /** The projection exists but this build cannot read it: unknown, from presence. */
     seat_presence_unreadable?: true;
+    /** Whether a message can reach the seat while it is idle, and the facts behind the class
+     *  (src/status/wake.ts): the same reading the tables' WAKE column prints. */
+    seat_wake?: SeatWake;
     /** Present, true, only where it applies: `unknown` past the blind threshold, which counts
      *  as not working (the table's `(blind)`). */
     blind?: true;
@@ -489,6 +494,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         project: team.project, root, home: sources.home, stateDir: dir, session,
         presenceChannelHealthy: presenceHealthy,
         ...(presenceSeats === undefined ? {} : { presenceSeats }),
+        wake: true,
       })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
@@ -587,6 +593,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     }),
   );
   comparison.notes.push(...record.notes);
+  // A Codex seat whose last launch fell back to an unmanaged line says so here, with the reason:
+  // the fallback is a reading worth acting on, never a silent state.
+  comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
@@ -614,6 +623,26 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ? comparison.rows
     : comparison.rows.filter((row) => row.state !== 'stopped');
 
+  // The compact table's wakeability reading, one read per row it shows. The expanded table gets
+  // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
+  // this path runs only where that table is not built.
+  const compactWake = all || json
+    ? undefined
+    : new Map<string, SeatWake>(visibleRows.map((row): [string, SeatWake] => {
+      const declared = team.seats.find((one) => one.name === row.name);
+      const recorded = state.seats[row.name];
+      return [row.name, seatWakeOf({
+        dir,
+        root,
+        session,
+        seat: row.name,
+        ...(declared !== undefined ? { declared } : {}),
+        ...(recorded !== undefined ? { state: recorded } : {}),
+        ...(sources.home !== undefined ? { home: sources.home } : {}),
+        now,
+      })];
+    }));
+
   if (json) {
     writeJson(io, 'team.status', {
       format: 1 as const,
@@ -636,6 +665,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           ...(found ? { seat_state: found.state, seat_state_source: found.state_source } : {}),
           ...(found?.presence !== undefined ? { seat_presence: found.presence } : {}),
           ...(found?.presence_unreadable === true ? { seat_presence_unreadable: true as const } : {}),
+          ...(found?.wake !== undefined ? { seat_wake: found.wake } : {}),
           ...(found?.blind ? { blind: true as const } : {}),
           ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
@@ -660,7 +690,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     });
   } else {
     const style = ttyStyle(io);
-    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style, sources.home, queues, backlog);
+    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style, sources.home, queues, backlog, compactWake);
     if (style.enabled) {
       io.stdout(rendered);
     } else {
@@ -842,6 +872,8 @@ function render(
   home?: string,
   queues?: QueueDepths | null,
   backlog?: number | null,
+  /** The compact table's wakeability readings, keyed by seat (src/status/wake.ts). */
+  wakeByName?: ReadonlyMap<string, SeatWake>,
 ): string {
   const lines = [contextLine(team.project, session)];
   if (registryRows) {
@@ -850,14 +882,19 @@ function render(
     const visibleRows = comparison.rows.filter((row) => row.state !== 'stopped');
     lines.push(
       ...renderTable({
-        headers: ['SEAT', 'STATE', 'MODEL', 'PANE', 'REACH'],
-        rows: visibleRows.map((row) => [
-          row.name,
-          row.state,
-          row.model,
-          row.pane,
-          row.reach ?? 'typed',
-        ]),
+        headers: ['SEAT', 'STATE', 'MODEL', 'PANE', 'REACH', 'WAKE'],
+        rows: visibleRows.map((row) => {
+          const wake = wakeByName?.get(row.name);
+          return [
+            row.name,
+            row.state,
+            row.model,
+            row.pane,
+            row.reach ?? 'typed',
+            // `!` marks the seat a message cannot wake while it is idle; the notes say why.
+            wake === undefined ? '-' : wakeCell(wake),
+          ];
+        }),
         indent: '  ',
         style,
         styleCell: (padded, _raw, _r, col, s) => (col === 1 ? s.styleState(padded) : padded),

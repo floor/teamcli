@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
 import type { CliHookReading } from '../labels/state.ts';
-import { profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import { cliWordList, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { STATE_FILE, emptySession, readState, updateState } from '../state.ts';
 import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import { currentBriefClaim } from './general-brief.ts';
@@ -110,8 +110,19 @@ function legacyStatePath(dir: string, seat: string): string | null {
  *  and no flag appended. `--settings <file>` and `--settings=<file>` both count. The send side
  *  asks the same question before it reads the generated file as the effective declaration
  *  (`src/send/inbound.ts`), so the two readings agree on when the generated file is on the line. */
-export function setsSettings(launch: string): boolean {
-  return /(^|\s)--settings(=|\s|$)/.test(launch);
+export function setsSettings(cli: string, launch: string): boolean;
+/** The line alone: no CLI is named, so the whole line is read as before. */
+export function setsSettings(launch: string): boolean;
+export function setsSettings(cliOrLaunch: string, launch?: string): boolean {
+  if (launch === undefined) return /(^|\s)--settings(=|\s|$)/.test(cliOrLaunch);
+  // The CLI's own decoded words: a quoted `--settings` is the flag, one inside a trailing quoted
+  // script is the CLI's setting, and the shell's options before that script are not the CLI's to
+  // read. A line this version cannot prove is asked 0.5.10's question of the whole line: a
+  // settings flag it plainly sets is still seen — the run installs no second one — and one only
+  // a quoted flag name appears to set is not.
+  const words = cliWordList(cliOrLaunch, launch);
+  if (words === null) return setsSettings(launch);
+  return words.some((word) => word === '--settings' || word.startsWith('--settings='));
 }
 
 /** How a seat's CLI learns that a drop is waiting for it: the start-of-turn hook this module
@@ -129,7 +140,7 @@ export type CliWatcher = 'hook' | 'inbox' | 'none';
  * leaves it true and reads what the launch would install.
  */
 export function cliWatcher(cli: string, launch: string, hookInstalled = true): CliWatcher {
-  if (hookInstalled && supportsCliHook(cli) && !setsSettings(launch)) return 'hook';
+  if (hookInstalled && supportsCliHook(cli) && !setsSettings(cli, launch)) return 'hook';
   const inbox = profileFor(cli)?.mcpInbox ?? null;
   return inbox === null ? 'none' : 'inbox';
 }
@@ -307,7 +318,7 @@ export function cliHookSettings(
 export function plannedCliHooks(dir: string, session: string, seats: readonly CliHookSeat[]): Record<string, string> {
   const planned: Record<string, string> = {};
   for (const seat of seats) {
-    if (seat.human === true || !supportsCliHook(seat.cli) || setsSettings(seat.launch)) continue;
+    if (seat.human === true || !supportsCliHook(seat.cli) || setsSettings(seat.cli, seat.launch)) continue;
     const path = cliHookSettingsPath(dir, session, seat.name);
     if (path !== null) planned[seat.name] = path;
   }

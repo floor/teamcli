@@ -184,11 +184,21 @@ describe('renew', () => {
     expect(current()).toEqual(renewed.authority);
   });
 
-  test('an expired proof is not renewed, and the record stays as it was', () => {
+  test('an expired heartbeat of this runtime is refreshed: a blocked loop cannot end the host', () => {
+    // The single event loop can be held past the fixed window by one synchronous pass. The record
+    // still carries this pid and this epoch, so no other host could have acquired it; the refresh
+    // is the host's own, and the verifier's window keeps every effect refused until it lands.
     const acquired = acquireWatchAuthority(agents, 'crew', { now: at(T0) });
     if (acquired.kind !== 'acquired') throw new Error('acquire failed');
-    expect(renewWatchAuthority(agents, 'crew', acquired.authority.epoch, { now: at(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1) })).toEqual({ kind: 'lost' });
-    expect(current()).toEqual(acquired.authority);
+    expect(renewWatchAuthority(agents, 'crew', acquired.authority.epoch, { now: at(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1) })).toEqual({
+      kind: 'renewed',
+      authority: { pid: process.pid, epoch: acquired.authority.epoch, heartbeat: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1) },
+    });
+    expect(current()).toEqual({
+      pid: process.pid,
+      epoch: acquired.authority.epoch,
+      heartbeat: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1),
+    });
   });
 
   test('the freshness edge still renews, inclusive', () => {
