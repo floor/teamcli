@@ -130,6 +130,15 @@ export type SeatState = {
    */
   codex_endpoint?: CodexEndpointRecord;
   /**
+   * Why this seat's managed Codex endpoint was not started at its last launch, with that launch's
+   * instant. Written by the launch beside its answer, and cleared by a launch that records one; a
+   * seat whose `codex_endpoint` is usable is managed whatever this says, so a reader consults it
+   * only where no endpoint is recorded. `team status` and `team check` name it as a note: a
+   * fallback is a reading worth acting on, never a launch gate or a repair of its own. Absent on
+   * a seat no managed launch has fallen back for, and on every record an older build wrote.
+   */
+  codex_endpoint_unmanaged?: { why: string; at: string };
+  /**
    * The daemon's activity reconciler's fence: the newest applied presence line of the seat's
    * current runtime binding that the canonical state has reconciled. `seq` must equal the current
    * projection's sequence for a consumer to treat the reading as known; while either side is

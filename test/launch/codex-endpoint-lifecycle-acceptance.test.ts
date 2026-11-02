@@ -25,7 +25,7 @@
 // Nothing here spawns a process: every spawn, signal, drop and socket check is injected, and the
 // only real filesystem is the temporary state folder. The removal scenes at the end exercise the
 // command's ordering with the same injected endpoint stop.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -55,6 +55,25 @@ const THIRD = 'prs_cccccccccccc';
 const STARTED_AT = '2026-10-20T07:59:00.000Z';
 const NOW = new Date('2026-10-20T08:00:00.000Z');
 
+// Every spawn here returns a synthetic pid, so no scene may signal a real process. The scenes
+// inject `terminate`; this guard makes that mechanical: any call the stub sees other than a
+// liveness probe of this very process is recorded and fails the scene at afterEach.
+const realKill = process.kill;
+const killCalls: { pid: number; signal: string | number | undefined }[] = [];
+beforeAll(() => {
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (signal === 0 && pid === process.pid) return true;
+    killCalls.push({ pid, signal });
+    throw new Error(`a scene called process.kill(${String(pid)}, ${String(signal)}); no real signal may leave a test`);
+  }) as typeof process.kill;
+});
+afterEach(() => {
+  expect(killCalls.splice(0)).toEqual([]);
+});
+afterAll(() => {
+  process.kill = realKill;
+});
+
 // The endpoint path has a 100-byte contract limit, so the state folder has to be short: these
 // scenes take the short socket base, and the endpoint a scene builds is measured against the limit.
 const SHORT_TMP = shortSocketBase();
@@ -73,8 +92,8 @@ function stateDir(): string {
 
 function socketOf(dir: string, binding = BINDING): string {
   const path = join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
-  // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
-  // path over 100 bytes.
+  // Measured, not assumed: the runtime temp folder can be deep, and the build never binds a
+  // socket path over 100 bytes.
   expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
   return path;
 }
@@ -176,11 +195,17 @@ describe('the endpoint path and the recorded start', () => {
     // The session is the presence tree's own encoding, so a name cannot escape its folder.
     expect(codexEndpointSocket(dir, 'a b', SEAT, BINDING)?.path).toBe(join(dir, 'run', 'a%20b', 'worker', `${BINDING}.sock`));
     // Nothing this build cannot bind to names a socket: a bad binding, a seat that is not a path
-    // segment, an empty session, and a path over the 100-byte limit.
+    // segment and an empty session.
     expect(codexEndpointSocket(dir, SESSION, SEAT, 'prs_nothex')).toBeNull();
     expect(codexEndpointSocket(dir, SESSION, 'bad/name', BINDING)).toBeNull();
     expect(codexEndpointSocket(dir, '', SEAT, BINDING)).toBeNull();
-    expect(codexEndpointSocket(`/${'x'.repeat(90)}`, SESSION, SEAT, BINDING)).toBeNull();
+    // A state folder over the 100-byte limit is not refused: its socket moves to the short
+    // runtime folder, within the same limit. Only a folder that cannot hold it either is null.
+    const deep = `/${'x'.repeat(90)}`;
+    const moved = codexEndpointSocket(deep, SESSION, SEAT, BINDING);
+    expect(moved?.path).toMatch(/\/team-endpoints\/[0-9a-f]{32}\.sock$/);
+    if (moved !== null) expect(Buffer.byteLength(moved.path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING, join(deep, 'runtime'))).toBeNull();
   });
 
   test('a start binds that path, records the pid under it, and says it started', async () => {
