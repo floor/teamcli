@@ -49,7 +49,7 @@ function sourcesOf(fixture: Fixture) {
 }
 
 /** One synthetic client principal and the owner's grant naming it, with these ops. */
-function grantFor(home: string, ops: GrantOp[]): { grant: string; key: string } {
+function grantFor(home: string, ops: GrantOp[]): { grant: string; key: string; grantId: string; clientId: string } {
   const pair = newClientKeyPair();
   const written = writeClientKeyFiles(join(home, '.config', 'team-client', 'client-a'), pair);
   if (!written.ok) throw new Error(written.why);
@@ -62,7 +62,7 @@ function grantFor(home: string, ops: GrantOp[]): { grant: string; key: string } 
     expires: EXPIRES,
   }, ISSUED);
   if (!issued.ok) throw new Error(issued.why);
-  return { grant: issued.path, key: written.keyPath };
+  return { grant: issued.path, key: written.keyPath, grantId: issued.grant.grant_id, clientId: 'client-a' };
 }
 
 /** A caller the walk cannot place and that runs with no terminal: a grant holder the owner's
@@ -95,7 +95,7 @@ test('a verified general grant admits daemon install with no owner caller and no
   const fixture = fixtureScene();
   const named = grantFor(fixture.home, ['daemon']);
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['install', '--json'], io, sourcesOf(fixture));
 
@@ -129,7 +129,7 @@ test('a grant recorded on the run is verified again by the command, and an op it
   const fixture = fixtureScene();
   const named = grantFor(fixture.home, ['status']);
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['install', '--dry-run', '--json'], io, sourcesOf(fixture));
 
@@ -185,7 +185,7 @@ test('restart --dry-run prints the plan and stops or starts nothing', async () =
   const named = grantFor(fixture.home, ['daemon']);
   fixture.seedPrevious();
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['restart', '--dry-run', '--json'], io, sourcesOf(fixture));
 
@@ -200,7 +200,7 @@ test('restart on a machine with no installed unit is refused and stops nothing',
   const fixture = fixtureScene();
   const named = grantFor(fixture.home, ['daemon']);
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['restart', '--json'], io, sourcesOf(fixture));
 
@@ -219,7 +219,7 @@ test('a restarted daemon that does not answer is started again, and the restart 
   // scene reports a restored daemon rather than a lost one.
   fixture.setProbeDelay(8);
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['restart'], io, sourcesOf(fixture));
 
@@ -237,7 +237,7 @@ test('a restarted daemon that never answers leaves no daemon, says so and names 
   fixture.seedPrevious();
   fixture.setProbeDelay(100);
   const io = sceneIo(fixture);
-  io.general = { grant: named.grant, key: named.key };
+  io.general = named;
 
   const code = await runDaemon(['restart', '--json'], io, sourcesOf(fixture));
 

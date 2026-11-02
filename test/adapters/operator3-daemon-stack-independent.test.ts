@@ -63,7 +63,7 @@ function world(refuseLoad = false) {
   const sources = { home, service: manager, now, program: { execPath: '/synthetic/runtime/node', entry },
     sleep: async (ms: number) => { waits.push(ms); }, health: async () => reading(true),
     start: async () => { forbidden.push('daemon start'); throw Error('a command scene must never start a daemon'); } };
-  function io(caller: Caller, general?: { grant: string; key: string }, dev = false) {
+  function io(caller: Caller, general?: { grant: string; key: string; grantId: string; clientId: string }, dev = false) {
     let out = '', err = '';
     const value: Io = { cwd: root, caller, general, env: { HOME: home, TEAM_CONFIG_SOURCE: 'registry', TEAMCLI_DEV_MODE: dev ? '1' : '0' },
       stdinIsTTY: false, stdoutIsTTY: false, stdout: t => { out += t; }, stderr: t => { err += t; } };
@@ -75,7 +75,7 @@ function world(refuseLoad = false) {
     const signed = issueOwnerGeneralGrant(home, { clientId: 'independent-service-client', publicKey: pair.publicKey,
       entities: ['*'], ops, mayIssue: false, expires: new Date(now().getTime() + 3600000) }, now());
     if (!signed.ok) throw Error(signed.why);
-    return { grant: signed.path, key: key.keyPath };
+    return { grant: signed.path, key: key.keyPath, grantId: signed.grant.grant_id, clientId: 'independent-service-client' };
   }
   return { root, home, calls, waits, manager, sources, io, grant, seed, unit, reading, loads: () => loads, running: () => running };
 }
