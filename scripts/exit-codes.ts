@@ -329,7 +329,8 @@ function isValueReference(node: ts.Identifier): boolean {
 
 /** The hook's one caller: `exit(<the handler's code parameter> ?? 1)` inside the child's `exit`
  *  or `close` handler, and no other use of the name. A literal, another expression, a second
- *  call or an alias would leave a code the hook did not receive from the child. */
+ *  call or an alias would leave a code the hook did not receive from the child; so would
+ *  assigning or shadowing the handler's own code parameter before the call. */
 function inheritedCallerProblem(hook: ts.VariableDeclaration, name: string): string | null {
   const sentence = `the exit hook is called once, from the child's exit or close handler, with that handler's code parameter and 1`;
   const body = hook.parent?.parent?.parent;
@@ -352,7 +353,11 @@ function inheritedCallerProblem(hook: ts.VariableDeclaration, name: string): str
   const right = unwrap(expr.right);
   if (!ts.isIdentifier(left) || !ts.isNumericLiteral(right) || Number(right.text) !== 1) return sentence;
   const handler = enclosingFunction(call);
-  if (!handler || !handler.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === left.text)) return sentence;
+  if (!handler) return sentence;
+  // The exit and close events hand the code first: only that parameter is the one the argument
+  // must name. A later parameter is the signal, never the code.
+  const first = handler.parameters[0];
+  if (!first || !ts.isIdentifier(first.name) || first.name.text !== left.text) return sentence;
   let node: ts.Node = handler;
   while (node.parent && (ts.isParenthesizedExpression(node.parent) || ts.isAsExpression(node.parent))) node = node.parent;
   const listening = node.parent;
@@ -362,7 +367,7 @@ function inheritedCallerProblem(hook: ts.VariableDeclaration, name: string): str
   if (!ts.isIdentifier(callee.expression) || callee.expression.text !== 'child') return sentence;
   const event = listening.arguments[0];
   if (!event || !ts.isStringLiteral(event) || (event.text !== 'exit' && event.text !== 'close')) return sentence;
-  return null;
+  return inheritedParameterProblem(handler, left.text, 'the child exit handler');
 }
 
 /** Every assignment operator. The compiler exposes the predicate only internally, so the kinds
@@ -404,7 +409,7 @@ function writtenNames(target: ts.Expression): string[] {
 
 /** Whether the hook's parameter can still be the argument it was called with: one assignment, one
  *  update, or one other binding of its name inside the hook is enough to make its code unreadable. */
-function inheritedParameterProblem(owner: ExitFunc, name: string): string | null {
+function inheritedParameterProblem(owner: ExitFunc, name: string, inside = 'the hook'): string | null {
   let problem: string | null = null;
   const fail = (why: string): void => {
     problem ??= why;
@@ -428,7 +433,7 @@ function inheritedParameterProblem(owner: ExitFunc, name: string): string | null
       return;
     }
     if (ts.isBinaryExpression(node) && ASSIGNMENT_KINDS.has(node.operatorToken.kind) && writtenNames(node.left).includes(name)) {
-      fail(`the inherited exit parameter ${name} is assigned inside the hook`);
+      fail(`the inherited exit parameter ${name} is assigned inside ${inside}`);
       return;
     }
     if (
@@ -437,11 +442,11 @@ function inheritedParameterProblem(owner: ExitFunc, name: string): string | null
       ts.isIdentifier(unwrap(node.operand)) &&
       (unwrap(node.operand) as ts.Identifier).text === name
     ) {
-      fail(`the inherited exit parameter ${name} is updated inside the hook`);
+      fail(`the inherited exit parameter ${name} is updated inside ${inside}`);
       return;
     }
     if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && ts.isExpression(node.initializer) && writtenNames(node.initializer).includes(name)) {
-      fail(`the inherited exit parameter ${name} is assigned inside the hook`);
+      fail(`the inherited exit parameter ${name} is assigned inside ${inside}`);
       return;
     }
     ts.forEachChild(node, visit);

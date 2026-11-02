@@ -7623,6 +7623,20 @@ analyzerTest('a second caller of the restart hook fails the check', () => {
   expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
 });
 
+analyzerTest('assigning the child handler\'s code before the call fails the check', () => {
+  // The argument still reads `code`, but it is no longer the code the child exited with.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'code = 247;\n      exit(code ?? 1);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('is assigned inside the child exit handler'))).toBe(true);
+});
+
+analyzerTest('shadowing the child handler\'s code before the call fails the check', () => {
+  const found = serveProbe((text) => text.replace(
+    'exit(code ?? 1);',
+    '{\n        const code = 247;\n        exit(code ?? 1);\n      }',
+  ));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
+});
+
 analyzerTest('a default call that is not the command table fails the check', () => {
   const text = readFileSync(new URL('../src/cli.ts', import.meta.url), 'utf8');
   const next = text.replace(
