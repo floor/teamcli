@@ -2339,7 +2339,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     const priorBindings = new Map(launchedSeats.map((name) => [name, beforeInstall[name]?.presence_binding]));
     // The settings files land before the plan types a line, so every launch carries its flag. A
     // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats(launchedSeats), { project: team.project, root, home: sources.home });
+    // Only the seats this run launches get a file: a pass with no launch steps (the daemon's
+    // restore sweep finding every seat healthy) must not touch a running seat's file at all —
+    // its mtime is that seat's declaration, and writing it is not this pass's to do.
+    const launched = new Set(launchedSeats);
+    const installed = installCliHooks(
+      dir,
+      session,
+      hookSeats(launchedSeats).filter((seat) => launched.has(seat.name)),
+      { project: team.project, root, home: sources.home },
+    );
     for (const name of Object.keys(cliHooks)) {
       if (installed[name] === undefined) {
         logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());

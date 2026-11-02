@@ -53,7 +53,7 @@ import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { frameFor, frameReplyFor } from './frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketEligible, socketHeldReason,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
 } from './inbound.ts';
 
@@ -1659,14 +1659,15 @@ async function executeSocketSend(
   }
   // A session started before its launcher's declaration was in force would hold the frame; the
   // socket's age answers whether the setting the file declares is the one the session runs with.
-  if (!inboundIsLive(inbound, socketPath)) {
+  const staleInbound = inboundStaleReason(inbound, socketPath);
+  if (staleInbound !== null) {
     return {
       v: 1,
       ok: false,
       id: msgId,
       seat: seatName,
       outcome: 'refused',
-      detail: `${seatName}: the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts; nothing was sent`,
+      detail: `${seatName}: ${staleInbound}; nothing was sent`,
     };
   }
 

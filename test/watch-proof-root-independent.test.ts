@@ -1,12 +1,13 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const fixtureRoot = fileURLToPath(new URL('../../watch-proof-root-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const roots: string[] = [];
-afterAll(() => { if (roots.length > 0) spawnSync('trash', roots, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (roots.length > 0) discardFixtures(roots, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 type Input = { words?: string[]; cwd?: string; session?: string; alive?: boolean; startOffset?: number; noStart?: boolean; pane?: boolean; epoch?: boolean; noExpectedFile?: boolean; otherEntry?: boolean };
 const cases: [string, Input, string][] = [
   ['absolute own file', { words: ['--session', 'shared', '--file', '$A_FILE'] }, 'proven'],

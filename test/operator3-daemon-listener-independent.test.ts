@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -13,12 +13,14 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 }) as typeof process.kill);
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
-  if (command === 'git' && options?.cwd?.startsWith('/private/tmp/o3listen-')) return realExec(command, args, options);
+  if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
   if (command === 'ps') return ''; // No real process inspection in these scenes.
   forbidden.push(String(command)); throw Error('no external command in listener scene');
 }) as typeof child.execFileSync);
 const spawn = spyOn(child, 'spawn').mockImplementation((() => { forbidden.push('spawn'); throw Error('no external launch'); }) as typeof child.spawn);
 const spawnSync = spyOn(child, 'spawnSync').mockImplementation((() => { forbidden.push('spawnSync'); throw Error('no external launch'); }) as typeof child.spawnSync);
+const { shortSocketBase } = await import('./helpers.ts');
+const fixturePrefix = join(shortSocketBase(), 'o3listen-');
 const { startMachineDaemon } = await import('../src/daemon/host.ts');
 const { probeDaemonHealth } = await import('../src/daemon/health.ts');
 const { hostedWatchAuthority } = await import('../src/daemon/watch-authority.ts');
@@ -45,7 +47,7 @@ function request(path: string, frame: unknown): Promise<any> {
   });
 }
 function fixture(stale: boolean) {
-  const base = mkdtempSync('/private/tmp/o3listen-'), home = join(base, 'h'), root = join(base, 'r'), dir = join(root, '.agents');
+  const base = realpathSync(mkdtempSync(fixturePrefix)), home = join(base, 'h'), root = join(base, 'r'), dir = join(root, '.agents');
   mkdirSync(home); mkdirSync(dir, { recursive: true }); child.execFileSync('git', ['init', '-q'], { cwd: root });
   const file = join(dir, 'team.yaml');
   const seat = (name: string, extra = '') => `  - role: worker\n    name: ${name}\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude\n${extra}`;
@@ -54,6 +56,7 @@ function fixture(stale: boolean) {
   if (stale) writeFileSync(file, text.replace('listener-project', 'retired-project').replaceAll(session, 'retired-session'));
   else if (existsSync(file)) unlinkSync(file);
   updateState(dir, state => { state.sessions[session] = emptySession(); });
+  const paneReads: { pane: string; session: string }[] = [];
   let clock = Date.parse('2026-11-02T11:00:00Z'), delayed = false, refusedDuringGap = false;
   const now = () => new Date(clock);
   const never = (): never => { forbidden.push('pane mutation'); throw Error('no pane mutation'); };
@@ -70,7 +73,7 @@ function fixture(stale: boolean) {
     typeText: never, pressEnter: never, sendKey: never, notify: never, sleep: async () => {}, wait: async () => false };
   const sendHost: DaemonHost = { home, now, agents: () => [], processInfo: () => null, socketsDir: join(base, 'synthetic-sockets'),
     deliver: async () => never(), native: { typeText: never, pressEnter: never, sendKey: never, paneText: () => null, status: () => null, wait: async () => {} } };
-  return { base, home, root, dir, file, now, sources, sendHost, refusedDuringGap: () => refusedDuringGap, advance: (ms: number) => { clock += ms; } };
+  return { base, home, root, dir, file, now, sources, sendHost, paneReads, refusedDuringGap: () => refusedDuringGap, advance: (ms: number) => { clock += ms; } };
 }
 for (const stale of [false, true]) {
   test(`machine listener resolves registry ${stale ? 'despite a stale file' : 'without a file'} through routing, restore and a long-pass watch`, () => underRegistry(async () => {
@@ -80,6 +83,7 @@ for (const stale of [false, true]) {
       hostedWatch: (route, log) => hostedWatchAuthority({ route, teamFile: w.file, log, base: w.sources, now: w.now, alive: pid => pid === process.pid }),
       restoreSweep: async (root, file) => { restore.push({ root, ...(file === undefined ? {} : { file }) }); return { kind: 'no-recorded-session' }; },
       nextPrincipal: () => ({ kind: 'verified', seat: 'analyst', pane: 'fixture-pane' }),
+      paneProcesses: (pane, session) => { w.paneReads.push({ pane, session }); return null; },
       nextHandler: async input => { selected.push(input.team.session); return { ok: true, kind: 'none', why: 'nothing-takeable' }; },
     });
     expect(started.kind).toBe('serving'); if (started.kind !== 'serving') throw Error('own machine listener did not bind');
@@ -89,6 +93,7 @@ for (const stale of [false, true]) {
     expect(restore).toEqual([{ root: w.root }]);
     const response = await request(daemon.socketPath, { v: 2, id: 'independent-next', op: 'next', scope: { root: w.root, session, seat: 'analyst', pane: 'fixture-pane' } });
     expect(response.ok).toBe(true); expect(response.next).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' }); expect(selected).toEqual([session]);
+    expect(w.paneReads).toEqual([{ pane: 'fixture-pane', session }]);
     await until(() => (daemon.roots[0]?.watch?.cycles ?? 0) >= 1);
     expect(w.refusedDuringGap()).toBe(true);
     const epoch = readState(w.dir).sessions[session]!.watch!.epoch!;

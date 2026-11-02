@@ -1,12 +1,14 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Caller } from '../src/caller.ts';
 import type { RestartSources } from '../src/commands/restart.ts';
 import type { Launch, UpSources } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Io } from '../src/io.ts';
+const fixturePrefix = join(realpathSync(tmpdir()), 'o3restart-');
 const forbidden: string[] = [];
 const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: any) => {
   if (pid === process.pid && signal === 0) return true;
@@ -14,7 +16,7 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 }) as typeof process.kill);
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
-  if (command === 'git' && options?.cwd?.startsWith('/private/tmp/o3restart-')) return realExec(command, args, options);
+  if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
   if (command === 'ps') return ''; // Synthetic unavailable ancestry; never read another process.
   forbidden.push(String(command)); throw Error('independent fixture refused an external command');
 }) as typeof child.execFileSync);
@@ -42,7 +44,7 @@ const lead: Caller = { kind: 'seat', name: 'captain', pane: 'pane-captain', sess
 const worker: Caller = { kind: 'seat', name: 'observer', pane: 'pane-observer', session };
 const foreign: Caller = { kind: 'seat', name: 'captain', pane: 'pane-foreign', session: 'foreign-team' };
 function world(dev = false, pausedExtra = '') {
-  const base = mkdtempSync('/private/tmp/o3restart-'), home = join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents');
+  const base = realpathSync(mkdtempSync(fixturePrefix)), home = join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true }); mkdirSync(home);
   child.execFileSync('git', ['init', '-q'], { cwd: root });
   const file = join(dir, 'team.yaml');

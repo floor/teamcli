@@ -18,6 +18,12 @@ export function daemonSocketPath(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon.sock');
 }
 
+/** Where a home keeps the retained runtime copies its service unit runs, and the record naming
+ *  the installed program they were copied from. */
+export function daemonRuntimeRoot(home: string = homedir()): string {
+  return join(machineConfigDir(home), 'daemon-runtime');
+}
+
 /** The daemon's state record: pid, start time, launcher, heartbeat, features and stuck requests. */
 export function daemonStatePath(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon.state.json');
