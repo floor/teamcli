@@ -152,7 +152,7 @@ function installer(w: World, prior: boolean, restoredAnswers: boolean) {
   const manager: ServiceManager & { job(home: string): Job | null; unit(home: string): Unit | null } = {
     kind: 'system-service-manager', unitPath: () => w.unitPath,
     plan: (_home, program) => ({ unitPath: w.unitPath, program: [program.execPath, program.entry, 'daemon', 'run', '--started-by', 'service-manager'] }),
-    job: () => { throw new Error('install read job'); }, unit: () => { throw new Error('install read unit'); },
+    job: () => { trace.push('job'); return null; }, unit: () => { throw new Error('install read unit'); },
     uninstall: () => { throw new Error('command must use the accepted install undo, not uninstall'); },
     restart: () => { throw new Error('command must use the accepted install undo, not restart'); },
     install: (_home, program: ServiceProgram) => {
@@ -169,15 +169,21 @@ function installer(w: World, prior: boolean, restoredAnswers: boolean) {
   };
   return { manager, previous, trace, unitPresent, undone: () => undone, restoredAnswers };
 }
+// The install's window is the cold start: sixteen probes over fifteen growing waits, and a
+// second window of the same shape when a restored daemon stays silent. A process the health
+// reading sees alive — or a socket with no readable record yet — is still starting at the end
+// of that window, so it is reported as starting and its unit stays; only a daemon no process
+// stands behind is taken back out.
+const COLD_START = [250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000];
 const installScenes = [
-  { name: 'answers-at-once', prior: false, reading: 'answer', delayed: false, restored: false, success: true },
-  { name: 'answers-after-two-probes', prior: true, reading: 'silent', delayed: true, restored: false, success: true },
-  { name: 'fresh-silent-removed', prior: false, reading: 'silent', delayed: false, restored: false, success: false },
-  { name: 'refresh-silent-restored', prior: true, reading: 'silent', delayed: false, restored: true, success: false },
-  { name: 'restored-daemon-still-silent', prior: true, reading: 'silent', delayed: false, restored: false, success: false },
-  { name: 'running-but-probe-unanswered', prior: false, reading: 'hung', delayed: false, restored: false, success: false },
-  { name: 'probe-refused', prior: false, reading: 'refused', delayed: false, restored: false, success: false },
-  { name: 'health-unknown', prior: false, reading: 'unknown', delayed: false, restored: false, success: false },
+  { name: 'answers-at-once', prior: false, reading: 'answer', delayed: false, restored: false, success: true, starting: false },
+  { name: 'answers-after-two-probes', prior: true, reading: 'silent', delayed: true, restored: false, success: true, starting: false },
+  { name: 'fresh-silent-removed', prior: false, reading: 'silent', delayed: false, restored: false, success: false, starting: false },
+  { name: 'refresh-silent-restored', prior: true, reading: 'silent', delayed: false, restored: true, success: false, starting: false },
+  { name: 'restored-daemon-still-silent', prior: true, reading: 'silent', delayed: false, restored: false, success: false, starting: false },
+  { name: 'running-but-probe-unanswered', prior: false, reading: 'hung', delayed: false, restored: false, success: false, starting: true },
+  { name: 'probe-refused', prior: false, reading: 'refused', delayed: false, restored: false, success: false, starting: true },
+  { name: 'health-unknown', prior: false, reading: 'unknown', delayed: false, restored: false, success: false, starting: true },
 ] as const;
 for (const scene of installScenes) for (const json of [false, true]) {
   test('install requires a health answer and preserves a previous unit: ' + scene.name + ', json=' + json, async () => {
@@ -192,12 +198,28 @@ for (const scene of installScenes) for (const json of [false, true]) {
     expect(code, io.err + io.out).toBe(scene.success ? 0 : 1); expect(adapter.trace[0]).toBe('install');
     if (scene.success) {
       expect(newProbes).toBe(scene.delayed ? 3 : 1); expect(adapter.undone()).toBe(false); expect(fs.existsSync(w.unitPath)).toBe(true);
-      expect(adapter.trace).not.toContain('undo'); expect(sleeps).toEqual(scene.delayed ? [100, 200] : []);
+      expect(adapter.trace).not.toContain('undo'); expect(sleeps).toEqual(scene.delayed ? [250, 500] : []);
       if (json) expect(JSON.parse(io.out).installed).toBe(true); else expect(io.out).toContain('installed for 1 checkout');
+    } else if (scene.starting) {
+      // Alive and silent at the end of the window is a start still in progress: the unit stays,
+      // nothing is stopped, and the line never says the machine has no daemon.
+      expect(newProbes).toBe(16); expect(sleeps).toEqual(COLD_START);
+      expect(adapter.undone()).toBe(false); expect(adapter.trace).not.toContain('undo');
+      expect(fs.existsSync(w.unitPath)).toBe(true);
+      const error = json ? JSON.parse(io.out).error : null;
+      const message = error === null ? io.err : error.message;
+      expect(message).toContain('may still be starting'); expect(message).not.toContain('no daemon is running');
+      if (error !== null) { expect(error.id).toBe('daemon.install-failed'); expect(error.repair).toBeNull(); }
+      else expect(io.err).toContain('check `team status`');
     } else {
-      expect(newProbes).toBe(8); expect(adapter.trace.filter(step => step === 'undo')).toHaveLength(1);
-      expect(restoredProbes).toBe(scene.prior ? (scene.restored ? 1 : 8) : 0);
-      expect(sleeps.slice(0, 7)).toEqual([100, 200, 400, 800, 1000, 1000, 1000]);
+      expect(newProbes).toBe(16);
+      // The restored window follows an undo only for an earlier unit that never answers.
+      expect(sleeps).toEqual(scene.prior && !scene.restored ? [...COLD_START, ...COLD_START] : COLD_START);
+      expect(adapter.trace.filter(step => step === 'undo')).toHaveLength(1);
+      // The manager's own record of the job is what called the daemon absent after the probes:
+      // the health reading alone cannot tell a daemon that never bound from one that is gone.
+      expect(adapter.trace).toContain('job');
+      expect(restoredProbes).toBe(scene.prior ? (scene.restored ? 1 : 16) : 0);
       const expectedId = scene.prior ? (scene.restored ? 'daemon.install-rolled-back' : 'daemon.install-rollback-failed') : 'daemon.install-failed';
       if (json) { const error = JSON.parse(io.out).error; expect(error.id).toBe(expectedId);
         if (scene.restored) expect(error.repair).toBeNull(); else expect(error.repair).toContain('team daemon install --root'); }
@@ -264,8 +286,8 @@ for (const json of [false, true]) test('runtime delta: broken package sibling le
   expect(result.code, result.io.out + result.io.err).toBe(1);
   if (json) expect(JSON.parse(result.io.out).error.id).toBe('daemon.install-rolled-back');
   else { expect(result.io.err).toContain('previous'); expect(result.io.out).not.toContain('installed for'); }
-  expect(result.probes).toHaveLength(9); expect(result.probes.slice(0, 8).every(p => !p.ok && p.entry === join(newFolder, 'dist/entry.mjs'))).toBe(true);
-  expect(result.probes[8]).toEqual({ entry: oldWords[1]!, ok: true, text: 'prior-program-relay' });
+  expect(result.probes).toHaveLength(17); expect(result.probes.slice(0, 16).every(p => !p.ok && p.entry === join(newFolder, 'dist/entry.mjs'))).toBe(true);
+  expect(result.probes[16]).toEqual({ entry: oldWords[1]!, ok: true, text: 'prior-program-relay' });
   expect(fs.readFileSync(unitPath, 'utf8')).toBe(oldText); expect(adapter.active()).toEqual(oldWords);
   expect(fs.existsSync(newFolder)).toBe(false); expect(fs.existsSync(oldFolder)).toBe(true);
   for (const [path, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(oldFolder, path), 'utf8')).toBe(bytes);
@@ -344,9 +366,9 @@ for (const json of [false, true]) test('runtime delta: health undo retains a cop
   let probes = 0; const io = testIo(w.root, { kind: 'owner' });
   const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
     home: w.home, service: adapter.manager, program: pkg.program, sleep: async () => {}, now: () => NOW,
-    health: async () => { probes++; expect(fs.existsSync(folder)).toBe(true); return health(w, probes <= 8 ? 'silent' : runFixture(w, adapter.active()).ok ? 'answer' : 'silent'); },
+    health: async () => { probes++; expect(fs.existsSync(folder)).toBe(true); return health(w, probes <= 16 ? 'silent' : runFixture(w, adapter.active()).ok ? 'answer' : 'silent'); },
   });
-  expect(code, io.out + io.err).toBe(1); expect(probes).toBe(9);
+  expect(code, io.out + io.err).toBe(1); expect(probes).toBe(17);
   if (json) expect(JSON.parse(io.out).error.id).toBe('daemon.install-rolled-back');
   expect(fs.readFileSync(path, 'utf8')).toBe(text); expect(adapter.active()).toEqual(words); expect(fs.existsSync(folder)).toBe(true);
   for (const [relative, bytes] of Object.entries(pkg.files)) expect(fs.readFileSync(join(folder, relative), 'utf8')).toBe(bytes);

@@ -32,7 +32,7 @@ seats:
     launch: claude
 `;
 
-export type RefreshPolicy = 'accept' | 'reject-new' | 'reject-all' | 'slow-stop';
+export type RefreshPolicy = 'accept' | 'reject-new' | 'reject-all' | 'slow-stop' | 'accept-dead';
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 const REFUSED: ServiceRunResult = { status: 23, stdout: '', stderr: 'synthetic load refused' };
 const PREVIOUS_BYTES = 'synthetic previous binary\n';
@@ -83,6 +83,12 @@ export function refreshFixture(realWait = false, inPlace = false, baseDir = tmpd
       events.push({ kind: 'stop', unit: '', accepted: true, at: clock });
       return OK;
     }
+    if (argv[0] === 'print' || argv[0] === 'list') {
+      // The manager's own record of the job it started. `accept-dead` takes a load but starts
+      // no process, so the record names none: the daemon that unit names is truly dead.
+      if (running === null) return { status: 113, stdout: '', stderr: 'synthetic job not found' };
+      return { status: 0, stdout: 'pid = 4242\nprogram = /synthetic/runtime\n', stderr: '' };
+    }
     if (argv[0] !== 'bootstrap' || argv[2] === undefined) throw new Error('unexpected synthetic manager operation');
     const unit = readFileSync(argv[2], 'utf8');
     const entry = unitEntry(unit);
@@ -92,7 +98,7 @@ export function refreshFixture(realWait = false, inPlace = false, baseDir = tmpd
     const accepted = running === null && clock >= stoppingUntil && policy !== 'reject-all' &&
       !(policy === 'reject-new' && identity === 'next');
     events.push({ kind: 'load', unit, accepted, at: clock, bytes, identity });
-    if (accepted) {
+    if (accepted && policy !== 'accept-dead') {
       running = identity;
       runningBytes = bytes;
     }

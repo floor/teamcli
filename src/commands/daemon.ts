@@ -52,6 +52,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
+import { pidAlive } from '../state.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
@@ -682,32 +683,76 @@ function installAgain(roots: readonly string[], parsed: Parsed): string {
   return parts.join(' ');
 }
 
-/** How long the command waits for a daemon to answer: the first probe at once, then the same
- *  bounded, growing waits the adapter gives a load. */
+/** How long a restart's confirmation waits for a daemon to answer: the first probe at once, then
+ *  the same bounded, growing waits the adapter gives a load. */
 const ANSWERS_WAIT_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_000];
-const ANSWERS_PROBES = ANSWERS_WAIT_MS.length + 1;
+
+/**
+ * How long an install waits for the daemon it started — or the one its rollback started — to
+ * answer. The window this replaces held eight probes over about 4.5 seconds; the cold starts
+ * this lane was opened for ran 18-30 seconds with five hosted checkouts under load, and the
+ * daemon answered 18 seconds after the old window had called it absent. The waits grow to a
+ * bound of about 90 seconds, so a slow start is still given its answer and a daemon that is
+ * alive but silent at the end is reported as starting, never as absent.
+ */
+const COLD_START_WAIT_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000];
+
+/**
+ * What one bounded wait learned about the daemon: only an answer is success. `starting` means
+ * the process the service manager started is alive and has not answered yet — a daemon still
+ * binding or still bringing its roots up, which is not a failed install. A daemon no process
+ * stands behind is `starting: false`, the answer a rollback is for.
+ */
+type DaemonAnswer = { answered: true } | { answered: false; starting: boolean };
+
+/**
+ * Whether the service manager's own record names a process that is still alive. A daemon that
+ * has not bound its socket yet writes no state record, so the health reading alone calls it
+ * not-running during exactly the cold start this wait exists for; the manager's record of the
+ * job it started is the evidence that the start is still in progress. An unreadable record
+ * answers "not alive": the install then rolls back, which is the safe answer.
+ */
+function managerProcessAlive(manager: ServiceManager, home: string): boolean {
+  try {
+    const job = manager.job(home);
+    return job !== null && job.pid !== null && pidAlive(job.pid);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Confirms a daemon answers, through the same health reading `team status` uses. A load the
  * service manager accepted is registration, not proof that a program runs: the unit an install
  * just wrote, or the earlier one a rollback restored, may name bytes that cannot start, and the
- * manager would still say the load was taken. Bounded — eight probes over about 4.5 seconds — so
- * a daemon that never answers is reported as none rather than waited on. An install reports
- * success only after this answers; a rollback is called one only after the restored daemon
- * answers.
+ * manager would still say the load was taken. The wait is bounded and growing; with `manager`
+ * given, a process still alive at the end makes the answer `starting` rather than absent, so a
+ * rollback only ever answers a process that is gone. An install reports success only after this
+ * answers, and calls a rollback one only after the restored daemon answers or is still starting.
  */
-async function daemonAnswers(home: string, sources: DaemonCommandSources): Promise<boolean> {
+async function daemonAnswers(
+  home: string,
+  sources: DaemonCommandSources,
+  options: { waits?: readonly number[]; manager?: ServiceManager } = {},
+): Promise<DaemonAnswer> {
+  const waits = options.waits ?? ANSWERS_WAIT_MS;
   const health = sources.health ?? daemonHealth;
   const sleep = sources.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
-  for (let probe = 0; probe < ANSWERS_PROBES; probe += 1) {
+  let lastStarting = false;
+  for (let probe = 0; probe <= waits.length; probe += 1) {
     if (probe > 0) {
-      const wait = ANSWERS_WAIT_MS[probe - 1];
+      const wait = waits[probe - 1];
       if (wait !== undefined) await sleep(wait);
     }
     const reading = await health(home, { timeoutMs: 500 });
-    if (reading.state === 'running' && reading.probe.state === 'answered') return true;
+    if (reading.state === 'running' && reading.probe.state === 'answered') return { answered: true };
+    // A live pid with a silent socket, or a socket with no readable record yet, is a daemon
+    // that cannot be called absent; a process the manager still records is the same fact for a
+    // daemon that has not bound its socket at all.
+    lastStarting = reading.state !== 'not-running';
   }
-  return false;
+  const starting = options.manager !== undefined && (lastStarting || managerProcessAlive(options.manager, home));
+  return { answered: false, starting };
 }
 
 /**
@@ -736,19 +781,35 @@ async function reportInstallFailure(
   unitPath: string,
   home: string,
   sources: DaemonCommandSources,
+  manager: ServiceManager,
 ): Promise<number> {
   appendDaemonLog(home, `install: ${failure.detail ?? failure.why}`, sources.now?.() ?? new Date());
   let outcome = failure.outcome;
   let why = failure.why;
-  if (outcome === 'restored' && !(await daemonAnswers(home, sources))) {
+  if (outcome === 'restored') {
+    const answer = await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS, manager });
+    if (answer.answered || answer.starting) {
+      // The earlier unit is back and the process it started is alive: it either answered, or it
+      // has not answered yet. In both cases the machine is not empty, and undoing again would
+      // stop a daemon that is still coming up, so the rollback stands and the line says which
+      // of the two it knows. Only one exit site marks the id, as the contract check requires.
+      let restoredWhy = why;
+      if (!answer.answered) {
+        restoredWhy = `${failure.why}, and the restored daemon has not answered the health probe yet; its process is alive and it may still be starting`;
+        appendDaemonLog(home, 'install: the restored daemon is still starting and has not answered the health probe', sources.now?.() ?? new Date());
+      }
+      refuse(io, parsed.json, 'daemon', {
+        id: 'daemon.install-rolled-back',
+        message: restoredWhy,
+        repair: null,
+        ...(answer.answered ? {} : { plain: `${restoredWhy}; check \`team status\` before installing again` }),
+      });
+      // exit: daemon.install-rolled-back
+      return 1;
+    }
     appendDaemonLog(home, 'install: the restored daemon did not answer the health probe', sources.now?.() ?? new Date());
     outcome = 'lost';
     why = `${failure.why}, but the restored daemon did not answer; no daemon is running`;
-  }
-  if (outcome === 'restored') {
-    refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: why, repair: null });
-    // exit: daemon.install-rolled-back
-    return 1;
   }
   // No daemon is running: the line names the command that starts one again, and where a kept
   // earlier unit is, so the failure is actionable without reading the log afterwards.
@@ -843,8 +904,9 @@ async function restartInstalled(
     return 1;
   }
   // A load the manager accepted is registration, not proof that a program runs: the restarted
-  // daemon must answer before this restart is called one.
-  if (await daemonAnswers(home, sources)) {
+  // daemon must answer before this restart is called one. A restart keeps the short confirmation
+  // an install used before the cold-start window: the unit it loads is one that has run before.
+  if ((await daemonAnswers(home, sources)).answered) {
     if (parsed.json) {
       writeJson(io, 'team.daemon-restart', {
         format: 1,
@@ -861,7 +923,7 @@ async function restartInstalled(
   }
   appendDaemonLog(home, 'restart: the restarted daemon did not answer the health probe', sources.now?.() ?? new Date());
   const undone = restarted.undo();
-  if (undone.ok && (await daemonAnswers(home, sources))) {
+  if (undone.ok && (await daemonAnswers(home, sources)).answered) {
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.restart-rolled-back',
       message: 'the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers',
@@ -1119,13 +1181,25 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
   const installed = manager.install(home, fullProgram);
   if (!installed.ok) {
-    return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, home, sources);
+    return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, home, sources, manager);
   }
   // A load the manager accepted is registration, not proof that a program runs. The install is
-  // reported only after the daemon it started answers the machine socket; a daemon that never
-  // answers is taken back out — or the earlier unit is put back — through the adapter's own
-  // undo, so a success line never stands for an empty machine.
-  if (!(await daemonAnswers(home, sources))) {
+  // reported only after the daemon it started answers the machine socket. The wait is the
+  // cold-start window: a process that is alive and has not bound its socket yet is still
+  // starting, so saying no daemon is running — or taking the unit back out — would be false and
+  // would stop a daemon that is coming up. Only a daemon no process stands behind is taken back
+  // out through the adapter's own undo, so a success line never stands for an empty machine.
+  const answer = await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS, manager });
+  if (!answer.answered && answer.starting) {
+    appendDaemonLog(home, 'install: the new daemon is still starting and has not answered the health probe', sources.now?.() ?? new Date());
+    return installFailed(io, parsed, {
+      id: 'daemon.install-failed',
+      message: 'the daemon the new unit started has not answered the health probe yet; its process is alive and it may still be starting',
+      repair: null,
+      plain: 'the daemon the new unit started has not answered the health probe yet; its process is alive and it may still be starting; check `team status` before installing again',
+    });
+  }
+  if (!answer.answered) {
     const failure: ServiceInstallFailure = installed.undo === undefined
       ? {
         ok: false,
@@ -1135,7 +1209,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         kept: false,
       }
       : installed.undo();
-    return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, home, sources);
+    return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, home, sources, manager);
   }
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
