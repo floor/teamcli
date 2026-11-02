@@ -80,9 +80,10 @@ export function latestDue(at: ReminderTimes, now: Date, zone: string): ReminderS
 
 /**
  * Half the gap from `due` to the next scheduled instant, capped at six hours; with catch-up off,
- * the daemon's own beat instead, so only an on-time tick fires.
+ * the daemon's own beat instead, so only an on-time tick fires. Exported because a retry for a
+ * key already satisfied asks the same question: is its window still open?
  */
-function catchUpWindow(at: ReminderTimes, due: ReminderStored, zone: string, catchUp: boolean): number {
+export function catchUpWindow(at: ReminderTimes, due: ReminderStored, zone: string, catchUp: boolean): number {
   if (!catchUp) return ON_TIME_MS;
   const next = nextDueAfter(at, new Date(due.instant), zone);
   if (next === null) return CATCH_UP_CAP_MS;
