@@ -120,6 +120,8 @@ export const ENFORCED_POLICY_NAMES = [
   'owner-reply-to',
   'codex-daemon',
   'idle-threshold',
+  'watch-read-budget-ms',
+  'watch-read-timeout-ms',
   'daemon.broker',
   'daemon.fallback-backlog-above',
   'daemon.fallback-backlog-limit',
@@ -224,6 +226,14 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_reply_to: 'owner-reply-to',
   codex_daemon: 'codex-daemon',
   idle_threshold: 'idle-threshold',
+  watch_read_budget_ms: 'watch-read-budget-ms',
+  'watch-read-budget': 'watch-read-budget-ms',
+  read_budget_ms: 'watch-read-budget-ms',
+  'read-budget': 'watch-read-budget-ms',
+  watch_read_timeout_ms: 'watch-read-timeout-ms',
+  'watch-read-timeout': 'watch-read-timeout-ms',
+  read_timeout_ms: 'watch-read-timeout-ms',
+  'read-timeout': 'watch-read-timeout-ms',
   watch_rhythm: 'watch-rhythm',
   grant_emission: 'grant-emission',
   owner_signers: 'owner-signers',
@@ -297,6 +307,20 @@ function parseOwnerSigners(raw: unknown): string[] | null {
 function parseApprovalRuleTtlDays(raw: unknown): number | null {
   const n = typeof raw === 'string' && /^[1-9][0-9]*d?$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
+}
+
+/**
+ * One of the watch's read limits: a whole number of milliseconds from 100 to 30000, so a busy
+ * loop can bound a pass without letting a level switch the bound off.
+ */
+function parseReadMillis(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 100 && n <= 30_000 ? n : null;
+}
+
+function readMillisProblem(name: string, raw: unknown): string | null {
+  if (parseReadMillis(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 100 to 30000, such as 2000`;
 }
 
 function parsePositiveSeconds(raw: unknown): number | null {
@@ -984,6 +1008,37 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseDurationSeconds,
     valueProblem: (raw: unknown) => durationValueProblem('idle-threshold', raw),
     // A shorter or equal window is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // How long one watch pass may spend reading the terminal host and the machine before the rest
+  // of its panes wait for the next pass: whole milliseconds, 2000 when nothing declares it, and a
+  // shorter budget is the tighter one (the pass reads less and resumes sooner). The reader that
+  // consumes it (`watchReadLimits`) resolves the chain to `team`: one pass reads a whole session,
+  // so no seat sets this. This entry is only the name, its aliases and the value rule.
+  'watch-read-budget-ms': {
+    name: 'watch-read-budget-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 2000,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('watch-read-budget-ms', raw),
+    // A shorter or equal budget is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest one read may take before its child is killed: whole milliseconds, 2000 when
+  // nothing declares it, a shorter call the tighter one. A pass's remaining budget may shorten
+  // a call below this value, never lengthen it. This entry is only the name, its aliases and
+  // the value rule.
+  'watch-read-timeout-ms': {
+    name: 'watch-read-timeout-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 2000,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('watch-read-timeout-ms', raw),
+    // A shorter or equal call is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The machine daemon's broker feature: on keeps the broker handler serving `team next` over the

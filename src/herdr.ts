@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
 import { resolveForgeShim } from './settings/forge-shim.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
@@ -43,6 +44,16 @@ function run(args: string[], session?: string): unknown {
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
+/** What one async read takes: the child's own kill after `timeoutMs`, and the loop's stop. */
+export type HerdrReadOptions = ChildOptions;
+
+async function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+  if (customRun) return customRun(args, session);
+  const full = session ? ['--session', session, ...args] : args;
+  const out = await execText('herdr', full, options);
+  return (JSON.parse(out) as { result?: unknown }).result;
+}
+
 // The agent session herdr reported, as the id alone. Herdr 0.7.1 sends an object —
 // `{agent, kind, source, value}` with `kind: 'id'` — where older builds sent the id string.
 // Only a non-empty string, or that object's non-empty string `value` under `kind: 'id'`, is a
@@ -57,24 +68,37 @@ function agentSessionOf(value: unknown): string | undefined {
   return typeof reported.value === 'string' && reported.value !== '' ? reported.value : undefined;
 }
 
+// The agents a `agent list` result names, in its order. One parser for the sync and async reads.
+function agentsOf(result: unknown): HerdrAgent[] {
+  return (((result as { agents?: Record<string, unknown>[] })?.agents) ?? []).map((agent) => {
+    const session = agentSessionOf(agent.agent_session);
+    const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
+    return {
+      name: typeof agent.name === 'string' && agent.name ? agent.name : null,
+      agent: typeof agent.agent === 'string' ? agent.agent : null,
+      pane: String(agent.pane_id),
+      workspace: String(agent.workspace_id),
+      status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
+      cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
+      ...(session ? { session } : {}),
+      ...(displayAgent ? { displayAgent } : {}),
+    };
+  });
+}
+
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
   try {
-    const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
-    return (result.agents ?? []).map((agent) => {
-      const session = agentSessionOf(agent.agent_session);
-      const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
-      return {
-        name: typeof agent.name === 'string' && agent.name ? agent.name : null,
-        agent: typeof agent.agent === 'string' ? agent.agent : null,
-        pane: String(agent.pane_id),
-        workspace: String(agent.workspace_id),
-        status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
-        cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
-        ...(session ? { session } : {}),
-        ...(displayAgent ? { displayAgent } : {}),
-      };
-    });
+    return agentsOf(run(['agent', 'list'], session));
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function agentListAsync(session: string | undefined, options: HerdrReadOptions = {}): Promise<HerdrAgent[] | null> {
+  try {
+    return agentsOf(await runAsync(['agent', 'list'], session, options));
   } catch {
     return null;
   }
@@ -177,15 +201,48 @@ export function paneProcesses(pane: string, session?: string): PaneProcesses | n
   }
 }
 
+/**
+ * One `pane process-info` result, untouched: the page both the pane's process identity and its
+ * foreground names are read from, so a pass asks the terminal host once for the pane.
+ */
+export function paneProcessInfo(pane: string, session?: string): unknown | null {
+  try {
+    return run(['pane', 'process-info', '--pane', pane], session);
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function paneProcessInfoAsync(pane: string, session: string | undefined, options: HerdrReadOptions = {}): Promise<unknown | null> {
+  try {
+    return await runAsync(['pane', 'process-info', '--pane', pane], session, options);
+  } catch {
+    return null;
+  }
+}
+
 export type HerdrWorkspace = { id: string; label: string };
+
+function workspacesOf(result: unknown): HerdrWorkspace[] {
+  return (((result as { workspaces?: Record<string, unknown>[] })?.workspaces) ?? []).map((workspace) => ({
+    id: String(workspace.workspace_id),
+    label: typeof workspace.label === 'string' ? workspace.label : '',
+  }));
+}
 
 export function workspaceList(session?: string): HerdrWorkspace[] | null {
   try {
-    const result = run(['workspace', 'list'], session) as { workspaces?: Record<string, unknown>[] };
-    return (result.workspaces ?? []).map((workspace) => ({
-      id: String(workspace.workspace_id),
-      label: typeof workspace.label === 'string' ? workspace.label : '',
-    }));
+    return workspacesOf(run(['workspace', 'list'], session));
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function workspaceListAsync(session: string | undefined, options: HerdrReadOptions = {}): Promise<HerdrWorkspace[] | null> {
+  try {
+    return workspacesOf(await runAsync(['workspace', 'list'], session, options));
   } catch {
     return null;
   }
@@ -235,6 +292,28 @@ export type HerdrSession = {
 // `{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}` before any seat is named;
 // after `agent rename` the one agent carried `name`, `agent_status` (`unknown` for that new seat),
 // `cwd`, `pane_id` and `workspace_id`.
+// A `session list --json` body as sessions, or null when the document is not that list. One
+// parser for the sync and async reads.
+function sessionsOf(out: string): HerdrSession[] | null {
+  const body = JSON.parse(out) as { sessions?: unknown };
+  // A missing list is no sessions. Anything else that is not an array is not this document.
+  if (body.sessions === undefined || body.sessions === null) return [];
+  if (!Array.isArray(body.sessions)) return null;
+  const listed: HerdrSession[] = [];
+  for (const entry of body.sessions) {
+    if (!entry || typeof entry !== 'object') continue;
+    const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown; socket_path?: unknown };
+    if (typeof session.name !== 'string' || session.name === '') continue;
+    listed.push({
+      name: session.name,
+      running: session.running === true,
+      sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
+      socketPath: typeof session.socket_path === 'string' ? session.socket_path : null,
+    });
+  }
+  return listed;
+}
+
 export function sessionList(): HerdrSession[] | null {
   try {
     const out = execFileSync('herdr', ['session', 'list', '--json'], {
@@ -242,26 +321,27 @@ export function sessionList(): HerdrSession[] | null {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     });
-    const body = JSON.parse(out) as { sessions?: unknown };
-    // A missing list is no sessions. Anything else that is not an array is not this document.
-    if (body.sessions === undefined || body.sessions === null) return [];
-    if (!Array.isArray(body.sessions)) return null;
-    const listed: HerdrSession[] = [];
-    for (const entry of body.sessions) {
-      if (!entry || typeof entry !== 'object') continue;
-      const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown; socket_path?: unknown };
-      if (typeof session.name !== 'string' || session.name === '') continue;
-      listed.push({
-        name: session.name,
-        running: session.running === true,
-        sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
-        socketPath: typeof session.socket_path === 'string' ? session.socket_path : null,
-      });
-    }
-    return listed;
+    return sessionsOf(out);
   } catch {
     return null;
   }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function sessionListAsync(options: HerdrReadOptions = {}): Promise<HerdrSession[] | null> {
+  try {
+    return sessionsOf(await execText('herdr', ['session', 'list', '--json'], options));
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the named session runs, awaited. Null when herdr can't be reached. */
+export async function sessionRunningAsync(name: string, options: HerdrReadOptions = {}): Promise<boolean | null> {
+  const sessions = await sessionListAsync(options);
+  if (sessions === null) return null;
+  const found = sessions.find((session) => session.name === name);
+  return found === undefined ? false : found.running;
 }
 
 // Whether a session exists and runs. A stopped session stays listed with running false; a deleted
@@ -646,8 +726,12 @@ export const PANE_WINDOW = 14;
 // styled call and is read by the exact call main makes today — no flag at all — where
 // unstyled text can never read as dim and the placeholder list alone decides. A herdr that
 // hangs is not asked twice: one timeout reads null.
+function paneReadArgs(pane: string, lines: number, session?: string): string[] {
+  return [...(session ? ['--session', session] : []), 'pane', 'read', pane, '--source', 'visible', '--lines', String(lines)];
+}
+
 export function paneRead(pane: string, lines: number, session?: string): string | null {
-  const full = [...(session ? ['--session', session] : []), 'pane', 'read', pane, '--source', 'visible', '--lines', String(lines)];
+  const full = paneReadArgs(pane, lines, session);
   let styled: string;
   try {
     styled = paneExec([...full, '--format', 'ansi']);
@@ -663,6 +747,34 @@ export function paneRead(pane: string, lines: number, session?: string): string 
     }
   }
   return styled.replace(/\r\n/g, '\n').replace(/\r$/, '');
+}
+
+/**
+ * The same read, awaited. The fallback to an herdr without `--format` is made only on a refusal:
+ * a child the timeout killed or the loop's stop aborted is not asked twice, the same rule the
+ * synchronous read makes for its own timeout.
+ */
+export async function paneReadAsync(
+  pane: string,
+  lines: number,
+  session: string | undefined,
+  options: HerdrReadOptions = {},
+): Promise<string | null> {
+  const full = paneReadArgs(pane, lines, session);
+  try {
+    return foldPaneLines(await execText('herdr', [...full, '--format', 'ansi'], options));
+  } catch (error) {
+    if (wasKilled(error) || wasAborted(error)) return null;
+    try {
+      return foldPaneLines(await execText('herdr', full, options));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function foldPaneLines(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r$/, '');
 }
 
 // The words to type for a herdr command, for a repair line.
