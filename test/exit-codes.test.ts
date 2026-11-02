@@ -4877,7 +4877,7 @@ scene('daemon.grant-refused', async (place) => {
   // A grant recorded on the run that the command's own verification cannot admit: the command
   // refuses it and names the failed check instead of falling back to the caller.
   const io = testIo(place.root, detachedCaller);
-  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key') };
+  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key'), grantId: 'gg_synthetic', clientId: 'synthetic-client' };
   const code = await runDaemon(['install', '--dry-run'], io, daemonSources(place, { service: fakeDaemonService() }));
   return show({ code, out: io.out, err: io.err }, 'cannot be read as a general grant');
 });
