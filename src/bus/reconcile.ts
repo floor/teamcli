@@ -737,6 +737,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   }
 
   // 3. Scan `messages.jsonl` history entries for outcomes not yet reflected in `events.jsonl`.
+  // The history line is the sender's own record, never a signed one: a line raises only after
+  // the drop record it names is on disk and verifies under the same rule step 1 applies. A line
+  // with nothing to verify raises nothing and is reported once; the history file alone never
+  // decides what the bus knows. Entries whose events the log already holds are skipped before
+  // that read, so a quiet pass stays a dedupe check.
   if (state.history !== null) {
     const stamp = retainedStamp(state.history.path, HISTORY_KEPT);
     if (stamp !== state.history.stamp) state.history = null;
@@ -750,23 +755,72 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   const history = state.history;
   if (history !== null) {
     for (const entry of history.entries) {
-      raise({
-        ts: entry.ts,
-        kind: 'message.arrived',
-        session,
-        record_id: entry.id,
-        from: entry.from,
-        to: entry.to,
-        ...(entry.via !== undefined ? { via: entry.via } : {}),
-      });
+      const heldAgeMs = nowMs - Date.parse(entry.ts);
+      const heldDue = !Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs;
+      const wanted = [`message.arrived\0${entry.id}`];
+      if (entry.outcome === 'delivered' || entry.outcome === 'delivered (read)') {
+        wanted.push(`message.delivered\0${entry.id}:delivered`);
+      }
+      if (entry.outcome === 'delivered (read)') wanted.push(`message.read\0${entry.id}:read`);
+      if (entry.outcome === 'answered') wanted.push(`message.replied\0${entry.id}:replied`);
+      if (entry.outcome === 'held' && heldDue) wanted.push(`message.held\0${entry.id}:held`);
+      if (entry.outcome === 'unreachable') wanted.push(`seat.unreachable\0${entry.id}:unreachable`);
+      if (wanted.every((key) => seen.has(key))) {
+        yield;
+        continue;
+      }
+
+      // The record the line names, checked by the walk's own rule: its signature covers the
+      // fields the arrival carries, and it must be addressed to this seat, session and checkout.
+      const where = `${entry.to}/${entry.id} (history)`;
+      const refusalKey = `history\0${session}\0${entry.to}\0${entry.id}`;
+      let arrival: EventAppendInput | null = null;
+      let refusal: string | null = null;
+      if (keyState.kind !== 'key') {
+        refusal = 'no message key is held, so the history line names no record this checkout can verify';
+      } else if (!RECORD_NAME.test(entry.to) || !RECORD_NAME.test(entry.id)) {
+        refusal = 'the history line does not name a seat and record this checkout reads';
+      } else if (!dropFolderIsReal(root, session, entry.to)) {
+        refusal = 'the history line names no drop folder of this checkout';
+      } else {
+        const seatDir = join(root, '.agents', 'send-drops', session, entry.to);
+        for (const name of [entry.id, `${entry.id}.json`]) {
+          const checked = checkedDropRecord(
+            join(seatDir, name),
+            { session, seat: entry.to, record_id: entry.id },
+            scope,
+            keyState.key,
+          );
+          if (checked.ok) {
+            arrival = checked.event;
+            break;
+          }
+          if (!checked.missing) {
+            refusal = checked.reason;
+            break;
+          }
+        }
+        refusal ??= 'the history line names no signed drop record this checkout can verify';
+      }
+      if (arrival === null) {
+        refuseRecord(options, state, refusalKey, where, refusal ?? 'the history line names no signed drop record this checkout can verify');
+        yield;
+        continue;
+      }
+
+      // Everything this line raises carries the addressees the record signed; only the outcome
+      // word and its time stay the history line's own claim.
+      const from = arrival.from;
+      const to = arrival.to;
+      raise(arrival);
       if (entry.outcome === 'delivered') {
         raise({
           ts: entry.ts,
           kind: 'message.delivered',
           session,
           record_id: `${entry.id}:delivered`,
-          from: entry.from,
-          to: entry.to,
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
           ...(entry.via !== undefined ? { via: entry.via } : {}),
         });
       } else if (entry.outcome === 'delivered (read)') {
@@ -775,8 +829,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           kind: 'message.delivered',
           session,
           record_id: `${entry.id}:delivered`,
-          from: entry.from,
-          to: entry.to,
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
           ...(entry.via !== undefined ? { via: entry.via } : {}),
         });
         raise({
@@ -784,8 +838,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           kind: 'message.read',
           session,
           record_id: `${entry.id}:read`,
-          from: entry.from,
-          to: entry.to,
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
           ...(entry.via !== undefined ? { via: entry.via } : {}),
         });
       } else if (entry.outcome === 'answered') {
@@ -794,29 +848,26 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           kind: 'message.replied',
           session,
           record_id: `${entry.id}:replied`,
-          from: entry.from,
-          to: entry.to,
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
         });
-      } else if (entry.outcome === 'held') {
-        const heldAgeMs = nowMs - Date.parse(entry.ts);
-        if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
-          raise({
-            ts: entry.ts,
-            kind: 'message.held',
-            session,
-            record_id: `${entry.id}:held`,
-            from: entry.from,
-            to: entry.to,
-          });
-        }
+      } else if (entry.outcome === 'held' && heldDue) {
+        raise({
+          ts: entry.ts,
+          kind: 'message.held',
+          session,
+          record_id: `${entry.id}:held`,
+          ...(from !== undefined ? { from } : {}),
+          ...(to !== undefined ? { to } : {}),
+        });
       } else if (entry.outcome === 'unreachable') {
         raise({
           ts: entry.ts,
           kind: 'seat.unreachable',
           session,
           record_id: `${entry.id}:unreachable`,
-          seat: entry.to,
-          subject: entry.to,
+          seat: to,
+          subject: to,
         });
       }
       yield;

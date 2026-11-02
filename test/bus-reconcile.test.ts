@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventPayload } from '../src/bus/log.ts';
 import { OWNER_MAILBOX, OwnerDelivery } from '../src/bus/owner.ts';
-import { reconcilePass } from '../src/bus/reconcile.ts';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
@@ -272,7 +272,8 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const sig = signDomain(RECEIPT_DOMAIN, receiptPayload, messageKeyOf(home));
     writeFileSync(receiptFile(root, 'worker-1', 'msg-signed-1'), JSON.stringify({ payload: receiptPayload, signature: sig }));
 
-    // History entry in messages.jsonl.
+    // History entry in messages.jsonl, backed by the signed drop record it names.
+    dropRecord({ root, home }, 'worker-2', 'hist-1', { ts: '2026-10-18T12:02:00.000Z' });
     appendHistory('acme', root, home, {
       ts: '2026-10-18T12:02:00.000Z',
       from: 'clerk',
@@ -324,6 +325,67 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.raised.length).toBe(0);
+  });
+
+  test('history lines with no verifying drop record raise nothing and are refused once', () => {
+    const { root, home } = makeScratch();
+    // A key is held, so each refusal below is about the record the line names, not a missing key.
+    mkdirSync(home, { recursive: true });
+    messageKeyOf(home);
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-2');
+    mkdirSync(seatDir, { recursive: true });
+    // A line whose record was never written, and one whose record does not verify.
+    const unbacked = appendHistory('acme', root, home, {
+      ts: '2026-10-18T12:02:00.000Z',
+      from: 'clerk',
+      to: 'worker-2',
+      body: 'a line with nothing behind it',
+      id: 'hist-unbacked',
+      outcome: 'delivered (read)',
+      via: 'mcp-inbox',
+    });
+    expect(unbacked.ok).toBe(true);
+    writeFileSync(join(seatDir, 'hist-tampered'), '{"payload":{"id":"hist-tampered"},"signature":"bad"}\n');
+    const tampered = appendHistory('acme', root, home, {
+      ts: '2026-10-18T12:02:00.000Z',
+      from: 'clerk',
+      to: 'worker-2',
+      body: 'a line whose record does not verify',
+      id: 'hist-tampered',
+      outcome: 'delivered',
+      via: 'mcp-inbox',
+    });
+    expect(tampered.ok).toBe(true);
+
+    const refusals: { where: string; reason: string }[] = [];
+    const state = createReconcileState();
+    const pass = (now: string) => reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date(now),
+      state,
+      onRefused: (refusal) => refusals.push(refusal),
+    });
+    const first = pass('2026-10-18T12:05:00.000Z');
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const raisedKeys = first.raised.map((e) => `${e.payload.kind}:${e.payload.record_id}`);
+    expect(raisedKeys).not.toContain('message.arrived:hist-unbacked');
+    expect(raisedKeys).not.toContain('message.arrived:hist-tampered');
+    expect(raisedKeys).not.toContain('message.delivered:hist-unbacked:delivered');
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-unbacked (history)')).toHaveLength(1);
+    expect(refusals.find((only) => only.where === 'worker-2/hist-unbacked (history)')?.reason)
+      .toBe('the history line names no signed drop record this checkout can verify');
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-tampered (history)')).toHaveLength(1);
+
+    const again = pass('2026-10-18T12:06:00.000Z');
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.length).toBe(0);
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-unbacked (history)')).toHaveLength(1);
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-tampered (history)')).toHaveLength(1);
   });
 
   test('a digest record raises no message.arrived, so repeated passes over one owner record write exactly one digest', () => {
