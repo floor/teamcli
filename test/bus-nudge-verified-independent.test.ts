@@ -1,6 +1,6 @@
-// Independent scenes for the bus-nudge fix and the reconcile pass's verified read
-// (writer-04, private lane, d6ce0bcef on b6f1d18bb). Written against the fix's claims, not the
-// builder's tests: a raw publish of message.arrived is held to the signed drop record it names;
+// Independent scenes for the bus-nudge fix and the reconcile pass's verified read. Written
+// against the fix's claims, not the builder's tests: a raw publish of message.arrived is held
+// to the signed drop record it names;
 // the reconcile pass puts every drop record through the same checked read — a linked record,
 // a linked folder, an unsigned record, or one addressed to another seat, session or checkout
 // raises nothing and is named once — and the mailbox messages and read receipts answer to the
@@ -24,7 +24,7 @@ import { messageKeyOf, messageKeyState, RECEIPT_DOMAIN, signDomain } from '../sr
 import { testIo } from './helpers.ts';
 
 const SESSION = 'acme';
-const SECRET = 'writer04-synthetic-secret-value';
+const SECRET = 'synthetic-secret-value';
 const NOW = new Date('2026-11-02T12:00:00.000Z');
 
 type Place = { base: string; root: string; home: string; dir: string; urlFile: string; secretFile: string };
@@ -181,7 +181,7 @@ function dropPayload(at: Place, seat: string, id: string, overrides: Partial<Rec
     body: `from lead — admitted by: lead\n\nhello ${id}`,
     from: 'lead',
     from_id: null,
-    rule: 'a writer04 scene',
+    rule: 'a verification scene',
     thread: id,
     ...overrides,
   };
