@@ -27,6 +27,7 @@ import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
+import { runFallback } from '../src/commands/fallback.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
@@ -55,6 +56,7 @@ import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { noteTransport, type CanonicalRecipient, type FallbackContext, type TransportFact } from '../src/send/fallback-events.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
@@ -6488,6 +6490,83 @@ scene('agents.owner', async (place) => {
   agentUnderTeam(place, 'ghost');
   return show(await agentsRun(place, ['prune', '--apply'], detachedCaller), 'only the owner runs this');
 });
+const fallbackSeat = { kind: 'seat', name: 'worker', pane: 'pane-1', session: 'acme' } as const;
+
+async function fallbackRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runFallback(argv, io, { home: place.home, now: () => new Date(NOW) }), out: io.out, err: io.err };
+}
+
+/** One episode in the store, written by the product's own note: `delivered`, or `held` — a walk
+ *  still trying, which the plan reads as expired and judges by the retention word. */
+function fallbackNote(place: Place, outcome: 'delivered' | 'held', messageId = 'm-001'): void {
+  const parsed = validateTeamFile(TEAM);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  const ctx: FallbackContext = {
+    caller: fallbackSeat,
+    team: parsed.team,
+    root: place.root,
+    home: place.home,
+    now: () => new Date(NOW),
+  };
+  const recipient: CanonicalRecipient = { team: 'acme', seat: 'worker', toId: null, session: 'acme', root: place.root };
+  const fact: TransportFact = {
+    recipient,
+    messageId,
+    recordDigest: 'a'.repeat(64),
+    route: outcome === 'delivered' ? 'native' : 'socket',
+    outcome,
+    at: NOW.toISOString(),
+    ms: 5,
+    liveRoutesRemain: outcome === 'held',
+    ...(outcome === 'held' ? { reason: 'the socket did not answer' } : {}),
+  };
+  const noted = noteTransport(ctx, fact);
+  if (!noted.ok) throw new Error(noted.reason);
+}
+
+function fallbackStoreDir(place: Place): string {
+  return dirname(historyPath('acme', place.root, place.home));
+}
+
+scene('fallback.invocation', async (place) => show(await fallbackRun(place, ['prune', '--nope']), 'unknown option'));
+scene('fallback.configuration', async (place) => show(await fallbackRun(place, ['prune']), 'no team file'));
+scene('fallback.plan', async (place) => {
+  write(place, TEAM);
+  return show(await fallbackRun(place, ['prune']), "no finished fallback episode stands in this project's state store");
+});
+scene('fallback.stale', async (place) => {
+  write(place, TEAM);
+  fallbackNote(place, 'delivered');
+  return show(await fallbackRun(place, ['prune']), '1 episode to retire');
+});
+scene('fallback.retired', async (place) => {
+  write(place, TEAM);
+  fallbackNote(place, 'delivered');
+  return show(await fallbackRun(place, ['prune', '--apply']), '1 episode retired');
+});
+scene('fallback.incomplete', async (place) => {
+  write(place, TEAM);
+  fallbackNote(place, 'delivered');
+  // The archive folder cannot be made: the marker cannot be moved, and the episode stays.
+  writeFileSync(join(fallbackStoreDir(place), 'fallback-archive'), 'in the way\n');
+  return show(await fallbackRun(place, ['prune', '--apply']), 'could not be retired');
+});
+scene('fallback.owner', async (place) => {
+  write(place, TEAM);
+  fallbackNote(place, 'delivered');
+  return show(await fallbackRun(place, ['prune', '--apply'], fallbackSeat), "--apply is the owner's");
+});
+scene('fallback.policy', async (place) => {
+  write(place, TEAM);
+  fallbackNote(place, 'held');
+  // The project-level policy source is unreadable: the retention word cannot be resolved, and a
+  // dry run refuses rather than listing the expired episode as unretirable.
+  mkdirSync(dirname(projectsFile(place.home)), { recursive: true });
+  writeFileSync(projectsFile(place.home), 'not-a-map\n');
+  return show(await fallbackRun(place, ['prune']), 'event-retention-days');
+});
+
 async function batchRun(place: Place, argv: string[], caller: Caller = owner, store?: ReturnType<typeof seatOwner>): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runBatch(argv, io, { home: place.home, ...(store ? { ownerSeatStore: store } : {}) }), out: io.out, err: io.err };

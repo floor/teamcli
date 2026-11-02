@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
@@ -990,18 +990,32 @@ export class LockBusyError extends Error {
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;
+  // A reclaimer may remove this folder while we still hold its key: the folder is recreated
+  // under us, the same way a missing one is made on the first pass. The count bounds the loop
+  // against a path that can never be created.
+  let recreated = 0;
   for (;;) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && recreated++ < 8) continue;
+      throw error;
+    }
     try {
       const fd = openSync(path, 'wx');
       writeFileSync(fd, `${process.pid}\n`);
       closeSync(fd);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // A create can meet a folder removed under it as ENOENT; the platform also reported EINVAL
+      // when the folder was recycled between the mkdir and the open (measured on macOS APFS). Both
+      // mean "the folder is not there now": recreate it and try again, at most eight times.
+      if ((code === 'ENOENT' || code === 'EINVAL') && recreated++ < 8) continue;
+      if (code !== 'EEXIST') throw error;
       let holder = NaN;
       try {
         holder = Number(readFileSync(path, 'utf8').trim());
@@ -1018,7 +1032,13 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       // process — so anything that is not a positive integer is young, not stale. Past the
       // one-second window a pid-less lock is stale by this age heuristic alone; that is not
       // proof its writer is dead, and no takeover pretends otherwise.
-      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
+      let fresh = false;
+      try {
+        fresh = Date.now() - statSync(path).mtimeMs < 1000;
+      } catch {
+        continue; // released, or the folder was reclaimed, between the read and the stat
+      }
+      if (!(Number.isInteger(holder) && holder > 0) && fresh) {
         if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
@@ -1032,5 +1052,56 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
     try {
       unlinkSync(path);
     } catch {}
+  }
+}
+
+/** What a reclaim of one lock folder did: removed, kept (a holder is live, the lock is young,
+ *  or the folder is not empty), or already absent. */
+export type LockReclaim = 'removed' | 'kept' | 'absent';
+
+// Reclaims a lock folder whose work is over: no lock file at all, or one whose holder is gone.
+// A live holder keeps it, and so does a lock file too young to hold its pid yet — the same
+// one-second rule `withLock` uses. An empty folder is left for `youngMs` first: a live acquirer
+// may be between its `mkdir` and its `open`, and one that is reclaimed under it recreates it
+// (see `withLock`), but the grace keeps that from being the common case.
+export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}): LockReclaim {
+  const youngMs = options.youngMs ?? 60_000;
+  const path = join(dir, LOCK_FILE);
+  let held = true;
+  let holder = NaN;
+  try {
+    holder = Number(readFileSync(path, 'utf8').trim());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'kept';
+    held = false;
+  }
+  if (!held) {
+    try {
+      // A zero grace disables the wait outright: the age is computed from a millisecond clock and
+      // a sub-millisecond mtime can read as a hair in the future, which no grace should keep.
+      if (youngMs > 0 && Date.now() - statSync(dir).mtimeMs < youngMs) return 'kept';
+      rmdirSync(dir);
+      return 'removed';
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
+    }
+  }
+  if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) return 'kept';
+  if (!(Number.isInteger(holder) && holder > 0)) {
+    try {
+      if (Date.now() - statSync(path).mtimeMs < 1000) return 'kept';
+    } catch {
+      return 'kept'; // released while we read it; the folder is the next pass's to judge
+    }
+  }
+  if (!takeOver(path, holder)) return 'kept';
+  // `takeOver` restores the file when it found a different live holder in between; the folder
+  // then stays with that holder's key.
+  if (existsSync(path)) return 'kept';
+  try {
+    rmdirSync(dir);
+    return 'removed';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
 }

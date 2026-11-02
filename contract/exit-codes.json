@@ -2236,6 +2236,62 @@
     },
     {
       "code": 0,
+      "command": "fallback",
+      "id": "fallback.plan",
+      "meaning": "the dry run found no finished episode to retire",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 0,
+      "command": "fallback",
+      "id": "fallback.retired",
+      "meaning": "every listed episode that could be retired was retired",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.incomplete",
+      "meaning": "--apply left an episode unretired because its retirement did not complete",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.owner",
+      "meaning": "--apply was aimed by a caller who is not the owner",
+      "trigger": "team fallback prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.policy",
+      "meaning": "the event retention word cannot be read",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 1,
+      "command": "fallback",
+      "id": "fallback.stale",
+      "meaning": "the dry run found finished episodes to retire",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 2,
+      "command": "fallback",
+      "id": "fallback.configuration",
+      "meaning": "the team file cannot be read",
+      "trigger": "team fallback prune"
+    },
+    {
+      "code": 2,
+      "command": "fallback",
+      "id": "fallback.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team fallback prune --nope"
+    },
+    {
+      "code": 0,
       "command": "feed",
       "id": "feed.ok",
       "meaning": "the message feed was printed",

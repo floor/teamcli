@@ -325,6 +325,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `drops.unreadable` | `drops` | 1 | the drop folder can't be read | `team drops` |
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
+| `fallback.plan` | `fallback` | 0 | the dry run found no finished episode to retire | `team fallback prune` |
+| `fallback.retired` | `fallback` | 0 | every listed episode that could be retired was retired | `team fallback prune --apply` |
+| `fallback.incomplete` | `fallback` | 1 | --apply left an episode unretired because its retirement did not complete | `team fallback prune --apply` |
+| `fallback.owner` | `fallback` | 1 | --apply was aimed by a caller who is not the owner | `team fallback prune --apply` |
+| `fallback.policy` | `fallback` | 1 | the event retention word cannot be read | `team fallback prune` |
+| `fallback.stale` | `fallback` | 1 | the dry run found finished episodes to retire | `team fallback prune` |
+| `fallback.configuration` | `fallback` | 2 | the team file cannot be read | `team fallback prune` |
+| `fallback.invocation` | `fallback` | 2 | the invocation cannot be read | `team fallback prune --nope` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
 | `feed.presence-unreadable` | `feed` | 1 | the presence event log cannot be read | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
