@@ -722,14 +722,14 @@ describe("the watch's typed wake retry", () => {
     const one = pane(MUSE_IDLE);
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_FAILED], calls));
-    const live = liveWith('helper', 'h:pane');
+    const live = liveWith('helper', 'helper-pane');
 
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
 
     // The module took the line and nothing confirmed it: the wake marker is given back, so the
     // message has not spent its one wake, and the attempt is counted in its own ledger.
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.pane).toBe('h:pane');
+    expect(calls[0]?.pane).toBe('helper-pane');
     expect(calls[0]?.cli).toBe('muse');
     expect(calls[0]?.session).toBe('acme');
     expect(calls[0]?.line).toContain('team drops --read');
@@ -754,7 +754,7 @@ describe("the watch's typed wake retry", () => {
 
     // Muse has the retry, but the image binds no seam: no key is typed, and neither the message's
     // wake nor an attempt is recorded.
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { live: liveWith('helper', 'h:pane') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
 
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
@@ -769,7 +769,7 @@ describe("the watch's typed wake retry", () => {
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const said: string[] = [];
     const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
-    const live = liveWith('helper', 'h:pane');
+    const live = liveWith('helper', 'helper-pane');
 
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live }), { unreadAfter: N });
 
@@ -807,7 +807,7 @@ describe("the watch's typed wake retry", () => {
     const one = pane(MUSE_IDLE);
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_REFUSED], calls));
-    const live = liveWith('helper', 'h:pane');
+    const live = liveWith('helper', 'helper-pane');
 
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
     expect(calls).toHaveLength(1);
@@ -845,7 +845,7 @@ describe("the watch's typed wake retry", () => {
     const one = pane(MUSE_IDLE);
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_DELIVERED], calls));
-    const live = liveWith('helper', 'h:pane');
+    const live = liveWith('helper', 'helper-pane');
 
     for (const at of [0, 5_000, 15_000]) {
       await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + at) }), { unreadAfter: N });
@@ -872,7 +872,7 @@ describe("the watch's typed wake retry", () => {
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
 
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'h:pane') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
 
     // The profile has the wake, the seat says off: the pass takes the old leg, whose writers
     // refuse, and no attempt is recorded because the retry is not on.
@@ -890,7 +890,7 @@ describe("the watch's typed wake retry", () => {
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
 
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'h:pane', 'working') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'working') }), { unreadAfter: N });
 
     expect(calls).toHaveLength(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
@@ -903,13 +903,13 @@ describe("the watch's typed wake retry", () => {
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
 
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'h:pane', 'working') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'working') }), { unreadAfter: N });
     expect(calls).toEqual([]);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
 
     // The same screen, with the terminal host's word agreeing it is idle, does reach the seam.
     one.status = 'idle';
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'h:pane', 'idle') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'idle') }), { unreadAfter: N });
     expect(calls).toHaveLength(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
