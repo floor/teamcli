@@ -4,6 +4,8 @@
 // pair is removed outside single quotes — a line continuation, inside double quotes too, as a
 // shell removes it; inside single quotes the backslash is literal. The standard `'\''` splice —
 // close the single quotes, an escaped quote, reopen — reads as one word, as a shell reads it.
+// A `$(…)`, `${…}` or backtick substitution is one word whatever spaces it holds, kept as its
+// source text: the shell runs it, so the reader can know no more than what is written.
 //
 // `$'…'` (ANSI-C quoting) is read when it holds no backslash: every shell that reads such a
 // word then hands on the literal text between its quotes, so there is nothing to guess. A word
@@ -39,6 +41,102 @@ export type ShellWordsUnreadable = 'unclosed' | 'ansi' | 'nul';
 export type ShellWordsRead =
   | { words: ShellWord[] }
   | { words: ShellWord[]; unreadable: ShellWordsUnreadable; at: number };
+
+/** Where the backtick substitution that starts at `at` ends: just past its closing backtick, or
+ *  -1 when the line ends first. Inside backticks a backslash escapes the next character. */
+function backtickEnd(command: string, at: number): number {
+  let index = at + 1;
+  while (index < command.length) {
+    const char = command[index]!;
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === '`') return index + 1;
+    index += 1;
+  }
+  return -1;
+}
+
+/** Where the double-quoted region that starts at `at` ends: just past its closing quote, or -1.
+ *  A substitution inside it keeps its own spaces and quotes, so it is skipped whole. */
+function doubleQuoteEnd(command: string, at: number): number {
+  let index = at + 1;
+  while (index < command.length) {
+    const char = command[index]!;
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === '"') return index + 1;
+    if (char === '`') {
+      const end = backtickEnd(command, index);
+      if (end < 0) return -1;
+      index = end;
+      continue;
+    }
+    if (char === '$' && (command[index + 1] === '(' || command[index + 1] === '{')) {
+      const end = substitutionEnd(command, index);
+      if (end < 0) return -1;
+      index = end;
+      continue;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+/**
+ * Where the `$(…)` or `${…}` substitution that starts at `at` ends: just past its closing
+ * character, or -1 when the line ends first. The span is one word whatever spaces it holds, and
+ * its source text is what a reader can know — the shell runs it, not this reader. Quoted regions,
+ * escapes and nested substitutions inside it are skipped whole, so a `)` inside `"…"` or a
+ * nested `$(…)` never closes it early.
+ */
+function substitutionEnd(command: string, at: number): number {
+  const open = command[at + 1];
+  const close = open === '(' ? ')' : '}';
+  let depth = 1;
+  let index = at + 2;
+  while (index < command.length) {
+    const char = command[index]!;
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      const closed = command.indexOf("'", index + 1);
+      if (closed < 0) return -1;
+      index = closed + 1;
+      continue;
+    }
+    if (char === '"') {
+      const end = doubleQuoteEnd(command, index);
+      if (end < 0) return -1;
+      index = end;
+      continue;
+    }
+    if (char === '`') {
+      const end = backtickEnd(command, index);
+      if (end < 0) return -1;
+      index = end;
+      continue;
+    }
+    if (char === open) {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (char === close) {
+      depth -= 1;
+      index += 1;
+      if (depth === 0) return index;
+      continue;
+    }
+    index += 1;
+  }
+  return -1;
+}
 
 /** Read a line to its words. Exported for the one caller that must decide about a line it could
  *  not read (`lineDelimiterRisk`), which needs the words read before the unreadable part. */
@@ -96,6 +194,20 @@ export function readShellWords(command: string): ShellWordsRead {
           at += 1;
           continue;
         }
+        if (inner === '$' && (command[at + 1] === '(' || command[at + 1] === '{')) {
+          const end = substitutionEnd(command, at);
+          if (end < 0) return { words, unreadable: 'unclosed', at: start };
+          text += command.slice(at, end);
+          at = end;
+          continue;
+        }
+        if (inner === '`') {
+          const end = backtickEnd(command, at);
+          if (end < 0) return { words, unreadable: 'unclosed', at: start };
+          text += command.slice(at, end);
+          at = end;
+          continue;
+        }
         text += inner;
         at += 1;
       }
@@ -127,6 +239,22 @@ export function readShellWords(command: string): ShellWordsRead {
       at = close + 1;
       continue;
     }
+    // A substitution is one word whatever spaces it holds: the shell runs it, so its source text
+    // is the only thing a reader can know. It is kept as written.
+    if (char === '`') {
+      const end = backtickEnd(command, at);
+      if (end < 0) return { words, unreadable: 'unclosed', at: start };
+      text += command.slice(at, end);
+      at = end;
+      continue;
+    }
+    if (char === '$' && (command[at + 1] === '(' || command[at + 1] === '{')) {
+      const end = substitutionEnd(command, at);
+      if (end < 0) return { words, unreadable: 'unclosed', at: start };
+      text += command.slice(at, end);
+      at = end;
+      continue;
+    }
     text += char;
     at += 1;
   }
@@ -139,6 +267,20 @@ export function readShellWords(command: string): ShellWordsRead {
 export function shellWords(command: string): ShellWord[] | null {
   const read = readShellWords(command);
   return 'unreadable' in read ? null : read.words;
+}
+
+/** The words' text, or null when the line has no knowable words. A reader that only needs the
+ *  words (a launch line's binary, an env word) asks here; the tokenizer stays in this file. */
+export function shellWordTexts(command: string): string[] | null {
+  return shellWords(command)?.map((word) => word.text) ?? null;
+}
+
+/** The words as the line spells them — the source text each word occupies, quotes included — or
+ *  null when the line has no knowable words. A message that shows the caller what they wrote
+ *  (a refused program, a quoted path) reads this spelling; a reader that acts on a word's value
+ *  reads `shellWordTexts`. */
+export function shellWordSources(command: string): string[] | null {
+  return shellWords(command)?.map((word) => command.slice(word.start, word.end)) ?? null;
 }
 
 /** Why a line has no knowable words, or null when it has them. A caller that must tell a line no

@@ -26,7 +26,12 @@ a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
     team swap cancel <seat> [--file <path>] [--json]
 
 A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the entity that already
-runs it.
+runs it. A name in the seat's own CLI profile's vendor table — `<vendor>:<model>` — moves the seat
+between vendors of that same CLI with no donor and no launcher script: the generated line keeps the
+seat's own wrapper prefix and the assignments that are not a vendor's, and takes the vendor's env
+words, the CLI's binary and its model flag. The move is refused when this machine's credential
+store does not hold the vendor's item — naming the item and the one-time command that adds it,
+never a secret — or when the store cannot be read.
 
 ## What it reads and writes
 
@@ -101,7 +106,7 @@ is not a rollback.
 | Flag | Meaning |
 | --- | --- |
 | `--rule` | list every breach of the entity's model rule, with the donor each recipe came from |
-| `--to <target>` | with `queue`: take the recipe from a seat running `<cli>:<model>`, instead of the rule's own proposal |
+| `--to <target>` | with `queue`: take the recipe from a seat running `<cli>:<model>`, instead of the rule's own proposal; `<vendor>:<model>` instead moves the seat between vendors of its own CLI through the profile's vendor table, with no donor and no launcher script |
 | `<seat>` | the seat to queue, force or cancel; required by `queue`, `now` and `cancel` |
 | `--run` | carry out every queued swap that is due now; `--json` prints one result per seat |
 | `--file <path>` | the team file to read; the owner's alone |
@@ -126,6 +131,11 @@ is not a rollback.
 | `team swap: <why the entity's model rule cannot be read, or that none is declared>` | 1 |
 | `team swap: <seat> declares a model the rule allows; there is nothing to swap to` | 1 |
 | `team swap: no seat of the entity this team may copy from runs <cli>:<model>` | 1 |
+| `team swap: <vendor> offers no model "<model>"; it offers <ids>` | 1 |
+| `team swap: this machine holds no "<item>" item for the vendor "<vendor>"; add it once with the command below, which asks the store for the secret itself, so nothing is typed here and nothing is read from stdin: <command>` | 1 |
+| `team swap: this machine's credential store could not be read while looking for "<item>"; whether it holds the item is not knowable, so the swap is refused rather than guessing` | 1 |
+| `team swap: its launch line is not one this version rewrites for another vendor; refused rather than guessing` | 1 |
+| `team swap: the model "<model>" runs under the lab "<vendor>", which the entity model rule in force does not allow on this seat` | 1 |
 | `team swap: <why no recipe is available for this seat>` | 1 |
 | `team swap: herdr cannot be read, so the forced swap cannot run now` | 1 |
 | `team swap: herdr cannot be read, so no swap can be run now` | 1 |

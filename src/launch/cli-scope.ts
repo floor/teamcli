@@ -22,6 +22,11 @@ export function splitAtDelimiter(line: string): { head: string; tail: string } {
 /** The shells that take a command string. */
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh']);
 
+/** Whether a program name is a shell: one that takes a command string of its own. */
+export function isShellName(name: string): boolean {
+  return SHELLS.has(name);
+}
+
 /** The shells whose quoting this tool writes inside: the POSIX shells, whose single quote
  *  splices as `'\''` and whose words split as the tokenizer reads them. A fish or csh command
  *  string is read for its flags but never written into: a line that runs one keeps 0.5.10's
@@ -283,7 +288,7 @@ function isSimpleCommand(text: string): boolean {
  *  a script that fails either proof, and a word read reports no word from one. Both ask this
  *  same function, so they refuse the same lines by construction. Returns the body and the quote
  *  the shell reads inside it, or null when the word proves neither. */
-function provenScriptWord(text: string, word: ShellWord): { body: string; layer: QuotedWord } | null {
+export function provenScriptWord(text: string, word: ShellWord): { body: string; layer: QuotedWord } | null {
   const layer = quotedWordOf(text, word);
   if (layer === null) return null;
   if (!outerWordKeepsText(text.slice(word.start + layer.openLen, word.end - 1), layer.quote)) return null;
@@ -317,7 +322,7 @@ type Placement =
  *  unclosed quote takes every later character into the quoted word, and a trailing backslash
  *  escapes the space before the appended word. A `$` expansion or a glob changes its own word
  *  only, so the words written after it still reach the command and it does not count here. */
-function takesAppendedWord(text: string): boolean {
+export function takesAppendedWord(text: string): boolean {
   let quote: ScriptQuote | null = null;
   let at = 0;
   while (at < text.length) {

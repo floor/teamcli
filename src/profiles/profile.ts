@@ -11,10 +11,13 @@ import {
   appendPositionalOnLaunchLine,
   cliBodyOn,
   cliWordListOf,
+  isShellName,
   lineDelimiterRisk,
   placedOnLaunchLine,
   plainBodyOf,
+  provenScriptWord,
   shellScriptWordOf,
+  takesAppendedWord,
 } from '../launch/cli-scope.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
@@ -49,6 +52,35 @@ export type InputBlock = {
  * A launch profile: what `team` knows about one CLI, so a seat can't start
  * blocked. Keyed by the seat's `cli`.
  */
+/** A model id a vendor offers, with the model and version the seat row records. */
+export type VendorModel = { id: string; model: string; version: string; display: string };
+
+/** One provider a CLI can run on: the env words it reads for that provider, the credential item
+ *  the machine must hold, and the models the provider offers. Only the adapter that owns the
+ *  credential store's naming declares one. */
+export type VendorBlock = {
+  name: string;
+  /** The item this provider's key lives under, in the store the credentials block names. */
+  credential: string;
+  /** Whole shell words the CLI reads: each one variable assignment, with `{model}` and
+   *  `{credential}` filled from the chosen model and the item. */
+  env: readonly string[];
+  models: readonly VendorModel[];
+};
+
+/** The credential store a profile's vendors read: an attribute-only presence check, and the
+ *  one-time command a refusal prints — never a secret value and never a prompt. */
+export type CredentialsBlock = {
+  /** The lookup's program and its words, before `-s <item> -a <account>`: no `-w`, so the
+   *  secret is never asked for and never reaches an argument list. */
+  check: readonly string[];
+  /** The add command, with `{item}` where the item's name goes. The store asks for the secret
+   *  itself: nothing is read from stdin, so nothing lands in a shell history. */
+  add: string;
+  /** What the store answers when the item is not there. */
+  missingStatus: number;
+};
+
 /** The keys `--abandon` may press to answer a prompt: none of them selects a menu option. */
 export const ABANDON_SAFE_KEYS = ['escape', 'ctrl+c', 'ctrl+u'] as const;
 
@@ -173,6 +205,12 @@ export interface Profile {
   startsOnLastModel: boolean;
   /** The model flag, and the id this profile maps to that model and version, when it knows one. */
   modelFlag(model: string, version: string): { option: string; id: string | null };
+  /** The providers this CLI can run on, as the adapter names them; empty when it names none, and
+   *  the seats of such a CLI move between providers only by copying a seat. */
+  vendors: readonly VendorBlock[];
+  /** The credential store the vendor items live in, or null when the profile declares no vendors:
+   *  nothing reads a store the profile has not named. */
+  credentials: CredentialsBlock | null;
   /** Trust-answer records. Empty when this version sends no trust key for the CLI. */
   answers: readonly TrustRecord[];
   /** The keys this profile presses to dismiss a dialog of each kind, per version. Empty when it
@@ -714,6 +752,106 @@ export function withResume(cli: string, command: string, sessionId: string): str
   return placedOnLaunchLine(command, `--resume ${sessionId}`, 'claude');
 }
 
+
+/** The variable name an assignment word sets, or null when the word sets none. */
+export function assignmentWordName(word: string): string | null {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(word);
+  return match ? match[1]! : null;
+}
+
+/** Whether an env word is exactly one shell word. A substitution or a quoted value may hold
+ *  spaces inside its own word; unquoted whitespace makes two words, and a vendor word that
+ *  splits would put the second one where the launch line's program is read. */
+function oneShellWord(text: string): boolean {
+  return shellWords(text)?.length === 1;
+}
+
+/** What a move to another vendor of the same CLI needs from the profile: the vendor's env words
+ *  with their placeholders filled, every assignment name any vendor of the CLI supplies (a word
+ *  with one of those names belongs to the vendor the line was written for), the CLI's model flag
+ *  and the model id to run. */
+export type VendorMove = {
+  words: readonly string[];
+  replaced: readonly string[];
+  option: string;
+  modelId: string;
+};
+
+export type VendorLaunch = { ok: true; launch: string } | { ok: false; why: string };
+
+/**
+ * The same CLI's launch line, written for another vendor of it. The line's leading variable
+ * assignments are kept unless a vendor supplies that name, and its wrapper prefix — a shell
+ * reading a script (`zsh ~/tools/as-floor.sh`) — is kept as written; everything after the CLI's
+ * own binary is the launcher's tail and is replaced by the vendor's words, the binary and the
+ * model flag. Every assignment word has to precede the command word, so the vendor's words go in
+ * front of the wrapper: the wrapper is `exec "$@"`, and a word written after it would be a
+ * program name, not an environment variable. A line this reader cannot prove — a `sh -c` script,
+ * an `env` or any other prefix, an unclosed quote, a shell option it does not follow — is
+ * refused rather than guessed at.
+ */
+export function launchWithVendorWords(profile: Profile, command: string, move: VendorMove): VendorLaunch {
+  const cannot = 'its launch line is not one this version rewrites for another vendor; refused rather than guessing';
+  const words = shellWords(command);
+  if (words === null) return { ok: false, why: `its launch line has no knowable words; ${cannot}` };
+  const kept: string[] = [];
+  let at = 0;
+  while (at < words.length) {
+    const word = words[at]!;
+    const name = assignmentWordName(word.text);
+    if (name === null) break;
+    if (!move.replaced.includes(name)) {
+      const source = command.slice(word.start, word.end);
+      if (!takesAppendedWord(source)) {
+        return { ok: false, why: `its launch line's \`${source}\` swallows the words after it; ${cannot}` };
+      }
+      kept.push(source);
+    }
+    at += 1;
+  }
+  const prefix: string[] = [];
+  const first = words[at];
+  if (first === undefined) return { ok: false, why: `its launch line names no command; ${cannot}` };
+  if (isShellName(first.text.split('/').pop() ?? first.text)) {
+    const second = words[at + 1];
+    if (second === undefined) return { ok: false, why: `its launch line runs a shell that runs nothing; ${cannot}` };
+    if (second.text.startsWith('-')) {
+      const script = words[at + 2];
+      const proved = script === undefined ? null : provenScriptWord(command, script);
+      return {
+        ok: false,
+        why: proved === null
+          ? `its launch line runs a shell option this version does not follow; ${cannot}`
+          : `its launch line runs the CLI inside a quoted script this version does not rewrite; ${cannot}`,
+      };
+    }
+    const scriptName = second.text.split('/').pop() ?? second.text;
+    if (!/\.(?:z|ba)?sh$/.test(scriptName)) {
+      return { ok: false, why: `its launch line starts a shell on \`${second.text}\`, which is no wrapper script; ${cannot}` };
+    }
+    const scriptSource = command.slice(second.start, second.end);
+    if (!takesAppendedWord(scriptSource)) {
+      return { ok: false, why: `its launch line's \`${scriptSource}\` swallows the words after it; ${cannot}` };
+    }
+    prefix.push(command.slice(first.start, first.end), scriptSource);
+    at += 2;
+  }
+  const program = words[at];
+  if (program === undefined) return { ok: false, why: `its launch line names no command; ${cannot}` };
+  if ((program.text.split('/').pop() ?? program.text) !== profile.binary) {
+    return {
+      ok: false,
+      why: `its launch line starts \`${program.text}\`, not this profile's CLI \`${profile.binary}\`; ${cannot}`,
+    };
+  }
+  for (const word of move.words) {
+    if (assignmentWordName(word) === null || !oneShellWord(word) || !takesAppendedWord(word)) {
+      return { ok: false, why: "the profile's vendor words are not one assignment word each; refused rather than guessing" };
+    }
+  }
+  const launch = [...kept, ...move.words, ...prefix, profile.binary, move.option, move.modelId].join(' ');
+  return { ok: true, launch };
+}
 
 /** The CLI's own decoded words on a launch line, as {@link cliWordListOf} reads them. Every
  *  "does the line already set this" question is asked of these words: a quoted flag name is the
@@ -1589,7 +1727,7 @@ function launchOf(root: YamlNode): Shipped {
   const entries = mapping(root, 'a profile');
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'vendors', 'credentials', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
   const cli = text(required(entries, 'cli', root.line), 'cli');
   required(entries, 'screen', root.line);
   const quotaEntry = optional(entries, 'quota');
@@ -1616,6 +1754,8 @@ function launchOf(root: YamlNode): Shipped {
   const notStartedEntry = optional(entries, 'not_started');
   const abandonAnswersEntry = optional(entries, 'abandon_answers');
   const featuresEntry = optional(entries, 'features');
+  const vendorsEntry = optional(entries, 'vendors');
+  const credentialsEntry = optional(entries, 'credentials');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
     fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
@@ -1626,6 +1766,12 @@ function launchOf(root: YamlNode): Shipped {
   const login = loginOf(required(entries, 'login', root.line).value);
   const timeouts = required(entries, 'timeouts', root.line).value;
   const models = modelsEntry ? modelsOf(modelsEntry.value) : { option: [] as string[], ids: [] as ModelRule[], absent: null };
+  if (vendorsEntry !== undefined && credentialsEntry === undefined) {
+    fail(vendorsEntry.line, '"vendors" needs a "credentials" block: the store its items live in');
+  }
+  if (credentialsEntry !== undefined && vendorsEntry === undefined) {
+    fail(credentialsEntry.line, '"credentials" names a store no vendor uses: declare "vendors" too');
+  }
   const rules = rulesOf(required(entries, 'rules', root.line).value);
   return {
     profile: {
@@ -1670,6 +1816,8 @@ function launchOf(root: YamlNode): Shipped {
         option: models.option[0] ?? '--model',
         id: suggestId(models.ids, model, version),
       }),
+      vendors: vendorsEntry ? vendorsOf(vendorsEntry) : [],
+      credentials: credentialsEntry ? credentialsOf(credentialsEntry) : null,
       answers: trustAnswers(optional(entries, 'trust_answer')),
       questionAnswers: questionAnswers(optional(entries, 'question_answer')),
     },
@@ -1705,6 +1853,71 @@ function featuresOf(node: YamlNode): string[] {
     }
     return pair;
   });
+}
+
+/** The providers a CLI can run on, as the adapter names them. Each env word is one shell word
+ *  once its placeholders fill: a word that would split, or set no variable, is refused here. */
+function vendorsOf(entry: YamlEntry): VendorBlock[] {
+  const node = entry.value;
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"vendors" must be a non-empty list');
+  const names = new Set<string>();
+  return node.items.map((item) => {
+    const fields = mapping(item, 'a vendor');
+    only(fields, ['name', 'credential', 'env', 'models']);
+    const name = text(required(fields, 'name', item.line), 'name');
+    if (names.has(name)) fail(item.line, `two vendors are named "${name}"`);
+    names.add(name);
+    const credential = text(required(fields, 'credential', item.line), 'credential');
+    const env = strings(required(fields, 'env', item.line).value, 'env');
+    for (const word of env) {
+      const filled = word.replaceAll('{model}', 'an-id').replaceAll('{credential}', 'an-item');
+      if (assignmentWordName(filled) === null) {
+        fail(item.line, `vendor "${name}" has an env word that sets no variable: "${word}"`);
+      }
+      if (!oneShellWord(filled)) {
+        fail(item.line, `vendor "${name}" has an env word that is not one shell word once its placeholders fill: "${word}"`);
+      }
+    }
+    const modelsNode = required(fields, 'models', item.line).value;
+    if (modelsNode.kind !== 'seq' || modelsNode.items.length === 0) fail(modelsNode.line, '"models" must be a non-empty list');
+    const ids = new Set<string>();
+    const models = modelsNode.items.map((model) => {
+      const modelFields = mapping(model, 'a vendor model');
+      only(modelFields, ['id', 'model', 'version', 'display']);
+      const id = text(required(modelFields, 'id', model.line), 'id');
+      if (ids.has(id)) fail(model.line, `vendor "${name}" names the model "${id}" twice`);
+      ids.add(id);
+      return {
+        id,
+        model: text(required(modelFields, 'model', model.line), 'model'),
+        version: text(required(modelFields, 'version', model.line), 'version'),
+        display: text(required(modelFields, 'display', model.line), 'display'),
+      };
+    });
+    return { name, credential, env, models };
+  });
+}
+
+/** The store a profile's vendor items live in: the attribute-only lookup and the one-time add
+ *  command a refusal prints. A store the profile does not name is never read. */
+function credentialsOf(entry: YamlEntry): CredentialsBlock {
+  const node = entry.value;
+  const fields = mapping(node, '"credentials"');
+  only(fields, ['check', 'add', 'missing_status']);
+  const check = strings(required(fields, 'check', node.line).value, 'check');
+  if (check.length === 0) fail(node.line, '"credentials.check" must name the command that reads the store');
+  for (const word of check) {
+    if (['-w', '--wait', '-g'].includes(word)) {
+      fail(node.line, `"credentials.check" asks for the secret ("${word}"): the check is attribute-only`);
+    }
+  }
+  const add = text(required(fields, 'add', node.line), 'add');
+  if (!add.includes('{item}')) fail(node.line, '"credentials.add" must name where the item goes with "{item}"');
+  const statusEntry = required(fields, 'missing_status', node.line).value;
+  if (statusEntry.kind !== 'scalar' || typeof statusEntry.value !== 'number' || !Number.isInteger(statusEntry.value)) {
+    fail(statusEntry.line, '"missing_status" must be a whole number');
+  }
+  return { check, add, missingStatus: statusEntry.value };
 }
 
 function patternsOf(node: YamlNode, line: number, key: string): RegExp[] {

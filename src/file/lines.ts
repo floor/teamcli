@@ -104,7 +104,14 @@ function setValue(line: string, value: string): string {
   const rest = match[2] ?? '';
   const comment = /\s+#.*$/.exec(rest)?.[0] ?? '';
   const raw = rest.slice(0, rest.length - comment.length).trim();
-  const quoted = raw.startsWith('"') ? `"${value}"` : raw.startsWith("'") ? `'${value}'` : value;
+  // The value keeps the line's own quoting style, so the quote characters inside it have to be
+  // escaped for that style: a shell word may carry `"$USER"` or a quoted argument, and writing
+  // those raw into a double-quoted scalar ended the string early and left the file unparseable.
+  const quoted = raw.startsWith('"')
+    ? `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+    : raw.startsWith("'")
+      ? `'${value.replaceAll("'", "''")}'`
+      : value;
   return `${match[1]}${quoted}${comment}`;
 }
 
