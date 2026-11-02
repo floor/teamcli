@@ -10,15 +10,16 @@ and one Touch ID.
 ## Synopsis
 
     team forget <id...> [--json]
-    team forget <id...> --request [--json]
+    team forget <id...> --request [--reason <text>] [--json]
     team forget <id...> --approval <request-id> [--json]
 
 Each word is a team id, a project name, or a session name.
 
 ## Who may run it
 
-The owner, from a terminal outside herdr. `--request` records every id as one request and
-removes nothing; the owner answers on the owner page. `--approval` runs that answer once. A
+The owner, from a terminal outside herdr. `--request` records every id as one request (`--reason
+<text>` is the short reason the card shows) and removes nothing; the owner answers on the owner
+page. `--approval` runs that answer once. A
 signed always rule for `team-forget` covering this folder admits the run with no request. A run
 with no terminal and no such answer is refused:
 `team forget: only the owner runs this, from a terminal outside herdr`.
@@ -39,7 +40,7 @@ with no terminal and no such answer is refused:
 $ team forget ; echo "exit $?"
 team forget: a team id is required
 Usage: team forget <id...> [--json]
-       team forget <id...> --request [--json]
+       team forget <id...> --request [--reason <text>] [--json]
        team forget <id...> --approval <request-id> [--json]
 
 Removes every named team from this machine's registry, in one command. Each word is a team id,
@@ -47,8 +48,8 @@ a project name, or a session name; a word that names more than one team is refus
 repeated team. Each team's place in any project record is dropped with it. Panes are not stopped
 and the team file is not deleted. A bad word removes nothing.
 
-The owner runs it from a terminal outside herdr. --request records every id as one request and
-removes nothing; --approval <request-id> runs it once the owner has answered on the owner page.
+The owner runs it from a terminal outside herdr. --request records every id as one request
+(--reason <text> is the short reason the card shows) and removes nothing; --approval <request-id> runs it once the owner has answered on the owner page.
 One card and one Touch ID cover the whole list. A signed always rule for team-forget covering
 this folder admits the run with no request.
 

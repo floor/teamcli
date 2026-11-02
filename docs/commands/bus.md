@@ -21,14 +21,14 @@ reconciliation pass).
 ## Synopsis
 
     team bus
-    team bus --request
+    team bus --request [--reason <text>]
     team bus --approval <request-id>
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--request` | — | record this start for the owner seat and exit; the owner answers on the owner page |
+| `--request` | — | record this start for the owner seat and exit; the owner answers on the owner page. `--reason <text>` is the short reason the card shows |
 | `--approval` | `<request-id>` | run the start the owner seat signed, once |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -90,7 +90,7 @@ seats:
 $ team bus extra ; echo "exit $?"
 team bus: unexpected "extra"
 Usage: team bus
-       team bus --request
+       team bus --request [--reason <text>]
        team bus --approval <request-id>
 
 Runs the event bus for this clone over `.agents/bus.sock`, appending signed event records to the
@@ -99,7 +99,7 @@ terminal outside herdr, and a seat the team marks `leads` runs it from that seat
 Ctrl-C stops it.
 
 The owner-seat form needs no owner terminal: --request records this start (repository, team, HEAD;
-fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a
+fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a
 passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule
 for team-bus covering this folder admits the run with no request. The daemon restarts a dead bus
 on its own, and so does team up.
