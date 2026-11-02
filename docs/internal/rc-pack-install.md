@@ -19,7 +19,7 @@ commit packs to the same compressed bytes on every supported machine.
 
 ```console
 $ bun run pack --pack-destination <artifact-dir>
-$ bun scripts/check-pack.ts <artifact-dir>/team-<version>.tgz <source-sha>
+$ bun scripts/check-pack.ts <artifact-dir>/team-<version>.tgz <source-sha> [--wrapper <path>]
 ```
 
 `pack` writes `<artifact-dir>/team-<version>.tgz` and `<tarball>.stamp.json` beside it. The stamp
@@ -28,8 +28,11 @@ records the tarball's `sha256` and `bytes`, the `version`, the full `gitHead`, t
 
 `check-pack` reads every member. An internal ticket reference fails it, and so does a missing or
 mismatched source stamp; a hit names the file, never the reference. Pass the source commit as the
-second argument (with none it expects `GITHUB_SHA`). Exit 1 is a failed check and exit 2 an
-unreadable tarball, never a clean one.
+second argument (with none it expects `GITHUB_SHA`). It also reads the wrapper manifest — by
+default `packages/teamcli/package.json`, or the path after `--wrapper` — and fails unless the
+wrapper's `version` and its `dependencies.team` both equal the packed `version` exactly; that is
+the pin a published `@teamcli/cli` installs. Exit 1 is a failed check and exit 2 an unreadable
+tarball or wrapper manifest, never a clean one.
 
 Keep the artifact directory outside the repository. The stamp is the artifact's identity; quote it
 rather than restating its numbers.
