@@ -7,9 +7,10 @@
 // no reader: it is moved whole, alone, and never served or acknowledged. Every file is read
 // without following a link and moved with `renameSync`; nothing here unlinks anything.
 import { createHash, type KeyObject } from 'node:crypto';
-import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { legacyReceiptMatches, messagePayload } from '../commands/messages.ts';
+import { ensureFoldersBelow } from './history.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { isRead, recordAuthOf, sameFolder, statusOf, type RecordPayload } from './record.ts';
 import { MESSAGE_DOMAIN, verifyDomain, type Json } from '../store/keys.ts';
@@ -418,6 +419,11 @@ export function moveFamily(
   at: { root: string; agents: string; date: string; session: string },
 ): { moved: MovedFile[]; errors: string[] } {
   const destDir = destinationOf(entry, at);
+  // The destination's new components are checked before the first write, one level at a time:
+  // a link standing where a folder would be made is refused, never followed, so a family can
+  // never land outside the checkout while the report names an in-root path.
+  const folderProblem = ensureFoldersBelow(at.agents, [relative(at.agents, destDir)]);
+  if (folderProblem !== null) return { moved: [], errors: [folderProblem] };
   for (const name of entry.files) {
     if (anything(join(destDir, name))) {
       const dest = relative(at.root, join(destDir, name));
@@ -434,7 +440,6 @@ export function moveFamily(
       return { moved: [], errors: [`cannot read ${relative(at.root, join(entry.dir, name))}: ${messageOf(error)}`] };
     }
   }
-  mkdirSync(destDir, { recursive: true, mode: 0o700 });
   const moved: MovedFile[] = [];
   const errors: string[] = [];
   for (const held of hashed) {
@@ -463,9 +468,16 @@ export function manifestPath(agents: string, now: Date): string {
 }
 
 /** The record of the move: one header line, then one row per moved file — digest, bytes, source
- *  and destination, each relative to the checkout. */
-export function writeManifest(path: string, header: string, moved: readonly MovedFile[]): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+ *  and destination, each relative to the checkout. Its folder is checked the same way the move's
+ *  destination is, and the file is created, never followed: null when written, or the reason. */
+export function writeManifest(path: string, header: string, moved: readonly MovedFile[], base: string): string | null {
+  const folderProblem = ensureFoldersBelow(base, [relative(base, dirname(path))]);
+  if (folderProblem !== null) return folderProblem;
   const rows = moved.map((file) => `${file.digest}\t${String(file.bytes)}\t${file.source}\t${file.dest}`);
-  writeFileSync(path, `${[header, ...rows].join('\n')}\n`, { mode: 0o600 });
+  try {
+    writeFileSync(path, `${[header, ...rows].join('\n')}\n`, { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    return `${path}: the manifest could not be written: ${messageOf(error)}`;
+  }
+  return null;
 }

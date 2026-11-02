@@ -18,6 +18,7 @@ import type { LoadResult } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
+import { ensureFoldersBelow } from '../send/history.ts';
 import { manifestPath, moveFamily, parseDuration, scanArchiveSeat, scanLegacySeat, writeManifest, type MovedFile } from '../send/message-archive.ts';
 import { STATE_FILE } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -417,6 +418,14 @@ async function runScopedArchive(
     const fileWord = files === 1 ? 'file' : 'files';
     lines.push(`seat ${seat}, older than ${window}: would move ${String(families)} ${familyWord} (${String(files)} ${fileWord}); nothing was written`);
   } else {
+    // The manifest is the record of the move: its folder's new components are checked before the
+    // first rename, so a link standing where it would be made refuses the run with every family
+    // still in place, rather than moving files whose record would land outside the checkout.
+    const folderProblem = ensureFoldersBelow(agents, [relative(agents, dirname(manifestPath(agents, now)))]);
+    if (folderProblem !== null) {
+      io.stderr(`team archive: ${folderProblem}\n`);
+      return 1; // exit: archive.scoped-failed
+    }
     for (const family of planned) {
       const moved = moveFamily(family, { root, agents, date, session });
       movedFiles.push(...moved.moved);
@@ -434,8 +443,9 @@ async function runScopedArchive(
   if (!dry && movedFiles.length > 0) {
     const manifest = manifestPath(agents, now);
     const header = `# team message archive ${now.toISOString()} seat=${seat} older-than=${window} root=${root}`;
-    writeManifest(manifest, header, movedFiles);
-    lines.push(`manifest: ${relative(root, manifest)}`);
+    const problem = writeManifest(manifest, header, movedFiles, agents);
+    if (problem !== null) failures.push(problem);
+    else lines.push(`manifest: ${relative(root, manifest)}`);
   }
   if (failures.length > 0) return scopedFailed(io, lines, failures);
   return scopedDone(io, lines);

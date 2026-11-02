@@ -7,7 +7,7 @@
 // calls refuse a seat that is not the owner's or a lead's, and a dry run writes nothing at all.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -322,6 +322,95 @@ describe('a stopped seat\'s stale record is acknowledged, then archived', () => 
       ['--seat', 'worker', '--older-than', '7d', '--abandon'],
       ['--seat', 'worker', '--older-than', '7d', '--session', 'other'],
     ]) expect((await archive(argv)).code).toBe(2);
+  });
+});
+
+/** An outside folder a planted link points at: anything written through the link lands here. */
+function outside(): string {
+  const dir = join(base, 'outside');
+  mkdirSync(dir);
+  return dir;
+}
+
+describe('a symbolic link at a folder the archive would write into is refused, never followed', () => {
+  test('at the transport archive root, the family is left where it is', async () => {
+    sent('worker', STALE_ID);
+    acknowledge('worker', STALE_ID);
+    age('worker', STALE_ID, STALE);
+    const away = outside();
+    symlinkSync(away, join(root, '.agents', 'send-drops-archive'));
+
+    const moved = await archive(['--seat', 'worker', '--older-than', '7d'], OWNER);
+    expect(moved.code, moved.err).toBe(1);
+    expect(moved.err).toContain('a symbolic link was found and not followed');
+    expect(moved.err).toContain('send-drops-archive');
+    // The record and its receipt are still the live tree's, and nothing reached the link's target.
+    expect(existsSync(live('worker', STALE_ID))).toBe(true);
+    expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), STALE_ID, 'read'))).toBe(true);
+    expect(readdirSync(away)).toEqual([]);
+  });
+
+  test('at the dated level below it, the family is left where it is', async () => {
+    sent('worker', STALE_ID);
+    acknowledge('worker', STALE_ID);
+    age('worker', STALE_ID, STALE);
+    const away = outside();
+    mkdirSync(join(root, '.agents', 'send-drops-archive'));
+    symlinkSync(away, join(root, '.agents', 'send-drops-archive', DATE));
+
+    const moved = await archive(['--seat', 'worker', '--older-than', '7d'], OWNER);
+    expect(moved.code, moved.err).toBe(1);
+    expect(moved.err).toContain('a symbolic link was found and not followed');
+    expect(moved.err).toContain(DATE);
+    expect(existsSync(live('worker', STALE_ID))).toBe(true);
+    expect(readdirSync(away)).toEqual([]);
+  });
+
+  test('at the legacy archive root, the legacy family is left where it is', async () => {
+    const legacyDir = join(root, '.agents', 'messages', 'worker');
+    plantMessage(home, root, 'worker', LEGACY_ID, {
+      kind: 'message',
+      id: LEGACY_ID,
+      to: 'worker',
+      root,
+      session: 'acme',
+      at: NOW_ISO,
+      body: 'the older store\'s message\n',
+      from: 'lead',
+    });
+    const receipt = { kind: 'receipt', id: LEGACY_ID, to: 'worker', root, session: 'acme', at: NOW_ISO };
+    writeFileSync(
+      join(legacyDir, `${LEGACY_ID}.read.json`),
+      `${JSON.stringify({ payload: receipt, signature: signDomain(RECEIPT_DOMAIN, receipt as unknown as Json, messageKeyOf(home)) }, null, 2)}\n`,
+    );
+    for (const name of readdirSync(legacyDir)) utimesSync(join(legacyDir, name), STALE, STALE);
+    const away = outside();
+    symlinkSync(away, join(root, '.agents', 'messages-archive'));
+
+    const moved = await archive(['--seat', 'worker', '--older-than', '7d'], LEAD);
+    expect(moved.code, moved.err).toBe(1);
+    expect(moved.err).toContain('a symbolic link was found and not followed');
+    expect(moved.err).toContain('messages-archive');
+    expect(existsSync(join(legacyDir, `${LEGACY_ID}.json`))).toBe(true);
+    expect(existsSync(join(legacyDir, `${LEGACY_ID}.read.json`))).toBe(true);
+    expect(readdirSync(away)).toEqual([]);
+  });
+
+  test('at the manifest folder, nothing moves at all', async () => {
+    sent('worker', STALE_ID);
+    acknowledge('worker', STALE_ID);
+    age('worker', STALE_ID, STALE);
+    const away = outside();
+    symlinkSync(away, join(root, '.agents', 'archive-manifests'));
+
+    const moved = await archive(['--seat', 'worker', '--older-than', '7d'], OWNER);
+    expect(moved.code, moved.err).toBe(1);
+    expect(moved.err).toContain('a symbolic link was found and not followed');
+    expect(moved.err).toContain('archive-manifests');
+    // The move is refused before the first rename: the family is still live and the target empty.
+    expect(existsSync(live('worker', STALE_ID))).toBe(true);
+    expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), STALE_ID, 'read'))).toBe(true);
+    expect(readdirSync(away)).toEqual([]);
   });
 });
 
