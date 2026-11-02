@@ -17,6 +17,7 @@ import { runRestoreSweepForRoute } from '../../src/launch/restore-sweep.ts';
 import { acquireRunLock, runLockText } from '../../src/launch/run-lock.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { intoRegistry, underRegistry } from '../helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-21T15:00:00Z');
 const AMPLE: Machine = {
@@ -381,5 +382,35 @@ describe('the daemon restore sweep for one route', () => {
     expect(made.runs).toEqual([]);
     expect(made.creates).toEqual([]);
     expect(made.closes).toEqual([]);
+  });
+});
+
+describe('a route whose team lives in the registry', () => {
+  test('is read through the registry when no file stands at the conventional path', async () => {
+    recordSeat();
+    intoRegistry(root, home);
+    rmSync(teamFile);
+    const made = world();
+    made.session = 'absent';
+    // The daemon-shaped call no longer names the conventional path: the route resolves its root
+    // through the one seam, so the registry's team and its recorded session are found. Naming
+    // the absent path would have answered `unreadable` ("no team file at ...").
+    const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
+    expect(result).toEqual({ kind: 'not-running', state: 'absent' });
+  });
+
+  test('is read from the registry, not from a stale file left at the conventional path', async () => {
+    recordSeat();
+    intoRegistry(root, home);
+    writeFileSync(
+      teamFile,
+      teamText().replace('project: sweep', 'project: retired').replace('session: sweep', 'session: retired'),
+    );
+    const made = world();
+    made.session = 'absent';
+    // The leftover names session "retired", which records no seat; reading it would stop at
+    // `no-recorded-session`. The registry names "sweep", whose recorded seat is judged.
+    const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
+    expect(result).toEqual({ kind: 'not-running', state: 'absent' });
   });
 });
