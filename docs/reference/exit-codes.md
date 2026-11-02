@@ -885,6 +885,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `usage.block` | `usage` | 0 | the machine's report printed | `team usage` |
 | `usage.invocation` | `usage` | 2 | the invocation can't be read | `team usage extra` |
 | `usage.store` | `usage` | 2 | the store folder can't be read | `team usage` |
+| `waits.ok` | `waits` | 0 | the waits were listed | `team waits` |
+| `waits.refused` | `waits` | 1 | the caller is not a seat of this team | `team waits` |
+| `waits.configuration` | `waits` | 2 | the team file, the registry or the retention policy can't be read | `team waits` |
+| `waits.usage` | `waits` | 2 | the invocation can't be read | `team waits --all` |
 | `watch.standby` | `watch` | 0 | a hosted watch stood down for a running watch | `team watch` |
 | `watch.started` | `watch` | 0 | the watch started in its own workspace | `team watch` |
 | `watch.stopped` | `watch` | 0 | the watch ran and stopped | `team watch` |
