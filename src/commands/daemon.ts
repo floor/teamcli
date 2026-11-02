@@ -37,6 +37,7 @@ import { daemonHealth } from '../daemon/health.ts';
 import { failureAge } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { DAEMON_LABEL } from '../daemon/paths.ts';
+import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { routeId, routeOf } from '../daemon/routes.ts';
 import {
@@ -1211,6 +1212,14 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       : installed.undo();
     return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, home, sources, manager);
   }
+  // The installed CLI this copy was made from, beside the copies: the restore pass runs `up` in
+  // this process, and every hook settings file it installs must name a program that outlives the
+  // retained copy the unit runs. Best effort — a record that cannot be written only means those
+  // hooks omit the CLI command rather than naming a path a refresh may delete.
+  recordInstalledProgram(home, {
+    entry: fullProgram.entry,
+    root: fullProgram.runtime?.root ?? dirname(fullProgram.entry),
+  });
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,

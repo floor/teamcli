@@ -30,6 +30,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { contextLine, displayPath, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
+import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
 import { storePath } from '../store/store.ts';
 import { admissionOf, realHost, type SendHost } from './send.ts';
 
@@ -124,7 +125,22 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if ('error' in placement) return refused(io, dir, who, placement.error, host, report);
   const pane = placement.pane;
   const processes = host.processInfo(recipient.reach.session, pane);
-  const address = readRouteAddress(recipient.reach.address, processes, socketFolders(host));
+  const cross = resolved.team.root !== root;
+  const receivingDir = cross ? join(resolved.team.root, '.agents') : dir;
+  const readAddress = readRouteAddress(recipient.reach.address, processes, socketFolders(host));
+  // The declaration a send reads before it dials: a socket older than the settings file that
+  // declares `accept` belongs to a session launched without the setting, and the send walk passes
+  // it over. The answer says the same, in the sender's own words — an address this CLI calls
+  // "live" while a send would drop it is the disagreement this reading exists to remove.
+  const inbound = declaredInboundOf({
+    dir: receivingDir,
+    root: resolved.team.root,
+    session: recipient.reach.session,
+    seat: recipient.reach.seat,
+    ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
+  });
+  const inboundStale = inboundStaleReason(inbound, readAddress.socket);
+  const address: RouteAddress = inboundStale === null ? readAddress : { socket: readAddress.socket, state: 'stale' };
   const native = recipient.cli === 'claude-code';
   const fromId = typeof admission.sender === 'object' && 'id' in admission.sender ? admission.sender.id : null;
   const record: RouteRecord = {
@@ -142,8 +158,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
     rule: admission.rule,
   };
 
-  const cross = resolved.team.root !== root;
-  const toDir = cross ? join(resolved.team.root, '.agents') : dir;
+  const toDir = receivingDir;
   const at: Routed = {
     name: recipient.name,
     seat: recipient.reach.seat,
@@ -155,14 +170,14 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if (args.flags.has('dry-run')) {
     const target = join(storePath(resolved.team.project, resolved.team.root, host.home), ROUTES_FILE);
     const plan: PlanStep[] = [{ step: 'record', seat: at.seat, detail: `append the route to ${target}`, prefix: '+' }];
-    return routeDry(io, context, at, address, native, admission.rule, plan, host.home, report);
+    return routeDry(io, context, at, address, native, admission.rule, plan, host.home, report, inboundStale);
   }
   const written = appendRoute(resolved.team.project, resolved.team.root, host.home, record);
   if (!written.ok) return unrecorded(io, dir, who, written.reason, host, report);
   // A lookup, not a delivery: the line says what was read — the address's state and whether the
   // recipient carries the native channel — never a word a seat reads as a message arriving.
-  logLine(toDir, 'route', who, `looked up ${at.seat}: ${socketStateText(address)}, native ${native ? 'yes' : 'no'}`, host.now());
-  return routed(io, context, at, address, native, admission.rule, report);
+  logLine(toDir, 'route', who, `looked up ${at.seat}: ${socketStateText(address, inboundStale)}, native ${native ? 'yes' : 'no'}`, host.now());
+  return routed(io, context, at, address, native, admission.rule, report, inboundStale);
 }
 
 /** Where the recipient stands now, as herdr reads it: the one pane the session names its seat on,
@@ -217,13 +232,14 @@ function routed(
   native: boolean,
   rule: string,
   report: Report,
+  inboundStale: string | null,
 ): number {
-  const summary = addressSummary(at, address);
+  const summary = addressSummary(at, address, inboundStale);
   if (report.json) {
     writeJson(io, 'team.route', document(context, at, address, native, rule, false, 'routed', summary));
   } else {
     io.stdout(`${contextLine(context.project, context.session)}\n`);
-    answerLines(io, at, address, native, rule);
+    answerLines(io, at, address, native, rule, inboundStale);
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: route.routed
@@ -240,6 +256,7 @@ function routeDry(
   plan: readonly PlanStep[],
   home: string,
   report: Report,
+  inboundStale: string | null,
 ): number {
   if (report.json) {
     writeJson(io, 'team.route', {
@@ -248,15 +265,15 @@ function routeDry(
     });
   } else {
     io.stdout(`${contextLine(context.project, context.session)}\n`);
-    answerLines(io, at, address, native, rule);
+    answerLines(io, at, address, native, rule, inboundStale);
     io.stdout(renderDryRunPlan(null, plan).map((line) => `${displayPath(line, home)}\n`).join(''));
   }
   return 0; // exit: route.dry-run
 }
 
 /** The resolved address, said once: the closing summary line, and `action_summary` under --json. */
-function addressSummary(at: Routed, address: RouteAddress): string {
-  return `${at.seat}: routed at ${address.socket ?? 'no socket'} (${address.state})`;
+function addressSummary(at: Routed, address: RouteAddress, inboundStale: string | null): string {
+  return `${at.seat}: routed at ${address.socket ?? 'no socket'} (${socketStateText(address, inboundStale)})`;
 }
 
 /** The one document both endings write: the action surface, then the answer's own fields.
@@ -291,20 +308,31 @@ function document(
 }
 
 /** The plain answer: the recipient, where it listens, and the rule that admitted the pair. */
-function answerLines(io: Io, at: Routed, address: RouteAddress, native: boolean, rule: string): void {
+function answerLines(
+  io: Io,
+  at: Routed,
+  address: RouteAddress,
+  native: boolean,
+  rule: string,
+  inboundStale: string | null,
+): void {
   io.stdout(`${at.seat}  ${at.id}  (${at.name})\n`);
   io.stdout(`session ${at.session}\n`);
   io.stdout(`cli ${at.cli}\n`);
   io.stdout(`pane ${at.pane}\n`);
-  io.stdout(`socket ${address.socket ?? 'none'} (${socketStateText(address)})\n`);
+  io.stdout(`socket ${address.socket ?? 'none'} (${socketStateText(address, inboundStale)})\n`);
   io.stdout(`native ${native ? 'yes' : 'no'}\n`);
   io.stdout(`admitted by: ${rule}\n`);
 }
 
-/** Where the address stands, as the lines word it. */
-function socketStateText(address: RouteAddress): string {
+/** Where the address stands, as the lines word it. A socket a send would pass over for its
+ *  declaration reads stale here, with the sender's own reason: the two commands answer the same
+ *  question about the same address. */
+function socketStateText(address: RouteAddress, inboundStale: string | null): string {
+  if (address.state === 'stale') {
+    return inboundStale === null ? 'stale; do not dial it' : `stale; do not dial it (${inboundStale})`;
+  }
   if (address.state === 'live') return 'live';
-  if (address.state === 'stale') return 'stale; do not dial it';
   if (address.state === 'pane') return 'found on the pane';
   if (address.state === 'unread') return 'recorded; the pane could not be read';
   return 'none';

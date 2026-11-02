@@ -26,8 +26,10 @@ import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyRece
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
-  cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
+  cliHookSettings, cliHookSettingsPath, cliHookStatePath, dropReadRunner, hookRunnerFor, installCliHooks,
+  plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
+import { recordInstalledProgram, stableHookPath } from '../src/daemon/runtime-entry.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
 import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -144,6 +146,23 @@ describe('what a run plans and what it installs', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
   });
 
+  test('a rewrite whose command paths moved keeps the declaration time', () => {
+    // The bytes change for a reason that is not the declaration: this run resolved the CLI a
+    // hook command runs to a different entry, and every presence and drop command names it. The
+    // top-level word is the same (none), so the file is the same declaration and its times stay
+    // the seat's declaredAt — a running session does not become stale for a moved command path.
+    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    const path = landed.worker!;
+    const declaredAt = new Date('2026-10-21T06:46:42Z');
+    utimesSync(path, declaredAt, declaredAt);
+    const before = statSync(path).mtimeMs;
+    expect(installCliHooks(dir, SESSION, [seat('worker')], undefined, join(base), '/opt/team/dist/cli.js'))
+      .toEqual({ worker: path });
+    const text = readFileSync(path, 'utf8');
+    expect(text).toContain('/opt/team/dist/cli.js drops --read');
+    expect(statSync(path).mtimeMs).toBe(before);
+  });
+
   test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
     // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
     // cross-session frames in the team file launches the seat able to take them.
@@ -182,6 +201,65 @@ describe('what a run plans and what it installs', () => {
   test('the install is silent when no seat is served', () => {
     expect(installCliHooks(dir, SESSION, [seat('codex-seat', 'codex', 'codex')])).toEqual({});
     expect(existsSync(join(dir, 'hooks'))).toBe(false);
+  });
+});
+
+describe('the CLI a hook command names', () => {
+  const COPY = 'a'.repeat(64);
+
+  /** A retained runtime copy of this program under a synthetic home, and the installed program
+   *  it was made from: two folders, each with the two files the hook resolvers name. */
+  function copyAndInstalled(): { home: string; copy: string; installed: string } {
+    const home = join(base, 'home');
+    const copy = join(home, '.config', 'team', 'daemon-runtime', COPY);
+    mkdirSync(join(copy, 'src', 'launch'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(copy, 'src', 'cli.ts'), '// the retained copy\n');
+    const installed = join(base, 'installed');
+    mkdirSync(join(installed, 'src', 'launch'), { recursive: true });
+    writeFileSync(join(installed, 'src', 'cli.ts'), '// the installed program\n');
+    writeFileSync(join(installed, 'src', 'launch', 'command-guard-hook.ts'), '// the installed guard\n');
+    return { home, copy, installed };
+  }
+
+  test('a run from a retained runtime copy names the installed program, never the copy', () => {
+    // The daemon's restore pass installs hooks in-process, from the private copy the service
+    // manager runs. A command naming that copy breaks on the next refresh; the installed
+    // program the copy was made from is the one that outlives it.
+    const { home, copy, installed } = copyAndInstalled();
+    expect(recordInstalledProgram(home, { entry: join(installed, 'src', 'cli.ts'), root: installed })).toBe(true);
+    const here = join(copy, 'src', 'launch', 'cli-hook.ts');
+    const runner = hookRunnerFor(here, home);
+    expect(runner).not.toBeNull();
+    expect(runner).toContain(join(installed, 'src', 'cli.ts'));
+    expect(runner).not.toContain('daemon-runtime');
+    expect(stableHookPath(join(copy, 'src', 'launch', 'command-guard-hook.ts'), home))
+      .toBe(join(installed, 'src', 'launch', 'command-guard-hook.ts'));
+  });
+
+  test('a copy with no recorded origin, or a twin that is gone, names no CLI at all', () => {
+    // A command naming the copy is worse than no command: the settings file keeps its state
+    // hooks and its declaration, and the seat outlives a later refresh's cleanup.
+    const { home, copy, installed } = copyAndInstalled();
+    const here = join(copy, 'src', 'launch', 'cli-hook.ts');
+    expect(hookRunnerFor(here, home)).toBeNull();
+    expect(stableHookPath(join(copy, 'src', 'launch', 'command-guard-hook.ts'), home)).toBeNull();
+    expect(recordInstalledProgram(home, { entry: join(installed, 'src', 'cli.ts'), root: installed })).toBe(true);
+    rmSync(join(installed, 'src', 'cli.ts'));
+    expect(hookRunnerFor(here, home)).toBeNull();
+    const settings = JSON.parse(cliHookSettings('/state/worker.json', { seat: 'worker', session: 'sweep' }, undefined, 'accept', undefined, null)) as {
+      crossSessionInbound?: string;
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    expect(settings.crossSessionInbound).toBe('accept');
+    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
+    expect(JSON.stringify(settings)).not.toContain('drops --read');
+  });
+
+  test('an install whose own entry is already stable names it as it stands', () => {
+    // A checkout or a package install runs its own CLI; no record is read and nothing is
+    // rewritten to a different program.
+    const here = join(base, 'pkg', 'src', 'launch', 'cli-hook.ts');
+    expect(hookRunnerFor(here, join(base, 'home'))).toContain(join(base, 'pkg', 'src', 'cli.ts'));
   });
 });
 
@@ -278,7 +356,9 @@ seats:
   test('the install adds the read to the same turn start, run by this install’s own CLI', () => {
     const landed = install();
     const command = dropCommand(landed);
-    expect(command).toContain(dropReadRunner());
+    const runner = dropReadRunner();
+    expect(runner).not.toBeNull();
+    expect(command).toContain(runner!);
     expect(command).toContain(`--seat ${SEAT}`);
     expect(command).toContain(`--session ${SESSION}`);
     // The receipt is the signed status receipt the inbox writes; no shell marker of its own.
