@@ -35,9 +35,9 @@ import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
-import { ofTeam, ProjectsError, upsertProject } from '../src/registry/projects.ts';
+import { ofTeam, projectsFile, ProjectsError, upsertProject } from '../src/registry/projects.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
-import { teamIdOf } from '../src/registry/teams.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { planPolicySet, writePolicySet } from '../src/policy/index.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf, DeliveryChainUnreadable } from '../src/send/delivery.ts';
@@ -790,6 +790,46 @@ describe('the chain is read from the files when the host hands none in', () => {
     expect(io.err).toContain('EACCES');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
+  });
+
+  // The normal state of a machine that registers teams but no projects: the project level is
+  // silent, and the send walks the default order exactly as it did before the refusal existed. A
+  // registry that answers "no project names this team" is an answer, not an unreadable record —
+  // refusing here would stop every send on such a machine.
+  for (const state of [
+    { name: 'no projects file', text: null },
+    { name: 'an empty projects map', text: 'projects: {}\n' },
+    { name: 'an empty projects list', text: 'projects: []\n' },
+  ] as const) {
+    test(`${state.name} is no project word: the send walks its usual legs`, async () => {
+      const w = world();
+      upsertTeam(w.home, teamIdOf(w.root), { project: 'acme', session: 'acme', root: w.root, at: NOW.toISOString() });
+      if (state.text !== null) writeFileSync(projectsFile(w.home), state.text);
+      const host = walker(w);
+      const io = owner(w.root);
+
+      expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+      // No project declared a word, so the default order stands: the walk records the two skips it
+      // always records and takes the drop leg.
+      const entry = lastEntry(w.root, w.home);
+      expect(entry.via).toBe('drop');
+      expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`, MCP_SKIP]);
+    });
+  }
+
+  test('projects naming other teams only are no project word: the send walks its usual legs', async () => {
+    const w = world();
+    upsertTeam(w.home, teamIdOf(w.root), { project: 'acme', session: 'acme', root: w.root, at: NOW.toISOString() });
+    upsertProject(w.home, 'elsewhere', { name: 'Elsewhere', teams: ['0123456789ab'], at: NOW.toISOString() });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`, MCP_SKIP]);
   });
 
   test('the project word is asked for the team’s own id', () => {

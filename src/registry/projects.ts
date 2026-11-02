@@ -396,6 +396,10 @@ function projectsOf(value: YamlValue, path: string): Record<string, ProjectRecor
   if (!isMap(value)) throw new ProjectsError(`${path}: expected a map with a "projects" key`);
   const section = value.projects;
   if (section === null || section === undefined) return {};
+  // An empty list is the empty registry in the shape a JSON view prints: it names no project, so
+  // it declares nothing, and reading it as corrupt would refuse every send on a machine that
+  // wrote that view back. A list holding an entry is still not a map of project IDs.
+  if (Array.isArray(section) && section.length === 0) return {};
   if (!isMap(section)) throw new ProjectsError(`${path}: "projects" must be a map of project IDs`);
   const out: Record<string, ProjectRecord> = {};
   for (const [id, raw] of Object.entries(section)) out[id] = recordOf(id, raw, path);
