@@ -274,8 +274,8 @@ describe('writer-04: the retirement backlog drain against its own claims', () =>
     expect(readFileSync(target, 'utf8')).toContain(linked.messageId);
 
     // The archive ladder itself: one normal retirement creates it, then a link planted at the
-    // archive root refuses the next retirement with the live marker untouched (the FLO-1187 rule:
-    // a link anywhere below the store never becomes a write path).
+    // archive root refuses the next retirement with the live marker untouched (a link anywhere
+    // below the store never becomes a write path).
     const normal = deliveredEpisode(world, 'm-normal');
     const okay = retireFinished(world.sweep, { at: new Date(AT), lockWaitMs: 0, limit: 10 });
     expect(okay.retired.map((entry) => entry.messageId)).toContain('m-normal');
