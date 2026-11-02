@@ -6703,7 +6703,13 @@ scene('restart.lead', async (place) => {
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
-  return show(await restarted(place, ['worker']), 'is signed off');
+  // A stopped seat is its own team's to revive: the owner and the team's lead clear it with
+  // `team restart`. A caller outside that rule is still refused, and under dev mode the caller
+  // gate folds — so the sign-off's own refusal is what the run says.
+  const io = testIo(place.root, other);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const code = await runRestart(['worker'], io, restartSources(place));
+  return show({ code, out: io.out, err: io.err }, 'is signed off');
 });
 scene('restart.herdr', async (place) => {
   write(place, ACTIVE_TWO);

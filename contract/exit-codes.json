@@ -4597,7 +4597,7 @@
       "code": 1,
       "command": "restart",
       "id": "restart.signed-off",
-      "meaning": "the seat is parked or stopped",
+      "meaning": "the seat is stopped, and the caller is not the owner or its own team's leads seat",
       "trigger": "team restart worker"
     },
     {

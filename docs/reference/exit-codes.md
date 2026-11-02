@@ -662,7 +662,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
 | `restart.run-lock` | `restart` | 1 | another session-mutating run is holding the session | `team restart worker` |
 | `restart.self` | `restart` | 1 | a seat caller tried to restart its own recorded pane | `team restart lead` |
-| `restart.signed-off` | `restart` | 1 | the seat is parked or stopped | `team restart worker` |
+| `restart.signed-off` | `restart` | 1 | the seat is stopped, and the caller is not the owner or its own team's leads seat | `team restart worker` |
 | `restart.temporary` | `restart` | 1 | the seat is a temporary copy | `team restart worker-tmp-1` |
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
