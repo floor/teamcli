@@ -324,6 +324,67 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     if (!seatLevel.ok) expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
   });
 
+  test('the daemon backlog knobs carry their release defaults and refuse a count outside their range', () => {
+    const above = POLICY_CATALOGUE['daemon.fallback-backlog-above'];
+    expect(above.kind).toBe('enforced');
+    expect(above.levels).toEqual(['entity', 'project', 'team']);
+    expect(above.defaultValue).toBe(256);
+    expect(above.gateLifting).toBe(false);
+    expect(normalizePolicyName('daemon_fallback_backlog_above')).toBe('daemon.fallback-backlog-above');
+    expect(normalizePolicyName('fallback-backlog-above')).toBe('daemon.fallback-backlog-above');
+    for (const word of ['256', 256, 1, '1000000']) expect(above.parseValue(word)).not.toBeNull();
+    for (const word of [0, '0', -1, 1_000_001, '256.5', 2.5, 'nope', '', true]) expect(above.parseValue(word)).toBeNull();
+    expect(above.valueProblem?.(0)).toContain('from 1 to 1000000');
+
+    const limit = POLICY_CATALOGUE['daemon.fallback-backlog-limit'];
+    expect(limit.kind).toBe('enforced');
+    expect(limit.levels).toEqual(['entity', 'project', 'team']);
+    expect(limit.defaultValue).toBe(500);
+    expect(limit.gateLifting).toBe(false);
+    expect(normalizePolicyName('daemon_fallback_backlog_limit')).toBe('daemon.fallback-backlog-limit');
+    for (const word of ['500', 500, 1, '10000']) expect(limit.parseValue(word)).not.toBeNull();
+    for (const word of [0, 10_001, '10k', 'nope', '', false]) expect(limit.parseValue(word)).toBeNull();
+    expect(limit.valueProblem?.(10_001)).toContain('from 1 to 10000');
+
+    const absent = resolvePolicy('daemon.fallback-backlog-limit', []);
+    expect(absent.ok).toBe(true);
+    if (absent.ok) expect(absent.effective.value).toBe(500);
+
+    // A higher threshold and a smaller bulk limit are the tighter words, so the chain tightens
+    // one way only: the reverse at a lower level is a loosening.
+    const tighter = resolvePolicy('daemon.fallback-backlog-above', [
+      { name: 'daemon.fallback-backlog-above', value: 256, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-above', value: 400, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(tighter.ok).toBe(true);
+    if (tighter.ok) expect(tighter.effective.value).toBe(400);
+    const aboveLoosened = resolvePolicy('daemon.fallback-backlog-above', [
+      { name: 'daemon.fallback-backlog-above', value: 400, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-above', value: 256, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(aboveLoosened.ok).toBe(false);
+    if (!aboveLoosened.ok) expect(aboveLoosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'daemon.fallback-backlog-above' });
+
+    const bulkTightened = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 700, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-limit', value: 600, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(bulkTightened.ok).toBe(true);
+    if (bulkTightened.ok) expect(bulkTightened.effective.value).toBe(600);
+    const bulkLoosened = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 600, level: 'entity', setter: 'owner', date: '2026-11-02T10:00:00Z', kind: 'enforced' },
+      { name: 'daemon.fallback-backlog-limit', value: 700, level: 'team', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(bulkLoosened.ok).toBe(false);
+    if (!bulkLoosened.ok) expect(bulkLoosened.refusals[0]).toMatchObject({ kind: 'loosening', policy: 'daemon.fallback-backlog-limit' });
+
+    const seatLevel = resolvePolicy('daemon.fallback-backlog-limit', [
+      { name: 'daemon.fallback-backlog-limit', value: 400, level: 'seat', setter: 'owner', date: '2026-11-02T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(seatLevel.ok).toBe(false);
+    if (!seatLevel.ok) expect(seatLevel.refusals[0]?.message).toContain('allowed: entity, project, team');
+  });
+
   test('absent declarations resolve to the release default, and off for gate-lifting policies', () => {
     const devMode = resolvePolicy('dev-mode', []);
     expect(devMode.ok).toBe(true);

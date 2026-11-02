@@ -29,7 +29,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { projectsFile } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
+import { storeBacklogLimits, sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
 import {
   attemptLedgerFileName,
   escalateDue,
@@ -496,6 +496,66 @@ describe('the fallback store retirement', () => {
       retire: { limit: 10, backlogAbove: 256, backlogLimit: 400, lockWaitMs: 0 },
     });
     expect(second.roots[0]!.retirement!.retired).toHaveLength(10);
+  }, 30_000);
+
+  test('the backlog knobs are the team word, and the release defaults when it declares none', () => {
+    const world = makeWorld();
+    // The daemon reads them for each hosted root; with no word anywhere, the catalogue's defaults.
+    expect(storeBacklogLimits(world.team, world.root, world.home, at(AT))).toEqual({ above: 256, limit: 500 });
+
+    for (const [name, value] of [['daemon.fallback-backlog-above', 400], ['daemon.fallback-backlog-limit', 700]] as const) {
+      const wrote = writePolicySet(
+        world.home,
+        { level: 'team', target: world.root, teamRoot: world.root, name, value },
+        { now: at(AT) },
+      );
+      expect(wrote.ok).toBe(true);
+    }
+    expect(storeBacklogLimits(world.team, world.root, world.home, at(AT))).toEqual({ above: 400, limit: 700 });
+  });
+
+  test('a pass takes the backlog word its root declares, over the fields the caller passed', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 299); // 300 delivered episodes in all, above the word's threshold
+
+    const swept = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: {
+        limit: 10,
+        lockWaitMs: 0,
+        // Both fields lose to the per-root word: with them, 300 is under the threshold and the
+        // steady limit of 10 would retire 10; the word drains 250 instead.
+        backlogAbove: 10_000,
+        backlogLimit: 20,
+        backlogLimitsFor: () => ({ above: 256, limit: 250 }),
+      },
+    });
+    expect(swept.roots[0]!.retirement!.retired).toHaveLength(250);
+    expect(swept.roots[0]!.note).toBeNull();
+  }, 30_000);
+
+  test('a backlog word that cannot be read keeps the release defaults and says why', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 299);
+
+    const swept = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: {
+        limit: 10,
+        lockWaitMs: 0,
+        backlogLimitsFor: () => ({ above: 256, limit: 500, unknown: 'the policy chain could not be read' }),
+      },
+    });
+    // The release bulk limit of 500 applies, not the steady 10: all 300 episodes go.
+    expect(swept.roots[0]!.retirement!.retired).toHaveLength(300);
+    expect(swept.roots[0]!.note).toContain('the policy chain could not be read');
+    expect(swept.roots[0]!.note).toContain('the release defaults apply');
   }, 30_000);
 
   test('the drain never retires a pending episode, and it escalates once afterwards', () => {
