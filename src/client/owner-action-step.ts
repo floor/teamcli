@@ -55,20 +55,25 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client' | 'development-mode',
   action: OwnerAction,
   argv: readonly string[],
-  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },
+  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
   io: Io,
   sources: OwnerSeatSources,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
-  const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block') {
-    refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
-    return { kind: 'refused' };
+  // The charter admits routine operations in the folder it covers. The machine's development
+  // mode is not one of them: it is the machine's, so only the owner's own answer admits it, even
+  // when the caller's folder lies inside a signed charter.
+  if (command !== 'development-mode') {
+    const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
+    if (gate.kind === 'block') {
+      refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
+      return { kind: 'refused' };
+    }
+    if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
   }
-  if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
   if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const now = sources.now?.() ?? new Date();
   const refused = (message: string): OwnerSeatStep => {
@@ -82,7 +87,15 @@ export function ownerSeatStep(
   const head = headOf(root);
   const words = boundWords(argv);
   if (ask.request) {
-    const made = createOwnerActionRequest(home, { actions: [action], root, team, head, args: { [action]: words }, requestedBy: callerLabel(callerOf(io)) }, now);
+    const made = createOwnerActionRequest(home, {
+      actions: [action],
+      root,
+      team,
+      head,
+      args: { [action]: words },
+      requestedBy: callerLabel(callerOf(io)),
+      ...(ask.reason === undefined ? {} : { reason: ask.reason }),
+    }, now);
     if (!made.ok) return refused(made.why);
     // The same honest delivery `grant --request` uses: the owner seat's Touch ID signer is asked to
     // sign this request's answer, with the card as the prompt. A verified signature is the approval,

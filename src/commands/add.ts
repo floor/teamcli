@@ -154,10 +154,10 @@ export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --request [--reason <text>] [--json]
        team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
-The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, and never starts the orchestrator or the operator.
 
@@ -204,7 +204,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval'], ['temporary', 'dry-run', 'json', 'request']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval', 'reason'], ['temporary', 'dry-run', 'json', 'request']);
   const json = wantsJson;
   // The one refusal of the client form, at every site.
   const clientRefused = (message: string): number => {
@@ -252,7 +252,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, { ...sources, root: seatRoot });
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
   if (seatStep.kind === 'requested') {
     // exit: add.approval-requested
     return 0;

@@ -65,7 +65,7 @@ function runEditor(path: string, env: Record<string, string | undefined>): numbe
 export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'general', 'key', 'reason'], ['json', 'request']);
   const [verb, rawPath, rawValue, extra] = args.rest;
   const usage = (await import('../commands/config.ts')).USAGE;
   const wants = verb === 'edit' ? 0 : verb === 'set' ? 2 : 1;
@@ -150,7 +150,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
   if (args.flags.has('request') || args.values.approval !== undefined) {
-    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
     if (step.kind === 'requested') {
       // exit: config.approval-requested
       return 0;
