@@ -8,7 +8,7 @@ import { validateTeamFile } from '../file/validate.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { parseYaml } from '../yaml.ts';
-import { bumpGeneration, generationPresence, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
+import { bumpGeneration, generationPath, generationPresence, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
 /**
  * The user-level store: what must survive the project folder and stay out of
@@ -317,7 +317,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   }
   const recorded = presence.kind === 'recorded' ? recordedGeneration(root, home) : null;
   if (presence.kind === 'recorded' && recorded === null) {
-    return { kind: 'refused', why: "this project's approval generation cannot be read: no approval is judged until it is restored" };
+    return { kind: 'refused', why: `this project's approval generation cannot be read (${generationPath(root, home)}): no approval is judged until it is restored` };
   }
   const located = locateStores(root, home);
   const store = located.store;
@@ -330,7 +330,9 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
     if (located.miss === 'several') {
       return { kind: 'refused', why: `${generation}several stores match this root and none is its own (${located.others.join(', ')}): approve the team again, or leave one store in place` };
     }
-    return { kind: 'refused', why: `${generation}its store is missing: restore the store, or approve the team again` };
+    const project = projectAt(root, home);
+    const wanted = project === null ? null : storePath(project, root, home);
+    return { kind: 'refused', why: `${generation}its store is missing${wanted === null ? '' : ` (${wanted})`}: restore the store, or approve the team again` };
   }
   const link = linkOnRecordPath(store, home);
   if (link !== null) {
@@ -345,7 +347,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   }
   if (record === null) {
     if (recorded !== null) {
-      return { kind: 'refused', why: `approval #${recorded.generation} is recorded for this project, but its record is missing: restore approval.json, or approve the team again` };
+      return { kind: 'refused', why: `approval #${recorded.generation} is recorded for this project, but its record is missing (${join(store, APPROVAL)}): restore approval.json, or approve the team again` };
     }
     return { kind: 'none' };
   }

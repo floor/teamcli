@@ -176,6 +176,7 @@ test('a recorded approval whose record was unlinked is refused, never none', () 
   const why = refusedWhy(standingOf(root, home));
   expect(why).toContain('approval #1 is recorded');
   expect(why).toContain('its record is missing');
+  expect(why).toContain(join(store, 'approval.json'));
 });
 
 test('a recorded approval whose store was removed is refused, never none', () => {
@@ -185,6 +186,7 @@ test('a recorded approval whose store was removed is refused, never none', () =>
   const why = refusedWhy(standingOf(root, home));
   expect(why).toContain('approval #1 is recorded');
   expect(why).toContain('its store is missing');
+  expect(why).toContain(store);
 });
 
 test('a link where the record was is refused, whether or not it points at a record', () => {
@@ -251,7 +253,10 @@ test('a generation that is recorded but cannot be read is refused', () => {
   const [entry] = readdirSync(folder);
   if (entry === undefined) throw new Error('expected a recorded generation');
   writeFileSync(join(folder, entry), 'not a generation\n');
-  expect(refusedWhy(standingOf(root, home))).toContain('generation cannot be read');
+  const why = refusedWhy(standingOf(root, home));
+  expect(why).toContain('generation cannot be read');
+  // A refusal names the path the owner must restore, whole.
+  expect(why).toContain(join(folder, entry));
 });
 
 test('a link where the generation is is refused, whether or not it points at one', () => {
