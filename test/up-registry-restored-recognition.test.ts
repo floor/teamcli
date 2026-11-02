@@ -120,12 +120,19 @@ function setup(): void {
   );
 }
 
-type Trace = { created: string[]; closed: string[]; typed: string[]; runs: string[] };
+type Trace = {
+  created: string[];
+  closed: string[];
+  typed: string[];
+  runs: string[];
+  renamed: { workspace: string; label: string }[];
+  reported: { pane: string; text: string }[];
+};
 
 /** The readings one run takes: herdr's list naming the seat on `pane` with `live` as the
  *  conversation it runs, and a pane whose process is the restored one. */
 function sources(live: string, opts: { pane?: string; status?: string } = {}): { sources: UpSources; trace: Trace } {
-  const trace: Trace = { created: [], closed: [], typed: [], runs: [] };
+  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], reported: [] };
   const madePanes = new Map<string, string>();
   const pane = opts.pane ?? 'w2:p1';
   const agents = () => [
@@ -151,6 +158,14 @@ function sources(live: string, opts: { pane?: string; status?: string } = {}): {
     },
     typeText(_session, _pane, text) {
       trace.typed.push(text);
+      return true;
+    },
+    renameWorkspace(_session, workspace, label) {
+      trace.renamed.push({ workspace, label });
+      return true;
+    },
+    reportDisplayAgent(_session, pane, text) {
+      trace.reported.push({ pane, text });
       return true;
     },
     renameAgent: () => true,
@@ -238,6 +253,28 @@ test('a registry-only restored record is recognized: the seat is left as it is a
   // The record takes the pids the pane holds now, and the conversation the registry proved.
   expect(seatState()?.launched).toEqual({ shell: RESTORED.shell, cli: RESTORED.foreground });
   expect(seatState()?.agent_session).toBe(SESSION_ID);
+});
+
+test('a restored seat is repainted from the record: both lines, nothing typed, nothing launched', async () => {
+  record(RECORD);
+  // The plan says both sidebar lines before anything runs: the file's title and its display
+  // line, on the pane and workspace the seat already holds.
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, sources(SESSION_ID).sources)).toBe(0);
+  expect(dry.out).toContain('workspace rename w2 worker');
+  expect(dry.out).toContain("pane report-metadata w2:p1 --source team --display-agent 'GPT Sol 6.1 default'");
+  expect(dry.out).toContain(`  skip ${SEAT}: ${RESTORED_LINE}`);
+  expect(dry.out).not.toContain('codex -m gpt-6.1-sol');
+
+  // The real run paints them through the host and leaves the pane alone: no launch, no typing.
+  const made = sources(SESSION_ID);
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(made.trace.renamed).toEqual([{ workspace: 'w2', label: 'worker' }]);
+  expect(made.trace.reported).toEqual([{ pane: 'w2:p1', text: 'GPT Sol 6.1 default' }]);
+  expect(made.trace.runs.filter((line) => line.includes('codex -m gpt-6.1-sol'))).toEqual([]);
+  expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
+  expect(seatState()?.launched).toEqual({ shell: RESTORED.shell, cli: RESTORED.foreground });
 });
 
 test('a live conversation that is not the recorded one is left as it is', async () => {
