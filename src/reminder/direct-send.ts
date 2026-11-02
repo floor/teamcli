@@ -9,8 +9,12 @@
 // The recipients are the reminder's own list for this due instant: the principal carries them
 // into admission, which refuses any address outside it, any owner or pane, any human seat, and
 // any checkout the daemon did not host when the principal was established.
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { Io } from '../io.ts';
+import { recordDir } from '../commands/messages.ts';
 import { realHost, runSend, type DaemonRecipient, type DaemonSendPrincipal, type SendHost } from '../commands/send.ts';
+import { recordFile } from '../send/record.ts';
 import { verifyDaemonAuthority, type DaemonIdentity } from './authority.ts';
 
 /** What the reminder layer hands its send: the reminder's name and due key, and the seats that
@@ -24,12 +28,26 @@ export type DaemonDirectContext = {
 
 /** One reminder delivery: the recipient's checkout, the declared seat, and the body the reminder
  *  text produced. The run loads the team file from `root` and walks that seat's delivery order
- *  exactly as an ordinary send does. */
-export type DaemonDirectRequest = { root: string; seat: string; body: string };
+ *  exactly as an ordinary send does. `id` is the retry's one identity: a reminder retried on a
+ *  later beat carries the message id it already staged, so the same message cannot arrive twice
+ *  under two names. */
+export type DaemonDirectRequest = { root: string; seat: string; body: string; id?: string };
 
-/** The outcome the reminder state records for one recipient: the exit code and the words the run
- *  wrote, never a claim of a read the receiving seat did not sign. */
-export type DaemonDirectResult = { ok: boolean; code: number; text: string };
+/**
+ * The outcome the reminder state records for one recipient: whether it went, the one message id
+ * every attempt carried, whether a signed record was staged under it — the sign that the walk
+ * reached a transport rather than an admission refusal — and the words the run wrote, never a
+ * claim of a read the receiving seat did not sign.
+ */
+export type DaemonDirectResult = {
+  ok: boolean;
+  code: number;
+  /** The message id the attempt carried; null when the daemon's identity was refused before a
+   *  send was ever built, so no message was named. */
+  id: string | null;
+  staged: boolean;
+  text: string;
+};
 
 /**
  * Sends one reminder to one recipient through the ordinary send command's admission, delivery
@@ -42,8 +60,11 @@ export async function sendDaemonDirect(
   host: SendHost = realHost,
 ): Promise<DaemonDirectResult> {
   const first = verify(host);
-  if (!first.ok) return { ok: false, code: 1, text: first.why };
+  if (!first.ok) return { ok: false, code: 1, id: null, staged: false, text: first.why };
   const identity: DaemonIdentity = first.identity;
+  // The id is minted (or the retry's kept) before the walk, so every attempt of one reminder
+  // carries it and the result can name the message even when no transport took it.
+  const id = request.id ?? host.sendId?.() ?? randomUUID();
   const principal: DaemonSendPrincipal = {
     reminder: context.reminder,
     due: context.due,
@@ -58,8 +79,16 @@ export async function sendDaemonDirect(
   // No guard is handed in: the send composes the principal's own recheck itself, from the
   // principal it carries, before every transport. This entry never relies on a caller
   // remembering to wire the check — it hands over the principal and lets the seam do it.
-  const code = await runSend([request.seat, request.body], daemonDirectIo(request.root, said), { ...host, daemon: principal });
-  return { ok: code === 0, code, text: said.join('') };
+  const code = await runSend([request.seat, request.body], daemonDirectIo(request.root, said), {
+    ...host,
+    sendId: () => id,
+    daemon: principal,
+  });
+  // A record staged under the id is the walk's own evidence that it reached a transport; an
+  // admission refusal writes nothing, so the retry rule can tell the two apart.
+  const recipient = context.recipients.find((one) => one.root === request.root && one.seat === request.seat);
+  const staged = recipient !== undefined && existsSync(recordFile(recordDir(request.root, recipient.session, request.seat), id));
+  return { ok: code === 0, code, id, staged, text: said.join('') };
 }
 
 /** The actual verifier, read as a verdict on every path: an exception is a refusal with its own

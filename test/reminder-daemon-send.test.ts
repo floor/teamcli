@@ -225,14 +225,45 @@ describe('a reminder send carries the daemon\'s own identity', () => {
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe(0);
+    expect(result.staged).toBe(true);
     expect(frames).toHaveLength(1);
     const ids = staged(one);
     expect(ids).toHaveLength(1);
+    expect(result.id).toBe(ids[0] as string);
     const record = readFileSync(join(dropDir(one.dir, 'lead'), ids[0] as string), 'utf8');
     expect(record).toContain('"from": "daemon"');
     expect(record).toContain('"from_id": null');
     expect(record).toContain("from the daemon — admitted by: the daemon's reminder authority");
     expect(record).not.toContain('from the owner');
+  });
+
+  test('a second attempt keeps its message id and adds no second record', async () => {
+    const one = world(null);
+    made.push(one);
+    receives(one);
+    daemonOf(one);
+    const frames: string[] = [];
+    const host = fake(one, {
+      native: scripted(['idle'], null),
+      deliver: async (_socket, frame) => {
+        frames.push(frame);
+        return { ok: true };
+      },
+    });
+    const context = { reminder: 'linear-activity', due: '2026-11-02T19:00', recipients: recipientsOf(one) };
+
+    const first = await sendDaemonDirect(context, { root: one.root, seat: 'lead', body: BODY }, host);
+    expect(first.ok).toBe(true);
+    expect(first.staged).toBe(true);
+    const stagedAfterFirst = staged(one);
+    expect(stagedAfterFirst).toEqual([first.id as string]);
+
+    // The retry a later beat makes reuses the recorded id: the same message, one record, and
+    // the receiver judges it by that one id.
+    const second = await sendDaemonDirect(context, { root: one.root, seat: 'lead', body: BODY, id: first.id as string }, host);
+    expect(second.ok).toBe(true);
+    expect(second.id).toBe(first.id as string);
+    expect(staged(one)).toEqual(stagedAfterFirst);
   });
 
   test('a record that is missing refuses before anything is staged or dialled', async () => {
@@ -255,6 +286,8 @@ describe('a reminder send carries the daemon\'s own identity', () => {
 
     expect(result.ok).toBe(false);
     expect(result.code).toBe(1);
+    expect(result.id).toBeNull();
+    expect(result.staged).toBe(false);
     expect(result.text).toContain('the daemon state record is missing');
     expect(staged(one)).toEqual([]);
     expect(frames).toEqual([]);
@@ -280,6 +313,7 @@ describe('a reminder send carries the daemon\'s own identity', () => {
     );
 
     expect(result.ok).toBe(false);
+    expect(result.staged).toBe(false);
     expect(result.text).toContain('the reminder\'s due instant does not address this seat');
     expect(staged(one)).toEqual([]);
     expect(frames).toEqual([]);
