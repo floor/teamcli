@@ -4200,9 +4200,11 @@ async function deliverClientRecord(
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
       // the reported class, so the summary never claims a wake that did not happen. The bus
-      // that posts a webhook is read the way the send's own first read reads it.
+      // that posts a webhook is read the way the send's own first read reads it, and the words
+      // keep the typed-wake exception: a profile that declares a typed wake reads the message
+      // at its next turn, not "no way to be woken".
       if (attempt.socketUnusable === true) {
-        report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat, await busListening(root));
+        report.deliveryWords = classWordsFor(classWithoutSocket(aim, host.home), aim.seat, await busListening(root));
       }
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
@@ -4853,9 +4855,12 @@ function noSocketReason(host: SendHost): string {
 
 async function staleSocketReason(to: Aim, path: string, home: string | undefined): Promise<string> {
   // The words follow the class the walk can still prove, and a webhook that is the only route
-  // left is only the bus's wake: the same liveness proof the send's first read makes.
+  // left is only the bus's wake: the same liveness proof the send's first read makes. The
+  // typed-wake exception applies here too: this sentence is read while the typed leg is still
+  // ahead of the walk, so a profile that declares a typed wake says the seat reads the message
+  // at its next turn rather than claiming it has no way to be woken.
   const busLive = await busListening(to.root);
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat, busLive)}`;
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWordsFor(classWithoutSocket(to, home), to.seat, busLive)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
