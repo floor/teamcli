@@ -890,10 +890,53 @@ export function storedWatchRecord(dir: string, session: string): unknown {
   return sessions[session]?.watch;
 }
 
-export function writeAtomic(path: string, text: string): void {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, text);
-  renameSync(temporary, path);
+const TEMPORARY_ATTEMPTS = 3;
+
+/** The name of the temporary beside `path`: a fresh random suffix each time, so a link planted
+ *  at a name guessed from the pid — or left behind by a crashed process whose pid was reused —
+ *  is never the file this write opens. */
+function temporaryName(path: string, random: () => string): string {
+  return `${path}.${random()}.tmp`;
+}
+
+/** Creates a temporary beside `path` exclusively, writes `text` whole into it, closes it, and
+ *  returns its name. The exclusive create is the point: a symbolic link already sitting at the
+ *  name makes the open fail instead of being written through, and the link is left exactly where
+ *  it was. A name already taken — by a link, a file, a directory, or another writer — draws
+ *  another random name; a store that keeps every drawn name taken fails the write instead. Only
+ *  the file this call created is ever removed, by its caller. */
+function writeTemporary(path: string, text: string, random: () => string, mode?: number): string {
+  for (let attempt = 1; ; attempt += 1) {
+    const temporary = temporaryName(path, random);
+    try {
+      writeFileSync(temporary, text, mode === undefined ? { flag: 'wx' } : { flag: 'wx', mode });
+      return temporary;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST' && attempt < TEMPORARY_ATTEMPTS) continue;
+      throw error;
+    }
+  }
+}
+
+/**
+ * Replaces `path` with `text` atomically: a temporary file beside it at mode 0600, created
+ * exclusively and never through a link, then a rename over the name. The rename leaves the name
+ * holding nothing or the whole text, never a prefix, and a failed rename removes the temporary —
+ * the only file this call created — leaving the live name as it was.
+ */
+export function writeAtomic(path: string, text: string, options: { random?: () => string } = {}): void {
+  const random = options.random ?? (() => randomBytes(10).toString('hex'));
+  const temporary = writeTemporary(path, text, random, 0o600);
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // A failed cleanup must not mask what the rename said.
+    }
+    throw error;
+  }
 }
 
 /**
@@ -903,16 +946,14 @@ export function writeAtomic(path: string, text: string): void {
  * nothing or the whole text, never a prefix. The temporary is removed either way.
  */
 export function createAtomic(path: string, text: string, mode?: number): void {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, text, mode === undefined ? {} : { mode });
+  const temporary = writeTemporary(path, text, () => randomBytes(10).toString('hex'), mode);
   try {
     linkSync(temporary, path);
   } finally {
     try {
       unlinkSync(temporary);
     } catch {
-      // The temporary is this process's own pid-named file; a failed cleanup must not mask
-      // what the link said.
+      // The temporary is this call's own file; a failed cleanup must not mask what the link said.
     }
   }
 }

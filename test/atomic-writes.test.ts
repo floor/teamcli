@@ -5,7 +5,9 @@
 // the name is replaced under it.
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -65,6 +67,37 @@ describe('createAtomic makes the name hold nothing or the whole text', () => {
     expect(() => createAtomic(path, 'the replacement\n')).toThrow();
     expect(readFileSync(path, 'utf8')).toBe('the original\n');
     expect(readdirSync(dir)).toEqual(['team.yaml']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('writeAtomic creates its temporary exclusively and never follows a link', () => {
+  test('a link at the name the write draws is refused, left in place, and its target untouched', () => {
+    const dir = scratch();
+    const path = join(dir, 'record.json');
+    const target = join(dir, 'owner-target');
+    writeFileSync(path, 'the original\n');
+    writeFileSync(target, 'untouched owner data\n');
+    symlinkSync(target, `${path}.planted.tmp`);
+
+    // The injected name stands in for a name the writer really drew: the exclusive create must
+    // fail rather than write through the link, whatever the name.
+    expect(() => writeAtomic(path, 'the replacement\n', { random: () => 'planted' })).toThrow();
+    expect(readFileSync(target, 'utf8')).toBe('untouched owner data\n');
+    expect(readFileSync(path, 'utf8')).toBe('the original\n');
+    // The link is not the file this write created, so it is left exactly where it was.
+    expect(lstatSync(`${path}.planted.tmp`).isSymbolicLink()).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual(['owner-target', 'record.json', 'record.json.planted.tmp']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('the write lands whole at mode 0600 and leaves no temporary behind', () => {
+    const dir = scratch();
+    const path = join(dir, 'record.json');
+    writeAtomic(path, 'whole text\n', { random: () => 'drawn' });
+    expect(readFileSync(path, 'utf8')).toBe('whole text\n');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dir)).toEqual(['record.json']);
     rmSync(dir, { recursive: true, force: true });
   });
 });
