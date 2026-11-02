@@ -2076,7 +2076,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note);
       if (wake.delivered) {
         markLeg('typed', 'attempted');
-        return wake.exit;
+        return delivered(io, to.seat, report, 'typed wake', 'typed');
       }
       failures.push(`typed: ${wake.reason}`);
       markLeg('typed', 'attempted', wake.reason);
@@ -3539,7 +3539,7 @@ async function deliverTypedWakeSeat(
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: SentAs | null = null,
   walkNote: WalkNote = (_attempt) => { /* no episode */ },
-): Promise<{ delivered: true; exit: number } | { delivered: false; reason: string }> {
+): Promise<{ delivered: true } | { delivered: false; reason: string }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
     return { delivered: false, reason: `another command holds the seat (pid ${String(lock.held)}); nothing was typed` };
@@ -3576,7 +3576,9 @@ async function deliverTypedWakeSeat(
       ...(failures.length > 0 ? { failed: [...failures] } : {}),
     });
     walkNote(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: wake.reason }));
-    return { delivered: true, exit: delivered(io, seatName, report, 'typed wake', 'typed') };
+    // The exit belongs to the caller: `delivered` is returned there, so its marked literal is
+    // the send's own exit site rather than a number carried through this result.
+    return { delivered: true };
   } finally {
     lock.release();
   }
