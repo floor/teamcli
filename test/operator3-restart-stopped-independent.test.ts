@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import type { RestartSources } from '../src/commands/restart.ts';
@@ -31,7 +31,7 @@ afterAll(() => { setHerdrRun(null); });
 const { runRestart } = await import('../src/commands/restart.ts');
 const { runUp } = await import('../src/commands/up.ts');
 const { runConfig } = await import('../src/commands/config.ts');
-const { emptySession, readState, updateState } = await import('../src/state.ts');
+const { emptySession, LOG_FILE, readState, updateState } = await import('../src/state.ts');
 const { intoRegistry, underRegistry } = await import('./helpers/registry-team.ts');
 const { readTeamConfig } = await import('../src/file/team-config.ts');
 const { readTeamText } = await import('../src/file/team-text.ts');
@@ -41,13 +41,13 @@ const session = 'revival-independent';
 const lead: Caller = { kind: 'seat', name: 'captain', pane: 'pane-captain', session };
 const worker: Caller = { kind: 'seat', name: 'observer', pane: 'pane-observer', session };
 const foreign: Caller = { kind: 'seat', name: 'captain', pane: 'pane-foreign', session: 'foreign-team' };
-function world(dev = false) {
+function world(dev = false, pausedExtra = '') {
   const base = mkdtempSync('/private/tmp/o3restart-'), home = join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true }); mkdirSync(home);
   child.execFileSync('git', ['init', '-q'], { cwd: root });
   const file = join(dir, 'team.yaml');
   const seat = (name: string, role: string, extra = '') => `  - role: ${role}\n    name: ${name}\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n${extra}`;
-  writeFileSync(file, `format: 1\nproject: revival-independent\nsession: ${session}\noperator: captain\ntrust:\n  - ${join(home, ".config/team/lobby")}\n  - ${root}\nworkspace:\n  mode: shared\nseats:\n` + seat('captain', 'orchestrator', '    leads: true\n') + seat('observer', 'worker') + seat('paused', 'worker', '    stopped: true\n'));
+  writeFileSync(file, `format: 1\nproject: revival-independent\nsession: ${session}\noperator: captain\ntrust:\n  - ${join(home, ".config/team/lobby")}\n  - ${root}\nworkspace:\n  mode: shared\nseats:\n` + seat('captain', 'orchestrator', '    leads: true\n') + seat('observer', 'worker') + seat('paused', 'worker', '    stopped: true\n' + pausedExtra));
   intoRegistry(root, home); unlinkSync(file);
   updateState(dir, state => {
     const current = state.sessions[session] = emptySession();
@@ -120,8 +120,28 @@ for (const dev of [false, true]) {
     }));
   }
 }
-for (const args of [['set', 'seats.paused.stopped', 'false'], ['unset', 'seats.paused.launch'], ['unset', 'seats.paused'], ['unset', 'seats.missing.stopped'], ['unset', 'seats.paused.leads']]) {
-  test(`the lead exception does not admit ${args.join(' ')}`, () => underRegistry(async () => {
+const ordinaryLeadEdits = [
+  ['set', 'seats.paused.stopped', 'false'],
+  ['unset', 'seats.paused'],
+  ['unset', 'seats.paused.leads'],
+];
+for (const args of ordinaryLeadEdits) for (const dev of [false, true]) {
+  test(`ordinary config ${args.join(' ')} ${dev ? 'uses the established dev-mode lift' : 'requires the owner'}`, () => underRegistry(async () => {
+    const w = world(dev, args[1] === 'seats.paused.leads' ? '    leads: false\n' : ''), before = w.text(), io = w.io(lead);
+    const exit = await runConfig(args, io.value, { home: w.home, now, env: io.value.env, present: false });
+    if (dev) {
+      expect(exit).toBe(0);
+      expect(io.output()).toContain('warning:'); expect(io.output()).toContain('dev mode continues');
+      const audit = readFileSync(join(w.dir, LOG_FILE), 'utf8');
+      expect(audit).toContain('config'); expect(audit).toContain('captain'); expect(audit).toContain('dev mode');
+    } else {
+      expect(exit).not.toBe(0); expect(w.text()).toBe(before);
+      expect(io.output()).not.toContain('dev mode continues');
+    }
+  }));
+}
+for (const args of [['unset', 'seats.paused.launch'], ['unset', 'seats.missing.stopped']]) {
+  test(`dev mode preserves schema or target refusal for ${args.join(' ')}`, () => underRegistry(async () => {
     const w = world(true), before = w.text(), io = w.io(lead);
     expect(await runConfig(args, io.value, { home: w.home, now, env: io.value.env, present: false })).not.toBe(0);
     expect(w.text()).toBe(before);
