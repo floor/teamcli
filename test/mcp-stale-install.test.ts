@@ -8,7 +8,7 @@
 // hooks).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
@@ -61,6 +61,14 @@ afterEach(() => {
 /** A channel seat's world: no declared delivery order, and the lead's launch carries the flag. */
 function channelWorld(): World {
   const made = world(null, [], { lead: CHANNEL_LAUNCH });
+  // The state `team up` leaves: a server proves its caller stands on its seat's recorded pane.
+  const seats = Object.fromEntries(
+    ['lead', 'helper', 'native'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]),
+  );
+  writeFileSync(
+    join(made.dir, 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } })}\n`,
+  );
   // A server started with no --file resolves its team from the registry record holding the seat.
   upsertTeam(made.home, teamIdOf(made.root), {
     project: 'acme',
@@ -185,7 +193,7 @@ describe('an install under a running server', () => {
     const dir = dropDir(made.dir, 'lead');
     let onDisk: InstallIdentity = { version: OLD.version, head: OLD.head };
     const restarts: InstallIdentity[] = [];
-    const staleIo = testIo(made.root);
+    const staleIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
     const staleFeed = feed();
     const stale = runMcpServe({ seat: 'lead', session: SESSION }, staleIo, staleFeed, {
       home: made.home,
@@ -214,7 +222,7 @@ describe('an install under a running server', () => {
       expect(staleIo.err).toBe('');
 
       // The fresh process the launch starts from the installed entry.
-      const installedIo = testIo(made.root);
+      const installedIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
       const installedFeed = feed();
       const installed = runMcpServe({ seat: 'lead', session: SESSION }, installedIo, installedFeed, {
         home: made.home,
@@ -326,7 +334,7 @@ describe('a sender falling back from a stale channel', () => {
   test('the sender holds the push name, so the stale server cannot wake the seat twice', async () => {
     const made = channelWorld();
     const dir = dropDir(made.dir, 'lead');
-    const serverIo = testIo(made.root);
+    const serverIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
     const serverFeed = feed();
     // The server believes it still runs OLD: its own install check agrees with its build, so only
     // the sender's held marker can stop its push.

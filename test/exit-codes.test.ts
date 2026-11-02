@@ -6147,9 +6147,14 @@ scene('mcp.serve-ended', async (place) => {
     root: place.root,
     roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
   });
+  // The state `team up` leaves: the server proves its caller stands on lead's recorded pane.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'ready', pane: leadSeat.pane };
+  });
   const lobby = join(place.base, 'lobby');
   mkdirSync(lobby, { recursive: true });
-  const io = testIo(lobby, owner);
+  const io = testIo(lobby, leadSeat);
   const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
     lines: (async function* () {
       // stdin is already closed
