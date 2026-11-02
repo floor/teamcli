@@ -497,7 +497,7 @@
     },
     "muse": {
       "idle": {
-        "real": 5,
+        "real": 8,
         "constructed": 3,
         "undocumented": 0
       },
@@ -507,7 +507,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 3,
+        "real": 8,
         "constructed": 1,
         "undocumented": 0
       },
@@ -2030,7 +2030,7 @@
     "muse": {
       "tested": {
         "from": "1.4.9",
-        "to": "1.4.11"
+        "to": "1.4.14"
       },
       "byVersion": {
         "1.4.9": {
@@ -2164,6 +2164,73 @@
           "unknown": {
             "real": 0,
             "constructed": 1,
+            "undocumented": 0
+          }
+        },
+        "1.4.14": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
             "undocumented": 0
           }
         }
@@ -3742,6 +3809,24 @@
       "provenance": "capture"
     },
     {
+      "file": "exit-typing/muse-idle-ansi.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "gemini/0.64.0/exit-typed.txt",
       "cli": "gemini",
       "kind": "unsent",
@@ -3940,6 +4025,24 @@
       "provenance": "capture"
     },
     {
+      "file": "muse-exit-independent/muse-idle-ansi.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "muse/1.4.11/ambiguous-synthetic.txt",
       "cli": "muse",
       "kind": "unknown",
@@ -3980,6 +4083,18 @@
       "cli": "muse",
       "kind": "working",
       "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.14/idle.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.14/unsent.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
     },
     {
       "file": "muse/1.4.9/idle-footer.txt",
