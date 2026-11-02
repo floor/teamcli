@@ -7525,8 +7525,9 @@ analyzerTest('a module-level process.exit fails the check', () => {
 // The inherited exit: a command that leaves with the code a process it waited on exited with.
 // The form is allowed at exactly one site — `restartSelf`'s default exit hook in
 // src/mcp/serve.ts — and the parameter there must still be the argument the hook was called
-// with. Everywhere else `process.exit(<parameter>)` is refused, and the row's own code is only
-// the fallback when the child gave none.
+// with. That hook in turn has one caller only: the child's exit or close handler, as
+// `exit(<that handler's code parameter> ?? 1)`. Everywhere else `process.exit(<parameter>)` is
+// refused, and the row's own code is only the fallback when the child gave none.
 const INHERITED_PROBE: ExitRow = {
   code: 1,
   command: 'doctor',
@@ -7603,6 +7604,23 @@ analyzerTest('shadowing the restart hook\'s parameter fails the check', () => {
     `    {\n      const code = 247;\n${SERVE_HOOK_EXIT.replaceAll('    ', '      ')}\n    }`,
   ));
   expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook with a literal fails the check', () => {
+  // The hook only ever leaves with the child's code. A literal is a code the command chose,
+  // which is exactly what the inherited form is not allowed to hide.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook without the child\'s fallback fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('a second caller of the restart hook fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code ?? 1);\n      exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
 });
 
 analyzerTest('a default call that is not the command table fails the check', () => {

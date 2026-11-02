@@ -58,13 +58,15 @@
 //
 // One form leaves with a code this command did not choose, and it is allowed at exactly one site:
 // `process.exit(<parameter>)` inside `restartSelf`'s default `exit` hook in `src/mcp/serve.ts`,
-// where the parameter is that hook's own and is never assigned or shadowed. Every row marked on
-// that site has `"inherits": true`; the row's code is the fallback — the code the command leaves
-// when the process it waited on gave none (a signal ended it) — and the page says the site leaves
-// with the child's code. Any other `process.exit(<parameter>)`, an assignment to the hook's
-// parameter, or another binding of its name inside the hook is an error: the form is not a general
-// way past the contract. An inherited row on any other site, or a fixed row on this one, is an
-// error too.
+// where the parameter is that hook's own and is never assigned or shadowed. That hook in turn is
+// called from exactly one place — the child's `exit` or `close` handler, as
+// `exit(<that handler's code parameter> ?? 1)` — and any other caller, argument or use of the name
+// is an error. Every row marked on that site has `"inherits": true`; the row's code is the
+// fallback — the code the command leaves when the process it waited on gave none (a signal ended
+// it) — and the page says the site leaves with the child's code. Any other
+// `process.exit(<parameter>)`, an assignment to the hook's parameter, or another binding of its
+// name inside the hook is an error: the form is not a general way past the contract. An inherited
+// row on any other site, or a fixed row on this one, is an error too.
 //
 // A `throw` with its own marker is a row. An unmarked `throw` a run function can reach outside
 // a try that catches it is covered by `team.command-threw`.
@@ -287,10 +289,11 @@ function enclosingFunction(node: ts.Node): ExitFunc | undefined {
   return undefined;
 }
 
-/** Whether `owner` is the one allowed inherited site: the `exit` variable's default hook, written
- *  directly in `restartSelf`'s body, with the parameter the allowlist names. */
-function allowedInheritedSite(owner: ExitFunc, name: string, file: string): boolean {
-  if (file !== INHERITED_SITE.file || name !== INHERITED_SITE.parameter) return false;
+/** Whether `owner` is the one allowed inherited site — the `exit` variable's default hook,
+ *  written directly in `restartSelf`'s body, with the parameter the allowlist names — and the
+ *  declaration of that hook, which the caller check reads. */
+function allowedInheritedSite(owner: ExitFunc, name: string, file: string): ts.VariableDeclaration | null {
+  if (file !== INHERITED_SITE.file || name !== INHERITED_SITE.parameter) return null;
   let node: ts.Node = owner;
   while (
     node.parent &&
@@ -302,14 +305,64 @@ function allowedInheritedSite(owner: ExitFunc, name: string, file: string): bool
     node = node.parent;
   }
   const declaration = node.parent;
-  if (!declaration || !ts.isVariableDeclaration(declaration)) return false;
-  if (!ts.isIdentifier(declaration.name) || declaration.name.text !== INHERITED_SITE.hook) return false;
+  if (!declaration || !ts.isVariableDeclaration(declaration)) return null;
+  if (!ts.isIdentifier(declaration.name) || declaration.name.text !== INHERITED_SITE.hook) return null;
   const statement = declaration.parent?.parent;
-  if (!statement || !ts.isVariableStatement(statement)) return false;
+  if (!statement || !ts.isVariableStatement(statement)) return null;
   const body = statement.parent;
-  if (!body || !ts.isBlock(body)) return false;
+  if (!body || !ts.isBlock(body)) return null;
   const func = body.parent;
-  return func !== undefined && ts.isFunctionDeclaration(func) && func.body === body && func.name?.text === INHERITED_SITE.func;
+  return func !== undefined && ts.isFunctionDeclaration(func) && func.body === body && func.name?.text === INHERITED_SITE.func
+    ? declaration
+    : null;
+}
+
+/** Whether an identifier is a use of a value, not a property's name, a label or a declaration. */
+function isValueReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (!parent) return true;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+  if (ts.isLabeledStatement(parent) || ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) return false;
+  return true;
+}
+
+/** The hook's one caller: `exit(<the handler's code parameter> ?? 1)` inside the child's `exit`
+ *  or `close` handler, and no other use of the name. A literal, another expression, a second
+ *  call or an alias would leave a code the hook did not receive from the child. */
+function inheritedCallerProblem(hook: ts.VariableDeclaration, name: string): string | null {
+  const sentence = `the exit hook is called once, from the child's exit or close handler, with that handler's code parameter and 1`;
+  const body = hook.parent?.parent?.parent;
+  if (!body || !ts.isBlock(body)) return sentence;
+  const references: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name && node !== hook.name && isValueReference(node)) references.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  if (references.length !== 1) return `${sentence}; the hook is used ${String(references.length)} times there`;
+  const reference = references[0]!;
+  const call = reference.parent;
+  if (!call || !ts.isCallExpression(call) || call.expression !== reference) return sentence;
+  const arg = call.arguments[0];
+  if (!arg || call.arguments.length !== 1) return sentence;
+  const expr = unwrap(arg);
+  if (!ts.isBinaryExpression(expr) || expr.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken) return sentence;
+  const left = unwrap(expr.left);
+  const right = unwrap(expr.right);
+  if (!ts.isIdentifier(left) || !ts.isNumericLiteral(right) || Number(right.text) !== 1) return sentence;
+  const handler = enclosingFunction(call);
+  if (!handler || !handler.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === left.text)) return sentence;
+  let node: ts.Node = handler;
+  while (node.parent && (ts.isParenthesizedExpression(node.parent) || ts.isAsExpression(node.parent))) node = node.parent;
+  const listening = node.parent;
+  if (!listening || !ts.isCallExpression(listening) || !listening.arguments.includes(node as ts.Expression)) return sentence;
+  const callee = unwrap(listening.expression);
+  if (!ts.isPropertyAccessExpression(callee) || (callee.name.text !== 'once' && callee.name.text !== 'on')) return sentence;
+  if (!ts.isIdentifier(callee.expression) || callee.expression.text !== 'child') return sentence;
+  const event = listening.arguments[0];
+  if (!event || !ts.isStringLiteral(event) || (event.text !== 'exit' && event.text !== 'close')) return sentence;
+  return null;
 }
 
 /** Every assignment operator. The compiler exposes the predicate only internally, so the kinds
@@ -407,13 +460,14 @@ function inheritedExit(call: ts.CallExpression, file: string): InheritedCheck {
   const owner = enclosingFunction(call);
   if (!owner) return { form: false };
   if (!owner.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === expr.text)) return { form: false };
-  if (!allowedInheritedSite(owner, expr.text, file)) {
+  const hook = allowedInheritedSite(owner, expr.text, file);
+  if (!hook) {
     return {
       form: true,
       problem: `the inherited exit form is allowed only at ${INHERITED_SITE.file}'s ${INHERITED_SITE.func} ${INHERITED_SITE.hook} hook`,
     };
   }
-  return { form: true, problem: inheritedParameterProblem(owner, expr.text) };
+  return { form: true, problem: inheritedParameterProblem(owner, expr.text) ?? inheritedCallerProblem(hook, INHERITED_SITE.hook) };
 }
 
 const UNREADABLE = "exit expression the contract can't read: return a marked literal or a covered call";
