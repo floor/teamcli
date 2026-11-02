@@ -782,6 +782,45 @@ test('a running bus posts the inbox shape for a seat whose row names it', async 
   }
 });
 
+test('a fixture inbox with side files beside its record posts once, and never reads one as a record', async () => {
+  // The watch, the channel and a thread close leave marker files beside the record. Their names
+  // match a record's shape, but none is a message: a scan that raises one asks the inbox shape to
+  // read it and gets "the record is not a signed record". The record itself is the only arrival.
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  signedDrop(base, root, MESSAGE_ID);
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  for (const side of [`${MESSAGE_ID}.reported`, `${MESSAGE_ID}.wake`, `${MESSAGE_ID}.channel-push.json`]) {
+    writeFileSync(join(dir, side), `${JSON.stringify({ id: MESSAGE_ID })}\n`);
+  }
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, { ...hook, body: 'inbox' }),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    for (let i = 0; i < 200 && get.hits.length === 0; i += 1) await Bun.sleep(10);
+    // A second pass sees the same folder; a side file raised as an arrival would be read now.
+    await started.handle.reconcileNow();
+    expect(get.hits.length).toBe(1);
+    expect(get.hits[0]?.body).toContain(MESSAGE_ID);
+    const said = lines.join('\n');
+    expect(said).not.toContain('not a signed record');
+    expect(said).not.toContain(`the message record ${MESSAGE_ID}.reported`);
+  } finally {
+    await started.handle.close();
+  }
+});
+
 test('a URL that names credentials is refused at read time, and its parts are never echoed', () => {
   const base = scratch();
   const hook = files(
