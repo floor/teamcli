@@ -91,37 +91,173 @@ export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: fal
   }
 }
 
+/** The shell words of a launch line, each with the quotes and escapes that spell it. A quoted
+ *  prompt is one word: the words inside it are text, not options. */
+const SHELL_WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
+
 /** The launch line without the `--sandbox <profile>` this run appended: what a launch runs when
  *  its sandbox file could not be written, instead of a line Grok would refuse for a profile it
- *  cannot find. */
+ *  cannot find. The option is removed as the argv pair it is, never as a substring: the same words
+ *  inside a quoted prompt are one argument, and the CLI is asked for exactly what it was asked
+ *  before. */
 export function withoutGrokSandbox(command: string, profile: string): string {
-  const name = profile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return command.replace(new RegExp(`\\s+--sandbox(?:=|\\s+)${name}(?=\\s|$)`), '');
+  const words = [...command.matchAll(SHELL_WORD)];
+  for (let at = 0; at < words.length; at++) {
+    const word = words[at]!;
+    const raw = word[0]!;
+    const start = word.index!;
+    let end = start + raw.length;
+    const joined = raw.startsWith('--sandbox=') ? raw.slice('--sandbox='.length) : null;
+    if (joined !== null) {
+      if (joined !== profile) continue;
+    } else if (raw === '--sandbox') {
+      const value = words[at + 1];
+      if (value === undefined || value[0] !== profile) continue;
+      end = value.index! + value[0]!.length;
+    } else {
+      continue;
+    }
+    let from = start;
+    while (from > 0 && /\s/.test(command[from - 1]!)) from--;
+    return command.slice(0, from) + command.slice(end);
+  }
+  return command;
 }
 
 type Field = { key: string; value: string };
 
 function mergeProfile(text: string, profile: string, fields: readonly Field[]): string | null {
-  const lines = text.split('\n');
-  const at = lines.findIndex((line) => {
-    const trimmed = line.trim();
-    return trimmed === `[profiles.${profile}]` || trimmed === `[profiles.${tomlString(profile)}]`;
-  });
-  if (at < 0) {
+  // The table is decided by parsing, never by one spelling of its header. A file that does not
+  // parse is left exactly as it is and the launch goes on without the profile: rewriting a broken
+  // file is not this launch's repair, and appending to it could not be checked.
+  const parsed = parseSandbox(text);
+  const exists = Object.prototype.hasOwnProperty.call(profileTables(parsed), profile);
+  let next: string | null;
+  if (!exists) {
     const block = [`[profiles.${profile}]`, ...fields.map((field) => `${field.key} = ${field.value}`), ''].join('\n');
-    if (text === '') return block;
-    const base = text.endsWith('\n') ? text : `${text}\n`;
-    return base.endsWith('\n\n') ? base + block : `${base}\n${block}`;
+    if (text === '') next = block;
+    else {
+      const base = text.endsWith('\n') ? text : `${text}\n`;
+      next = base.endsWith('\n\n') ? base + block : `${base}\n${block}`;
+    }
+  } else {
+    const lines = text.split('\n');
+    const at = lines.findIndex((line) => {
+      const path = headerPath(line);
+      return path !== null && path.length === 2 && path[0] === 'profiles' && path[1] === profile;
+    });
+    if (at < 0) {
+      // The parse proves the key exists, but not as a table header this version can edit — an
+      // inline value under `[profiles]`, for example. Appending a second definition would make
+      // the file unparseable, so nothing is written.
+      throw new Error(`the sandbox file defines profiles.${profile} in a form this version cannot rewrite; it was left as it is`);
+    }
+    let end = at + 1;
+    while (end < lines.length && headerPath(lines[end] ?? '') === null) end++;
+    const section = lines.slice(at + 1, end);
+    let changed = false;
+    for (const field of fields) {
+      if (upsertField(section, field)) changed = true;
+    }
+    if (!changed) return null;
+    next = [...lines.slice(0, at + 1), ...section, ...lines.slice(end)].join('\n');
   }
-  let end = at + 1;
-  while (end < lines.length && !(lines[end] ?? '').trim().startsWith('[')) end++;
-  const section = lines.slice(at + 1, end);
-  let changed = false;
-  for (const field of fields) {
-    if (upsertField(section, field)) changed = true;
+  // A file that parsed before this write parses after it. The check is the whole file, so an
+  // appended table beside an inline `profiles = {...}` is refused instead of corrupted.
+  const written = parseSandbox(next, 'writing the sandbox profile would leave the file unreadable');
+  if (!Object.prototype.hasOwnProperty.call(profileTables(written), profile)) {
+    throw new Error('writing the sandbox profile did not land in the file; it was left as it is');
   }
-  if (!changed) return null;
-  return [...lines.slice(0, at + 1), ...section, ...lines.slice(end)].join('\n');
+  return next;
+}
+
+/** A sandbox file parsed as a TOML document. A file that does not parse is not written: the
+ *  error tells the caller why, and the launch continues without the profile. */
+function parseSandbox(text: string, prefix = 'the sandbox file is not valid TOML'): Record<string, unknown> {
+  try {
+    const parsed: unknown = Bun.TOML.parse(text);
+    return parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    throw new Error(`${prefix} (${said}); it was left as it is`);
+  }
+}
+
+function profileTables(parsed: Record<string, unknown>): Record<string, unknown> {
+  const profiles = parsed.profiles;
+  return profiles !== null && typeof profiles === 'object' && !Array.isArray(profiles)
+    ? profiles as Record<string, unknown>
+    : {};
+}
+
+/** The key path a table header line names, decoded. `[profiles.x]`, `[profiles.x] # note`,
+ *  `[ profiles . "x" ]` and `[profiles.'x']` all name the same table; a line that is not a table
+ *  header (`[[array]]`, a key, a continuation of a multi-line value) names nothing. */
+function headerPath(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('[') || trimmed.startsWith('[[')) return null;
+  let quote: '"' | "'" | null = null;
+  let close = -1;
+  for (let index = 1; index < trimmed.length; index++) {
+    const char = trimmed[index]!;
+    if (quote !== null) {
+      if (quote === '"' && char === '\\') index++;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === ']') {
+      close = index;
+      break;
+    }
+  }
+  if (close < 0) return null;
+  const rest = trimmed.slice(close + 1).trim();
+  if (rest !== '' && !rest.startsWith('#')) return null;
+  return keyPath(trimmed.slice(1, close));
+}
+
+function keyPath(inner: string): string[] | null {
+  const parts: string[] = [];
+  let part = '';
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < inner.length; index++) {
+    const char = inner[index]!;
+    if (quote !== null) {
+      part += char;
+      if (quote === '"' && char === '\\' && index + 1 < inner.length) part += inner[++index]!;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      part += char;
+    } else if (char === '.') {
+      parts.push(part);
+      part = '';
+    } else part += char;
+  }
+  if (quote !== null) return null;
+  parts.push(part);
+  const keys: string[] = [];
+  for (const raw of parts) {
+    const key = bareOrQuoted(raw.trim());
+    if (key === null) return null;
+    keys.push(key);
+  }
+  return keys;
+}
+
+function bareOrQuoted(raw: string): string | null {
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      return JSON.parse(`"${raw.slice(1, -1)}"`) as string;
+    } catch {
+      return null;
+    }
+  }
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1);
+  return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : null;
 }
 
 function upsertField(section: string[], field: Field): boolean {
