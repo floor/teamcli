@@ -98,7 +98,11 @@ describe('a root with no team file naming a project', () => {
     const alpha = approve('alpha', root, 'format: 1\n');
     const gamma = approve('gamma', root, 'format: 1\n');
     expect(findStore(root, home)).toBeNull();
-    expect(approvalStanding(root, home).kind).toBe('none');
+    // Both stores were written for this root, so the generation is recorded: the tie is
+    // refused with both stores named, never read as a root no approval was written for.
+    const standing = approvalStanding(root, home);
+    expect(standing.kind).toBe('refused');
+    if (standing.kind === 'refused') expect(standing.why).toContain('several stores match this root');
     expect(otherMatchingStores(root, home)).toEqual([basename(alpha), basename(gamma)].sort());
   });
 });
