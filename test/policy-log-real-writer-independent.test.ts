@@ -1,4 +1,4 @@
-// Independent FLO-1177 scenes: real in-process admission and signed policy writes, with an
+// Independent scenes: real in-process admission and signed policy writes, with an
 // isolated home and fresh fixture keys. No operational command, pane or credential store runs.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
