@@ -5,7 +5,16 @@
 // shell removes it; inside single quotes the backslash is literal. The standard `'\''` splice —
 // close the single quotes, an escaped quote, reopen — reads as one word, as a shell reads it.
 // A `$(…)`, `${…}` or backtick substitution is one word whatever spaces it holds, kept as its
-// source text: the shell runs it, so the reader can know no more than what is written.
+// source text: the shell runs it, so the reader can know no more than what is written. The same
+// is true of an unquoted `$name`, `$1`, `$@` and the rest of the parameter expansions: the
+// source text is kept, and the value is the shell's. Such a word is marked `expands` on the
+// `ShellWord`, because its runtime text is not a word this reader can know. That mark composes
+// with the ANSI rule below: a launch line whose CLI argument scope holds an expanding word is
+// refused rather than placed around (`opaqueArgumentWord` in `cli-scope.ts`), exactly as a line
+// holding an escaped ANSI-C word is, because the expansion may be the CLI's positional
+// delimiter and any option written after it would become prompt text. A leading assignment
+// word is exempt (a shell does not split its expansion), so a vendor's credential lookup still
+// launches; the mark travels with the word wherever it is read.
 //
 // `$'…'` (ANSI-C quoting) is read when it holds no backslash: every shell that reads such a
 // word then hands on the literal text between its quotes, so there is nothing to guess. A word
@@ -23,12 +32,18 @@
 // or a trailing backslash is unreadable at the `unclosed` reason: no shell can run it.
 
 export type ShellWord = {
-  /** The word as the shell hands it to the program, quotes removed and escapes resolved. */
+  /** The word as the shell hands it to the program, quotes removed and escapes resolved, and
+   *  with a substitution or parameter expansion kept as its source text. */
   text: string;
   /** Where the word starts on the line. */
   start: number;
   /** Where the word ends on the line: just past its last source character. */
   end: number;
+  /** Whether the shell computes part of this word at run time — a substitution, a backtick or
+   *  an unquoted parameter expansion — so `text` is the source, not a value the reader knows.
+   *  A caller that decides where a word goes asks this before trusting the word: an expansion
+   *  may be the CLI's positional delimiter. */
+  expands: boolean;
 };
 
 /** Why a line has no knowable words. `unclosed` is a line no shell can run; `ansi` and `nul`
@@ -138,6 +153,15 @@ function substitutionEnd(command: string, at: number): number {
   return -1;
 }
 
+/** Whether the `$` at `at`, outside ANSI-C quoting, opens a parameter expansion whose value the
+ *  shell computes: a name, a digit or one of the special parameters. `$(…)` and `${…}` are spans
+ *  this reader consumes before this question, and `$'…'` is ANSI-C quoting where it is read; a
+ *  `$` before anything else marks no expansion here. */
+function startsExpansion(command: string, at: number): boolean {
+  const next = command[at + 1];
+  return next !== undefined && /[A-Za-z0-9_@*#?$!-]/.test(next);
+}
+
 /** Read a line to its words. Exported for the one caller that must decide about a line it could
  *  not read (`lineDelimiterRisk`), which needs the words read before the unreadable part. */
 export function readShellWords(command: string): ShellWordsRead {
@@ -147,13 +171,16 @@ export function readShellWords(command: string): ShellWordsRead {
   let at = 0;
   let text = '';
   let start = -1;
+  // Whether the word being read holds an expansion whose value this reader cannot know.
+  let expands = false;
   while (at < length) {
     const char = command[at]!;
     if (/\s/.test(char)) {
       if (start >= 0) {
-        words.push({ text, start, end: at });
+        words.push({ text, start, end: at, expands });
         text = '';
         start = -1;
+        expands = false;
       }
       at += 1;
       continue;
@@ -199,6 +226,7 @@ export function readShellWords(command: string): ShellWordsRead {
           if (end < 0) return { words, unreadable: 'unclosed', at: start };
           text += command.slice(at, end);
           at = end;
+          expands = true;
           continue;
         }
         if (inner === '`') {
@@ -206,8 +234,10 @@ export function readShellWords(command: string): ShellWordsRead {
           if (end < 0) return { words, unreadable: 'unclosed', at: start };
           text += command.slice(at, end);
           at = end;
+          expands = true;
           continue;
         }
+        if (inner === '$' && startsExpansion(command, at)) expands = true;
         text += inner;
         at += 1;
       }
@@ -240,12 +270,13 @@ export function readShellWords(command: string): ShellWordsRead {
       continue;
     }
     // A substitution is one word whatever spaces it holds: the shell runs it, so its source text
-    // is the only thing a reader can know. It is kept as written.
+    // is the only thing a reader can know. It is kept as written, and marked as expanding.
     if (char === '`') {
       const end = backtickEnd(command, at);
       if (end < 0) return { words, unreadable: 'unclosed', at: start };
       text += command.slice(at, end);
       at = end;
+      expands = true;
       continue;
     }
     if (char === '$' && (command[at + 1] === '(' || command[at + 1] === '{')) {
@@ -253,12 +284,16 @@ export function readShellWords(command: string): ShellWordsRead {
       if (end < 0) return { words, unreadable: 'unclosed', at: start };
       text += command.slice(at, end);
       at = end;
+      expands = true;
       continue;
     }
+    // A parameter expansion (`$name`, `$1`, `$@`, …) keeps its source text too, and its value is
+    // the shell's. `\$` was taken by the backslash branch above and stays literal.
+    if (char === '$' && startsExpansion(command, at)) expands = true;
     text += char;
     at += 1;
   }
-  if (start >= 0) words.push({ text, start, end: length });
+  if (start >= 0) words.push({ text, start, end: length, expands });
   return { words };
 }
 

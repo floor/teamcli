@@ -6,7 +6,9 @@
 // decoded words are its words before, exactly, followed by exactly the inserted words in order.
 // A line whose shape this version cannot prove — unclosed quoting, a script file, a bare command
 // word, a nested shell deeper than one, an ANSI-C (`$'…'`) word — keeps exactly its 0.5.10
-// placement, the options after the line, with one plain warning, and is never refused. These
+// placement, the options after the line, with one plain warning, and is never refused. The one
+// refusal is a plain line that hands its CLI a word the shell computes — a substitution, a
+// backtick or a parameter expansion — because that word may be the CLI's `--` at run time. These
 // scenes run the built line against a stub CLI and read the argv the CLI was handed, so the words
 // are measured, not matched in the line's text.
 import { execFileSync } from 'node:child_process';
@@ -25,6 +27,7 @@ import {
   cliWordList,
   cliWordsOf,
   launchCommand,
+  launchCommandOrRefusal,
   launchSessionId,
   namedResumeTarget,
   resumeCarry,
@@ -638,10 +641,11 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
   });
 
   // The plain-line rows: no script word stands between the reader and the shell that runs the
-  // line, so the only question left is whether the line swallows a word written after it. A
-  // comment, an operator, a redirect, a newline, an unclosed quote and a trailing backslash do;
-  // an expansion or a glob changes its own word only, so the words written after it still reach
-  // the CLI and the line stays provable — refusing those would lose ids 0.5.10 recorded.
+  // line, so two questions remain. Whether the line swallows a word written after it: a comment,
+  // an operator, a redirect, a newline, an unclosed quote and a trailing backslash do. And
+  // whether a word's value is the shell's: a substitution, a backtick or a parameter expansion
+  // may be the CLI's `--` when the line runs, so the launch refuses the line and the reader names
+  // no word. A glob changes its own word only, so the line stays provable.
   const PLAIN_SWALLOWED = [
     { name: 'a plain comment', line: 'claude --model m # note' },
     { name: 'a plain semicolon', line: 'claude --model m; :' },
@@ -656,13 +660,19 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
     { name: 'a plain trailing backslash', line: 'claude --model m \\' },
   ];
   const PLAIN_PROVED = [
+    { name: 'a plain star glob', line: 'claude --model m*' },
+    { name: 'a plain quoted word', line: 'claude --model "m"' },
+    { name: 'a plain single-quoted word', line: "claude --model 'm'" },
+    { name: 'a plain escaped dollar', line: 'claude --model \\$X' },
+  ];
+  // The words the shell computes: the line's own words may be the CLI's `--` at run time, so a
+  // launch refuses the line, a non-launching read keeps 0.5.10's placement with its notice, and
+  // no reader names a word.
+  const PLAIN_COMPUTED = [
     { name: 'a plain variable', line: 'claude --model $X' },
     { name: 'a plain braced variable', line: 'claude --model ${X}' },
     { name: 'a plain command substitution', line: 'claude --model $(printf x)' },
     { name: 'a plain backtick substitution', line: 'claude --model `printf x`' },
-    { name: 'a plain star glob', line: 'claude --model m*' },
-    { name: 'a plain quoted word', line: 'claude --model "m"' },
-    { name: 'a plain single-quoted word', line: "claude --model 'm'" },
   ];
 
   test('every plain shape that swallows its tail is refused by the placement and names no word', () => {
@@ -686,6 +696,25 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
       expect(`${name}: placement refuses — ${placementRefused}`).toBe(`${name}: placement refuses — false`);
       expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — false`);
       expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
+    }
+  });
+
+  test('a plain word the shell computes is refused by a launch and names no word', () => {
+    for (const { name, line } of PLAIN_COMPUTED) {
+      // A launch refuses the line: the computed word may be the CLI's delimiter, so no option
+      // written after it would be an option.
+      const built = launchCommandOrRefusal(claude, line, 'Rules.');
+      expect(`${name}: launch refused — ${built.command === '' && (built.refusal ?? '').includes('delimiter')}`)
+        .toBe(`${name}: launch refused — true`);
+      // A non-launching read keeps 0.5.10's placement and says so; it names no word either.
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      expect(`${name}: fallback warned — ${warnings.length === 1 && command === baseline(line)}`)
+        .toBe(`${name}: fallback warned — true`);
+      expect(`${name}: reader unknown — ${cliWordList('claude-code', line) === null}`)
+        .toBe(`${name}: reader unknown — true`);
+      expect(`${name}: session words unknown — ${cliWordsOf('claude-code', line) === ''}`)
+        .toBe(`${name}: session words unknown — true`);
     }
   });
 
@@ -735,15 +764,16 @@ describe('a plain line that swallows its tail takes no session id, and one that 
     expect(cliArgv(`${line} --session-id declared-1`)).toEqual(['--model', 'm']);
   });
 
-  test('a variable on a plain line does not swallow the id, and the CLI receives it', () => {
-    const launch = withLaunchSession('claude-code', 'claude --model $X');
-    expect(launch.sessionId).toBeDefined();
-    expect(cliArgv(launch.command, { env: { X: 'm' } })).toEqual([
-      '--model',
-      'm',
-      '--session-id',
-      launch.sessionId!,
-    ]);
+  test('a variable on a plain line cannot place an id the CLI is sure to read, so none is recorded', () => {
+    const line = 'claude --model $X';
+    const launch = withLaunchSession('claude-code', line);
+    expect(launch.command).toBe(line);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+    // And the launch itself refuses the line: the computed word may be the CLI's delimiter.
+    const built = launchCommandOrRefusal(claude, line, 'Rules.');
+    expect(built.command).toBe('');
+    expect(built.refusal).toContain('delimiter');
   });
 
   test('a glob on a plain line does not swallow the id either', () => {

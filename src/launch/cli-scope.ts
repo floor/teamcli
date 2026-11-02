@@ -51,6 +51,35 @@ function programWordAt(words: readonly ShellWord[]): number {
   return at;
 }
 
+/** Whether a word is an assignment the shell itself reads before its program word. The name and
+ *  `=` must be unquoted in the source: measured here on GNU bash 3.2.57(1)-release, zsh 5.9 and
+ *  sh, `A=1 /usr/bin/env` sets `A=1`, while `"A=1" /usr/bin/env`, `A"=1" /usr/bin/env` and
+ *  `'A=1' /usr/bin/env` all run a command named `A=1` (exit 127, `command not found`). */
+function assignmentWordAt(command: string, word: ShellWord): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(command.slice(word.start));
+}
+
+/**
+ * Whether a plain line — one whose own words are the CLI's — hands its CLI a word whose value
+ * this reader cannot know: a substitution, a backtick or a parameter expansion
+ * ({@link ShellWord.expands}) at or after the command word. A shell script word's body is asked
+ * about by its own proof instead.
+ * Such a word may be the CLI's positional delimiter when the shell runs the line — measured with
+ * a line holding `codex $(printf %s $'\055\055') --flag`, where the program receives `--` first
+ * — so an option written after it is prompt text, and a placement relative to it is a guess.
+ * The leading assignment words are exempt: a shell does not split an assignment word's expansion
+ * into several words, so it cannot become an argument of the command (`A=$(printf '%s' 'x y')
+ * /usr/bin/env` prints `A=x y` on bash, zsh and sh), and a vendor's credential lookup,
+ * `TOKEN=$(…) claude …`, is exactly that shape. A word spelled as an assignment after `env` is
+ * not exempt: the shell split it before `env` saw it, so its expansion can become a word of its
+ * own.
+ */
+function opaqueArgumentWord(command: string, words: readonly ShellWord[]): boolean {
+  let at = 0;
+  while (at < words.length && assignmentWordAt(command, words[at]!)) at += 1;
+  return words.slice(at).some((word) => word.expands);
+}
+
 /** The program word of a line, when that word is a shell. */
 function shellProgramOf(command: string): string | null {
   const words = shellWords(command.trimEnd());
@@ -321,7 +350,9 @@ type Placement =
  *  unquoted top-level operator (`;`, `|`, `&`, `<`, `>`) or a newline ends the command, an
  *  unclosed quote takes every later character into the quoted word, and a trailing backslash
  *  escapes the space before the appended word. A `$` expansion or a glob changes its own word
- *  only, so the words written after it still reach the command and it does not count here. */
+ *  only, so the words written after it still reach the command and it does not count here — but
+ *  a word the shell computes may be the CLI's delimiter, so a placement asks
+ *  {@link opaqueArgumentWord} before it trusts the line. */
 export function takesAppendedWord(text: string): boolean {
   let quote: ScriptQuote | null = null;
   let at = 0;
@@ -363,16 +394,23 @@ export function takesAppendedWord(text: string): boolean {
  *  forwards its arguments take them after the line, when the line does not swallow the rest of
  *  its text ({@link takesAppendedWord}). A line ending in a quoted script that runs the CLI takes
  *  them inside that script, and one nested shell is followed to the script it runs. Everything
- *  else — an unreadable line, a script word after positional words, a script file, a bare command
- *  word, a shell whose quoting this tool does not write, a body that is more than one simple
- *  command, a nesting deeper than one shell, or a plain line that swallows an appended word — is
- *  uncertain, and keeps 0.5.10's placement after the line. */
+ *  else — an unreadable line, a CLI argument word the shell computes ({@link opaqueArgumentWord}:
+ *  a substitution, a backtick or a parameter expansion), a script word after positional words, a
+ *  script file, a bare command word, a shell whose quoting this tool does not write, a body that
+ *  is more than one simple command, a nesting deeper than one shell, or a plain line that
+ *  swallows an appended word — is uncertain, and keeps 0.5.10's placement after the line. */
 function placementOf(binary: string, command: string): Placement {
   const trimmed = command.trimEnd();
   if (trimmed === '') return { kind: 'line' };
-  if (shellWords(trimmed) === null) return { kind: 'uncertain' };
+  const read = readShellWords(trimmed);
+  if ('unreadable' in read) return { kind: 'uncertain' };
   const found = shellScriptWordOf(trimmed);
-  if (found === null) return takesAppendedWord(trimmed) ? { kind: 'line' } : { kind: 'uncertain' };
+  if (found === null) {
+    // The line's own words are the CLI's. A word the shell computes may be its delimiter, so the
+    // line gets no placement a word could be written after.
+    if (opaqueArgumentWord(trimmed, read.words)) return { kind: 'uncertain' };
+    return takesAppendedWord(trimmed) ? { kind: 'line' } : { kind: 'uncertain' };
+  }
   if (found.trailing.length > 0) return { kind: 'uncertain' };
   const shell = shellProgramOf(trimmed);
   if (shell === null || !POSIX_SHELLS.has(shell)) return { kind: 'uncertain' };
@@ -385,21 +423,28 @@ function placementOf(binary: string, command: string): Placement {
 }
 
 /**
- * Whether a launch line that cannot be read whole may hand its CLI a `--` this tool cannot place
- * words before. Words appended to such a line stand after it, where a plain line's program reads
- * them; if the line names the delimiter before the part this reader cannot see, or the
- * unreadable part could name one, the added options would be prompt text instead. The caller
- * refuses such a launch.
+ * Whether a launch line may hand its CLI a `--` this tool cannot place words before. Words
+ * appended to such a line stand after it, where a plain line's program reads them; if the line
+ * names the delimiter before a part the shell computes, or the part this reader cannot see could
+ * name one, the added options would be prompt text instead. The caller refuses such a launch.
  *
- * The test on the unread suffix is deliberately conservative and does not parse it: a `--`
- * anywhere in the raw text (in any quoting, not only as a bare word), a backslash, or an ANSI-C
- * opening all refuse, because each can spell a delimiter under some shell. Only a suffix that
- * plainly cannot — an unclosed quote takes the rest of the line into one word — keeps 0.5.10's
- * placement with its notice.
+ * Two readings compose here. The first is a word the shell computes but this reader does not, on
+ * a plain line whose own words are the CLI's: a substitution, a backtick or a parameter
+ * expansion at or after the command word is kept as its source text, and its value may be the
+ * delimiter when the line runs, so no word may be placed after it ({@link opaqueArgumentWord} —
+ * a leading assignment word is exempt, and the vendor's credential lookup keeps launching). A
+ * shell script word's body has its own proof, which proves no word at all beside a construct the
+ * shell computes, and the words written after such a line are the shell's positional words, not
+ * the CLI's. The second reading is a line this reader stops inside: `$'…'` with a backslash, a
+ * NUL, or an unclosed quote. A `--` read before the stop, or a raw suffix holding a `--` (in any
+ * quoting, not only as a bare word), a backslash or an ANSI-C opening, all refuse, because each
+ * can spell a delimiter under some shell. Only a suffix that plainly cannot — an unclosed quote
+ * takes the rest of the line into one word — keeps 0.5.10's placement with its notice.
  */
 export function lineDelimiterRisk(command: string): boolean {
   const line = command.trimEnd();
   const read = readShellWords(line);
+  if (shellScriptWordOf(line) === null && opaqueArgumentWord(line, read.words)) return true;
   if (!('unreadable' in read)) return false;
   if (read.words.some((word) => word.text === '--')) return true;
   const rest = line.slice(read.at);
@@ -672,14 +717,19 @@ function cliTextOf(binary: string, command: string): string | null {
  *  substitution, a glob — names none: the words after such a construct are not the argv the
  *  script hands its CLI. Null when the line, or the script that runs the CLI, cannot be proved
  *  ({@link provenScriptWord}, the proof a placement asks too): no caller may treat an unproved
- *  line as a word list. */
+ *  line as a word list. A word the shell computes on a plain line is no word this reader knows
+ *  ({@link opaqueArgumentWord}): the list would miss whatever the expansion becomes, so the
+ *  reader answers null rather than a list it would have to call complete. */
 export function cliWordListOf(binary: string, command: string): string[] | null {
   const trimmed = command.trimEnd();
   const lineWords = shellWords(trimmed);
   if (lineWords === null) return null;
   if (shellScriptWordOf(trimmed) === null) {
+    if (opaqueArgumentWord(trimmed, lineWords)) return null;
     return takesAppendedWord(trimmed) ? lineWords.map((word) => word.text) : null;
   }
+  // A proved script body is one simple command with no expansion left in it (`isSimpleCommand`),
+  // so the line's own words are the only place an unknown word can be.
   const text = cliTextOf(binary, trimmed);
   if (text === null) return null;
   const words = shellWords(text);
@@ -691,12 +741,14 @@ export function cliWordListOf(binary: string, command: string): string[] | null 
  *  recorded recipe names its CLI by the recipe's own program word, so a reader of feature pins
  *  does not need to know the CLI in advance. A line with no shell command string is read as its
  *  own words, exactly as the shell will hand them to the program. Null when the line, or the
- *  script that runs its program, cannot be proved. */
+ *  script that runs its program, cannot be proved. A word the shell computes on a plain line
+ *  names no word either ({@link opaqueArgumentWord}): null says the reader knows no complete list. */
 export function decodedWordsOf(command: string): string[] | null {
   const trimmed = command.trimEnd();
   const lineWords = shellWords(trimmed);
   if (lineWords === null) return null;
   if (shellScriptWordOf(trimmed) === null) {
+    if (opaqueArgumentWord(trimmed, lineWords)) return null;
     return takesAppendedWord(trimmed) ? lineWords.map((word) => word.text) : null;
   }
   let text = trimmed;

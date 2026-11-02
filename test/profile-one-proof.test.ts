@@ -77,6 +77,7 @@ const NOT_A_READER = new Map<string, string>([
   ['launchWordScopes', "0.5.10's raw-line question: it may see more words than the CLI reads, and its answer only suppresses an addition"],
   ['splitAtDelimiter', 'splits a line at its delimiter word so a rewrite keeps the tail verbatim: source spans, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
+  ['oneShellWord', 'asks how many shell words one vendor env fragment splits into, never reading a launch line: a boolean, never a word or span of the CLI'],
 ]);
 
 // The plain proof: a line with no script word names the CLI's own words only when a word written
@@ -96,6 +97,7 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
   ['launchWordScopes', "0.5.10's raw-line question: its answer only suppresses an addition"],
   ['splitAtDelimiter', 'splits a line at its delimiter word for a rewrite: source spans only, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
+  ['oneShellWord', 'reads one vendor env fragment, never a whole launch line: a boolean, never a word or span of the CLI'],
 ]);
 
 // Every exported function that returns CLI words, an id read from them, a launch line, or a

@@ -424,12 +424,14 @@ function optionKey(cli: string, word: string): string {
  * the line's own words after the delimiter keep their place. A line whose shape
  * this version cannot prove keeps 0.5.10's placement, the options after the
  * line, and says so through `warn`. Two lines are refused rather than launched
- * with the profile's words where the CLI does not read them: one this reader
- * cannot read to its end whose unread part holds a `--` in any quoting, a
- * backslash or an ANSI-C opening — anything that can spell the CLI's
- * delimiter (`lineDelimiterRisk`) — because every word written after it would
- * be prompt text; and one whose rules line cannot be placed inside it once its options
- * have been. Every other line keeps the old placement with its notice.
+ * with the profile's words where the CLI does not read them: one that hands its
+ * CLI a word the shell computes — a substitution, a backtick or an unquoted
+ * `$name` at or after the command word — or one this reader cannot read to its
+ * end whose unread part holds a `--` in any quoting, a backslash or an ANSI-C
+ * opening — anything that can spell the CLI's delimiter (`lineDelimiterRisk`) —
+ * because every word written after it would be prompt text; and one whose rules
+ * line cannot be placed inside it once its options have been. Every other line
+ * keeps the old placement with its notice.
  * A sandbox profile is named only when the caller wrote one for this launch and
  * the line names none of its own: the file's choice of profile stands.
  */
@@ -454,13 +456,14 @@ export function launchCommandOrRefusal(
    *  takes 0.5.10's placement even where a launch would be refused: nothing runs it. */
   launching = true,
 ): { command: string; refusal?: string } {
-  // A line this reader cannot read to its end may name the CLI's delimiter in the part it
-  // cannot see. Words written after such a line reach the CLI as prompt text, not options, so
-  // the launch is refused rather than launched with its configuration misplaced.
+  // A word the shell computes may be the CLI's delimiter, and a line this reader cannot read to
+  // its end may name one in the part it cannot see. Words written after such a line reach the
+  // CLI as prompt text, not options, so the launch is refused rather than launched with its
+  // configuration misplaced.
   if (launching && lineDelimiterRisk(launch)) {
     return {
       command: '',
-      refusal: 'its launch line cannot be read where it names, or may name, the CLI\'s delimiter; words added after it would be read as prompt text, not options',
+      refusal: 'its launch line computes a word where it runs the CLI, or cannot be read where it names, or may name, the CLI\'s delimiter; words added after it would be read as prompt text, not options',
     };
   }
   // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
