@@ -27,7 +27,8 @@ import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { readLaunchedTeam } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { clearStopped, hasSeat } from '../file/lines.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -333,7 +334,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, json, describeCaller(caller));
   }
-  if (declared.stopped) {
+  // A stopped seat is its own team's sign-off to lift: the owner, or a seat this team's map
+  // admits as `leads` on its recorded pane, restarts it, and the run clears the mark in the same
+  // write that records the launch. The caller gate above is not that proof on its own — dev mode
+  // folds its refusal into a warning, and a client run reads past it — so the verdict itself must
+  // be `ok`, not merely unfolded.
+  if (declared.stopped && mayChange.kind !== 'ok') {
     return signedOffRefused(out, json, name);
   }
 
@@ -487,6 +493,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     dry,
     ...(resume === undefined ? {} : { resume }),
     ...(continuity === undefined ? {} : { continuity }),
+    // The sign-off this run lifts is cleared in the same write that carries the launch: after
+    // the old pane is closed and before the launch reads the file's own words.
+    ...(declared.stopped ? { declare: () => declareRevived(path, name, home) } : {}),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
     sources,
@@ -1955,11 +1964,38 @@ function leadRefused(out: Io, json: boolean, callerText: string): number {
 function signedOffRefused(out: Io, json: boolean, name: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.signed-off',
-    message: `${plainLine(name)} is signed off; the owner takes the sign-off off in the file and runs team up`,
-    repair: 'the owner takes the sign-off off in the file, then runs team up',
+    message: `${plainLine(name)} is signed off; a \`leads\` seat of its own team clears it with \`team restart ${plainLine(name)}\``,
+    repair: `team restart ${name}`,
   });
   // exit: restart.signed-off
   return 1;
+}
+
+/**
+ * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
+ * which reads the file's own words: the seat's block loses `stopped: true` and keeps everything
+ * else. The write is validated whole (`writeTeamText`), so a file the schema refuses is left as
+ * it was; a seat taken out of the file since the run read it is said, never re-added. A failed
+ * write is the caller's abort: nothing is launched from a file the run could not rewrite.
+ */
+function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
+  const where = { home, command: 'restart' };
+  let text: string;
+  try {
+    text = readTeamText(path, where);
+  } catch (error) {
+    return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
+  const written = writeTeamText(path, clearStopped(text, name), where);
+  if (!written.ok) {
+    const problem = written.errors[0];
+    return {
+      ok: false,
+      why: problem === undefined ? 'the rewritten file is invalid' : `${problem.line === undefined ? '' : `line ${problem.line}: `}${problem.message}`,
+    };
+  }
+  return { ok: true };
 }
 
 function herdrRefused(out: Io, json: boolean): number {

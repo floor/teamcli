@@ -66,6 +66,10 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
 
+A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
+leaving it out, and the owner or a `leads` seat of that seat's own team brings it back with `team restart
+<seat>`, which clears the mark in the same write that records the launch, then relaunches it.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
