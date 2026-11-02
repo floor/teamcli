@@ -132,7 +132,7 @@ function registeredOptions(cli: string): ServeOptions {
     if (cli === 'cursor') args = JSON.parse(readFileSync(join(lobby, '.cursor/mcp.json'), 'utf8')).mcpServers['team-inbox'].args;
   }
   const flag = (name: string) => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
-  expect(args).toContain('serve'); expect(flag('--seat')).toBe('reader'); expect(flag('--session')).toBe('session-b');
+  expect(args).toContain('serve'); expect(flag('--seat')).toBe('reader'); expect(flag('--session')).toBe(cli === 'codex' ? undefined : 'session-b');
   expect(flag('--file')).toBe(file); expect(flag('--epoch')).toBe(oldEpoch);
   return { seat: flag('--seat'), session: flag('--session'), file: flag('--file'), epoch: flag('--epoch') };
 }
