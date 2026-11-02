@@ -491,6 +491,12 @@ export function pass({
     }
 
     const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
+    const continuity = replacedSeat(verdict, {
+      asked: true,
+      namedOnPane: state.seats[name]?.pane === agent.pane,
+      recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
+      liveSession: agent.session,
+    });
     const signed = signing?.get(name);
     observations.push({
       name,
@@ -506,12 +512,7 @@ export function pass({
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
       identity: verdict,
       launcher: seat ? usesLauncher(seat) : false,
-      continuity: replacedSeat(verdict, {
-        asked: true,
-        namedOnPane: state.seats[name]?.pane === agent.pane,
-        recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
-        liveSession: agent.session,
-      }),
+      continuity,
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
@@ -536,7 +537,7 @@ export function pass({
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
     });
-    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
+    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory, continuity === 'restored'));
   }
 
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
@@ -831,17 +832,19 @@ function pauseDrops(
 
 /** The sidebar lines a running file seat needs this pass. The first cycle paints both lines
  *  from the file, with a live model or effort in place of the file's when the screen shows
- *  one. A later cycle paints only a line that changed. A temporary seat has no file seat and
- *  is not passed here. */
+ *  one. A restored seat's pane is not trusted on its first cycle: the record's line is
+ *  painted, and a later cycle reads the pane again. A later cycle paints only a line that
+ *  changed. A temporary seat has no file seat and is not passed here. */
 function labelOf(
   seat: Seat,
   pane: string,
   workspace: string,
   screen: string | undefined,
   memory: Memory,
+  restored: boolean,
 ): PassResult['labels'] {
   const prior = memory.seatLabels[seat.name];
-  const live = liveDisplayAgent(seat, screen, prior?.effort);
+  const live = liveDisplayAgent(seat, restored && prior === undefined ? undefined : screen, prior?.effort);
   if (live.effort) (memory.seatLabels[seat.name] ??= {}).effort = live.effort;
   const title = workspaceLabel(seat);
   const push: PassResult['labels'][number] = { name: seat.name, pane, workspace };
