@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -300,6 +300,13 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const workspace = agent.workspace;
     const waiting = recorded?.waiting;
     if (waiting?.manual === true) return refused(refusedClass('state', `${seatName}: the owner has the pane open`));
+    // Nothing has been sent yet: a clean refusal puts the record back exactly as it was, and a
+    // rollback that does not take leaves the recovery, the direction that only observes. Both
+    // words refuse from this point the same way.
+    const refusedAtKey = (problem: Refusal, back: NonNullable<SeatState['waiting']>): Refusal =>
+      restoreWaiting(dir, session, seatName, back, pane, workspace)
+        ? problem
+        : { id: problem.id, class: 'state', message: `${problem.message} (it is still recorded as a recovery)` };
 
     if (dialog === 'question') {
       // A recovery is the other word's to complete: only the command that pressed the key
@@ -367,20 +374,14 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       }, pane, workspace)) {
         return refused(refusedClass('state', `${seatName}: its recovery state could not be recorded`));
       }
-      // Nothing has been sent yet: a clean refusal puts the record back exactly as it was, and a
-      // rollback that does not take leaves the recovery, the direction that only observes.
-      const refusedAtKey = (problem: Refusal): Refusal =>
-        restoreWaiting(dir, session, seatName, waiting, pane, workspace)
-          ? problem
-          : { id: problem.id, class: 'state', message: `${problem.message} (it is still recorded as a recovery)` };
       // The last reading is the one immediately before the key, and it reads the whole pane
       // again: the dialog's kind included, so a same-process switch to a permission, login or
       // other prompt after the earlier reads refuses here, and a dialog that no longer reads the
       // same is refused rather than keyed.
       const last = inspectQuestion(seatName, host, session, pane, profile, recorded?.launched);
-      if ('class' in last) return refused(refusedAtKey(last));
+      if ('class' in last) return refused(refusedAtKey(last, waiting));
       if (!sameQuestion(checked, last)) {
-        return refused(refusedAtKey(refusedClass('disagree', `${seatName}: the last reading of the pane no longer names the dialog`)));
+        return refused(refusedAtKey(refusedClass('disagree', `${seatName}: the last reading of the pane no longer names the dialog`), waiting));
       }
       let sent = false;
       try {
@@ -447,16 +448,21 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     }, pane, workspace)) {
       return refused(refusedClass('state', `${seatName}: its recovery state could not be recorded`));
     }
-    const keyProcessProblem = checkProcess(seatName, host, session, pane, recorded?.launched);
-    if (keyProcessProblem) {
-      // Nothing was sent, so this clean refusal puts the record back exactly as it was: the
-      // seat is waiting for its owner again, and a later answer can still answer it. The
-      // write above exists only for the crash case — that window stays write-before-key. A
-      // rollback that does not take leaves the recovery, the direction that only observes.
-      if (!restoreWaiting(dir, session, seatName, waiting, pane, workspace)) {
-        return refused({ id: keyProcessProblem.id, class: 'state', message: `${keyProcessProblem.message} (it is still recorded as a recovery)` });
-      }
-      return refused(keyProcessProblem);
+    // The last reading is the one immediately before the key, and it reads the whole pane again:
+    // the process and the screen included, so a process replacement or a switch to a permission,
+    // login or other prompt after the earlier reads refuses here, and a dialog that no longer
+    // reads the same is refused rather than keyed. The clean refusal puts the record back: the
+    // seat is waiting for its owner again, and a later answer can still answer it. The write
+    // above exists only for the crash case — that window stays write-before-key.
+    const last = inspect(seatName, host, session, pane, profile, team.trust, answerLobby, root, recorded?.launched);
+    if ('class' in last) return refused(refusedAtKey(last, waiting));
+    if (
+      last.folder !== checked.folder ||
+      last.record.from !== checked.record.from ||
+      last.record.to !== checked.record.to ||
+      last.record.action !== checked.record.action
+    ) {
+      return refused(refusedAtKey(refusedClass('disagree', `${seatName}: the last reading of the pane no longer names the trust dialog`), waiting));
     }
     let sent = false;
     try {
@@ -614,41 +620,64 @@ function inspect(
 ): Seen | Refusal {
   const say = (reason: 'version' | 'screen' | 'label' | 'folder', text: string): Refusal =>
     refusedClass(reason, `${seat}: ${text}`);
+  // The process check compares the pane's process with the identity its launch recorded. With no
+  // record there is nothing to compare it with, so the reading cannot be proved this run's seat:
+  // the word refuses instead of pressing a key into a pane it cannot identify. The log line keeps
+  // the class both words use; the contract row is this word's own.
+  if (!launched) {
+    return { id: 'answer.trust-identity', class: 'identity', message: `${seat}: its launched identity was not recorded, so the process in its pane cannot be checked` };
+  }
+  if (!profile) return say('version', 'this version has no trust answer');
+  // Every slow or host lookup is resolved before the final process read. `host.version` runs the
+  // CLI's `--version`, which can take seconds, and the pane's folder readings are host calls of
+  // their own: a process replaced — or a screen switched to a permission, login or other prompt —
+  // while one of them runs would be keyed from a process read taken before the replacement, or
+  // from a capture taken before the switch. `canonicalLanding` reads the filesystem too, so the
+  // expected lobby and the trust entries are resolved here, with those lookups. The order the key
+  // path relies on is: the version and the folder lookups, then the final process check, then the
+  // final pane capture, then only pure checks, then the key. The refusal order is unchanged — the
+  // process, the version, the screen and the folder are still judged in that order — only the
+  // host and filesystem reads moved together.
+  const printed = host.version(profile.binary);
+  const own = host.foregroundCwd(session, pane);
+  const lobby = canonicalLanding(resolvedLobby);
+  const names = lobby === null ? null : host.list(dirname(lobby));
+  const listed = lobby !== null && trust.some((entry) => canonicalLanding(folderOf(entry, root)) === lobby);
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
-  if (!profile) return say('version', 'this version has no trust answer');
-  const printed = host.version(profile.binary);
+  const screen = host.pane(session, pane);
   const record = printed
     ? profile.answers.find((item) => isEligible(profile.cli, item) && versionMatches(item, printed))
     : undefined;
   if (!printed || !record) return say('version', 'this version has no trust answer');
-  const screen = host.pane(session, pane);
   if (readScreen(profile.cli, screen).kind !== 'trust') return say('screen', 'the pane is not the trust dialog');
   if (!labelMatches(record, screen ?? '')) return say('label', 'the trust choice is not the recorded one');
   const shown = extractFolder(record.extract, screen ?? '');
   if (!shown) return say('folder', 'the dialog does not show exactly one folder');
-  // `shown` must be the lobby as team writes it, byte for byte, and canonicalise to
-  // it — a trailing slash, another case, `//` or `/./` is a different spelling, and
-  // the reading that sends less is to refuse it.
-  const lobby = canonicalLanding(resolvedLobby);
+  // `shown` must be the lobby as team writes it, byte for byte, and resolve to it — a trailing
+  // slash, `//`, `/./` or `..` is a different spelling, and the reading that sends less is to
+  // refuse it. The lobby was resolved before the process read, so this is only a comparison of
+  // the bytes the capture returned: `resolve` collapses those spellings without touching the
+  // filesystem, and a path that does not land on the lobby by its own text is refused as
+  // outside. Nothing here may read the filesystem after the capture.
   if (!lobby) return say('folder', OUTSIDE);
-  if (canonicalLanding(shown) !== lobby) return say('folder', OUTSIDE);
-  if (shown !== lobby) return say('folder', 'the dialog does not show the lobby as written: the owner answers it through team up');
+  if (shown !== lobby) {
+    return say('folder', resolve(shown) === lobby
+      ? 'the dialog does not show the lobby as written: the owner answers it through team up'
+      : OUTSIDE);
+  }
   // The screen read strips the row's trailing padding, so the last byte of the path it
   // shows is never proof — a boxed row has no visible end. Two other readings, fresh with
   // this one, must say the lobby too: the folder the pane itself reports working in, byte
   // for byte, and the lobby's parent, where a name the lobby's plus whitespace would be
   // the folder such trimming could have hidden.
-  const own = host.foregroundCwd(session, pane);
   if (own === null) return say('folder', "the pane's folder cannot be read");
   if (own !== lobby) return say('folder', "the pane's folder is not the lobby as written");
-  const names = host.list(dirname(lobby));
   if (names === null) return say('folder', "the lobby's parent folder cannot be read");
   const base = basename(lobby);
   if (names.some((name) => name.length > base.length && name.startsWith(base) && /\s/.test(name.charAt(base.length)))) {
     return say('folder', "the lobby's parent folder holds a name that differs from the lobby's by whitespace alone");
   }
-  const listed = trust.some((entry) => canonicalLanding(folderOf(entry, root)) === lobby);
   if (!listed) return say('folder', 'this folder is not an exact trust entry');
   return { record, version: printed, folder: lobby };
 }
@@ -834,6 +863,7 @@ function refuse(
   // exit: answer.action
   // exit: answer.process
   // exit: answer.identity
+  // exit: answer.trust-identity
   // exit: answer.human
   // exit: answer.permission
   // exit: answer.login
