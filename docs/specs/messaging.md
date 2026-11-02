@@ -143,8 +143,9 @@ an earlier text or an earlier delivery left does not count for the current claim
 Every signed file — record, receipt, close — is authenticated over its complete payload exactly as
 it was parsed, before any field is projected or read. A field inserted, altered or removed after
 signing does not verify; a signed field this version does not read authenticates and is then
-refused as unsupported, never interpreted and never reported as a signature failure. A receipt
-without `writer` was written by an earlier build and is read exactly as it was.
+refused as unsupported, never interpreted and never reported as a signature failure. A reader
+ships one release before its writer; unknown kind VALUES are served, unknown FIELDS are refused.
+A receipt without `writer` was written by an earlier build and is read exactly as it was.
 
 ### The route record
 
