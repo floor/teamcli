@@ -49,6 +49,8 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   ack: "writes one signed read receipt into the addressee's folder",
   approvals: 'lists or revokes owner-seat always rules under the owner home',
   forget: 'removes a team registry record from the owner home',
+  fallback: "lists the project's finished fallback episodes and, with --apply, retires them and reclaims stale lock folders; its --json output has no registered schema",
+  waits: 'lists the signed records a seat or a lead still waits on, read-only across every registered transport tree; its --json output has no registered schema',
   batch: 'records several owner-seat actions as one request, or runs a batch the owner seat already signed',
   answer: 'types an answer into a live herdr pane dialog',
   archive: 'stops the team as down does and moves its state into an archive folder, with no registered output schema',
