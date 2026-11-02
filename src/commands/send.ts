@@ -64,7 +64,7 @@ import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, recordHeldSocket,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, recordHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
   type CrossSessionInbound, type InboundDeclaration,
 } from '../send/inbound.ts';
@@ -4466,12 +4466,9 @@ async function deliverSocketFrame(
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
-  if (!inboundIsLive(inbound, first.path)) {
-    return {
-      kind: 'fallback',
-      reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts',
-      socketUnusable: true,
-    };
+  const staleInbound = inboundStaleReason(inbound, first.path);
+  if (staleInbound !== null) {
+    return { kind: 'fallback', reason: staleInbound, socketUnusable: true };
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
