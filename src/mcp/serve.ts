@@ -24,7 +24,7 @@ import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { callerOf, callerVerdict, describeCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
@@ -116,10 +116,18 @@ export type RestartHooks = {
  *  before this is called, and the fresh process writes its own. A stdin line the old process had
  *  already read is not replayed: the client's next call is the new process's first.
  *
+ *  The old process stays the fresh one's parent until the fresh one exits. The serve proves its
+ *  caller by its parent processes on every call, and a process whose parent has left is
+ *  reparented: the fresh server's walk would no longer reach the seat's CLI, pane root and herdr,
+ *  and it would be refused at start or on its next call. The parent link is the proof the kernel
+ *  keeps — a handoff record could not stand in for it, because every seat on this home can read
+ *  the key such a record would carry. This process reads nothing more and writes nothing; it
+ *  leaves when the fresh server does, with a code that says how that server ended.
+ *
  *  A start that fails reports `error` on the child after `spawn` has already returned, so the
- *  failure cannot be caught around the call: this process leaves only after the child's `spawn`
- *  event (unref, exit 0), and an `error` instead writes the reason and exits 1. A quiet exit 0
- *  would end the client's session as if the fresh server had taken over. */
+ *  failure cannot be caught around the call: this process leaves only after the child's `error`
+ *  (exit 1) or its `exit` (its own code). A quiet exit 0 would end the client's session as if
+ *  the fresh server had taken over. */
 export function restartSelf(hooks: RestartHooks = {}): void {
   const start = hooks.spawnChild ?? spawn;
   const exit = hooks.exit ?? ((code: number): void => {
@@ -141,8 +149,8 @@ export function restartSelf(hooks: RestartHooks = {}): void {
     return;
   }
   child.once('spawn', () => {
-    child.unref();
-    exit(0);
+    // The fresh server's proof runs through this process, so this one must not leave first.
+    child.once('exit', (code) => exit(code ?? 1));
   });
   child.once('error', () => {
     say('team mcp serve: the fresh server could not start; the next launch reloads\n');
@@ -657,6 +665,26 @@ function staleLaunch(generation: Generation, epoch: string | undefined, name: st
 }
 
 /**
+ * Why the team file no longer declares the seat this server serves, or null while it does. The
+ * file is read again at every use, never trusted as the snapshot the process started with: a seat
+ * marked `stopped: true` while the process lives is one a lead took out of the team, and a file
+ * that drops the seat, or now names another session, no longer declares it either.
+ */
+function declarationRefusal(team: TeamFile, session: string, name: string): string | null {
+  if (team.session !== session) {
+    return `the team file names session ${JSON.stringify(team.session)} now, not ${JSON.stringify(session)}; this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}`;
+  }
+  const seat = team.seats.find((one) => one.name === name);
+  if (seat === undefined) {
+    return `the team file no longer declares seat ${JSON.stringify(name)}; a lead starts it again with \`team up\``;
+  }
+  if (seat.stopped) {
+    return `the team file marks seat ${JSON.stringify(name)} stopped; a lead starts it again with \`team up\``;
+  }
+  return null;
+}
+
+/**
  * Runs the stdio server for one seat and returns the process exit code. The seat must be one the
  * team file declares, and `--session`, when given, must be the team's own session: the server
  * serves exactly one inbox. `--file` is the team file the seat's launch read: a seat that starts
@@ -684,10 +712,11 @@ export async function runMcpServe(
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
   const registered = options.file === undefined ? registeredRoot(host.home, options.seat, options.session) : null;
   if (registered !== null && !registered.ok) return refuse(registered.message);
-  const loaded = readTeamConfig(registered === null ? io.cwd : registered.root, {
+  const readTeam = (): LoadResult => readTeamConfig(registered === null ? io.cwd : registered.root, {
     ...(options.file === undefined ? {} : { file: options.file }),
     home: host.home,
   });
+  const loaded = readTeam();
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;
@@ -696,6 +725,11 @@ export async function runMcpServe(
   }
   const seat = team.seats.find((one) => one.name === options.seat);
   if (seat === undefined) return refuse(`the team file declares no seat ${JSON.stringify(options.seat)}`);
+  // A seat the file marks stopped is not one this server may serve, whatever its launch does:
+  // `team remove <seat> --keep` leaves the entry and its pane, and only the file's word says the
+  // seat is out of the team.
+  const stoppedNow = declarationRefusal(team, team.session, seat.name);
+  if (stoppedNow !== null) return refuse(stoppedNow);
   // The server's own identity is the launch's, and the state has to prove it: the caller is this
   // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
   // before the inbox folder or the listener is written, so a refused start leaves no trace.
@@ -774,11 +808,19 @@ export async function runMcpServe(
     brief,
     // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
     // while this process lives, and a launcher-written config that names it again must not make
-    // the old process a reader of the new seat.
+    // the old process a reader of the new seat. The team file itself is read again: the
+    // declaration this server serves is the file's current one, and a seat it has stopped or
+    // dropped is no longer a seat this server may serve.
     alive: () => {
       const now = placementOf(io, stateDir, team.session, seat.name);
       if (!now.ok) return now.why;
-      return staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+      if (staleLaunchNow !== null) return staleLaunchNow;
+      const file = readTeam();
+      if (!file.ok) {
+        return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
+      }
+      return declarationRefusal(file.team, team.session, seat.name);
     },
   };
   const stopChannel = channel ? watchChannel(serving, streams.write, notice) : null;

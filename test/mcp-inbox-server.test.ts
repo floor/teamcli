@@ -1005,4 +1005,101 @@ describe('the serve is bound to the seat and launch it was started for', () => {
       at.cleanup();
     }
   });
+
+  /** The team file with one seat's entry marked stopped, the way `team remove <seat> --keep`
+   *  leaves it: the declaration stays, with the pane and claim the state records untouched. */
+  function stopSeat(at: Place, name: string): void {
+    const path = join(at.root, '.agents', 'team.yaml');
+    const text = readFileSync(path, 'utf8');
+    const index = text.indexOf(`    name: ${name}\n`);
+    if (index < 0) throw new Error(`the fixture team file declares no seat ${name}`);
+    const after = index + `    name: ${name}\n`.length;
+    writeFileSync(path, `${text.slice(0, after)}    stopped: true\n${text.slice(after)}`);
+  }
+
+  test('a seat the team file marks stopped is refused at start, and opens no inbox', async () => {
+    const at = place();
+    try {
+      signed(at, 'worker', WORKER_ID, 'the body worker has not read');
+      // The state still records the worker's pane and claim: only the file's declaration says
+      // the seat is stopped, and that is the word the serve must read.
+      stopSeat(at, 'worker');
+      const io = testIo(at.root, seatCaller('worker'));
+      const feed = closed();
+      const code = await runMcpServe({ seat: 'worker', session: SESSION, file: join(at.root, '.agents', 'team.yaml') }, io, feed, { home: at.home });
+      expect(code).toBe(2);
+      expect(io.out).toBe('');
+      expect(io.err).toContain('the team file marks seat "worker" stopped');
+      expect(feed.replies).toEqual([]);
+      expect(existsSync(listenerPath(at.dropDir('worker')))).toBe(false);
+      expect(existsSync(receiptPath(at.dropDir('worker'), WORKER_ID))).toBe(false);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a seat the team file marks stopped between two calls is refused on its next call', async () => {
+    const at = place();
+    try {
+      signed(at, 'worker', WORKER_ID, 'the body worker has not read');
+      const io = testIo(at.root, seatCaller('worker'));
+      const feed = queue();
+      const running = runMcpServe({ seat: 'worker', session: SESSION, file: join(at.root, '.agents', 'team.yaml') }, io, feed, { home: at.home });
+      for (let wait = 0; wait < 200 && !existsSync(listenerPath(at.dropDir('worker'))); wait++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(listenerPath(at.dropDir('worker')))).toBe(true);
+      feed.push(call('1', 'inbox_check'));
+      for (let wait = 0; wait < 400 && feed.replies.length < 1; wait++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      // The check ran before the stop: it lists the record the sender left.
+      const first = JSON.parse(feed.replies[0]!) as Record<string, any>;
+      expect(first.result.isError).toBe(undefined);
+      expect(JSON.stringify(first)).toContain(WORKER_ID);
+      // A lead stops the seat while this server lives. The pane and the claim stay as they were;
+      // only the file's declaration changes, and the next call must read it again.
+      stopSeat(at, 'worker');
+      feed.push(call('2', 'inbox_read', { id: WORKER_ID }));
+      for (let wait = 0; wait < 400 && feed.replies.length < 2; wait++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const second = JSON.parse(feed.replies[1]!) as Record<string, any>;
+      expect(second.result.isError).toBe(true);
+      expect(second.result.content[0].text).toContain('the team file marks seat "worker" stopped');
+      expect(existsSync(receiptPath(at.dropDir('worker'), WORKER_ID))).toBe(false);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a seat the team file no longer declares is refused on its next call', async () => {
+    const at = place();
+    try {
+      signed(at, 'worker', WORKER_ID, 'the body worker has not read');
+      const io = testIo(at.root, seatCaller('worker'));
+      const feed = queue();
+      const running = runMcpServe({ seat: 'worker', session: SESSION, file: join(at.root, '.agents', 'team.yaml') }, io, feed, { home: at.home });
+      for (let wait = 0; wait < 200 && !existsSync(listenerPath(at.dropDir('worker'))); wait++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      // The lead drops the seat from the file, as `team remove <seat>` does: the declaration the
+      // server was started for is gone, whatever the state still records.
+      writeFileSync(join(at.root, '.agents', 'team.yaml'), teamText(['lead']));
+      feed.push(call('1', 'inbox_read', { id: WORKER_ID }));
+      for (let wait = 0; wait < 400 && feed.replies.length < 1; wait++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const reply = JSON.parse(feed.replies[0]!) as Record<string, any>;
+      expect(reply.result.isError).toBe(true);
+      expect(reply.result.content[0].text).toContain('the team file no longer declares seat "worker"');
+      expect(existsSync(receiptPath(at.dropDir('worker'), WORKER_ID))).toBe(false);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
 });
