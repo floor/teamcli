@@ -65,13 +65,14 @@ beat; a longer beat has to be declared at a level every hosted checkout shares. 
 the tighter word. `team daemon status` prints the beat it runs (`heartbeat <time> (every
 <seconds>s)`). While the sweep still rides the beat, a shorter beat makes a backlog stall more
 often, not less.
-`daemon.chores` decides where the machine daemon runs its heavy per-checkout chores: `shared`
-(the default) runs one child for every checkout whose word is `shared`, with a queue per checkout
-and a slice per turn in round robin, so one checkout's backlog delays another's chores by a slice
-and never its socket or the daemon's beat; `per-root` gives each hosted checkout its own
-supervised child, for one whose work must not share a process at all; and `inline` keeps the work
-on the daemon's own loop, exactly as before the isolation — the rollback. Three limits bound a
-child:
+
+`daemon.chores` decides where the machine daemon runs its heavy per-checkout chores: `per-root`
+(the default) gives each hosted checkout its own supervised child, so one checkout's work never
+shares a process with another's; `shared` runs one child for every checkout whose word is
+`shared`, with a queue per checkout and a slice per turn in round robin, so one checkout's
+backlog delays another's chores by a slice and never its socket or the daemon's beat; and
+`inline` keeps the work on the daemon's own loop, exactly as before the isolation — the
+rollback. Three limits bound a child:
 `daemon.chores-slice-ms` (2000) is how long one slice of a pass runs before it yields to its
 heartbeat, `daemon.chores-missed-beats` (2) is how many heartbeats it may miss before the daemon
 ends and replaces it, and `daemon.chores-backoff-cap-ms` (30000) caps the doubling wait between

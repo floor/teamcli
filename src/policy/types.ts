@@ -784,17 +784,17 @@ function heartbeatSecondsProblem(name: string, raw: unknown): string | null {
 
 /**
  * The machine daemon's chore isolation: where the heavy per-root chores run, and the limits that
- * bound one child. `shared`, the default, runs one child for every root whose word is `shared`
- * and gives each root its own FIFO and one slice per turn, so one root's backlog can delay
- * another root's chores by a slice but never its socket; `per-root` gives every hosted root its
- * own supervised child, for a root whose work should never share a process; `inline` runs them
+ * bound one child. `per-root`, the default, gives every hosted root its own supervised child, so
+ * one root's work never shares a process with another's; `shared` runs one child for every root
+ * whose word is `shared` and gives each root its own FIFO and one slice per turn, so one root's
+ * backlog can delay another root's chores by a slice but never its socket; `inline` runs them
  * on the daemon's own loop exactly as before the isolation, which is the rollback. The limits
  * default to the values the isolation landed with.
  */
 export const DAEMON_CHORES_MODES = ['inline', 'shared', 'per-root'] as const;
 export type DaemonChoresMode = (typeof DAEMON_CHORES_MODES)[number];
 export const DAEMON_CHORES_DEFAULTS = {
-  mode: 'shared' as DaemonChoresMode,
+  mode: 'per-root' as DaemonChoresMode,
   sliceMs: 2000,
   missedBeats: 2,
   backoffCapMs: 30_000,
@@ -1337,11 +1337,11 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   },
   // Where the machine daemon runs the heavy per-root chores — the fallback sweep and retirement,
   // the reconcile scans, the presence history step and publisher, and the hosted watch's reads.
-  // `shared`, the release default, runs one child for every root whose word is `shared`: each
-  // root has its own FIFO of passes and the child serves them round-robin, one slice per turn,
-  // so a root's backlog delays another root's chores by a slice and never the daemon's socket.
-  // `per-root` gives every hosted root its own supervised child, for a root whose work must not
-  // share a process at all, and `inline` runs the work on the daemon's own loop exactly as
+  // `per-root`, the release default, gives every hosted root its own supervised child, so one
+  // root's work never shares a process with another's. `shared` runs one child for every root
+  // whose word is `shared`: each root has its own FIFO of passes and the child serves them
+  // round-robin, one slice per turn, so a root's backlog delays another root's chores by a slice
+  // and never the daemon's socket. `inline` runs the work on the daemon's own loop exactly as
   // before the isolation, which is the rollback. A lower level may choose less isolation, never
   // more: inline is within shared, and shared is within per-root. The daemon reads it for each
   // hosted root; a chain that cannot be read keeps the release default, because the chores never

@@ -1,6 +1,6 @@
 // The daemon's isolated chores: where the heavy per-root work runs, and how a child that stops
 // answering is replaced. The policy decides per root — `inline` is the rollback to the one loop
-// the daemon always had, `per-root` one child each, `shared` (the default) one child for a group
+// the daemon always had, `per-root` (the default) one child each, `shared` one child for a group
 // whose roots take turns a slice at a time — and the supervisor starts, watches and replaces the
 // children on the daemon's own beat. A child proves it was started from here through a one-use
 // token and speaks one newline-framed JSON line per message on its standard streams.
@@ -328,10 +328,10 @@ function messages(events: readonly ChoresChildEvent[]): ChoresChildMessage[] {
 }
 
 describe('the chores policy', () => {
-  test('a root with no word gets shared and the release limits', () => {
+  test('a root with no word gets per-root and the release limits', () => {
     const made = world();
     expect(choresPolicyFor(teamFile(), made.root, made.home, new Date(NOW))).toEqual({
-      mode: 'shared',
+      mode: 'per-root',
       sliceMs: 2000,
       missedBeats: 2,
       backoffCapMs: 30_000,
@@ -773,9 +773,10 @@ describe('under the machine daemon', () => {
     register(first.home, second);
     const fixture = join(first.base, 'chores-shared-fixture.ts');
     writeFileSync(fixture, SHARED_FIXTURE_CHILD);
-    // Both roots keep the release `shared` mode, a short slice, and a long miss allowance so the
-    // waiting slice is observed rather than replaced.
+    // Both roots take the `shared` mode by policy, a short slice, and a long miss allowance so
+    // the waiting slice is observed rather than replaced.
     for (const root of [first.root, second]) {
+      word(first.home, root, 'daemon.chores', 'shared');
       word(first.home, root, 'daemon.chores-slice-ms', 250);
       word(first.home, root, 'daemon.chores-missed-beats', 60);
     }

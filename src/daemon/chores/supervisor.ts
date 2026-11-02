@@ -9,11 +9,11 @@
 // keep moving.
 //
 // `inline` keeps this module out of the picture entirely — the daemon runs the chores on its own
-// loop, exactly as before the isolation. `shared`, the release default, is one child for every
-// root whose word is `shared`, so their work is one process's cost instead of one process each;
-// the group's limits are the tightest of its roots', and the child serves the roots round-robin,
-// a slice per turn, so one root's backlog delays another root's chores by a slice. `per-root` is
-// a child each, for a root whose work must not share a process at all.
+// loop, exactly as before the isolation. `per-root`, the release default, is a child each, for a
+// root whose work must not share a process at all. `shared` is one child for every root whose
+// word is `shared`, so their work is one process's cost instead of one process each; the group's
+// limits are the tightest of its roots', and the child serves the roots round-robin, a slice per
+// turn, so one root's backlog delays another root's chores by a slice.
 import type { TeamFile } from '../../file/types.ts';
 import type { HostedRoute } from '../routes.ts';
 import type { DaemonChoresState } from '../state.ts';
