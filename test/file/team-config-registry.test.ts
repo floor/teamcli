@@ -16,6 +16,7 @@ import {
 } from '../../src/file/team-config.ts';
 import { teamConfigDir } from '../../src/registry/team-config-store.ts';
 import { testIo } from '../helpers.ts';
+import { unreadableFolder } from '../helpers/registry-team.ts';
 
 // Every scene builds its own home and its own repository under the system's temp folder: the
 // real ~/.config/team is never read or written. The registry is named explicitly (`env: {}`), so
@@ -159,6 +160,40 @@ describe('reading from the registry', () => {
     const after = readTeamConfig(root, registry(home));
     expect(after.ok && after.team.tempo).toBe('urgent');
     expect(after.ok && after.leftover?.matches).toBe(true);
+  });
+
+  test('a leftover under a folder this user cannot search is a difference, never absence', async () => {
+    const { home, root } = scene();
+    await runTeamImport('migrate', [], testIo(root, OWNER), { home, now: NOW });
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme', 'project: acme\ntempo: urgent'));
+    const held = unreadableFolder(join(root, '.agents'));
+    try {
+      const read = readTeamConfig(root, registry(home));
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      // The file may exist and differ, or exist and match — this reader cannot tell. It is a
+      // leftover it must report, never "no file", so the discrepancy is not lost.
+      expect(read.leftover).toEqual({ path: join(root, '.agents', 'team.yaml'), matches: false });
+      expect(leftoverDifferences(read.leftover)).toHaveLength(1);
+    } finally {
+      held.restore();
+    }
+  });
+
+  test('a second migrate with the leftover folder unreadable refuses, never reports unchanged', async () => {
+    const { home, root } = scene();
+    await runTeamImport('migrate', ['--keep-file'], testIo(root, OWNER), { home, now: NOW });
+    const held = unreadableFolder(join(root, '.agents'));
+    try {
+      const io = testIo(root, OWNER);
+      // The leftover cannot be compared, so this run cannot verify the registry still says what
+      // the file says; accepting it as unchanged would hide the difference.
+      expect(await runTeamImport('migrate', [], io, { home, now: NOW })).not.toBe(0);
+      expect(io.out).not.toContain('nothing to import');
+      expect(io.out).not.toContain('read back and verified');
+    } finally {
+      held.restore();
+    }
   });
 
   test('formatting and comments alone are not a mismatch', async () => {

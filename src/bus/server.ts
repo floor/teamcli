@@ -1,10 +1,15 @@
 // The event bus service over `.agents/bus.sock` (RFC 002 Amendment 01 §4.2, §4.4).
 //
 // A dedicated process beside the broker with its own Unix domain socket (`.agents/bus.sock`,
-// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports two
+// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
-//   live subscribers with bounded per-subscriber buffers.
+//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is the one kind
+//   that names a delivery, so it is verified against its signed drop record before it is
+//   appended and fanned out; the other kinds are appended as published.
+// - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
+//   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
+//   misaddressed record delivers nothing, and the nudge carries no authority of its own.
 // - `subscribe`: validates the subscriber and any self-subscribed `kinds` against the
 //   privileged-kind ban (`privileged-self-subscription`, raising `team.policy-refused` on
 //   violation), reads unseen events from `cursor`, answers `gap` with `oldest_seq` when the
@@ -60,8 +65,10 @@ import {
 } from './log.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
-import { makeWebhookDelivery } from './webhook.ts';
+import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
+import { recordWebhookDelivery } from './webhook-record.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
+import { RECORD_NAME, verifiedArrival } from './arrival.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -120,6 +127,14 @@ export type BusPublishRequest = {
   event: EventAppendInput;
 };
 
+/** The one thing a nudge may name: a record the bus re-reads and verifies itself. */
+export type BusNudgeRequest = {
+  op: 'nudge';
+  session: string;
+  seat: string;
+  record_id: string;
+};
+
 export type BusSubscribeRequest = {
   op: 'subscribe';
   seat: string;
@@ -129,10 +144,11 @@ export type BusSubscribeRequest = {
   follow?: boolean;
 };
 
-export type BusRequest = BusPublishRequest | BusSubscribeRequest;
+export type BusRequest = BusPublishRequest | BusNudgeRequest | BusSubscribeRequest;
 
 export type BusAnswer =
   | { ok: true; kind: 'published'; event: SignedEventRecord; duplicate: boolean }
+  | { ok: true; kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
   | { ok: true; kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | { ok: true; kind: 'event'; event: SignedEventRecord }
   | {
@@ -169,6 +185,9 @@ export type StartBusInput = {
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
+  /** The folder of the team file: the state beside it records each seat's last webhook delivery,
+   *  which `team check` and `team status` note. Absent, a delivery's facts go to `stderr` alone. */
+  stateDir?: string;
   /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
    *  each seat's configured adapter row and re-reads it when the root's registry record changes;
    *  a caller may inject its own for a scene, and that one is the caller's to refresh. */
@@ -199,6 +218,8 @@ const LOCK_WAIT_MS = 2000;
 const LOCK_POLL_MS = 50;
 const LOCK_YOUNG_MS = 1000;
 const UNKNOWN_REQUEST = 'the request is not one this bus knows';
+/** A published arrival is refused with fixed words when the record it names does not verify. */
+const UNVERIFIED_ARRIVAL = 'the message.arrived it publishes names no signed drop record for its seat';
 
 function alive(pid: number): boolean {
   try {
@@ -430,6 +451,18 @@ export function parseBusRequest(line: string): BusRequest | null {
     return { op: 'publish', event: rest };
   }
 
+  if (obj.op === 'nudge') {
+    const keys = Object.keys(obj);
+    if (keys.length !== 4 || !keys.every((k) => k === 'op' || k === 'session' || k === 'seat' || k === 'record_id')) return null;
+    const session = obj.session;
+    const seat = obj.seat;
+    const recordId = obj.record_id;
+    if (typeof session !== 'string' || !RECORD_NAME.test(session)) return null;
+    if (typeof seat !== 'string' || !RECORD_NAME.test(seat)) return null;
+    if (typeof recordId !== 'string' || !RECORD_NAME.test(recordId)) return null;
+    return { op: 'nudge', session, seat, record_id: recordId };
+  }
+
   if (obj.op === 'subscribe') {
     const allowed = new Set(['op', 'seat', 'pane', 'cursor', 'kinds', 'follow']);
     for (const k of Object.keys(obj)) {
@@ -481,6 +514,13 @@ export function parseBusAnswer(line: string): BusAnswer | null {
       const rec = parseSignedEventLine(JSON.stringify(obj.event));
       if (!rec || typeof obj.duplicate !== 'boolean') return null;
       return { ok: true, kind: 'published', event: rec, duplicate: obj.duplicate };
+    }
+    if (obj.kind === 'nudged') {
+      if (typeof obj.duplicate !== 'boolean') return null;
+      if (obj.event === null) return { ok: true, kind: 'nudged', event: null, duplicate: obj.duplicate };
+      const rec = parseSignedEventLine(JSON.stringify(obj.event));
+      if (!rec) return null;
+      return { ok: true, kind: 'nudged', event: rec, duplicate: obj.duplicate };
     }
     if (obj.kind === 'events') {
       if (!Array.isArray(obj.events) || typeof obj.cursor !== 'number' || !Number.isInteger(obj.cursor) || obj.cursor < 0) {
@@ -701,8 +741,17 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
     // awaits, so a pass or a publish is never failed by a routine.
+    const stateDir = input.stateDir;
     const builtIn = input.deliver === undefined
-      ? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root })
+      ? makeWebhookDelivery({
+          team: input.team,
+          stderr: input.stderr,
+          root: input.root,
+          ...(stateDir === undefined ? {} : {
+            onResult: (seat: string, record: SignedEventRecord, facts: WebhookFacts) =>
+              recordWebhookDelivery(stateDir, input.team.session, seat, record, facts),
+          }),
+        })
       : null;
     const deliver = input.deliver ?? builtIn!;
 
@@ -807,6 +856,12 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         kept: input.keptLogFiles,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
+        // A record the pass will not raise is named once: a linked file or folder, an unsigned
+        // record or one addressed elsewhere. The refusal says where and why, never what the
+        // record said.
+        onRefused: (refusal) => {
+          input.stderr(`team bus: ${refusal.where} was not raised: ${refusal.reason}\n`);
+        },
         state: reconcileState,
         signal: closing.signal,
       }).then(
@@ -966,7 +1021,22 @@ function dispatchBusRequest(
   }
 
   if (request.op === 'publish') {
-    const appended = appendEvent(input.team.project, input.root, home, request.event, {
+    // A published arrival names a delivery, so it is held to the record that delivery carries.
+    // The verified event is built from the signed record, never from the caller's fields.
+    let event = request.event;
+    if (event.kind === 'message.arrived') {
+      const verified = verifiedArrival(
+        { session: event.session, seat: event.to ?? '', record_id: event.record_id },
+        { root: input.root, session: input.team.session },
+        home,
+      );
+      if (verified === null) {
+        answerOnce(socket, { ok: false, at: 'caller', message: UNVERIFIED_ARRIVAL });
+        return;
+      }
+      event = verified;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
       maxBytes: input.maxLogBytes,
       kept: input.keptLogFiles,
       maxTotalBytes: input.maxTotalLogBytes,
@@ -986,6 +1056,32 @@ function dispatchBusRequest(
       event: appended.record,
       duplicate: appended.duplicate,
     });
+    return;
+  }
+
+  if (request.op === 'nudge') {
+    const event = verifiedArrival(request, { root: input.root, session: input.team.session }, home);
+    if (event === null) {
+      // Nothing verified, so nothing is appended and no adapter is posted. The send's own record
+      // may still be landing; its reader's poll and the next pass both find it if it does.
+      answerOnce(socket, { ok: true, kind: 'nudged', event: null, duplicate: false });
+      return;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
+      maxBytes: input.maxLogBytes,
+      kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
+      deduplicate: true,
+    });
+    if (!appended.ok) {
+      answerOnce(socket, { ok: false, at: 'write', message: appended.reason });
+      return;
+    }
+    if (!appended.duplicate) {
+      fanOut(appended.record);
+    }
+    answerOnce(socket, { ok: true, kind: 'nudged', event: appended.record, duplicate: appended.duplicate });
     return;
   }
 
@@ -1150,19 +1246,30 @@ export type BusPublishOutcome =
   | { kind: 'wrong' }
   | { kind: 'deadline' };
 
-export function publishToBus(
-  root: string,
-  event: EventAppendInput,
-  options: { deadlineMs?: number } = {},
-): Promise<BusPublishOutcome> {
-  const deadlineMs = options.deadlineMs ?? BUS_DEADLINE_MS;
-  const request: BusPublishRequest = { op: 'publish', event };
+/** What a nudge heard back. `event: null` is the bus saying the record did not verify: nothing
+ *  was appended and no adapter was posted. */
+export type BusNudgeOutcome =
+  | { kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
+  | { kind: 'refused'; at: 'caller' | 'policy' | 'write'; message: string }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+type BusAsk =
+  | { kind: 'answer'; answer: BusAnswer }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+/** One request to a running bus, bounded by `deadlineMs`. The socket is the bus's own: a bus
+ *  that is not serving refuses the connection, and the caller hears `unavailable`. */
+function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<BusAsk> {
   return new Promise((done) => {
     let settled = false;
     let connected = false;
     let buffer = '';
     const socket = connect(busSocket(root));
-    const finish = (outcome: BusPublishOutcome) => {
+    const finish = (outcome: BusAsk) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1187,19 +1294,47 @@ export function publishToBus(
         finish({ kind: 'wrong' });
         return;
       }
-      if (!parsed.ok) {
-        finish({ kind: 'refused', at: parsed.at, message: parsed.message });
-        return;
-      }
-      if (parsed.kind !== 'published') {
-        finish({ kind: 'wrong' });
-        return;
-      }
-      finish({ kind: 'published', event: parsed.event, duplicate: parsed.duplicate });
+      finish({ kind: 'answer', answer: parsed });
     });
     socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
     socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
   });
+}
+
+export async function publishToBus(
+  root: string,
+  event: EventAppendInput,
+  options: { deadlineMs?: number } = {},
+): Promise<BusPublishOutcome> {
+  const asked = await askBus(root, { op: 'publish', event }, options.deadlineMs ?? BUS_DEADLINE_MS);
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'published') return { kind: 'wrong' };
+  return { kind: 'published', event: answer.event, duplicate: answer.duplicate };
+}
+
+/**
+ * Tells the bus serving `root` that a signed record has landed, naming it and nothing else. The
+ * bus resolves the drop folder, re-reads the file and verifies its signature before it appends
+ * anything, so the nudge grants no authority the record does not already carry. Best effort: a
+ * bus that is not running, refuses or answers slowly leaves the caller as it was.
+ */
+export async function nudgeBus(
+  root: string,
+  record: { session: string; seat: string; record_id: string },
+  options: { deadlineMs?: number } = {},
+): Promise<BusNudgeOutcome> {
+  const asked = await askBus(
+    root,
+    { op: 'nudge', session: record.session, seat: record.seat, record_id: record.record_id },
+    options.deadlineMs ?? BUS_DEADLINE_MS,
+  );
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'nudged') return { kind: 'wrong' };
+  return { kind: 'nudged', event: answer.event, duplicate: answer.duplicate };
 }
 
 export type BusSubscribeOutcome =

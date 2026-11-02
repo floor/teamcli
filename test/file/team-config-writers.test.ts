@@ -13,10 +13,11 @@ import { runInit } from '../../src/commands/init.ts';
 import { runTeamImport } from '../../src/commands/migrate.ts';
 import { runTempo } from '../../src/commands/tempo.ts';
 import { readTeamConfig } from '../../src/file/team-config.ts';
-import { readTeamText, teamPlace, teamTextTarget, writeTeamText } from '../../src/file/team-text.ts';
-import { readStoredTeamConfig, sha256 } from '../../src/registry/team-config-store.ts';
+import { readTeamText, readTeamTextTarget, teamPlace, teamTextTarget, writeTeamText } from '../../src/file/team-text.ts';
+import { readStoredTeamConfig, sha256, TeamConfigStoreError } from '../../src/registry/team-config-store.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { testIo } from '../helpers.ts';
+import { unreadableRegistryFolder } from '../helpers/registry-team.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -73,6 +74,29 @@ describe('the writers seam', () => {
     const at = await migrated();
     expect(teamTextTarget(at.file, { home: at.home }).kind).toBe('registry');
     expect(readTeamText(at.file, { home: at.home })).toBe(TEAM);
+  });
+
+  // A folder that cannot be read is not a registry that holds nothing. The writer refuses in the
+  // registry's own words and leaves the stale file beside it exactly as it was, instead of
+  // concluding the team was never migrated and editing that file.
+  test('an unreadable registry folder refuses the edit and leaves the file beside it untouched', async () => {
+    const at = await migrated();
+    const before = readFileSync(at.file, 'utf8');
+    const registry = unreadableRegistryFolder(at.home);
+    try {
+      expect(() => teamTextTarget(at.file, { home: at.home })).toThrow(TeamConfigStoreError);
+      expect(() => readTeamText(at.file, { home: at.home })).toThrow(TeamConfigStoreError);
+      const read = readTeamTextTarget(at.file, { home: at.home });
+      expect(read.ok).toBe(false);
+      if (!read.ok) expect(read.why).toContain("the registry's record of this team cannot be read: ");
+      expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
+      const next = TEAM.replace('format: 1\n', 'format: 1\ntempo: urgent\n');
+      expect(() => writeTeamText(at.file, next, { home: at.home, command: 'tempo', now: NOW })).toThrow(TeamConfigStoreError);
+    } finally {
+      registry.restore();
+    }
+    expect(readFileSync(at.file, 'utf8')).toBe(before);
+    expect(stored(at)?.text).toBe(TEAM);
   });
 
   test('an edit replaces the record, recomputes both digests, and leaves the file as it was', async () => {
@@ -150,6 +174,15 @@ describe('a team read from a file under the registry source', () => {
 describe('the messages name where the team lives', () => {
   test("the registry's record under the registry, the team file otherwise", async () => {
     const at = await migrated();
+    expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
+    expect(teamPlace(at.file, { home: at.home, source: 'file' })).toBe('the team file');
+  });
+
+  // A record that cannot be read still has a home, and a message names it: the display helper
+  // refuses plainly instead of throwing the store's error out of a refusal it was wording.
+  test('a record that cannot be read is still named, never thrown from a message', async () => {
+    const at = await migrated();
+    writeFileSync(join(at.home, '.config', 'team', 'team-config', `${teamIdOf(at.root)}.json`), '{"format": 1, "text": ');
     expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
     expect(teamPlace(at.file, { home: at.home, source: 'file' })).toBe('the team file');
   });

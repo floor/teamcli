@@ -298,7 +298,11 @@ export type ExitIo = {
  * that reads back as exactly the typed text, the same comparison delivery makes. When the
  * read-back does not confirm the text, nothing is sent on a screen that is not the CLI's own
  * composer; a box that holds exactly the typed text is cleared with the profile's one key, and
- * a profile without one leaves the text for the owner, saying so. The caller check that
+ * a profile without one leaves the text for the owner, saying so. Where the profile declares
+ * the completion row, a box whose first row is this run's text is cleared even when a row under
+ * it is not the one the profile names — a row Muse moved between versions — so a failed exit
+ * leaves the box as it was found; the typed-newline frame gets one backspace first, because the
+ * clearing key alone does nothing on it (measured on Muse Code 1.4.14). The caller check that
  * precedes every key precedes each of these too.
  */
 export async function typeExit(io: ExitIo, cli: string, text: string): Promise<ExitTyping> {
@@ -335,6 +339,59 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (other === null) return '';
     return ` (first row that differs: ${other === '' ? 'a blank row' : other})`;
   };
+  // The reading the clearing keys use: this run's text is the box's first row, whatever rows the
+  // CLI drew under it. `holds` is the Enter's question — every row is the text's own; the clearing
+  // only needs the text this run typed to still be there, so a completion row the profile does
+  // not name (a row Muse moved between versions) does not leave the box for the owner.
+  const typedInBox = (): boolean => {
+    const box = readBox(cli, io.screen(), screenOpts());
+    return box !== null && box.first === text;
+  };
+  // The text this run typed is cleared with the profile's one key, and the box is left as it was
+  // found. Muse's typed-newline frame is not cleared by ctrl+u (measured: nothing happens there),
+  // so one backspace takes the empty row off first and draws the completion row back, and the key
+  // then clears that frame (both measured on 1.4.14). Every gate is read again before each key;
+  // `null` is "not cleared here", and the caller keeps its own refusal.
+  const clearTyped = async (): Promise<ExitTyping | null> => {
+    const clear = profileFor(cli)?.exitClear ?? null;
+    if (clear === null) return null;
+    if (!live()) return 'no-agent';
+    if (!resting() || kindOf() !== 'unsent' || !typedInBox()) return null;
+    // A row under the text that the run did not type is cleared only on the profile that declares
+    // the completion row: there the row is the pane's own answer to this text. A profile without
+    // one cannot tell such a row from a person's, and keeps its refusal.
+    if (!completion && !holds()) return null;
+    if (completion && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+      if (!io.sendKey('backspace')) {
+        return { left: 'its exit was not confirmed; the newline under the exit text was not removed; the text was left; left running' };
+      }
+      // Both frames read `unsent`, so the kind cannot see the redraw the backspace makes: the wait
+      // is on the box, until the empty row is gone.
+      const deadline = io.now() + DRAW_WAIT_MS;
+      while (boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        if (!live()) return 'no-agent';
+        if (io.now() >= deadline) break;
+        const before = io.now();
+        await io.sleep(100);
+        if (io.now() <= before) break;
+      }
+      if (!live()) return 'no-agent';
+      if (boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        return { left: 'its exit was not confirmed; the newline under the exit text was not removed; the text was left; left running' };
+      }
+      const frame = kindOf();
+      if (frame === 'idle' && resting()) return 'cleared';
+      if (frame !== 'unsent' || !resting() || !typedInBox()) {
+        return { left: `its exit was not confirmed; the text could not be cleared; the screen was reading ${frame}; left running` };
+      }
+    }
+    if (!io.sendKey(clear)) {
+      return { left: `its exit was not confirmed; the clearing key (${clear}) was not delivered; the text was left; left running` };
+    }
+    const after = await settle('unsent');
+    if (after === 'idle' && resting()) return 'cleared';
+    return { left: `its exit was not confirmed; the clearing key (${clear}) left the screen reading ${after}; left running` };
+  };
   // The Enter above sends the exit text. A second key is only the profile's `exit_confirm`,
   // and only once the screen reads as that CLI's own exit question. A quote of the choice
   // row is an ordinary question and gets nothing. A question the profile cannot confirm, or
@@ -345,6 +402,11 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     if (kindOf() !== 'unsent' || !holds()) {
+      // The box is not the exact read-back — a completion row the profile does not name reads as
+      // text the run did not type — so no Enter goes. The text is this run's own all the same,
+      // and is cleared before the refusal.
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     // Wait out the CLI's completion row before the Enter, where the profile declares one: an
@@ -355,10 +417,18 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       await io.sleep(EXIT_COMPLETION_SETTLE_MS);
       if (!live()) return 'no-agent';
       if (!resting() || kindOf() !== 'unsent' || !holds()) {
+        const cleared = await clearTyped();
+        if (cleared !== null) return cleared;
         return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
       }
     }
     if (!io.pressEnter()) {
+      // The Enter never went out. Where the profile declares the completion row, the text this
+      // run typed is still the box's and is cleared; every other profile keeps its refusal.
+      if (completion) {
+        const cleared = await clearTyped();
+        if (cleared !== null) return cleared;
+      }
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     const confirm = profileFor(cli)?.exitConfirm ?? null;
@@ -375,6 +445,10 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
         if (!live()) return 'no-agent';
         if (resting() && kindOf() === 'unsent' && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
           if (!io.pressEnter()) {
+            // The retry Enter never went out; the typed-newline frame is this run's own and is
+            // cleared off the box.
+            const cleared = await clearTyped();
+            if (cleared !== null) return cleared;
             return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
           }
           retried = true;
@@ -403,22 +477,14 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (kindOf() === 'exit question') {
       return { left: 'its exit was not confirmed; the exit question stayed open; left running' };
     }
-    // The box still holds exactly the exit text: the Enter did not run it. Where the profile
-    // declares the completion row, the text is what this run typed, so it is cleared with the
-    // profile's one key and the box is left as it was found — the rule the leftover path already
-    // follows. Muse's ctrl+u was measured to clear `/exit` and its completion row to the idle
-    // box, with the CLI still running; a key that leaves anything else is reported, not retried.
-    const clear = profileFor(cli)?.exitClear ?? null;
-    if (completion && clear !== null && kindOf() === 'unsent' && holds()) {
-      if (!live()) return 'no-agent';
-      if (!resting()) return true;
-      if (kindOf() !== 'unsent' || !holds()) return true;
-      if (!io.sendKey(clear)) {
-        return { left: `its exit was not confirmed; the clearing key (${clear}) was not delivered; the text was left; left running` };
-      }
-      const after = await settle('unsent');
-      if (after === 'idle' && resting()) return 'cleared';
-      return { left: `its exit was not confirmed; the clearing key (${clear}) left the screen reading ${after}; left running` };
+    // The exit text did not run: where the profile declares the completion row, the text is this
+    // run's own — with the completion frame it drew, or a row under it the profile does not name —
+    // and it is cleared with the profile's one key, so the box is left as it was found. Muse's
+    // ctrl+u was measured to clear `/exit` and its completion row to the idle box, with the CLI
+    // still running; a key that leaves anything else is reported, not retried.
+    if (completion && kindOf() === 'unsent' && typedInBox()) {
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
     }
     return true;
   };
@@ -494,6 +560,13 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       : { left: `its exit was not confirmed; its box was left holding other text${otherRow()}; the owner clears it in its pane` };
   }
   if (!holds()) {
+    // A completion row the profile does not name reads as other text; where the profile declares
+    // the row, this run's text is still the box's first row and is cleared, so the box is left as
+    // it was found. Every other box keeps the line that says what it holds.
+    if (completion && typedInBox()) {
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
+    }
     return { left: `its exit was not confirmed; its box holds text that is not only the exit text${otherRow()}; nothing more was sent; left running` };
   }
   if (!io.sendKey(key)) {

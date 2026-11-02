@@ -29,7 +29,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { projectsFile } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
+import { storeBacklogLimits, sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
 import {
   attemptLedgerFileName,
   escalateDue,
@@ -230,6 +230,28 @@ function trying(world: World, messageId = 'm-001', when = AT): FallbackMarker {
   const noted = noteTransport(world.ctx, fact(world, { messageId, outcome: 'held', liveRoutesRemain: true, at: when }));
   if (!noted.ok) throw new Error(noted.reason);
   return noted.marker;
+}
+
+/** Settled episodes written straight into the seat's drop folder: the backlog a store that was
+ *  never retired carries, without paying a full send per episode. */
+function settledBacklog(world: World, count: number): void {
+  const dir = join(world.root, '.agents', 'send-drops', world.recipient.session, world.recipient.seat);
+  mkdirSync(dir, { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    const messageId = `m-backlog-${String(index).padStart(4, '0')}`;
+    const marker: FallbackMarker = {
+      format: 1,
+      messageId,
+      recipient: world.recipient,
+      recordDigest: DIGEST,
+      sender: 'worker-1',
+      status: 'delivered',
+      attempts: [],
+      receipt: { kind: 'unknown' },
+      updatedAt: AT,
+    };
+    writeFileSync(markerPathOf(world.recipient, messageId), `${JSON.stringify(marker)}\n`);
+  }
 }
 
 describe('the fallback store retirement', () => {
@@ -452,6 +474,115 @@ describe('the fallback store retirement', () => {
     expect(after.scanned).toBe(0);
     expect(after.candidates).toHaveLength(0);
   });
+
+  test('a backlog above the threshold is drained in bulk, then the steady limit returns', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 599); // 600 delivered episodes in all
+
+    const first = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: { limit: 10, backlogAbove: 256, backlogLimit: 400, lockWaitMs: 0 },
+    });
+    expect(first.roots[0]!.retirement!.retired).toHaveLength(400);
+
+    // 200 eligible episodes remain, under the threshold: the steady limit is back.
+    const second = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: { limit: 10, backlogAbove: 256, backlogLimit: 400, lockWaitMs: 0 },
+    });
+    expect(second.roots[0]!.retirement!.retired).toHaveLength(10);
+  }, 30_000);
+
+  test('the backlog knobs are the team word, and the release defaults when it declares none', () => {
+    const world = makeWorld();
+    // The daemon reads them for each hosted root; with no word anywhere, the catalogue's defaults.
+    expect(storeBacklogLimits(world.team, world.root, world.home, at(AT))).toEqual({ above: 256, limit: 500 });
+
+    for (const [name, value] of [['daemon.fallback-backlog-above', 400], ['daemon.fallback-backlog-limit', 700]] as const) {
+      const wrote = writePolicySet(
+        world.home,
+        { level: 'team', target: world.root, teamRoot: world.root, name, value },
+        { now: at(AT) },
+      );
+      expect(wrote.ok).toBe(true);
+    }
+    expect(storeBacklogLimits(world.team, world.root, world.home, at(AT))).toEqual({ above: 400, limit: 700 });
+  });
+
+  test('a pass takes the backlog word its root declares, over the fields the caller passed', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 299); // 300 delivered episodes in all, above the word's threshold
+
+    const swept = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: {
+        limit: 10,
+        lockWaitMs: 0,
+        // Both fields lose to the per-root word: with them, 300 is under the threshold and the
+        // steady limit of 10 would retire 10; the word drains 250 instead.
+        backlogAbove: 10_000,
+        backlogLimit: 20,
+        backlogLimitsFor: () => ({ above: 256, limit: 250 }),
+      },
+    });
+    expect(swept.roots[0]!.retirement!.retired).toHaveLength(250);
+    expect(swept.roots[0]!.note).toBeNull();
+  }, 30_000);
+
+  test('a backlog word that cannot be read keeps the release defaults and says why', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 299);
+
+    const swept = sweepFallbackEscalations({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      retire: {
+        limit: 10,
+        lockWaitMs: 0,
+        backlogLimitsFor: () => ({ above: 256, limit: 500, unknown: 'the policy chain could not be read' }),
+      },
+    });
+    // The release bulk limit of 500 applies, not the steady 10: all 300 episodes go.
+    expect(swept.roots[0]!.retirement!.retired).toHaveLength(300);
+    expect(swept.roots[0]!.note).toContain('the policy chain could not be read');
+    expect(swept.roots[0]!.note).toContain('the release defaults apply');
+  }, 30_000);
+
+  test('the drain never retires a pending episode, and it escalates once afterwards', () => {
+    const world = makeWorld();
+    delivered(world, 'm-seed');
+    settledBacklog(world, 599);
+    const pending = noteTransport(world.ctx, fact(world, { messageId: 'm-pending' }));
+    if (!pending.ok) throw new Error(pending.reason);
+    const pendingPath = markerPathOf(world.recipient, 'm-pending');
+    const before = readFileSync(pendingPath, 'utf8');
+
+    const drained = retireFinished(world.ctx, {
+      at: at(AT),
+      lockWaitMs: 0,
+      limit: 10,
+      backlogAbove: 256,
+      backlogLimit: 400,
+    });
+    expect(drained.retired).toHaveLength(400);
+    expect(existsSync(pendingPath)).toBe(true);
+    expect(readFileSync(pendingPath, 'utf8')).toBe(before);
+
+    const due = Date.parse(pending.marker.dueAt!);
+    const fired = escalateDue(sweepContext(world), { at: new Date(due), lockWaitMs: 0 });
+    expect(fired.escalated).toHaveLength(1);
+    expect(readMarker(world, 'm-pending').escalatedAt).toBe(new Date(due).toISOString());
+  }, 30_000);
 
   test('reclaims stale lock folders and leaves live, young and foreign ones', () => {
     const world = makeWorld();

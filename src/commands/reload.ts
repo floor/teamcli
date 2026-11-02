@@ -816,9 +816,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
-          // The record keeps the file's own launch line, never the executed one: the state hooks'
-          // `--settings` rides on the command the pane runs, not on what the seat declared.
-          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          // The record keeps the file's own launch line (with the profile's pinned features the
+          // launch appends), never the executed one: the state hooks' `--settings` rides on the
+          // command the pane runs, not on what the seat declared.
+          const launch_line = patch.launch_line ?? (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
           if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;

@@ -3,10 +3,11 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { cliWordList, launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -37,6 +38,13 @@ export type Op =
    *  on a hand-built op: every planned launch names them. */
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
       /**
+       * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
+       * profile's pinned feature words appended, never the expanded command the pane runs (the
+       * environment prefix, the unattended flags, the rules line). Set only for a profile that
+       * pins features; absent leaves the record path exactly as it was.
+       */
+      recordLine?: string;
+      /**
        * True when the command this step runs carries the seat's rules line: decided here, where
        * the line is given to `launchCommand`, never re-derived from the built command — the line
        * is shell-quoted on it, and a profile with no launch prompt carries none at all. Absent on
@@ -52,7 +60,13 @@ export type Op =
        * state folder the endpoint's record is written in, carried by the plan so the launch's
        * host methods take no folder of their own.
        */
-      codexEndpoint?: { dir: string } }
+      codexEndpoint?: { dir: string };
+      /**
+       * A Grok seat's sandbox profile, written at launch before the pane's command runs. Set
+       * only when this plan named the profile on the line, so a failure can take the same
+       * `--sandbox` off again instead of launching a line Grok would refuse.
+       */
+      grokSandbox?: GrokSandbox }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -871,6 +885,85 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
+    // The place's session is the herdr session this launch aims at. A file route binds the
+    // team file's own session instead (`mcp/register.ts`), read from the file this run read:
+    // the server refuses any other. A launch-line route names the same file to its server, so
+    // both resolve the team from it rather than from the seat's folder.
+    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
+    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
+      codexDaemon = codexDaemonForSeat({
+        home: input.home,
+        root: input.root,
+        ...(input.team !== undefined
+          ? { team: input.team }
+          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        seat: seat.name,
+        session,
+      });
+    }
+    // The id a proven conversation writes into the launch line: the state-agreeing record's
+    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
+    // form cannot carry either; the plan says so on the launch rather than losing it silently.
+    const resumeId = seat.registry?.sessionId ?? seat.resume;
+    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
+    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
+    const resumeGap = carried?.kind === 'refuse'
+      ? `its recorded conversation cannot be resumed: ${carried.why}`
+      : undefined;
+    // The rules line this launch gives `launchCommandOrRefusal`, and whether that call carries
+    // it: only a message-mode profile with a launch prompt carries one. Whether the built line
+    // really hands it to the CLI is read from the CLI's own decoded words — the same reader the
+    // placement proves — so a line whose shape this version cannot place reports no carry
+    // instead of writing the file on the assumption of one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command's text,
+    // which is shell-quoted there.
+    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
+    // A Grok seat runs inside the sandbox profile this run writes for it: the workspace's own
+    // grant plus the two folders the seat's state lives in. The profile belongs to the team's
+    // project, and a launch line that names its own `--sandbox` keeps it — nothing is written
+    // for a profile this run did not name. A plan with no home or no team file cannot place the
+    // file, and names no profile rather than one Grok could not find.
+    const grokSandbox = profile.cli === 'grok' && input.home !== undefined && input.team !== undefined
+      ? grokSandboxOf({ home: input.home, root: input.root, project: input.team.project })
+      : undefined;
+    // The line's own `--sandbox` keeps the file's choice. Asked of the CLI's decoded words,
+    // exactly as the launch command asks every "does the line already set this": a flag inside a
+    // wrapper's trailing script is the CLI's flag, and a quoted mention in a prompt value is not.
+    // A line whose shape this version cannot prove is asked of the whole line, where a plainly
+    // written flag is still seen.
+    const lineWords = cliWordList(profile.cli, recordedLine);
+    const lineNamesSandbox = lineWords === null
+      ? /(^|\s)--sandbox(=|\s|$)/.test(recordedLine)
+      : lineWords.some((word) => word === '--sandbox' || word.startsWith('--sandbox='));
+    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
+      ? grokSandbox
+      : undefined;
+    // The line is built before the steps that create or close a workspace: a refusal must come
+    // before any of them, and the warnings it produces are said on the launch step where they
+    // have always been said.
+    const launchWarnings: string[] = [];
+    const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
+      seat: seat.name,
+      session,
+      ...selfRunner(),
+      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
+      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+      // options after it; the seat says so on the launch step rather than losing the words.
+      launchWarnings.push(text);
+    }, cwd, plannedSandbox?.profile, wouldLaunch);
+    // A line the profile's words cannot be placed on is refused before any workspace is created
+    // or closed: its options would be read as prompt text, or its rules line lost.
+    if (launcher.refusal !== undefined) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${launcher.refusal}`,
+        do: { do: 'refuse', seat: seat.name, why: launcher.refusal },
+      });
+      continue;
+    }
+    const command = launcher.command;
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
@@ -924,48 +1017,21 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
       });
     }
-    // The place's session is the herdr session this launch aims at. A file route binds the
-    // team file's own session instead (`mcp/register.ts`), read from the file this run read:
-    // the server refuses any other. A launch-line route names the same file to its server, so
-    // both resolve the team from it rather than from the seat's folder.
-    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
-    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
-      codexDaemon = codexDaemonForSeat({
-        home: input.home,
-        root: input.root,
-        ...(input.team !== undefined
-          ? { team: input.team }
-          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
-        seat: seat.name,
-        session,
-      });
-    }
-    // The id a proven conversation writes into the launch line: the state-agreeing record's
-    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
-    // form cannot carry either; the plan says so on the launch rather than losing it silently.
-    const resumeId = seat.registry?.sessionId ?? seat.resume;
-    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
-    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
-    const resumeGap = carried?.kind === 'refuse'
-      ? `its recorded conversation cannot be resumed: ${carried.why}`
-      : undefined;
-    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
-    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
-    // before the command runs from this decision, never by searching the built command for the
-    // line, which is shell-quoted there.
-    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
-    const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
-      seat: seat.name,
-      session,
-      ...selfRunner(),
-      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
-      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
-      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
-      // options after it; the seat says so on the launch step rather than losing the words.
-      notice = notice ? `${notice}; ${text}` : text;
-    }, cwd);
+    // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+    // options after it; the seat says so on the launch step rather than losing the words.
+    for (const text of launchWarnings) notice = notice ? `${notice}; ${text}` : text;
+    // The launch carries the line exactly when the CLI's own decoded words end with it: a
+    // message-mode CLI reads its initial prompt as its last positional word, and a line this
+    // version could not place it on names no such word.
+    const launchWords = cliWordList(profile.cli, command);
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null
+      && launchWords !== null && launchWords.at(-1) === rulesLine;
+    // What the seat's record keeps as its launch line when this run records it: the same base
+    // recipe the record paths store today, with the profile's pins placed where the launch puts
+    // them — before the CLI's first delimiter, inside a proven script that runs the CLI. Never
+    // the expanded command — a dry run prints that and a pane runs it, and the record's line is
+    // the recipe, not the expansion. A profile that pins nothing records its base line unchanged.
+    const recordLine = pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1000,7 +1066,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;

@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readStoredTeamConfig, sha256, teamConfigRecordPath, TeamConfigStoreError } from '../src/registry/team-config-store.ts';
+import { unreadableRegistryFolder } from './helpers/registry-team.ts';
 
 const ID = '0123456789ab';
 const TEXT = 'format: 1\nproject: acme\n';
@@ -53,6 +54,33 @@ describe("the registry's record", () => {
     expect(record?.id).toBe(ID);
     expect((record as { hidden?: string } | null)?.hidden).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'hidden')).toBe(false);
+  });
+
+  // A record that is not there and a folder that cannot be read are different answers: the first
+  // is the registry holding none, the second is the registry's record being unreadable — which
+  // callers refuse, so a file beside it is never read in its place.
+  test('a record that is not there is absent, and a folder that cannot be read is unreadable', () => {
+    const home = temp();
+    expect(readStoredTeamConfig(home, ID)).toBeNull();
+    writeRecord(home, '');
+    const registry = unreadableRegistryFolder(home);
+    try {
+      const path = teamConfigRecordPath(home, ID);
+      let thrown: unknown;
+      try {
+        readStoredTeamConfig(home, ID);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TeamConfigStoreError);
+      expect((thrown as Error).message).toContain(path);
+      expect((thrown as Error).message).toContain('EACCES');
+      // No record of another id is absent either while the folder cannot be read.
+      expect(() => readStoredTeamConfig(home, 'ffffffffffff')).toThrow(TeamConfigStoreError);
+    } finally {
+      registry.restore();
+    }
+    expect(readStoredTeamConfig(home, ID)?.text).toBe(TEXT);
   });
 
   test('cannot satisfy its envelope from a member named __proto__', () => {

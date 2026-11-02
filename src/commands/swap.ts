@@ -1,4 +1,4 @@
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -17,13 +17,20 @@ import {
 import { charterGate } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
+import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
 import { launchTeamFile } from '../file/load.ts';
+import { readTeamText } from '../file/team-text.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
+import { modelRuleAllows, modelRuleSentence } from '../policy/model-rule.ts';
+import { credentialProbeFor, type CredentialProbe } from '../profiles/credentials.ts';
+import { profileFor } from '../profiles/index.ts';
+import type { Profile } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { readState, type QueuedSwap } from '../state.ts';
@@ -40,6 +47,7 @@ import {
 } from '../swap/queue.ts';
 import { findRecipe, listModelRuleBreaches, type ModelRecipe, type RuleDonor, type RuleListing } from '../swap/rule.ts';
 import { runDueSwaps, runOneSwap, type SwapRunOptions, type SwapRunResult } from '../swap/run.ts';
+import { planVendorSwap, vendorTargetOf } from '../swap/vendor.ts';
 import { realSources, type RestartSources } from './restart.ts';
 
 // `team swap` is the command family for the entity's model rule and the queued swap
@@ -58,6 +66,8 @@ export const USAGE = `Usage: team swap [--file <path>] [--json]
        team swap --run [--file <path>] [--json]
 
 A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity that already runs it.
+A <vendor>:<model> target moves the seat between vendors of its own CLI through the profile's vendor
+table, with no donor and no launcher script; the vendor's credential item must be on this machine.
 Exits 0 when the queue or the listing is shown, or a swap is queued, forced, run or cancelled, 1 when refused, a run failed or the entity rule cannot be read, 2 when the invocation or team file is invalid.
 `;
 
@@ -70,6 +80,9 @@ export type SwapCommandOptions = {
   presenceChannelHealthy?: (seat: string) => boolean;
   /** The credential store a charter signature is confirmed against. Absent: the system one. */
   ownerSeatStore?: OwnerSeatKeyStore;
+  /** Whether the machine holds a vendor's credential item. Injected by tests; absent, the
+   *  profile's own attribute-only check runs against this machine's store. */
+  credentialProbe?: CredentialProbe;
 };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
@@ -432,13 +445,15 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     return 'rule';
   }
 
-  const choice = choose(sub, listing, root, seat, args.values.to);
+  const profile = profileFor(seat.cli) ?? null;
+  const probe = options.credentialProbe ?? probeOnThisMachine(profile);
+  const choice = choose(sub, listing, root, seat, args.values.to, profile, probe);
   if (choice.kind === 'unchanged') {
     refuse(rawIo, io, json, 'swap.unchanged', choice.message, null, notice, null);
     return 'unchanged';
   }
   if (choice.kind === 'target') {
-    refuse(rawIo, io, json, 'swap.target', choice.message, null, notice, null);
+    refuse(rawIo, io, json, 'swap.target', choice.message, choice.repair, notice, null);
     return 'target';
   }
   const request: QueueRequest = {
@@ -462,6 +477,25 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     now,
   };
   let queued: QueuedSwap;
+  // The run rewrites the seat's declaration and validates the whole file before it launches
+  // (`writeTeamFile` / the registry write), so the queue proves the same write now: a row the
+  // team file would refuse is never reported as queued, and no record is left behind for a run
+  // that could only fail. The validator is the file loader's own.
+  if (current.path === undefined) {
+    refuse(rawIo, io, json, 'swap.io', 'the team has no text the swap row could be written to', null, notice, null);
+    return 'io';
+  }
+  let rowProblem: string | null;
+  try {
+    rowProblem = queuedRowProblem(readTeamText(current.path, { home, command: 'swap' }), seat.name, request.to);
+  } catch (error) {
+    refuse(rawIo, io, json, 'swap.io', `the team cannot be read to check the swap's row: ${(error as Error).message}`, null, notice, null);
+    return 'io';
+  }
+  if (rowProblem !== null) {
+    refuse(rawIo, io, json, 'swap.target', plainText(`the swap would write a row the team file refuses: ${rowProblem}`), null, notice, null);
+    return 'target';
+  }
   try {
     queued = enqueueSwap(dir, request);
   } catch (error) {
@@ -487,7 +521,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
       action_summary: `swap: ${seat.name} queued`,
       seat: seat.name,
       swap: queued,
-      donor: choice.donor,
+      ...(choice.donor === null ? {} : { donor: choice.donor }),
     });
   } else {
     io.stdout(`swap queued: ${swapLine(seat.name, queued, now)}\n`);
@@ -644,18 +678,43 @@ function resultDoc(result: SwapRunResult): Record<string, unknown> {
   }
 }
 
-/** The recipe a `queue` or `now` will take, or the refusal it prints. */
+/** The recipe a `queue` or `now` will take, or the refusal it prints. A vendor target's recipe
+ *  comes from the CLI profile rather than a donor seat, so `donor` is null there and the queued
+ *  document carries none; a refusal may name the one-time command that unblocks it. */
 type Choice =
-  | { kind: 'recipe'; donor: RuleDonor; recipe: ModelRecipe }
+  | { kind: 'recipe'; donor: RuleDonor | null; recipe: ModelRecipe }
   | { kind: 'unchanged'; message: string }
-  | { kind: 'target'; message: string };
+  | { kind: 'target'; message: string; repair: string | null };
 
-function choose(sub: Sub, listing: RuleListing, root: string, seat: Seat, to: string | undefined): Choice {
+function choose(
+  sub: Sub,
+  listing: RuleListing,
+  root: string,
+  seat: Seat,
+  to: string | undefined,
+  profile: Profile | null,
+  probe: CredentialProbe,
+): Choice {
   if (sub === 'queue' && to !== undefined) {
     const want = parseTarget(to);
-    if (typeof want === 'string') return { kind: 'target', message: want };
+    if (typeof want === 'string') return { kind: 'target', message: want, repair: null };
+    // A name in the seat CLI's own vendor table moves the seat between vendors of the same CLI;
+    // every other name keeps the donor route below.
+    const vendor = vendorTargetOf(profile, want.cli);
+    if (profile !== null && vendor !== null) {
+      if (!modelRuleAllows(listing.entries, { name: seat.name, role: seat.role, vendor: vendor.name })) {
+        return {
+          kind: 'target',
+          message: plainText(modelRuleSentence(want.model, vendor.name)),
+          repair: null,
+        };
+      }
+      const plan = planVendorSwap(profile, seat, vendor.name, want.model, probe);
+      if (!plan.ok) return { kind: 'target', message: plainText(plan.why), repair: plan.repair };
+      return { kind: 'recipe', donor: null, recipe: plan.recipe };
+    }
     const found = findRecipe(listing, seat, want);
-    if (!found.ok) return { kind: 'target', message: plainText(found.why) };
+    if (!found.ok) return { kind: 'target', message: plainText(found.why), repair: null };
     return { kind: 'recipe', donor: found.donor, recipe: found.recipe };
   }
   const breach = listing.breaches.find((entry) => entry.root === root && entry.seat.name === seat.name);
@@ -666,9 +725,33 @@ function choose(sub: Sub, listing: RuleListing, root: string, seat: Seat, to: st
     };
   }
   if (!breach.proposal) {
-    return { kind: 'target', message: plainText(breach.reason ?? 'no recipe is available for this seat') };
+    return { kind: 'target', message: plainText(breach.reason ?? 'no recipe is available for this seat'), repair: null };
   }
   return { kind: 'recipe', donor: breach.proposal.donor, recipe: breach.proposal.recipe };
+}
+
+/**
+ * Why the queue may not report this row as queued, or null: the run writes the recipe into the
+ * seat's entry and validates the whole file before it launches, so a row the file refuses is
+ * refused here, before `enqueueSwap` leaves a record a run could only fail. `text` is the
+ * team's own text, read the way the run reads it; `fields` is the record's `to`.
+ */
+export function queuedRowProblem(text: string, name: string, fields: SeatModelFields): string | null {
+  if (!hasSeat(text, name)) return `${name} is no longer in the team file`;
+  const parsed = validateTeamFile(rewriteSeatModel(text, name, fields));
+  if (parsed.ok) return null;
+  const first = parsed.errors[0];
+  if (first === undefined) return 'the rewritten file is invalid';
+  return `${first.line === undefined ? '' : `line ${first.line}: `}${first.message}`;
+}
+
+/** The profile's own attribute-only credential check, run on this machine. A profile with no
+ *  declared check answers `unavailable`: nothing asked it, and a vendor move never runs without
+ *  a store to prove the item in. */
+function probeOnThisMachine(profile: Profile | null): CredentialProbe {
+  const credentials = profile?.credentials ?? null;
+  if (credentials === null) return () => 'unavailable';
+  return credentialProbeFor(credentials, userInfo().username);
 }
 
 /** The one sentence a refused caller reads; the placement is named, never the exact step. */

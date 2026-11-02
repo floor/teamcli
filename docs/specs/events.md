@@ -141,11 +141,17 @@ project's event log and reconciling durable message and seat records. Only the o
 a terminal outside the pane manager. Ctrl-C stops it. Exit codes: `bus.started` (0), `bus.stopped`
 (0), `bus.refused` (1), `bus.configuration` / `bus.usage` (2).
 
-The bus's two operations on the socket: `subscribe` (a seat by registry id, its pane, a cursor — a
-sequence number) and `publish` (a runtime tool handing it a record that changed). Each subscriber
-gets a bounded buffer; one that was away reads from its cursor. When records between the cursor and
-the oldest retained sequence are missing, the answer is `gap` with `oldest_seq`, and the subscriber
-resyncs from the underlying records before following on.
+The bus's three operations on the socket: `subscribe` (a seat by registry id, its pane, a cursor —
+a sequence number), `publish` (a runtime tool handing it a record that changed), and `nudge` (a
+sender naming one record it has just written to a seat's drop folder). A `nudge` carries no event:
+the bus resolves the drop folder, re-reads and verifies the signed record itself, and raises the
+arrival only when the record is this seat's, this session's and this root's; a missing, unsigned
+or misaddressed record delivers nothing. A `publish` of a `message.arrived` is held to the same
+check, and its event is built from the signed record rather than from the fields the caller sent;
+the other kinds are appended as published. Each subscriber gets a bounded buffer; one that was away
+reads from its cursor. When records between the cursor and the oldest retained sequence are
+missing, the answer is `gap` with `oldest_seq`, and the subscriber resyncs from the underlying
+records before following on.
 
 ### `team reply`
 

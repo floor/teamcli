@@ -29,7 +29,7 @@ import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts'
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
-import { dropMessage } from '../src/send/native.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import type { SendDaemonHandle } from '../src/send/daemon.ts';
 import { emptySession, LOCK_FILE, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
@@ -84,6 +84,33 @@ function dropsDir(root: string): string {
   return join(root, '.agents', 'send-drops', 'acme', 'worker-1');
 }
 
+/** One message record as a send writes it into worker-1's drop folder. */
+function signedDrop(
+  root: string,
+  home: string,
+  id: string,
+  options: { from?: string; at?: string; thread?: string } = {},
+): void {
+  const dir = dropsDir(root);
+  mkdirSync(dir, { recursive: true });
+  const from = options.from ?? 'clerk';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'worker-1',
+    to_id: null,
+    root,
+    session: 'acme',
+    at: options.at ?? BULK_TS,
+    body: `${from} says hello to ${id}`,
+    from,
+    from_id: null,
+    rule: 'a synthetic admission',
+    thread: options.thread ?? id,
+  };
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, home), null, 2)}\n`);
+}
+
 function raisedKeys(pass: ReconcileResult): string[] {
   if (!pass.ok) throw new Error(pass.reason);
   return pass.raised.map((record) => `${record.payload.kind}:${record.payload.record_id}`);
@@ -113,9 +140,10 @@ const BULK_FILES = 10_000;
 const BULK_TS = '2026-11-01T00:00:00.000Z';
 
 /**
- * A store of 10,000 drop records whose events are already in the log. Every record is still
- * listed, stamped and examined, but a raise finds its key in the pass's own seen set, so the
- * scene measures the scan and its yields, not 10,000 event appends.
+ * A store of 10,000 drop files whose events are already in the log. Every file is still listed,
+ * stamped and examined — these fixtures are unsigned, so the verified read refuses each one,
+ * which is the read this scene measures — and no raise appends anything: the scene measures the
+ * scan and its yields, not 10,000 event appends.
  */
 function seedBulkStore(root: string, home: string): void {
   const dir = dropsDir(root);
@@ -180,8 +208,7 @@ describe('reconcile steps yield off the event loop', () => {
 
   test('the sync driver drains the same steps and raises the same events', () => {
     const { root, home } = scratch();
-    const dir = dropsDir(root);
-    dropMessage(dir, 'rec-sync', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-sync');
     const sync = reconcilePass({ project: 'acme', root, session: 'acme', home });
     expect(raisedKeys(sync)).toContain('message.arrived:rec-sync');
   });
@@ -190,9 +217,8 @@ describe('reconcile steps yield off the event loop', () => {
 describe('a pass remembers what it read and verified', () => {
   test('the second pass reads no record file again and reuses every entry', () => {
     const { root, home } = scratch();
-    const dir = dropsDir(root);
     for (let index = 0; index < 100; index += 1) {
-      dropMessage(dir, `rec-${String(index).padStart(3, '0')}`, `from clerk — admitted by: lead\n\nbody ${String(index)}`);
+      signedDrop(root, home, `rec-${String(index).padStart(3, '0')}`);
     }
     const state = createReconcileState();
     const first = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
@@ -245,7 +271,7 @@ describe('the archive findings are regression probes', () => {
   test('a read and a reply that arrive after the record was taken still raise, once, with the sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-late', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-late');
     const state = createReconcileState();
     const first = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     expect(raisedKeys(first)).toContain('message.arrived:rec-late');
@@ -279,7 +305,7 @@ describe('the archive findings are regression probes', () => {
   test('a receipt after an intervening quiet pass still names the sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-gap', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-gap');
     const state = createReconcileState();
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state })))
       .toContain('message.arrived:rec-gap');
@@ -305,12 +331,13 @@ describe('the archive findings are regression probes', () => {
   test('a record rewritten in place is read again, and a later receipt carries the new sender', () => {
     const { root, home } = scratch();
     const dir = dropsDir(root);
-    dropMessage(dir, 'rec-rewrite', 'from clerk — admitted by: lead\n\nhello');
+    signedDrop(root, home, 'rec-rewrite');
     const state = createReconcileState();
     expect(raisedKeys(reconcilePass({ project: 'acme', root, session: 'acme', home, state })))
       .toContain('message.arrived:rec-rewrite');
-    // Same byte length, different sender: only the file's own stamp can tell the two apart.
-    writeFileSync(join(dir, 'rec-rewrite'), 'from alice — admitted by: lead\n\nhello');
+    // A different sender and thread carry a different signed payload, so the record's own stamp
+    // moved: the pass reads it again rather than serving the verdict it cached for the old bytes.
+    signedDrop(root, home, 'rec-rewrite', { from: 'alice', thread: 'rewritten-thread' });
     writeFileSync(join(dir, 'rec-rewrite.read'), '{"ok":true}');
     const second = reconcilePass({ project: 'acme', root, session: 'acme', home, state });
     if (!second.ok) throw new Error(second.reason);
@@ -412,10 +439,9 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 200;
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -474,11 +500,10 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 3;
     const stop = new AbortController();
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -544,11 +569,10 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
     const { root, home } = scratch();
     const input = { project: 'acme', root, session: 'acme', home };
     const state = createReconcileState();
-    const dir = dropsDir(root);
     const count = 3;
     const stop = new AbortController();
     for (let n = 0; n < count; n += 1) {
-      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `defer-${String(n).padStart(4, '0')}`);
     }
     const seed = appendEvent('acme', root, home, {
       kind: 'message.arrived',
@@ -601,9 +625,8 @@ describe('closing the bus cancels the pass it started', () => {
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
     const started = await startBus({ root, team: parsed.team, home, stderr: () => {}, reconcileIntervalMs: 0 });
     if (started.kind !== 'serving') throw new Error(started.kind);
-    const dir = dropsDir(root);
     for (let n = 0; n < 200; n += 1) {
-      dropMessage(dir, `close-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+      signedDrop(root, home, `close-${String(n).padStart(4, '0')}`);
     }
     function appended(): number {
       const read = readEvents('acme', root, home);

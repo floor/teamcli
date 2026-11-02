@@ -3,7 +3,7 @@ import { executePlan, type Host } from '../src/launch/execute.ts';
 import { upPlan, type Step } from '../src/launch/plan.ts';
 import { rulesLine } from '../src/launch/rules-file.ts';
 import { profileFor } from '../src/profiles/index.ts';
-import { launchCommand, shellQuote } from '../src/profiles/profile.ts';
+import { cliWordList, launchCommand, pinnedRecordLine, shellQuote } from '../src/profiles/profile.ts';
 
 // 0.5.9: a seat's rules are never typed into its pane. A first-message CLI that takes an initial
 // prompt at launch carries the one line that points at its rules file on its launch line; the
@@ -40,6 +40,117 @@ describe('the launch line carries the rules line', () => {
         rulesFile: { path: PATH, line: LINE } }] });
     const launch = plan.find((step) => step.do?.do === 'launch')?.do;
     expect(launch && 'command' in launch ? launch.command : '').toContain(shellQuote(LINE));
+  });
+
+  function planOf(launch: string): Step[] {
+    return upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+      seats: [{ name: 'coder', cli: 'codex', launch, cwd: '.', label: 'coder', stopped: false, rules: 'Rules.',
+        repairLine: '`team remove coder --keep` then `team add coder`',
+        rulesFile: { path: PATH, line: LINE } }] });
+  }
+
+  function planFor(launch: string) {
+    return planOf(launch).find((step) => step.do?.do === 'launch')?.do;
+  }
+
+  test('a quoted script that runs the CLI carries the line as the CLI’s own last word', () => {
+    const launch = planFor("/bin/sh -c 'codex'");
+    const command = launch && 'command' in launch ? launch.command : '';
+    // The CLI's decoded words end with the line, inside the script it runs; the plan's carry
+    // flag follows that proof rather than the line's existence.
+    expect(cliWordList('codex', command)?.at(-1)).toBe(LINE);
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).toBe(true);
+  });
+
+  test('a line the scope cannot read reports no carry, and says where the line went', () => {
+    // The control: an unclosed quote leaves a suffix with no delimiter, no backslash and no
+    // ANSI-C opening, so it plainly cannot spell the delimiter and keeps 0.5.10's placement
+    // after the whole line; the plan does not tell the file write that the CLI was given it.
+    const launch = planFor("codex 'unclosed");
+    const command = launch && 'command' in launch ? launch.command : '';
+    expect(command).toContain("codex 'unclosed");
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).not.toBe(true);
+    expect(launch && 'notice' in launch ? launch.notice : '').toContain('its rules line is after the line, where the CLI may not read it');
+  });
+
+  // A counterexample from an independent tester: an ANSI-C word after the CLI's own `--` used
+  // to make the whole line unreadable, so the options were appended after the delimiter and the
+  // CLI read them as prompt text. The word holds no escape, so every shell that reads it reads
+  // the same text; it decodes, and the options stand before the delimiter again.
+  const DELIMITED = "codex -- $'prompt'";
+  test('an ANSI-C word after the delimiter takes the options before it and the rules after', () => {
+    const launch = planFor(DELIMITED);
+    const command = launch && 'command' in launch ? launch.command : '';
+    const words = cliWordList('codex', command);
+    expect(words).not.toBeNull();
+    const at = words!.indexOf('--');
+    expect(at).toBeGreaterThan(0);
+    expect(words!.slice(at)).toEqual(['--', 'prompt', LINE]);
+    expect(words!.slice(0, at)).toContain('never');
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).toBe(true);
+  });
+  test('the record line places the pin before the delimiter too', () => {
+    const record = pinnedRecordLine('codex', DELIMITED, profileFor('codex')!.features);
+    expect(record.indexOf('features.mcp_oauth_refresh_coordination=false')).toBeLessThan(record.indexOf('--'));
+  });
+
+  // The second counterexample: the options are placed inside the inner script, and the rules
+  // must be placed inside it too rather than after the outer closing quote, where the CLI never
+  // reads them.
+  test('a nested quoted script keeps the rules inside, as the CLI’s last word', () => {
+    const launch = planFor(`/bin/sh -c 'sh -c "codex -- prompt"'`);
+    const command = launch && 'command' in launch ? launch.command : '';
+    const words = cliWordList('codex', command);
+    expect(words).not.toBeNull();
+    expect(words!.at(-1)).toBe(LINE);
+    expect(words!).toContain('--');
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).toBe(true);
+  });
+
+  // An unreadable line that names, or may name, the delimiter can never take the appended words
+  // safely: they would land after it. Those launches refuse. The refusal is conservative — a
+  // `--` anywhere in the unread text (in any quoting), a backslash or an ANSI-C opening all
+  // refuse — and only a suffix that plainly cannot spell a delimiter keeps the old placement
+  // with its notice, as the unclosed control above shows.
+  test('a line that names the delimiter before the part it cannot read refuses the launch', () => {
+    const steps = planOf("codex -- $'a\\nb'");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    const refusal = steps.find((step) => step.do?.do === 'refuse');
+    expect(refusal && 'text' in refusal ? refusal.text : '').toContain('would refuse');
+    expect(refusal && 'text' in refusal ? refusal.text : '').toContain('delimiter');
+  });
+  test('a line whose unreadable word could itself spell the delimiter refuses too', () => {
+    // The escapes read as two hyphens in every shell that decodes this word, so the shell runs a
+    // real delimiter this reader never saw.
+    const steps = planOf("codex $'\\55\\55'");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  test('a line that names the delimiter after the part it cannot read refuses too', () => {
+    const steps = planOf("codex $'a\\nb' -- prompt");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  // builder-3's last counterexample: the unread part is one word, and the delimiter after it
+  // is quoted, so a scan for a bare whitespace-delimited `--` misses it. Once a line is
+  // unreadable the refusal is conservative: a `--` anywhere in the unread text refuses,
+  // whichever quotes hold it.
+  test("a quoted delimiter after an unread part refuses the launch", () => {
+    const steps = planOf("codex $'p\\x72ompt' '--' prompt");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  test('the same delimiter in double quotes refuses too', () => {
+    const steps = planOf("codex $'p\\x72ompt' \"--\" prompt");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  test('an unread part holding a backslash refuses even with no delimiter in sight', () => {
+    // A backslash or an ANSI-C opening can spell the delimiter, so neither keeps the fallback:
+    // only a suffix that plainly cannot spell one launches with the notice.
+    const steps = planOf("codex $'a\\nb'");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
   });
 });
 

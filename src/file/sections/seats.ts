@@ -97,6 +97,7 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        public_only: { type: 'boolean', $comment: 'the seat\'s briefs go to a service outside this machine: the team\'s rules are never prepended, and a send reads the body against the machine\'s private lists and falls through on a match; a hosted CLI\'s profile is public-only on its own, and a seat can only add the guard' },
         inbound: {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
@@ -109,6 +110,7 @@ export const seats: Section = {
             secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
             header: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[!#$%&\'*+\\-.^_`|~0-9A-Za-z]+$', $comment: 'an HTTP field name; the secret file\'s line is sent as this header\'s value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>' },
             body: { enum: [...WEBHOOK_BODY_SHAPES], $comment: 'the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event' },
+            timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, $comment: 'how long one POST waits for the routine\'s answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice' },
           },
           required: ['url_file', 'secret_file'],
           $comment: 'the seat\'s webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here',
@@ -154,7 +156,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -226,6 +228,11 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's briefs go to a service outside this machine. A field of the built seat like
+    // `human`, omitted when the file marks none — every file that marks no seat keeps the digest
+    // it had. A written `false` reads as absent, so a team file can only add the guard a hosted
+    // CLI's profile already declares, never take it away.
+    const publicOnly = check.flag(fields.get('public_only'), `${at}: public_only`);
     // The seat's own word on cross-session socket frames. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
@@ -293,6 +300,8 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file marks no public-only seat, for the same reason.
+        ...(publicOnly ? { publicOnly: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
         // Omitted when the file configures no webhook adapter, for the same reason.
@@ -395,18 +404,39 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     check.fail(node.line, `${at}: webhook.secret_file is required`);
     return undefined;
   }
-  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body']);
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms']);
   const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
   const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
   const header = readWebhookHeader(fields.get('header'), `${at}: webhook.header`, check);
   const body = check.oneOf(fields.get('body'), `${at}: webhook.body`, [...WEBHOOK_BODY_SHAPES]);
+  const timeoutMs = readWebhookTimeout(fields.get('timeout_ms'), `${at}: webhook.timeout_ms`, check);
   if (urlFile === undefined || secretFile === undefined) return undefined;
   return {
     urlFile,
     secretFile,
     ...(header === undefined ? {} : { header }),
     ...(body === undefined ? {} : { body }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
+}
+
+/** The delivery's answer bound, when the row names one: a whole number of milliseconds this
+ *  build can honour, from one to a minute. Anything else is refused rather than clamped — a
+ *  bound the row did not write would be a different routine contract than the one it asked for. */
+function readWebhookTimeout(entry: YamlEntry | undefined, name: string, check: Check): number | undefined {
+  if (!entry) return undefined;
+  const node = entry.value;
+  if (
+    node.kind === 'scalar'
+    && typeof node.value === 'number'
+    && Number.isInteger(node.value)
+    && node.value >= 1
+    && node.value <= 60_000
+  ) {
+    return node.value;
+  }
+  check.fail(node.line, `${name} must be a whole number from 1 to 60000`);
+  return undefined;
 }
 
 /** An HTTP field name, as the front's own webhook reader accepts one. */

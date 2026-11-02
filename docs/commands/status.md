@@ -101,6 +101,10 @@ where one was started on purpose. With more than one watched route, each line en
 `… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
 difference, never in a total, never an exit.
 
+The seat's last webhook delivery is one more note when its recorded outcome is not delivered, in
+the check's words (`<seat>: its last webhook delivery did not arrive: …; the delivery left the
+drop record for the seat's own pull`); a delivered record draws none.
+
 ## A leftover team file
 
 When the team is in the registry and a `.agents/team.yaml` is still in the project, the run

@@ -4,12 +4,15 @@ Creates and removes a task worktree: a second checkout of the project on a branc
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
 session's state and prints its folder; `remove` deletes a worktree that holds nothing that would be
 lost, and keeps its branch. `list` prints every record that counts toward `workspace.limit` and
-writes nothing.
+writes nothing. `pull` runs the seat CLI's own pull call in the worktree — the call its profile
+declares, with the session id and `--apply` — so a remote session's result lands as a local patch;
+it commits, pushes and creates no branch.
 
 ## Synopsis
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree list [--session <name>] [--file <path>] [--json]
+    team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
     Ignored files in the worktree are deleted with it.
@@ -20,14 +23,15 @@ writes nothing.
 | --- | --- | --- |
 | `<task>` | — | one path segment: letters, digits, `.`, `_`, `-`, starting with a letter or a digit |
 | `--kind` | `<kind>` | fills `{kind}` in `workspace.branch`; required when the pattern holds it, refused when it doesn't |
-| `--seat` | `<name>` | records a declared seat in the worktree's record |
+| `--seat` | `<name>` | records a declared seat in the worktree's record; on `pull`, names the seat whose CLI pulls when the record holds none, and must agree with a seat the record does hold |
 | `--branch` | `<name>` | `remove` only: the branch the worktree must be on; any other is refused |
-| `--session` | `<name>` | the session the caller is judged in, instead of the team's own; `new` and `remove` read and write that session; the owner's alone |
+| `--remote-session` | `<id>` | `pull` only: the session id the seat CLI created and recorded as the delivery |
+| `--session` | `<name>` | the session the caller is judged in, instead of the team's own; every subcommand reads that session, and `new`, `pull` and `remove` act on its records; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
-| `--json` | — | `list` prints its reading document; `new` and `remove` print their action envelope |
+| `--json` | — | `list` prints its reading document; `new`, `pull` and `remove` print their action envelope |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
-`remove` takes no `--kind` and no `--seat`. `new` and `list` take no `--branch`. `list` takes no task, no `--kind` and no `--seat`.
+`remove` takes no `--kind` and no `--seat`. `new`, `list` and `pull` take no `--branch`. `pull` takes no `--kind` and needs `--remote-session`. `list` takes no task, no `--kind` and no `--seat`.
 
 ## Who may run it
 
@@ -45,13 +49,18 @@ writes nothing.
 | the recorded worktrees were listed | the context line, a `TASK  BRANCH  PATH` table (a missing folder's path ends ` (gone)`), `note: limit <n> (workspace.limit)`, then `<n> worktree` / `<n> worktrees` | 0 |
 | the worktree was removed | the context line, then `removed <task>; the branch <branch> is kept` — the branch the worktree is on, read from git, not from the state record | 0 |
 | the folder was already gone | the context line, then `removed the record of <task>; its folder was already gone. No branch was deleted.` | 0 |
+| the session's patch was pulled | the CLI's own output, then the context line and `remote session <id>: pulled into <path>` | 0 |
 | `new` created the worktree and `workspace.setup` failed | the created line, then `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` on stderr | 1 |
 | the run was refused | `team worktree: <reason>` | 1 |
 | the invocation can't be read | `team worktree: <problem>` and the usage | 2 |
 | the team file can't be read | `team worktree: line <n>: <message>` (`team worktree: <message>` when the problem names no line) | 2 |
 
+A `pull` refusal names what stopped it — no record for the task, a record in another session, a
+folder that is gone, no seat whose CLI declares a pull, or the CLI's own non-zero exit with its
+last error line — and no patch is applied.
+
 Under `--json` the same run is a `team.worktree` document: the reading document on `list`, the
-action envelope on `new` and `remove`, and the `team.error` document for a refusal — see
+action envelope on `new`, `pull` and `remove`, and the `team.error` document for a refusal — see
 [the output contract](../reference/output.md).
 
 ## Example

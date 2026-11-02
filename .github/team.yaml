@@ -392,3 +392,22 @@ seats:
     version: "6.1"
     display: GrokBot 6.1
     launch: grok
+
+  # 2026-11-02: reviewer commits sign as writers; the hosted signature check reads these seats.
+  - role: writer
+    name: writer-glm
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  - role: writer
+    name: writer-sol-6-1
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex

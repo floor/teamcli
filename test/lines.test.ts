@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clearStopped, copySeat, hasSeat, markStopped, restoreSeat, rewriteCount, seatBlocks, seatIsStopped, takeOut } from '../src/file/lines.ts';
+import { clearStopped, copySeat, hasSeat, markStopped, restoreSeat, rewriteCount, rewriteSeatModel, seatBlocks, seatIsStopped, takeOut } from '../src/file/lines.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { writeTeamFile } from '../src/file/write.ts';
 
@@ -240,6 +240,58 @@ seats:
     expect(names).toEqual(['lead', 'ds', 'ds-2', 'ds-3']);
     expect(restored).not.toContain('count:');
     expect(validateTeamFile(restored).ok).toBe(true);
+  });
+
+  test('a rewritten double-quoted launch carries its inner quotes and backslashes escaped', () => {
+    const text = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    display: Claude Opus 5.5
+    launch: "claude --model claude-opus-5-5"
+`;
+    const launch = 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s kimi-api-key -a "$USER" -w) claude --model kimi-k2.5 --note C:\\tmp';
+    const edited = rewriteSeatModel(text, 'lead', {
+      cli: 'claude-code', vendor: 'moonshot', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5 2.5', launch,
+    });
+    const parsed = validateTeamFile(edited);
+    expect(parsed.ok, parsed.ok ? '' : JSON.stringify(parsed.errors)).toBe(true);
+    if (parsed.ok) expect(parsed.team.seats.find((seat) => seat.name === 'lead')?.launch).toBe(launch);
+  });
+
+  test('a rewritten single-quoted launch doubles the single quotes it carries', () => {
+    const text = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    display: Claude Opus 5.5
+    launch: 'claude --model claude-opus-5-5'
+`;
+    const launch = "claude --append-system-prompt 'be brief' --model kimi-k2.5";
+    const edited = rewriteSeatModel(text, 'lead', {
+      cli: 'claude-code', vendor: 'moonshot', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5 2.5', launch,
+    });
+    const parsed = validateTeamFile(edited);
+    expect(parsed.ok, parsed.ok ? '' : JSON.stringify(parsed.errors)).toBe(true);
+    if (parsed.ok) expect(parsed.team.seats.find((seat) => seat.name === 'lead')?.launch).toBe(launch);
   });
 });
 

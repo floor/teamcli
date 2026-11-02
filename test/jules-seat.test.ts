@@ -2,7 +2,8 @@
 // everyone — a seat's own included. No profile path may send that key: the profile exits by
 // `ctrl+c` alone, its delivery types through `jules-compose.ts`, and neither may spell the
 // delete. This file holds the profile to that, and holds the one standing rule the CLI makes
-// necessary — "Never delete a Jules session." — in the text every jules seat receives.
+// necessary — "Never delete a Jules session." — in the text a rules delivery of this profile
+// carries. A send to a jules seat delivers no rules at all: the profile is public-only.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -62,16 +63,19 @@ describe('no profile path sends the Jules delete key', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('jules exits by ctrl+c alone, and carries the standing rule', () => {
+  test('jules exits by ctrl+c alone, carries the standing rule, and is public-only', () => {
     const jules = profileFor('jules');
     if (jules === null) throw new Error('the jules profile did not load');
     expect(jules.exit).toBeNull();
     expect(jules.exitKeys).toEqual(['ctrl+c']);
     expect(jules.standingRules).toEqual(['Never delete a Jules session.']);
+    // Every jules session runs on the vendor's service, so no rules ride a brief and every
+    // body is read against the machine's private lists first (src/send/public-only.ts).
+    expect(jules.publicOnly).toBe(true);
   });
 });
 
-describe('the standing rule rides a jules seat\'s every brief', () => {
+describe('the standing rule is what a jules rules delivery would carry', () => {
   test('the prepended text carries it between the profile\'s own rules and the file\'s', () => {
     const jules = profileFor('jules');
     if (jules === null) throw new Error('the jules profile did not load');
