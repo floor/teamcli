@@ -75,6 +75,18 @@ for (const [label, argv] of lines) {
   });
 }
 
+test('a listed grant naming fallback admits the 0.5.12 route, as a wildcard already does', async () => {
+  // The door's op vocabulary is the dispatcher table, and `fallback` joined it with the 0.5.12
+  // route, so a listed grant may name it like any other op. `prune` without --apply only reads
+  // the store; an admitted line runs as the owner, which is what the command's own --apply gate
+  // reads, so the grant is the owner's delegated authority and not a way around that gate.
+  const ran = await run(['fallback', 'prune', '--general', grant(['fallback']), '--key', a.path]);
+  expect(ran.err).toContain('admitted by general grant');
+  expect(`${ran.err}${ran.out}`).not.toContain('does not cover fallback');
+  expect(`${ran.err}${ran.out}`).not.toContain('--general');
+  expect(`${ran.err}${ran.out}`).not.toContain('--key');
+});
+
 const inPane = { kind: 'seat', name: 'builder-5', pane: 'pane1' } as const;
 
 test('a seat inside a team pane is admitted, dev mode on or off: an owner tool applies changes under a general grant', async () => {
