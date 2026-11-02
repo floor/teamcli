@@ -668,6 +668,12 @@
                   "inbox"
                 ],
                 "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
+              },
+              "timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60000,
+                "$comment": "how long one POST waits for the routine's answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice"
               }
             },
             "required": [
