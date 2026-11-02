@@ -101,8 +101,10 @@ export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus take
 /** What a typed wake did, when the run made one. `attempted` is false for a wake the run did
  *  not reach — a pane it refused to type into, a trigger over the line, an order that leaves the
  *  typed leg out — and true once the wake itself ran, delivered or not. `reason` is the wake's
- *  own word for what it saw. */
-export type WakeOutcome = { attempted: boolean; reason?: string };
+ *  own word for what it saw. `woke` is true only when the wake ran and the profile's working
+ *  screen showed: the seat took the trigger and is in a turn. A wake typed for a message that is
+ *  already stored (the pull-only walk's trigger) reports that beside the store. */
+export type WakeOutcome = { attempted: boolean; woke?: true; reason?: string };
 
 /** The facts a class's sentence needs beyond the class itself: a person's pane is never typed, a
  *  CLI whose profile declares `typed_wake: screen` can take one line at send time, and a wake
@@ -126,9 +128,11 @@ export function deliveryWords(cls: DeliveryClass, seat: string, context: Deliver
   const { human = false, typedWake = false, watchWake = false, wake } = context;
   const wakeLine = wake === undefined
     ? ''
-    : wake.attempted
-      ? `the typed wake failed (${wake.reason ?? 'no reason was recorded'})`
-      : `the typed wake did not run (${wake.reason ?? 'no reason was recorded'})`;
+    : wake.woke === true
+      ? `the typed wake woke it (${wake.reason ?? 'no reason was recorded'})`
+      : wake.attempted
+        ? `the typed wake failed (${wake.reason ?? 'no reason was recorded'})`
+        : `the typed wake did not run (${wake.reason ?? 'no reason was recorded'})`;
   const lead = (rest: string): string => (wakeLine === '' ? `queued; ${rest}` : `queued; ${wakeLine}; ${rest}`);
   switch (cls) {
     case 'push':
@@ -136,10 +140,20 @@ export function deliveryWords(cls: DeliveryClass, seat: string, context: Deliver
     case 'between-turns':
       return 'woken through its runtime queue';
     case 'pull-on-turn':
-      return lead(`${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
+      // A wake this run typed gave it the turn; the rest sentence must not say nothing did.
+      return lead(wake?.woke === true
+        ? `${seat} reads it at its next turn`
+        : `${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
     case 'none':
       if (human) return lead(`${seat} has no way to be woken while idle`);
       if (!typedWake) return lead(`nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
+      // The same for a seat with no watcher: the wake this run typed is the one thing that
+      // gave it a turn, so the sentence names what else could, never that nothing could.
+      if (wake?.woke === true) {
+        return lead(watchWake
+          ? `nothing else wakes ${seat} while it is idle except the watch's typed retry once a message passes its unread window, into an empty composer`
+          : `nothing else wakes ${seat} while it is idle`);
+      }
       return lead(watchWake
         ? `nothing wakes ${seat} while it is idle except a send-time typed wake and the watch's typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn`
         : `nothing wakes ${seat} while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn`);
