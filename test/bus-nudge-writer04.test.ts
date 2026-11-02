@@ -464,7 +464,7 @@ test('a pending marker whose record is a link raises neither arrival nor held, u
   writeFileSync(elsewhere, bytes);
   markPending(join(at.dir, 'send-drops', SESSION, 'iris'), {
     id: 'pending-linked', from: 'lead', to: 'iris', body: 'held body',
-    ts: '2026-11-02T10:00:00.000Z', tries: 0, leg: 'drop',
+    ts: '2026-11-02T10:00:00.000Z', leg: 'drop',
   });
   rmSync(path);
   symlinkSync(elsewhere, path);
