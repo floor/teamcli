@@ -109,7 +109,8 @@ export type DownSources = {
   };
   /** Removes a closed seat's own entry from its CLI's user-level MCP store. Tests record it;
    *  the shipped command runs the profile's own remove route (a CLI with none has nothing to
-   *  remove). Absent: the shipped `removeInbox` runs. */
+   *  remove). Absent: nothing is removed — the real command carries the shipped `removeInbox`,
+   *  so a test's fake sources never run a real CLI. */
   inboxRemove?: (input: { cli: string; seat: string; session: string }) => InboxRemoval | null;
   /** The delegate gate. Tests hand in a verdict; the shipped command asks the real one. */
   gate?: typeof delegateGate;
@@ -201,6 +202,7 @@ export const realSources: DownSources = {
   home: homedir(),
   launch: realLaunch,
   codexEndpoint: { stop: (input) => stopSeatCodexEndpoint(input) },
+  inboxRemove: removeInbox,
 };
 
 /** How long `--wait` gives a working seat, in seconds. */
@@ -1504,7 +1506,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         // The seat's own user-level inbox entry goes with the seat. Only the name the launch
         // registered is removed; every other entry in the CLI's shared store is left as it is.
         const cli = seats.find((seat) => seat.name === name)?.cli;
-        const removal = cli === undefined ? null : (sources.inboxRemove ?? removeInbox)({ cli, seat: name, session });
+        const removal = cli === undefined ? null : sources.inboxRemove?.({ cli, seat: name, session }) ?? null;
         if (removal !== null && !removal.ok) {
           io.stderr(`team down: ${name}: its team inbox entry was not removed: ${removal.reason}\n`);
         }

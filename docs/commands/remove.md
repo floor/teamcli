@@ -9,7 +9,10 @@ being touched: nothing is typed into it; left running. A seat whose launch start
 Codex endpoint has that endpoint stopped through the process the state records, with the same
 ownership proof `team down` uses, before the record that names it goes — for a seat that exits
 when asked and for one its owner abandons. A stop that cannot prove the recorded process is
-refused, and the seat, its file entry and the server are left as they are. A removed seat's agent
+refused, and the seat, its file entry and the server are left as they are. A seat whose CLI keeps
+its inbox entry in a user-level store — one entry named for the seat, as `up` registered it — has
+exactly that entry removed as the seat's record goes, and nothing else in the store is touched; a
+removal that cannot be made is said and the removal still proceeds. A removed seat's agent
 record stays in the machine's agent registry, retired rather than deleted: the record and its
 signed settings remain readable, and `team agents prune` lists it as already retired. `--keep`
 stops the record instead.

@@ -826,6 +826,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     // interrupted must not answer for a seat this run stopped or removed — a `--keep` entry is
     // stopped too, so it is no longer mid-turn.
     resetCliHookState(dir, session, [name]);
+    // The seat's own user-level inbox entry goes with its record, as `down` takes it: only the
+    // name its launch registered is removed, every other entry in the CLI's shared store is left
+    // as it is, and a removal that cannot be made is said while the removal proceeds.
+    const inboxCli = copySeat?.cli ?? recorded?.cli;
+    const removal = inboxCli === undefined ? null : sources.inboxRemove?.({ cli: inboxCli, seat: name, session }) ?? null;
+    if (removal !== null && !removal.ok) {
+      noteIo.stderr(`team remove: ${name}: its team inbox entry was not removed: ${removal.reason}\n`);
+    }
     // The swap's record: the gap is a replacement in progress, not a lost lead. Written after the
     // stop, so a refused or failed stop leaves no record; `add` clears it once the seat runs.
     if (swap) {

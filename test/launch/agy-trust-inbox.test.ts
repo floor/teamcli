@@ -1,7 +1,7 @@
-// FLO-1209: an Antigravity seat launches with its own folder trusted for the session, and its
-// team inbox is one per-seat entry in the CLI's user-level store, removed when `team down`
-// closes the seat. The trust value and the add/remove words are measured on agy 1.4.12 in a
-// scratch HOME; every scene below is synthetic.
+// An Antigravity seat launches with its own folder trusted for the session, and its team inbox
+// is one per-seat entry in the CLI's user-level store, removed when `team down` closes the seat.
+// The trust value and the add/remove words are measured on agy 1.4.12 in a scratch HOME; every
+// scene below is synthetic.
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
