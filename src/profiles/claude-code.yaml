@@ -170,7 +170,8 @@ vendors:
       - id: kimi-k2.5
         model: Kimi K2.5
         version: '2.5'
-        display: Kimi K2.5
+        # The team file requires the version as a token of its own, and `K2.5` is one word.
+        display: Kimi K2.5 2.5
 # The store those items live in: an attribute-only lookup (`find-generic-password` without `-w`,
 # so the secret never reaches a process's arguments) and the one-time command a refusal prints.
 # The add command asks the store for the secret itself — no stdin, no history — and `{item}` is

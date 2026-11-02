@@ -5,6 +5,7 @@
 // presence.
 import { describe, expect, test } from 'bun:test';
 import { addCommandFor, checkArgv, credentialProbeFor, type CredentialProbe } from '../src/profiles/credentials.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { profileFor } from '../src/profiles/profile.ts';
 import { shellWordTexts } from '../src/launch/shell-words.ts';
 import { planVendorSwap, vendorTargetOf } from '../src/swap/vendor.ts';
@@ -71,7 +72,7 @@ describe('the vendors a profile declares', () => {
         'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)',
         'ANTHROPIC_MODEL={model}',
       ],
-      models: [{ id: 'kimi-k2.5', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5' }],
+      models: [{ id: 'kimi-k2.5', model: 'Kimi K2.5', version: '2.5', display: 'Kimi K2.5 2.5' }],
     });
     // The other profiles carry no vendor table: the store naming stays in the adapter that has
     // one.
@@ -261,4 +262,36 @@ describe('a vendor target', () => {
     if (!other.ok) throw new Error(other.why);
     expect(other.recipe.account).toBeUndefined();
   });
+});
+
+describe('every vendor model declares a row the team validator accepts', () => {
+  const filled = (word: string, vendor: (typeof profile.vendors)[number], modelId: string): string =>
+    word.replaceAll('{credential}', vendor.credential).replaceAll('{model}', modelId);
+  for (const vendor of profile.vendors) {
+    for (const model of vendor.models) {
+      test(`${vendor.name}:${model.id}`, () => {
+        const launch = `${vendor.env.map((word) => filled(word, vendor, model.id)).join(' ')} claude --model ${model.id}`;
+        const text = `format: 1
+project: vendors
+session: vendors
+entity: fixture-lab
+coordinator: subject
+operator: subject
+workspace:
+  mode: shared
+seats:
+  - name: subject
+    role: coordinator
+    cli: claude-code
+    vendor: ${vendor.name}
+    model: ${model.model}
+    version: "${model.version}"
+    display: ${model.display}
+    launch: ${JSON.stringify(launch)}
+`;
+        const parsed = validateTeamFile(text);
+        expect(parsed.ok, parsed.ok ? '' : JSON.stringify(parsed.errors)).toBe(true);
+      });
+    }
+  }
 });
