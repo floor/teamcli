@@ -36,7 +36,7 @@ import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
-import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
@@ -1872,10 +1872,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       roots: sweepRoots,
       now,
       ...(housekeeping
-        ? { retire: { limit: FALLBACK_STORE_PASS_LIMIT, lockWaitMs: 0 } }
+        ? {
+            retire: {
+              limit: FALLBACK_STORE_PASS_LIMIT,
+              // The backlog knobs are the team's word, read for each hosted root: above the
+              // threshold one pass takes the bulk limit instead of the steady one, so a store
+              // that was never retired before empties over a few passes. A root whose chain
+              // cannot be read keeps the release defaults and says why below.
+              backlogLimitsFor: (entry: SweepRoot) => storeBacklogLimits(entry.team, entry.root, home, now()),
+              lockWaitMs: 0,
+            },
+          }
         : {}),
     });
     for (const entry of swept.roots) {
+      if (entry.note !== null) logLine(`fallback sweep ${entry.root}: ${entry.note}`);
       if (entry.why !== null) {
         logLine(`fallback sweep ${entry.root}: ${entry.why}`);
         continue;

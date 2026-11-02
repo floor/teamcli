@@ -13,8 +13,10 @@
 // recorded, so it has no verified seat to pass and must not invent one: the event's sender is the
 // tag fixed in the marker at its first fact, and `noteTransport` — the transport path — still
 // requires a full context with the verified caller.
+import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
+import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/index.ts';
 import {
   escalateDue,
   reclaimFallbackLocks,
@@ -29,6 +31,48 @@ export type SweepRoot = { root: string; team: TeamFile };
 /** A root given to a pass: an already-validated pair, or a bare path this module validates. */
 export type SweepRootInput = SweepRoot | string;
 
+/**
+ * The fallback store's two backlog knobs in force for one root: above `above` eligible finished
+ * episodes, one pass retires up to `limit` instead of its steady limit. Both are catalogue
+ * policies (`daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`), read to the team
+ * level like the daemon's other knobs. A chain that cannot be read keeps the release defaults and
+ * carries `unknown`, because retirement is housekeeping: it keeps the store bounded either way,
+ * and the caller says which word it could not read rather than acting on a word no level chose.
+ */
+export type StoreBacklogLimits = { above: number; limit: number; unknown?: string };
+
+export function storeBacklogLimits(team: TeamFile, root: string, home: string | undefined, now: Date): StoreBacklogLimits {
+  const defaults = { above: DAEMON_BACKLOG_DEFAULTS.above, limit: DAEMON_BACKLOG_DEFAULTS.limit };
+  try {
+    const resolved = loadAndResolvePolicyChain(
+      {
+        home,
+        entity: team.entity,
+        projectId: home === undefined ? null : projectIdOfTeam(home, team, root),
+        teamRoot: root,
+        team,
+      },
+      { now, upToLevel: 'team' },
+    );
+    if (!resolved.ok) {
+      const why = resolved.refusals.map((refusal) => refusal.message).join('; ');
+      return { ...defaults, unknown: why === '' ? 'the policy chain could not be read' : why };
+    }
+    const above = resolved.policies['daemon.fallback-backlog-above']?.value;
+    const limit = resolved.policies['daemon.fallback-backlog-limit']?.value;
+    const missing = [
+      typeof above === 'number' ? null : 'daemon.fallback-backlog-above',
+      typeof limit === 'number' ? null : 'daemon.fallback-backlog-limit',
+    ].filter((name): name is string => name !== null);
+    if (missing.length > 0) {
+      return { ...defaults, unknown: `${missing.join(' and ')} did not resolve to a number` };
+    }
+    return { above: above as number, limit: limit as number };
+  } catch (error) {
+    return { ...defaults, unknown: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export type SweepRootResult = {
   root: string;
   /** The pass over this root, or null when the root was not swept. */
@@ -39,6 +83,9 @@ export type SweepRootResult = {
   reclaim: { reclaimed: number; kept: number; scanned: number } | null;
   /** Why the root was skipped; null when the pass ran. */
   why: string | null;
+  /** What the pass has to say about the root besides its counts: a backlog word that could not
+   *  be read and the release defaults the retirement used instead. Null when there is none. */
+  note: string | null;
 };
 
 export type FallbackSweepResult = {
@@ -60,8 +107,17 @@ export function sweepFallbackEscalations(input: {
   now: () => Date;
   /** Ask this pass to retire finished episodes and reclaim their lock folders after the
    *  escalation pass. Absent, the pass only escalates — a direct sweep never writes the store's
-   *  history. */
-  retire?: { limit?: number; lockWaitMs?: number; youngMs?: number };
+   *  history. `backlogAbove`/`backlogLimit` let one pass drain a store that was never retired
+   *  before; see `retireFinished`. `backlogLimitsFor` reads them per root from that root's team
+   *  policy instead, over the two fields when it returns them. */
+  retire?: {
+    limit?: number;
+    lockWaitMs?: number;
+    youngMs?: number;
+    backlogAbove?: number;
+    backlogLimit?: number;
+    backlogLimitsFor?: (entry: SweepRoot) => StoreBacklogLimits;
+  };
 }): FallbackSweepResult {
   const at = input.now();
   const roots: SweepRootResult[] = [];
@@ -76,6 +132,7 @@ export function sweepFallbackEscalations(input: {
           retirement: null,
           reclaim: null,
           why: loaded.errors[0]?.message ?? 'the team file cannot be read',
+          note: null,
         });
         continue;
       }
@@ -90,18 +147,27 @@ export function sweepFallbackEscalations(input: {
       // and an intent written during the pass keeps the marker out of the retired set.
       let retirement: RetirementReport | null = null;
       let reclaim: { reclaimed: number; kept: number; scanned: number } | null = null;
+      let note: string | null = null;
       if (input.retire !== undefined) {
+        const policy = input.retire.backlogLimitsFor?.(entry);
+        const backlogAbove = policy?.above ?? input.retire.backlogAbove;
+        const backlogLimit = policy?.limit ?? input.retire.backlogLimit;
         retirement = retireFinished(ctx, {
           at,
           lockWaitMs: input.retire.lockWaitMs ?? 0,
           ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+          ...(backlogAbove !== undefined ? { backlogAbove } : {}),
+          ...(backlogLimit !== undefined ? { backlogLimit } : {}),
         });
         reclaim = reclaimFallbackLocks(ctx, {
           ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
           ...(input.retire.youngMs !== undefined ? { youngMs: input.retire.youngMs } : {}),
         });
+        if (policy?.unknown !== undefined) {
+          note = `the store backlog word could not be read (${policy.unknown}); the release defaults apply`;
+        }
       }
-      roots.push({ root: entry.root, report, retirement, reclaim, why: null });
+      roots.push({ root: entry.root, report, retirement, reclaim, why: null, note });
     } catch (error) {
       roots.push({
         root: entry.root,
@@ -109,6 +175,7 @@ export function sweepFallbackEscalations(input: {
         retirement: null,
         reclaim: null,
         why: error instanceof Error ? error.message : String(error),
+        note: null,
       });
     }
   }
