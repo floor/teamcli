@@ -964,6 +964,51 @@ test('a running bus records a failed delivery on the seat\'s state row', async (
   }
 });
 
+test('a running bus records a 2xx answer as delivered, and says nothing', async () => {
+  // The other side of the policy's line: delivered is only ever the routine's 2xx, and a
+  // successful delivery prints no failure sentence, so the state record is the reading.
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stateDir: dir,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.record_id).toBe(MESSAGE_ID);
+    expect(record?.outcome).toBe('delivered');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('HTTP 204');
+    expect(get.hits.length).toBe(1);
+    expect(lines.join('\n')).not.toContain('not delivered');
+    expect(lines.join('\n')).not.toContain('sent, response unknown');
+  } finally {
+    await started.handle.close();
+  }
+});
+
 test('a running bus records a late answer as sent, response unknown, with one request', async () => {
   // The row names its own bound; the routine takes the body and answers well after it. The seat's
   // state records the outcome the send could not have known: the response never arrived.
