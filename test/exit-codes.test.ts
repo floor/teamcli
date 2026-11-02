@@ -36,7 +36,7 @@ import { daemonSocketPath } from '../src/daemon/paths.ts';
 import { routeId, routeOf } from '../src/daemon/routes.ts';
 import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
-import type { ServiceManager } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
@@ -4669,7 +4669,42 @@ function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonS
       calls.push('uninstall');
       return { ok: true, unitPath: place(home), removed: true };
     }),
+    restart: overrides.restart ?? ((home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    }),
     calls,
+  };
+}
+
+/** A manager that answers a restart by loading the installed unit again; whether the daemon it
+ *  starts answers is the scene's health seam. */
+function restartingService(): FakeDaemonService {
+  return fakeDaemonService({
+    restart: (home) => {
+      const success: ServiceRestartSuccess = {
+        ok: true,
+        unitPath: join(home, 'unit.plist'),
+        undo: () => success,
+      };
+      return success;
+    },
+  });
+}
+
+/** A health reading whose daemon runs but does not answer the probe. */
+function unansweredHealth(): DaemonHealth {
+  const reading = answeringHealth();
+  return { ...reading, probe: { state: 'unanswered', at: reading.probe.at, reason: 'closed' } };
+}
+
+/** Answers from the Nth probe on, across the windows one command opens (a restart's own, then
+ *  its undo's), so a scene reaches the restored-daemon branch without sleeping for real waits. */
+function healthFrom(probe: number): () => Promise<DaemonHealth> {
+  let probes = 0;
+  return async () => {
+    probes += 1;
+    return probes >= probe ? answeringHealth() : unansweredHealth();
   };
 }
 
@@ -4827,7 +4862,65 @@ scene('daemon.installed', async (place) => {
 scene('daemon.not-owner', async (place) =>
   show(
     await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner installs or removes the machine daemon',
+    'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon',
+  ));
+scene('daemon.grant-refused', async (place) => {
+  // A grant recorded on the run that the command's own verification cannot admit: the command
+  // refuses it and names the failed check instead of falling back to the caller.
+  const io = testIo(place.root, detachedCaller);
+  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key') };
+  const code = await runDaemon(['install', '--dry-run'], io, daemonSources(place, { service: fakeDaemonService() }));
+  return show({ code, out: io.out, err: io.err }, 'cannot be read as a general grant');
+});
+scene('daemon.restart-dry-run', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would restart');
+});
+scene('daemon.restarted', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: async () => answeringHealth() });
+  return show(ran, 'team daemon: restarted');
+});
+scene('daemon.not-installed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({ ok: false, reason: 'not-installed', why: 'no user service unit is installed, so there is no daemon to restart', detail: null }),
+      }),
+    }),
+    'no user service unit is installed',
+  ));
+scene('daemon.restart-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({
+          ok: false,
+          reason: 'refused',
+          why: 'the system\'s service manager refused to start the installed daemon again',
+          detail: 'synthetic load refused',
+        }),
+      }),
+    }),
+    'no daemon is running',
+  ));
+scene('daemon.restart-rolled-back', async (place) => {
+  // The restarted daemon's own probe window stays unanswered; the daemon the undo starts
+  // answers in the second window, so the restart is reported as undone.
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: healthFrom(10), sleep: async () => {} });
+  return show(ran, 'the installed unit was started again and its daemon answers');
+});
+scene('daemon.restart-rollback-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: restartingService(),
+      health: async () => unansweredHealth(),
+      sleep: async () => {},
+    }),
+    'no daemon is running',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
 scene('daemon.run-root', async (place) =>
