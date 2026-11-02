@@ -18,9 +18,11 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/index.ts';
 import {
+  drainDeferredNotes,
   escalateDue,
   reclaimFallbackLocks,
   retireFinished,
+  type DeferredNoteDrainReport,
   type EscalationReport,
   type RetirementReport,
 } from '../send/fallback-events.ts';
@@ -75,6 +77,8 @@ export function storeBacklogLimits(team: TeamFile, root: string, home: string | 
 
 export type SweepRootResult = {
   root: string;
+  /** The facts a busy episode key deferred while a send returned, recorded and cleared. */
+  notes: DeferredNoteDrainReport | null;
   /** The pass over this root, or null when the root was not swept. */
   report: EscalationReport | null;
   /** What this pass retired, or null when the caller did not ask for retirement. */
@@ -128,6 +132,7 @@ export function sweepFallbackEscalations(input: {
       if (!loaded.ok) {
         roots.push({
           root: given,
+          notes: null,
           report: null,
           retirement: null,
           reclaim: null,
@@ -142,6 +147,9 @@ export function sweepFallbackEscalations(input: {
     }
     try {
       const ctx = { team: entry.team, root: entry.root, home: input.home, now: input.now };
+      // Notes first: a fact a send deferred is recorded before this pass judges the episode, so
+      // an exhaustion it carries schedules its escalation in the same tick rather than the next.
+      const notes = drainDeferredNotes(ctx, { at });
       const report = escalateDue(ctx, { at, lockWaitMs: 0 });
       // Escalation first: a pending intent is flushed before retirement may archive its episode,
       // and an intent written during the pass keeps the marker out of the retired set.
@@ -167,10 +175,11 @@ export function sweepFallbackEscalations(input: {
           note = `the store backlog word could not be read (${policy.unknown}); the release defaults apply`;
         }
       }
-      roots.push({ root: entry.root, report, retirement, reclaim, why: null, note });
+      roots.push({ root: entry.root, notes, report, retirement, reclaim, why: null, note });
     } catch (error) {
       roots.push({
         root: entry.root,
+        notes: null,
         report: null,
         retirement: null,
         reclaim: null,
