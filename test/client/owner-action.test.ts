@@ -60,9 +60,9 @@ describe('request, owner-seat answer, execute', () => {
     const p = place();
     const id = request(p);
     expect(approveOwnerAction(p.home, id, 'oui', p.store, later(1000))).toEqual({ ok: true, choice: 'once' });
-    // The Touch ID prompt is the card, one plain line: the kind, the question and who asked. The
+    // The Touch ID prompt is the card, one plain line: the title, the question and the scope. The
     // record it answers for (root, HEAD, arguments) is not in it; `team approvals details` prints it.
-    expect(p.store.prompts.at(-1)).toBe('TeamCLI: start the team — Start team "acme"? — One-time change. seat:iris asked.');
+    expect(p.store.prompts.at(-1)).toBe('Start the team — iris wants to start the team. OK? — Team acme · no permission change');
     expect(p.store.prompts.at(-1)).not.toContain(p.root);
     const dry = admitOwnerAction(p.home, id, ask(p, 'team-up', { claim: false }), p.store, later(2000));
     expect(dry).toMatchObject({ ok: true, via: 'owner-seat', signer: 'mac' });

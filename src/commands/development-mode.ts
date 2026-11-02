@@ -17,12 +17,13 @@
 // logged, and a switch that finds the generation moved refuses the replayed token. The record
 // itself is signed with the owner's existing key; this command creates no key and no grant.
 //
-// `--request` records the switch as one owner-seat request (the card reads `TeamCLI: development
-// mode` / `Set development mode to <mode> on this machine?`) exactly as `team config … --request`
-// records a record change, and `--approval <request-id>` applies it once the owner's verified
-// signature binds these words. The request is bound to the caller's repository, team, HEAD and
-// words, and no charter admits it: the switch is the machine's, and only the owner's own answer
-// may stand for her.
+// `--request` records the switch as one owner-seat request — for `local-fast` the card reads
+// `Turn on fast local development` / `Stop asking Touch ID for routine team changes on this Mac.
+// OK?` / `This Mac · all teams`, and the other modes say their own lines — exactly as
+// `team config … --request` records a record change, and `--approval <request-id>` applies it once
+// the owner's verified signature binds these words. The request is bound to the caller's
+// repository, team, HEAD and words, and no charter admits it: the switch is the machine's, and
+// only the owner's own answer may stand for her.
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { ownerAuthorized } from '../approve/owner-token.ts';
@@ -45,7 +46,7 @@ import { writeJson, writeJsonError } from '../output/index.ts';
 
 export const USAGE = `Usage: team development-mode [--json]
        team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
-       team development-mode set <local-fast|pr-per-change|off> --request [--json]
+       team development-mode set <local-fast|pr-per-change|off> --request [--reason <text>] [--json]
        team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 Exits 0 when the setting is read, shown, changed, or a request is recorded, 1 when refused, 2
@@ -79,7 +80,7 @@ export async function runDevelopmentMode(
   options: DevelopmentModeOptions = {},
 ): Promise<number> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, ['approval'], ['show', 'dry-run', 'json', 'request']);
+  const args = readArgs(argv, ['approval', 'reason'], ['show', 'dry-run', 'json', 'request']);
   const json = args.flags.has('json');
   const home = options.home ?? homedir();
   const sub = args.rest[0];
@@ -138,7 +139,7 @@ export async function runDevelopmentMode(
       // answer to it is the approval. No charter admits this switch (see `ownerSeatStep`).
       let seatApproved = false;
       if (ask) {
-        const step = ownerSeatStep('development-mode', 'development-mode', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, {
+        const step = ownerSeatStep('development-mode', 'development-mode', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, {
           home,
           now: () => options.now ?? new Date(),
           ...(options.ownerSeatStore === undefined ? {} : { ownerSeatStore: options.ownerSeatStore }),

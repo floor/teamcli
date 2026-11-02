@@ -21,7 +21,7 @@ import type { Command, Io } from '../io.ts';
 export const USAGE = `Usage: team approvals list [--json]
        team approvals details <id> [--json]
        team approvals revoke <id...> [--json]
-       team approvals revoke <id...> --request [--json]
+       team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
 
 Lists the owner seat's always rules — team-create (tc_…) and owner-action (oa_…) — or removes
@@ -29,7 +29,7 @@ every id in the one command. Listing reads the owner's folder and changes nothin
 one request's full record — request id, repository, HEAD, bound arguments, hashes — and the audit
 entries written for it; the card the owner answers never carries them. Revoking is the owner's,
 from a terminal outside herdr, or an owner-seat answer for that revoke: --request records every
-id as one request and --approval <request-id> runs it once the owner has answered on the owner
+id as one request (--reason <text> is the short reason the card shows) and --approval <request-id> runs it once the owner has answered on the owner
 page. One card and one Touch ID cover the whole list. A signed always rule for
 team-revoke-approval covering this folder admits the revoke with no request. A bad id revokes
 nothing.
@@ -44,7 +44,7 @@ export const approvals: Command = (argv, io) => runApprovals(argv, io);
 export default approvals;
 
 export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSources = {}): Promise<number> {
-  const args = readArgs(argv, ['approval'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'reason'], ['json', 'request']);
   const json = hasJsonFlag(argv);
   const verb = args.rest[0];
   const verbs = verb === 'list' || verb === 'revoke' || verb === 'details';
@@ -116,7 +116,7 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
       }
     }
     if (!seatRefused) {
-      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, seatSources);
+      const seat = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, seatSources);
       if (seat.kind === 'requested') {
         // exit: approvals.approval-requested
         return 0;
