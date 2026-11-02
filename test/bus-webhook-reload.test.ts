@@ -324,6 +324,22 @@ test('a record rewritten outside the approval chain never moves a running row', 
   expect(problems[0]).toContain('not the copy the owner approved');
 });
 
+test('a malformed registry record is reported without the text it holds', async () => {
+  const at = await scene();
+  const said: string[] = [];
+  const bus = await start(at, said);
+  // The parser's own message quotes the text it refused; the bus must not forward it. The marker
+  // stands for anything a malformed record could carry.
+  const marker = 'SYNTHETIC_RELOAD_SECRET_DO_NOT_LOG';
+  writeFileSync(teamConfigRecordPath(at.home, teamIdOf(at.root)), `{"token":"${marker}"}`);
+
+  await bus.reconcileNow();
+  const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('the registry record could not be read');
+  expect(said.join('\n')).not.toContain(marker);
+});
+
 test('a removed registry record is named once and the running rows keep working', async () => {
   const routine = receiver();
   const at = await scene((base) => webhookRow(hookFiles(base, 'stable', routine.url)));

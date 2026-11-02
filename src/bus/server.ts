@@ -717,8 +717,11 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       let stored: ReturnType<typeof readStoredTeamConfig>;
       try {
         stored = readStoredTeamConfig(home, registryTeamId);
-      } catch (error) {
-        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, (error as Error).message);
+      } catch {
+        // The store's refusal can name the file and the fault, but a diagnostic that forwards
+        // it could one day carry the record's own text (a parser quotes what it refused). The
+        // line says only that the read failed, and never what the record held.
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry record could not be read');
         return;
       }
       if (stored === null) {
