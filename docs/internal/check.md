@@ -147,7 +147,9 @@ reads it now`, and a seat nothing can wake earns `nothing gives <seat> a turn wh
 team drops --read --seat <seat> reads it now, or a person or a restart must give it a turn` —
 with `nothing wakes <seat> while it is idle except a send-time typed wake into an empty composer`
 in place of `nothing gives <seat> a turn while it is idle` when the seat's profile declares
-`typed_wake: screen`.
+`typed_wake: screen`, and `nothing wakes <seat> while it is idle except a send-time typed wake,
+and the watch's typed retry has not delivered this message` when that profile's watch retry is on
+for the seat.
 The sender is the verified record's `from`; a record that does not verify is named `an
 unverified message`, and the `.pending` marker beside it is never read as a sender — it is
 unsigned, so it may not lend a message the owner's name or a seat's standing. A person's drop is

@@ -50,6 +50,10 @@ export function hostedWatchSources(
     typeText: () => false,
     pressEnter: () => false,
     sendKey: () => false,
+    // The one write kept: the profile-gated typed wake, which the shared module bounds with two
+    // idle reads, a guarded Enter and its own working-screen acknowledgement. The raw writers
+    // above stay closed; a seat whose profile declares no wake never reaches this seam.
+    typedWake: base.typedWake,
     notify: () => {},
     createWorkspace: undefined,
     paneRun: undefined,

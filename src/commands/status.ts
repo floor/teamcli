@@ -665,7 +665,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       const age = reading.wake.oldest_unread_seconds;
       if (age === null || age < windowSeconds) continue;
       const waits = reading.words.replace(/^queued; /, '');
-      comparison.notes.push(`${name}: its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window; ${waits}`);
+      const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
+      comparison.notes.push(`${name}: its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
     }
   }
 

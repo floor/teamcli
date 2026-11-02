@@ -56,6 +56,9 @@ export type SeatWakeReading = {
   wake: SeatWake;
   /** The class in plain words, without a run's wake outcome: a reading, not a send. */
   words: string;
+  /** The watch may type its retry for this seat (`typed_wake` and `watch_wake` on): a note
+   *  that says the retry has not delivered must never say nothing wakes the seat. */
+  watchWake: boolean;
 };
 
 export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
@@ -81,6 +84,7 @@ export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
       oldest_unread_seconds: oldest,
     },
     words: delivery.words,
+    watchWake: delivery.evidence.watchWake,
   };
 }
 

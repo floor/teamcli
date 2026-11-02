@@ -285,7 +285,7 @@ describe('the class a send reports for its target', () => {
     const code = await runSend(['none-seat', 'hello'], io, sendHost(made));
     console.log(`A4 code=${code} out=${JSON.stringify(io.out)} err=${JSON.stringify(io.err)}`);
     expect(code).toBe(0);
-    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); nothing wakes none-seat while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
+    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); nothing wakes none-seat while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
   });
 });
 

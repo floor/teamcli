@@ -2,7 +2,7 @@ import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
-import { displayEffort } from '../../profiles/profile.ts';
+import { displayEffort, profileFor } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
@@ -155,7 +155,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -227,6 +227,18 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's own word on the watch's typed wake retry. A field of the built seat like
+    // `human`, omitted when the file writes none — every file that writes none keeps the digest
+    // it had, and a written word is part of the digest the owner approves. `on` needs a profile
+    // that declares a typed wake: there is no other wake for the watch to type, so the word
+    // would be a setting that could never run.
+    const watchWakeField = fields.get('watch_wake');
+    const watchWakeWord = check.oneOf(fields.get('watch_wake'), `${at}: watch_wake`, ['on', 'off']);
+    let watchWake = watchWakeWord === undefined ? undefined : watchWakeWord === 'on';
+    if (watchWake === true && (cli === undefined || profileFor(cli)?.typedWake == null)) {
+      check.fail(watchWakeField?.value.line ?? line, `${at}: watch_wake "on" needs a CLI profile that declares typed_wake, and "${String(cli)}" declares none`);
+      watchWake = undefined;
+    }
     // The seat's own word on cross-session socket frames. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
@@ -294,6 +306,8 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file writes no watch_wake word, for the same reason.
+        ...(watchWake !== undefined ? { watchWake } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
         // Omitted when the file configures no webhook adapter, for the same reason.

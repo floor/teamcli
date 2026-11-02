@@ -104,7 +104,9 @@ Every wait on the leg is bounded.
 A send with no receipt in the grace prints `sent (unconfirmed)` with the receiving seat's
 delivery class appended — `queued; <seat> reads it at its next turn, and nothing here gives it one
 (pull-only)`, `queued; nothing wakes <seat> while it is idle; a person or a restart must give it a
-turn` (or the typed-wake variant, `… except a send-time typed wake into an empty composer`),
+turn` (or the typed-wake variant, `… except a send-time typed wake and the watch's typed retry
+once a message passes its unread window, into an empty composer`, with the shorter `… except a
+send-time typed wake into an empty composer` for a seat that turns `watch_wake` off),
 `queued; <seat> has no way to be woken while idle`, `queued; its webhook fires when the bus takes
 it`, `woken through its event adapter` or `woken through its runtime queue`, with `the typed wake
 failed (<reason>)` or `the typed wake did not run (<reason>)` inserted after `queued; ` when the

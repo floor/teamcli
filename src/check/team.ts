@@ -1130,9 +1130,11 @@ function unreadDifferences(
       ? `${readNow}; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
       : wakeableWhileIdle(delivery.class)
         ? `a wake route stands for ${seat.name} and the message is still unread; ${readNow}`
-        : delivery.evidence.typedWake
-          ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake into an empty composer; ${readNow}, or a person or a restart must give it a turn`
-          : `nothing gives ${seat.name} a turn while it is idle; ${readNow}, or a person or a restart must give it a turn`;
+        : delivery.evidence.watchWake
+          ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake, and the watch's typed retry has not delivered this message; ${readNow}, or a person or a restart must give it a turn`
+          : delivery.evidence.typedWake
+            ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake into an empty composer; ${readNow}, or a person or a restart must give it a turn`
+            : `nothing gives ${seat.name} a turn while it is idle; ${readNow}, or a person or a restart must give it a turn`;
     out.push({
       what: `${seat.name}: ${who} has been unread for ${String(minutes)} min${more} (id ${oldest.id})`,
       repair,

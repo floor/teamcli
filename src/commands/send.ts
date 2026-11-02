@@ -521,7 +521,7 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
  *  reading still counts, and what a typed wake would read: the seat's CLI and whether its pane
  *  is a human's. That adapter route is fired by the bus's announcement of the record, never by
  *  the send itself, so a wake through it is the bus's to make, not the send's to claim. */
-type ClassRead = { cls: DeliveryClass; webhookOnly: boolean; cli: string; human: boolean };
+type ClassRead = { cls: DeliveryClass; webhookOnly: boolean; cli: string; human: boolean; watchWake: boolean };
 
 /** The words for a class read at send time. A webhook-only push is a message queued for the
  *  bus's delivery routine, never a wake this send made: the send writes the record and returns,
@@ -537,6 +537,7 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
   return deliveryWords(read.cls, seat, {
     ...(read.human ? { human: true } : {}),
     ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
+    ...(read.watchWake ? { watchWake: true } : {}),
     ...(wake === undefined ? {} : { wake }),
   });
 }
@@ -551,7 +552,7 @@ function deliveryWordsOf(input: {
   root: string;
   session: string;
   seat: string;
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   home?: string;
 }, wake?: WakeOutcome): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
@@ -570,6 +571,7 @@ function deliveryWordsOf(input: {
       webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket,
       cli: state?.cli ?? input.declared?.cli ?? '',
       human: read.evidence.human === true,
+      watchWake: read.evidence.watchWake,
     },
     input.seat,
     wake,
@@ -4812,7 +4814,7 @@ function classWithout(
   /** The receiving team file's row for the seat, when the caller has it: the launch line, human
    *  word, inbound word and webhook row the class was first read with. Without it the walk's own
    *  reading of the seat stands in, exactly as the first read did. */
-  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>,
+  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>,
 ): ClassRead {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
@@ -4852,6 +4854,7 @@ function classWithout(
     // CLI and the pane's kind even after the walk disproved a leg.
     cli: record?.cli ?? declaredRow?.cli ?? to.cli,
     human: read.evidence.human === true,
+    watchWake: read.evidence.watchWake,
   };
 }
 

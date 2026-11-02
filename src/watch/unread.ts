@@ -25,6 +25,17 @@
 // one would be one too many. Nothing here claims more than it saw: a typed wake is `sent
 // (unconfirmed)` until a receipt verifies, and only a verified receipt is `delivered (read)`.
 //
+// A seat whose profile declares a typed wake (`typed_wake`) gets that same wake through the one
+// module that types, `src/send/typed-wake.ts`, instead of the drop-file trigger: `watch_wake`
+// turns the retry on or off per profile and per seat (on exactly where the typed wake is
+// declared), and `watch_wake_tries` bounds it (three by default, at most ten). An attempt that is
+// refused or cannot be confirmed gives its `.wake` reservation back — it never spends the
+// message's one wake — and is counted in `<id>.wake-try` with its next due time: five seconds,
+// doubling, capped at one minute. At the bound the retry stops and the report is what speaks. A
+// profile whose terminal-host status is unreliable is not gated on that status for this leg,
+// because the typed wake reads the composer itself twice and types only into an empty idle
+// prompt; `watch_wake: off` keeps the drop-file leg for that seat.
+//
 // The markers are reservations made before their effect, never reminders written after it:
 // `<id>.wake` is linked into place exclusively before a line is typed, and `<id>.reported` before
 // a mailbox record is written. A reservation already there belongs to an earlier attempt whose
@@ -46,8 +57,10 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
+import type { Seat } from '../file/types.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
@@ -70,6 +83,11 @@ export function wakePath(dropDir: string, id: string): string {
 /** The marker beside a message whose sender and lead were told. */
 export function reportedPath(dropDir: string, id: string): string {
   return join(dropDir, `${id}.reported`);
+}
+
+/** The ledger beside a message whose watch retry has attempted typed wakes. */
+export function wakeTryPath(dropDir: string, id: string): string {
+  return join(dropDir, `${id}.wake-try`);
 }
 
 /** The two windows one pass reads: the wake is due at N, the report at twice that. */
@@ -158,6 +176,57 @@ function wakeMarkOf(dropDir: string, id: string): WakeMark | null {
   }
 }
 
+/** What the watch's typed wake retry has done for one message: how many attempts, whether any
+ *  put a key into the pane, and the earliest instant the next one is due. */
+export type WakeTry = { tries: number; typed: boolean; next_at: string };
+
+/** The first retry waits this long after a failed attempt; each later one doubles. */
+const WAKE_TRY_BASE_MS = 5_000;
+
+/** The backoff never grows past this, so a seat that stays busy is still retried within the
+ *  report window rather than drifting away from it. */
+const WAKE_TRY_MAX_MS = 60_000;
+
+/** The wait before the attempt after `tries` failed ones: 5s, 10s, 20s, 40s, then 60s. */
+export function wakeBackoffMs(tries: number): number {
+  return Math.min(WAKE_TRY_BASE_MS * 2 ** Math.max(0, tries - 1), WAKE_TRY_MAX_MS);
+}
+
+/** The typed wake ledger, when it can be read; null when the message has had no typed wake
+ *  attempt. The file is written whole and 0600, like every record beside a message. */
+function wakeTryOf(dropDir: string, id: string): WakeTry | null {
+  try {
+    const parsed = JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries?: unknown; typed?: unknown; next_at?: unknown };
+    if (typeof parsed.tries !== 'number' || !Number.isInteger(parsed.tries) || parsed.tries < 0) return null;
+    return {
+      tries: parsed.tries,
+      typed: parsed.typed === true,
+      next_at: typeof parsed.next_at === 'string' ? parsed.next_at : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Writes the ledger whole, as a record update rather than a reservation: the attempt it
+ *  records has already happened, and a failed write leaves the earlier count standing. */
+function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
+  try {
+    dropMessage(dropDir, `${id}.wake-try`, `${JSON.stringify({ id, ...record })}\n`);
+  } catch {
+    // Best effort: the message keeps its remaining tries rather than silently giving up.
+  }
+}
+
+/** What the watch's typed wake retry is for one seat, when it is on: the profile's attempt
+ *  bound. Off when the CLI's profile declares no typed wake, or the profile or the seat's own
+ *  word turns the retry off. */
+function watchRetryOf(seat: Seat): { tries: number } | null {
+  const profile = profileFor(seat.cli);
+  if (profile === null || profile.typedWake === null) return null;
+  return (seat.watchWake ?? profile.watchWake) ? { tries: profile.watchWakeTries } : null;
+}
+
 /** The message's signed payload, verified with the checkout's message key. A message that does
  *  not verify has no sender and no body this pass may audit, and a read would refuse it: nothing
  *  is woken or reported from it. */
@@ -190,13 +259,32 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * - younger than the window: not yet;
  * - a `.pending` marker: the retry pass owns it, and a second trigger would be one too many;
  * - `.wake` or `.reported`: the one wake was sent, or the word has already gone out.
+ *
+ * A seat whose typed wake retry is on (`watch_wake`) also reads its ledger: an attempt inside
+ * its backoff is not due yet, and one at the profile's bound is never due again — the report
+ * at twice the window is what speaks after that.
  */
-function dueForWake(dropDir: string, message: { id: string; ts: string }, nowMs: number, window: UnreadWindow): boolean {
+function dueForWake(
+  dropDir: string,
+  message: { id: string; ts: string },
+  nowMs: number,
+  window: UnreadWindow,
+  retryTries: number | null,
+): boolean {
   const age = nowMs - Date.parse(message.ts);
   if (!(age >= window.unreadAfter * 1000)) return false;
   if (existsSync(pendingDropPath(dropDir, message.id))) return false;
   if (existsSync(wakePath(dropDir, message.id))) return false;
-  return !existsSync(reportedPath(dropDir, message.id));
+  if (existsSync(reportedPath(dropDir, message.id))) return false;
+  if (retryTries !== null) {
+    const ledger = wakeTryOf(dropDir, message.id);
+    if (ledger !== null) {
+      if (ledger.tries >= retryTries) return false;
+      const next = Date.parse(ledger.next_at);
+      if (Number.isFinite(next) && nowMs < next) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -227,9 +315,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // still speaks; no reservation is taken and nothing is typed.
     if (scene.nativeHeld?.has(seat.name) === true) continue;
     if (options.rung?.has(seat.name) === true) continue;
+    // The seat's own retry, read from its profile and its file word. Off keeps today's
+    // drop-file typed leg, whose writer refuses in every real binding.
+    const retry = watchRetryOf(seat);
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
-    const due = listUnread(dropDir, context, home).filter((message) => dueForWake(dropDir, message, nowMs, options));
+    const due = listUnread(dropDir, context, home)
+      .filter((message) => dueForWake(dropDir, message, nowMs, options, retry === null ? null : retry.tries));
     if (due.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const found = agents.length === 1 ? agents[0]?.pane : undefined;
@@ -239,9 +331,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const screen = scene.sources.screen(pane, scene.session);
     // A box that cannot be read is not typed into. The delivery below reads it again; this is
     // only the pass's own look, so a dialog is never entered and a busy seat is not nudged.
-    if (screen === null || (status !== 'idle' && status !== 'done')) continue;
+    if (screen === null) continue;
+    // A profile the terminal host cannot report faithfully names its own screen as the seat's
+    // state, so the typed retry trusts that reading rather than the host's word; the drop-file
+    // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
+    // idle prompt at both reads lets it type, so a draft is still never typed over.
+    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
     const kind = readScreen(seat.cli, screen).kind;
-    if (kind !== 'idle' && kind !== 'unsent') continue;
+    if (retry === null ? (kind !== 'idle' && kind !== 'unsent') : kind !== 'idle') continue;
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {
@@ -285,6 +382,68 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // delivery cannot become the wake's read here.
       const binding = claimBindingIn(scene.root, scene.session, seat.name, message.id);
       const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home, binding);
+      // The seat's profile declares a typed wake and its retry is on: the watch types the same
+      // wake a send types, through the one seam that carries the module (src/send/typed-wake.ts).
+      // That wake is delivered only when the profile's working screen showed; a refused or
+      // failed attempt gives its reservations back, so it never spends the message's one wake.
+      if (retry !== null) {
+        const typed = await scene.sources.typedWake?.(pane, line, seat.cli, scene.session);
+        if (typed === undefined) {
+          // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
+        if (!typed.delivered) {
+          // Nothing the module could confirm: the reservations go back, and the ledger counts
+          // the attempt so the next one waits out its backoff and the bound ends a wake that
+          // never lands. A crash instead leaves the reservation linked, which `dueForWake`
+          // already reads as spent.
+          for (const id of reserved) {
+            release(wakePath(dropDir, id));
+            const before = wakeTryOf(dropDir, id);
+            const tries = (before?.tries ?? 0) + 1;
+            recordWakeTry(dropDir, id, {
+              tries,
+              typed: before?.typed === true || typed.typed,
+              next_at: new Date(nowMs + wakeBackoffMs(tries)).toISOString(),
+            });
+          }
+          continue;
+        }
+        // The working screen showed after an Enter this wake pressed. The trigger is the seat's
+        // own receipt-writing read, so a receipt already at the message is the read itself.
+        const read = receipt();
+        if (read) {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'delivered (read)',
+            via: 'typed',
+          });
+          scene.say(`${seat.name}: a message from ${payload.from} was unread and was read on the typed wake (receipt)`, false);
+        } else {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'delivered (typed wake)',
+            note: typed.reason,
+            via: 'typed',
+          });
+          scene.say(`${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered (${typed.reason})`, false);
+        }
+        for (const id of reserved) {
+          mark(dropDir, `${id}.wake`, { id, at, state: read ? 'read' : 'sent', evidence: 'typed-wake' });
+        }
+        continue;
+      }
       const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
         submitHeld: true,
         dropPath: join(dropDir, message.id),
@@ -603,8 +762,11 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
       const woke = wakeMarkOf(dropDir, message.id);
+      const tried = woke === null ? wakeTryOf(dropDir, message.id) : null;
       const wakeWords = woke === null
-        ? 'no wake line was typed'
+        ? tried !== null && tried.typed
+          ? `a typed wake was tried ${String(tried.tries)} time${tried.tries === 1 ? '' : 's'} and none was confirmed`
+          : 'no wake line was typed'
         : woke.state === 'reserved'
           ? `a wake was attempted at ${woke.at} and its outcome is unconfirmed`
           : `its wake line was sent at ${woke.at}`;

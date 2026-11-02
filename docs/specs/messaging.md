@@ -364,7 +364,9 @@ seat's delivery class in plain words after the leg's own parenthetical — `woke
 adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next turn, and nothing
 here gives it one (pull-only)`, `queued; nothing wakes <seat> while it is idle; a person or a
 restart must give it a turn` (or, for a profile that declares the typed wake, `… while it is idle
-except a send-time typed wake into an empty composer; a person or a restart must give it a turn`),
+except a send-time typed wake and the watch's typed retry once a message passes its unread
+window, into an empty composer; a person or a restart must give it a turn`; a seat whose file
+turns `watch_wake` off keeps `except a send-time typed wake into an empty composer`),
 or `queued; <seat> has no way to be woken while idle` for a person — because `unconfirmed` is a
 fact about the receipt, not an answer to whether the seat will read the message. A send that
 reached for the typed wake inserts what the wake saw after `queued; `: `the typed wake failed

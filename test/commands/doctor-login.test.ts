@@ -120,6 +120,8 @@ describe('checkLogin with fake command results', () => {
       mcpInbox: null,
       settings: null,
       typedWake: null,
+      watchWake: false,
+      watchWakeTries: 3,
       delivery: 'none',
       idleTimeout: 30,
       exitTimeout: 10,

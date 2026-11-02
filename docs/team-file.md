@@ -451,6 +451,13 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
+`watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
+retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse and
+Cursor today) and the key is omitted; `on` on a profile with no typed wake is refused, because
+there is no wake to retry, and a word other than the two is refused under the seat. `off` keeps
+the drop-file wake for that seat — the send-time typed wake is unaffected. The key is part of the
+seat's digest, and a record that writes none keeps every digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the

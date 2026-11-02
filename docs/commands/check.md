@@ -87,7 +87,9 @@ still unread; team drops --read --seat <seat> reads it now` when something can w
 it is idle, and otherwise `nothing gives <seat> a turn while it is idle; team drops --read --seat
 <seat> reads it now, or a person or a restart must give it a turn` — with `nothing wakes <seat>
 while it is idle except a send-time typed wake into an empty composer` in place of the first
-clause when the seat's profile declares the typed wake. A seat whose record says no turn-start
+clause when the seat's profile declares the typed wake, and `nothing wakes <seat> while it is
+idle except a send-time typed wake, and the watch's typed retry has not delivered this message`
+when that profile's watch retry is on for the seat. A seat whose record says no turn-start
 reader is installed earns `team drops --read --seat <seat> reads it now; no turn-start reader is
 installed, so team reload <seat> installs the launch's hooks` instead. The watch's
 unread wake attempts the delivery and reaches no pane in this build, and an attempt that wrote

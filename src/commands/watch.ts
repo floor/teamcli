@@ -31,6 +31,7 @@ import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
 import { listUnacked, listUnackedMessages } from './messages.ts';
 import { wakeTrigger } from '../send/wake.ts';
+import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeResult } from '../send/typed-wake.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, NUDGE_TEXT, ownUnsent, pass, ringText, type MailboxWaiting, type Memory } from '../watch/pass.ts';
 import { listUnread } from '../mcp/inbox.ts';
@@ -151,6 +152,10 @@ export type WatchSources = {
   /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
    *  the profile's measured keys and pastes the text back. Absent, such a delivery holds. */
   sendKey?(pane: string, key: string, session: string): boolean;
+  /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the unread
+   *  pass's one typing seam, reached only for a seat whose profile declares a typed wake and
+   *  whose retry is on. The raw writers above stay refused. */
+  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -270,9 +275,12 @@ export const realWatchSources: WatchSources = {
   foreground: (pane, session) => paneForeground(pane, session),
   processes: (pane, session) => paneProcesses(pane, session),
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
+  // The one exception is the profile-gated typed wake below, whose own module reads the box
+  // twice and presses Enter only into the line it typed (src/send/typed-wake.ts).
   typeText: refuseTyping,
   pressEnter: refuseTyping,
   sendKey: refuseTyping,
+  typedWake: (pane, line, cli, session) => deliverTypedWake(herdrTypedWakeHost(session), pane, line, cli),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),

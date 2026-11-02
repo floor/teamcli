@@ -634,8 +634,10 @@ queued; <seat> reads it at its next turn, and nothing here gives it one (pull-on
                                                        the seat reads its inbox when it takes a turn
 queued; nothing wakes <seat> while it is idle; a person or a restart must give it a turn
                                                        a seat with no route at all
+queued; nothing wakes <seat> while it is idle except a send-time typed wake and the watch's typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn
+                                                       a seat with no route but the typed wake its profile declares, with the watch's retry on
 queued; nothing wakes <seat> while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn
-                                                       a seat with no route but the typed wake its profile declares
+                                                       the same, for a seat whose file turns `watch_wake` off
 queued; <seat> has no way to be woken while idle       a person
 ```
 
