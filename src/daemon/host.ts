@@ -28,7 +28,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcesses } from '../herdr.ts';
+import { paneProcesses, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -237,6 +237,13 @@ export type StartMachineDaemonInput = {
    * with no verifier, so the two seams are only ever open together.
    */
   nextHandler?: NextDispatchHandler;
+  /**
+   * The verified pane's process identity for a `next` request's delivery class: the proof that
+   * a recorded socket is the pane's own. The default asks the terminal host; a test injects its
+   * own so a synthetic listener scene makes no terminal-host call. A reader that cannot answer
+   * returns null, the conservative rule.
+   */
+  paneProcesses?: (pane: string, session: string) => PaneProcesses | null;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
@@ -762,7 +769,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // The verified pane's process identity, read the way this host reads a pane for a watch
         // authority: the handler's class then knows whether the recorded socket is the pane's
         // own. A pane the terminal host cannot answer for reads null, the conservative rule.
-        processes: paneProcesses(verdict.pane, route.session),
+        processes: (input.paneProcesses ?? paneProcesses)(verdict.pane, route.session),
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
