@@ -1,9 +1,15 @@
+// The team inbox at launch. A refused registration is retried once — a CLI's own add can fail
+// transiently — and a refusal that stands leaves the seat out instead of launching it with no
+// inbox. A registry-team launch names no file, so the registration resolves the registry; a file
+// team's launch names the file it read. Synthetic folders and a fake host; no CLI, no herdr.
 import { describe, expect, test } from 'bun:test';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import type { Step } from '../../src/launch/plan.ts';
 
+type Registration = { ok: true } | { ok: false; reason: string } | null;
+
 function inboxHost(input: {
-  registerInbox?: (cli: string, seat: string, cwd: string, teamFile?: string) => { ok: true } | { ok: false; reason: string } | null;
+  register?: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => Registration;
   calls: string[];
   said: string[];
   logged: { who: string; what: string }[];
@@ -13,7 +19,7 @@ function inboxHost(input: {
     sessionUp: () => true,
     createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
     paneRun: () => { input.calls.push('paneRun'); return true; },
-    ...(input.registerInbox ? { registerInbox: input.registerInbox } : {}),
+    ...(input.register ? { registerInbox: input.register } : {}),
     typeLine: () => false,
     renameAgent: () => true,
     closeWorkspace: () => true,
@@ -40,53 +46,83 @@ function steps(teamFile?: string): Step[] {
 }
 
 describe('the team inbox at launch', () => {
-  test('it is registered in the seat folder, with the team file the run read, before the launch command runs', async () => {
+  test('a file team registers the launch file, for the launch session, before the launch command runs', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const logged: { who: string; what: string }[] = [];
     const host = inboxHost({
       calls, said, logged,
-      registerInbox: (cli, seat, cwd, teamFile) => { calls.push(`register:${cli}:${seat}:${cwd}:${teamFile ?? ''}`); return { ok: true }; },
+      register: (cli, seat, cwd, session, teamFile) => {
+        calls.push(`register:${cli}:${seat}:${cwd}:${session}:${teamFile ?? 'none'}`);
+        return { ok: true };
+      },
     });
     await executePlan(steps('/project/.agents/team.yaml'), 'acme', host);
-    expect(calls).toEqual(['register:cursor:coder:/seat/folder:/project/.agents/team.yaml', 'paneRun']);
+    expect(calls).toEqual(['register:cursor:coder:/seat/folder:acme:/project/.agents/team.yaml', 'paneRun']);
     expect(said.join('')).not.toContain('team inbox');
   });
 
-  test('a launch with no team file passes none: the registration reads the seat folder', async () => {
+  test('a registry launch passes no file: the registration resolves the registry for the session', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const logged: { who: string; what: string }[] = [];
     const host = inboxHost({
       calls, said, logged,
-      registerInbox: (cli, seat, cwd, teamFile) => { calls.push(`register:${cli}:${seat}:${cwd}:${teamFile ?? 'none'}`); return { ok: true }; },
+      register: (cli, seat, cwd, session, teamFile) => {
+        calls.push(`register:${cli}:${seat}:${cwd}:${session}:${teamFile ?? 'none'}`);
+        return { ok: true };
+      },
     });
     await executePlan(steps(), 'acme', host);
-    expect(calls).toEqual(['register:cursor:coder:/seat/folder:none', 'paneRun']);
+    expect(calls).toEqual(['register:cursor:coder:/seat/folder:acme:none', 'paneRun']);
   });
 
-  test('a refusal is detail under the seat record, and the seat still launches', async () => {
+  test('a refusal is retried once, and a success on the retry launches the seat', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const logged: { who: string; what: string }[] = [];
+    let tries = 0;
     const host = inboxHost({
       calls, said, logged,
-      registerInbox: () => ({ ok: false, reason: 'its project does not ignore .cursor/mcp.json' }),
+      register: () => (++tries === 1 ? { ok: false, reason: 'its project does not ignore .cursor/mcp.json' } : { ok: true }),
     });
-    await executePlan(steps(), 'acme', host);
+    const report = await executePlan(steps(), 'acme', host);
+    expect(tries).toBe(2);
     expect(calls).toEqual(['paneRun']);
-    expect(said.join('')).toContain('coder: the team inbox was not registered: its project does not ignore .cursor/mcp.json');
-    // The record is the seat's line; the refusal is stderr detail, not a second log line.
+    expect(report.dropped).toEqual([]);
+    expect(said.join('')).not.toContain('team inbox');
     expect(logged).toEqual([{ who: 'coder', what: 'ready' }]);
   });
 
-  test('a profile with no file route registers nothing', async () => {
+  test('a refusal that stands leaves the seat out, and its command never runs', async () => {
     const calls: string[] = [];
     const said: string[] = [];
     const logged: { who: string; what: string }[] = [];
-    const host = inboxHost({ calls, said, logged, registerInbox: () => null });
-    await executePlan(steps(), 'acme', host);
+    let tries = 0;
+    const host = inboxHost({
+      calls, said, logged,
+      register: () => {
+        tries += 1;
+        return { ok: false, reason: 'its project does not ignore .cursor/mcp.json' };
+      },
+    });
+    const report = await executePlan(steps(), 'acme', host);
+    expect(tries).toBe(2);
+    expect(calls).toEqual([]);
+    expect(report.dropped).toEqual(['coder']);
+    expect(logged).toEqual([{ who: 'coder', what: 'left out: the team inbox was not registered: its project does not ignore .cursor/mcp.json' }]);
+  });
+
+  test('a profile with no file route registers nothing and launches', async () => {
+    const calls: string[] = [];
+    const said: string[] = [];
+    const logged: { who: string; what: string }[] = [];
+    let tries = 0;
+    const host = inboxHost({ calls, said, logged, register: () => { tries += 1; return null; } });
+    const report = await executePlan(steps(), 'acme', host);
+    expect(tries).toBe(1);
     expect(calls).toEqual(['paneRun']);
+    expect(report.dropped).toEqual([]);
     expect(said.join('')).not.toContain('team inbox');
   });
 });

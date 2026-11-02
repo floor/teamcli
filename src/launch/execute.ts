@@ -98,12 +98,13 @@ export type Host = {
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
-   * launch command. `teamFile` is the team file the launch read: the seat's folder may be a
-   * lobby with none. Null when the profile carries no file route, and absent on a host whose
-   * commands never launch. A refusal is said in one line under the seat's record, and the seat
-   * still launches: the inbox is one delivery leg, not the launch.
+   * launch command. `session` is the launch's own, which narrows the registry to the team the
+   * seat is on; `teamFile` is the team file the launch read, absent for a registry team whose
+   * launch names no file. Null when the profile carries no file route, and absent on a host
+   * whose commands never launch. A refusal is retried once, then leaves the seat out: a seat
+   * that runs with no inbox receives nothing, which is what this registration exists to prevent.
    */
-  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+  registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
@@ -1164,11 +1165,22 @@ export async function executePlan(
           break;
         }
         // The seat's inbox is registered before its command runs, in the folder the command
-        // starts in, from the team file this launch read (a lobby folder holds none). A refusal
-        // costs the seat its inbox leg and nothing else.
+        // starts in, for the session this launch serves and from the team file it read, when it
+        // read one. A refused registration is retried once — a CLI's own add can fail
+        // transiently — and a refusal that stands leaves the seat out loudly: a seat running
+        // with no inbox receives nothing at all, which is the defect, not the repair.
         if (op.cli !== undefined && op.cwd !== undefined) {
-          const inbox = host.registerInbox?.(op.cli, op.seat, op.cwd, op.teamFile);
-          if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
+          const cli = op.cli;
+          const cwd = op.cwd;
+          const register = (): InboxRegistration | null | undefined =>
+            host.registerInbox?.(cli, op.seat, cwd, session, op.teamFile);
+          let inbox = register();
+          if (inbox && !inbox.ok) inbox = register();
+          if (inbox && !inbox.ok) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: `the team inbox was not registered: ${inbox.reason}` });
+            break;
+          }
         }
         const here = place(op.seat, op.pane);
         // The rules line rides this launch: its file is written before anything starts, so the

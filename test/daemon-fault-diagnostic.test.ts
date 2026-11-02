@@ -351,10 +351,10 @@ describe('the administration admission', () => {
     const code = await runDaemon(['fault-watch', '--root', root, '--route', id, '--dry-run'], io, sourcesOf(home));
     expect(code).toBe(0);
     // The warning keeps the refusal's own words, which name the caller it refuses.
-    expect(io.err).toContain('warning: only the owner installs or removes the machine daemon');
+    expect(io.err).toContain('warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
     expect(io.err).toContain('dev mode continues');
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('daemon [atlas] warning: only the owner installs or removes the machine daemon');
+    expect(log).toContain('daemon [atlas] warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
     expect(log).toContain('admitted as orchestrator');
   });
 
@@ -365,7 +365,7 @@ describe('the administration admission', () => {
     const io = testIo(root, { kind: 'seat', name: 'crew-op', pane: 'w2:p1', session: 'crew' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runDaemon(['fault-watch', '--root', root, '--route', id, '--dry-run'], io, sourcesOf(home))).toBe(1);
-    expect(io.err).toContain('only the owner installs or removes the machine daemon');
+    expect(io.err).toContain('only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
     expect(io.err).not.toContain('dev mode continues');
     expect(existsSync(faultRequestPath(home))).toBe(false);
   });

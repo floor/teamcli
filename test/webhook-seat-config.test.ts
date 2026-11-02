@@ -66,6 +66,77 @@ test('a seat webhook reads as two absolute file paths', () => {
   expect(parsed.team.seats.find((seat) => seat.name === 'lead')?.webhook).toBeUndefined();
 });
 
+test('a seat row may name the header its secret authenticates and the body its routine reads', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const parsed = validateTeamFile(teamText(`    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      header: x-synthetic-auth
+      body: inbox
+`));
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  const iris = parsed.team.seats.find((seat) => seat.name === 'iris');
+  expect(iris?.webhook).toEqual({ urlFile, secretFile, header: 'x-synthetic-auth', body: 'inbox' });
+});
+
+test('a header that is not an HTTP field name is refused, and content-type stays the adapter\'s', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const row = (header: string): string => `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      header: ${JSON.stringify(header)}
+`;
+  const spaces = validateTeamFile(teamText(row('not a header')));
+  expect(spaces.ok).toBe(false);
+  if (!spaces.ok) {
+    expect(spaces.errors.map((problem) => problem.message).join('; ')).toContain('webhook.header must be an HTTP field name');
+  }
+  const contentType = validateTeamFile(teamText(row('Content-Type')));
+  expect(contentType.ok).toBe(false);
+  if (!contentType.ok) {
+    expect(contentType.errors.map((problem) => problem.message).join('; ')).toContain('cannot be content-type');
+  }
+});
+
+test('a header named for an object\'s own map is a field name like any other', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const row = (header: string): string => `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      header: ${JSON.stringify(header)}
+`;
+  // The adapter carries these intact (its header map has no prototype), so a row may name one
+  // and the routine receives the secret there like any other field.
+  for (const header of ['__proto__', 'constructor', 'prototype', '__PROTO__']) {
+    const parsed = validateTeamFile(teamText(row(header)));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.team.seats.find((seat) => seat.name === 'iris')?.webhook?.header).toBe(header);
+  }
+});
+
+test('a body word the adapter does not read is refused', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const parsed = validateTeamFile(teamText(`    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      body: signed
+`));
+  expect(parsed.ok).toBe(false);
+  if (!parsed.ok) {
+    expect(parsed.errors.map((problem) => problem.message).join('; ')).toContain('webhook.body must be one of: event, inbox');
+  }
+});
+
 test('a relative path is refused: the two files are named absolutely', () => {
   const parsed = validateTeamFile(teamText(`    webhook:
       url_file: hook-url

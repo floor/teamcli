@@ -42,8 +42,10 @@ export type RestoreSweepInput = {
   home: string;
   /** The canonical route root: what the restart sweep was accepted for. */
   root: string;
-  /** The team file the route was actually loaded from (`teamFiles.get(route.root)`). */
-  teamFile: string;
+  /** The team file the route was loaded from when it is a `team-file` route. Absent for a route
+   *  whose team lives in the registry: this pass then resolves `root` through the one seam, the
+   *  way every writer does, and never reads a leftover beside the root. */
+  teamFile?: string;
   now?: () => Date;
   /** The daemon's closing flag: stops the pass between seat steps. */
   isClosing?: () => boolean;
@@ -98,7 +100,9 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
   };
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = readTeamConfig(input.root, { file: input.teamFile, home: sources.home });
+    loaded = input.teamFile === undefined
+      ? readTeamConfig(input.root, { home: sources.home })
+      : readTeamConfig(input.root, { file: input.teamFile, home: sources.home });
   } catch (error) {
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }

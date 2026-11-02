@@ -1670,6 +1670,20 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.restart-dry-run",
+      "meaning": "the restart plan was printed and nothing was stopped or started",
+      "trigger": "team daemon restart --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
+      "id": "daemon.restarted",
+      "meaning": "the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.status",
       "meaning": "the one-line health reading was printed: running, not running or unknown",
       "trigger": "team daemon status"
@@ -1754,6 +1768,13 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.grant-refused",
+      "meaning": "the general grant recorded on the run no longer admits the daemon op: its chain, its key or its ops failed verification",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.install-failed",
       "meaning": "the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back",
       "trigger": "team daemon install"
@@ -1775,9 +1796,37 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.not-installed",
+      "meaning": "no user service unit is installed, so a restart had nothing to stop or start",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.not-owner",
-      "meaning": "the caller may not install or remove the machine daemon",
+      "meaning": "the caller may not install, restart or remove the machine daemon",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-failed",
+      "meaning": "the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rollback-failed",
+      "meaning": "the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rolled-back",
+      "meaning": "the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers",
+      "trigger": "team daemon restart"
     },
     {
       "code": 1,
