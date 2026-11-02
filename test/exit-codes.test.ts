@@ -27,7 +27,7 @@ import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
-import { actionApprovalsFolder } from '../src/client/team-create.ts';
+import { actionApprovalsFolder, actionRequestsFolder, teamCreateHash } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -1582,6 +1582,22 @@ scene('conformance-adapter.finished', async () => {
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
 });
 
+scene('development-mode.approval-requested', async (place) => {
+  // An injected store records the request and offers no Touch ID: synthetic signing only.
+  const store = seatOwner(place.home);
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--request'], io, { home: place.home, now: NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+    'owner-seat request',
+  );
+});
+scene('development-mode.approval-refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--approval', 'oa_nope'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'is not an owner-seat request id',
+  );
+});
 scene('development-mode.done', async (place) => {
   const io = testIo(place.root, other);
   return show(
@@ -6504,6 +6520,16 @@ async function forgetRun(place: Place, argv: string[], caller: Caller = owner): 
 }
 scene('approvals.invocation', async (place) => show(await approvalsRun(place, []), 'a verb is required'));
 scene('approvals.listed', async (place) => show(await approvalsRun(place, ['list']), 'no always rules'));
+scene('approvals.details', async (place) => {
+  // A recorded team-create request, in the shape `createTeamCreateRequest` writes: the details
+  // print the record the card deliberately leaves out, without an owner seat or a signature.
+  const id = `tc_${'ab'.repeat(12)}`;
+  const params = { kind: 'team-create' as const, root: place.root, team: 'demo', head: null };
+  const record = { request_id: id, params, params_sha256: teamCreateHash(params), created: '2026-01-01T00:00:00.000Z', expires_at: '2026-01-01T00:15:00.000Z' };
+  mkdirSync(actionRequestsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionRequestsFolder(place.home), `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  return show(await approvalsRun(place, ['details', id]), `request ${id}`);
+});
 scene('approvals.revoked', async (place) => {
   const id = `oa_${'ab'.repeat(12)}`;
   mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
