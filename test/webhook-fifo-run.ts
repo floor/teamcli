@@ -11,11 +11,12 @@
 // (process start included), fstat said isFIFO true and isFile false, and a regular file read its
 // bytes through the same flags.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { publishToBus, startBus } from '../src/bus/server.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
 
 const SECRET = 'synthetic-fifo-secret';
@@ -103,6 +104,15 @@ seats:
     process.exit(1);
   }
   bus = started.handle;
+  // The published arrival is held to the signed record its seat holds.
+  const dropDir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  mkdirSync(dropDir, { recursive: true });
+  const payload: RecordPayload = {
+    kind: 'message', id: 'msg-1', to: 'iris', to_id: null, root, session: 'acme',
+    at: '2026-11-01T00:00:00.000Z', body: 'synthetic fifo body', from: 'lead', from_id: null,
+    rule: 'fixture', thread: 'msg-1',
+  };
+  writeFileSync(join(dropDir, 'msg-1'), JSON.stringify(signRecord(payload, base), null, 2));
   const publishStarted = Date.now();
   const outcome = await publishToBus(
     root,

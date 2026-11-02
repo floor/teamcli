@@ -4,7 +4,9 @@
 // mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
-//   live subscribers with bounded per-subscriber buffers.
+//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is the one kind
+//   that names a delivery, so it is verified against its signed drop record before it is
+//   appended and fanned out; the other kinds are appended as published.
 // - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
 //   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
 //   misaddressed record delivers nothing, and the nudge carries no authority of its own.
@@ -214,6 +216,8 @@ const LOCK_WAIT_MS = 2000;
 const LOCK_POLL_MS = 50;
 const LOCK_YOUNG_MS = 1000;
 const UNKNOWN_REQUEST = 'the request is not one this bus knows';
+/** A published arrival is refused with fixed words when the record it names does not verify. */
+const UNVERIFIED_ARRIVAL = 'the message.arrived it publishes names no signed drop record for its seat';
 
 function alive(pid: number): boolean {
   try {
@@ -982,44 +986,52 @@ function serveBusConnection(
 }
 
 /**
- * The arrival a nudge may raise, built only after the bus has read and verified the signed
- * record the request names. The request carries no field the event repeats, and the bus resolves
- * the drop folder itself, so a caller can neither point at another seat's record nor invent a
- * sender: what the event says is what the signed file says. A record that is missing, not a
- * message, or not addressed to this seat, session and root raises nothing.
+ * The arrival a nudge, or a published `message.arrived`, may raise: built only after the bus has
+ * read and verified the signed record the claim names. The claim carries no field the event
+ * repeats, and the bus resolves the drop folder itself, so a caller can neither point at another
+ * seat's record nor invent a sender: what the event says is what the signed file says. A record
+ * that is missing, not a message, or not addressed to this seat, session and root raises nothing.
  */
-function verifiedArrival(request: BusNudgeRequest, input: StartBusInput, home: string): EventAppendInput | null {
+function verifiedArrival(
+  claim: { session: string; seat: string; record_id: string },
+  input: StartBusInput,
+  home: string,
+): EventAppendInput | null {
+  // The names become one path; the folder rule every record name obeys is the same here.
+  if (!RECORD_NAME.test(claim.session) || !RECORD_NAME.test(claim.seat) || !RECORD_NAME.test(claim.record_id)) {
+    return null;
+  }
   // This bus scans one session's drop folders; a session it does not serve is not its record.
-  if (request.session !== input.team.session) return null;
+  if (claim.session !== input.team.session) return null;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  const dir = join(input.root, '.agents', 'send-drops', request.session, request.seat);
+  const dir = join(input.root, '.agents', 'send-drops', claim.session, claim.seat);
   // A linked ancestor — the session's or the seat's — could lead into another project, and the
   // record it holds there is not this project's to raise. The record's own read refuses a linked
   // file; this refuses the folders above it.
   let expected: string;
   let realDir: string;
   try {
-    expected = join(realpathSync(input.root), '.agents', 'send-drops', request.session, request.seat);
+    expected = join(realpathSync(input.root), '.agents', 'send-drops', claim.session, claim.seat);
     realDir = realpathSync(dir);
   } catch {
     return null;
   }
   if (realDir !== expected) return null;
-  const read = readSealedRecord(join(dir, request.record_id));
+  const read = readSealedRecord(join(dir, claim.record_id));
   if (!read.ok || read.sealed === null) return null;
   const auth = recordAuthOfSealed(read.sealed, key.key);
   if (auth.kind !== 'ok') return null;
   const record = auth.value.payload;
   if (record.kind !== 'message') return null;
-  if (record.id !== request.record_id) return null;
-  if (record.to !== request.seat || record.session !== request.session) return null;
+  if (record.id !== claim.record_id) return null;
+  if (record.to !== claim.seat || record.session !== claim.session) return null;
   if (!sameFolder(record.root, input.root)) return null;
   return {
     ts: record.at,
     kind: 'message.arrived',
-    session: request.session,
-    record_id: request.record_id,
+    session: claim.session,
+    record_id: claim.record_id,
     from: record.from,
     to: record.to,
     ...(record.thread === undefined ? {} : { thread: record.thread }),
@@ -1045,7 +1057,22 @@ function dispatchBusRequest(
   }
 
   if (request.op === 'publish') {
-    const appended = appendEvent(input.team.project, input.root, home, request.event, {
+    // A published arrival names a delivery, so it is held to the record that delivery carries.
+    // The verified event is built from the signed record, never from the caller's fields.
+    let event = request.event;
+    if (event.kind === 'message.arrived') {
+      const verified = verifiedArrival(
+        { session: event.session, seat: event.to ?? '', record_id: event.record_id },
+        input,
+        home,
+      );
+      if (verified === null) {
+        answerOnce(socket, { ok: false, at: 'caller', message: UNVERIFIED_ARRIVAL });
+        return;
+      }
+      event = verified;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
       maxBytes: input.maxLogBytes,
       kept: input.keptLogFiles,
       maxTotalBytes: input.maxTotalLogBytes,

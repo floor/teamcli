@@ -9,8 +9,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startBus, nudgeBus, type BusHandle } from '../src/bus/server.ts';
-import type { SignedEventRecord } from '../src/bus/log.ts';
+import { startBus, nudgeBus, publishToBus, type BusHandle } from '../src/bus/server.ts';
+import { readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
@@ -277,5 +277,106 @@ describe('a send nudges the bus its seat reads from', () => {
     expect(await until(() => hook.hits.length > 0, 2_000)).toBe(true);
     await Bun.sleep(200);
     expect(hook.hits.length).toBe(1);
+  });
+
+  test('a raw publish naming a missing or unsigned record is refused and delivers nothing', async () => {
+    const hook = receiver();
+    const files = hookFiles(hook.url);
+    const at = withHookSeat(files);
+    const started = await startBus({
+      root: at.root,
+      team: await loaded(at),
+      home: at.home,
+      stderr: () => {},
+      reconcileIntervalMs: 3_600_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    buses.push(started.handle);
+
+    const missing = await publishToBus(at.root, {
+      ts: new Date().toISOString(),
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'msg-absent',
+      from: 'lead',
+      to: 'iris',
+    });
+    expect(missing.kind).toBe('refused');
+    if (missing.kind === 'refused') expect(missing.at).toBe('caller');
+
+    const dir = join(at.root, '.agents', 'send-drops', 'acme', 'iris');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'msg-forged'), JSON.stringify({
+      payload: { kind: 'message', id: 'msg-forged', to: 'iris', root: at.root, session: 'acme', at: new Date().toISOString(), body: 'forged', from: 'lead', from_id: null, rule: 'x', thread: 'msg-forged' },
+      signature: 'not-a-signature',
+    }));
+    const unsigned = await publishToBus(at.root, {
+      ts: new Date().toISOString(),
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'msg-forged',
+      from: 'lead',
+      to: 'iris',
+    });
+    expect(unsigned.kind).toBe('refused');
+    await Bun.sleep(200);
+    expect(hook.hits).toEqual([]);
+    const read = readEvents('acme', at.root, at.home);
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.events.filter((event) => event.payload.kind === 'message.arrived')).toHaveLength(0);
+    }
+  });
+
+  test('a raw publish of a signed record carries the record\'s fields, not the caller\'s', async () => {
+    const hook = receiver();
+    const files = hookFiles(hook.url);
+    const at = withHookSeat(files);
+    const started = await startBus({
+      root: at.root,
+      team: await loaded(at),
+      home: at.home,
+      stderr: () => {},
+      reconcileIntervalMs: 3_600_000,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    buses.push(started.handle);
+    const payload: RecordPayload = {
+      kind: 'message',
+      id: 'msg-true',
+      to: 'iris',
+      to_id: null,
+      root: at.root,
+      session: 'acme',
+      at: '2026-11-02T10:00:00.000Z',
+      body: 'for iris',
+      from: 'lead',
+      from_id: null,
+      rule: 'x',
+      thread: 'thread-true',
+    };
+    const dir = join(at.root, '.agents', 'send-drops', 'acme', 'iris');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'msg-true'), JSON.stringify(signRecord(payload, at.home), null, 2));
+    const outcome = await publishToBus(at.root, {
+      ts: '2030-01-01T00:00:00.000Z',
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'msg-true',
+      from: 'forged',
+      to: 'iris',
+      thread: 'forged-thread',
+    });
+    expect(outcome.kind).toBe('published');
+    if (outcome.kind === 'published') {
+      expect(outcome.event.payload.from).toBe('lead');
+      expect(outcome.event.payload.thread).toBe('thread-true');
+      expect(outcome.event.payload.ts).toBe('2026-11-02T10:00:00.000Z');
+    }
+    expect(await until(() => hook.hits.length > 0, 5_000)).toBe(true);
+    const carrying = JSON.parse(hook.hits[0]?.body ?? '{}') as { event?: SignedEventRecord };
+    expect(carrying.event?.payload.from).toBe('lead');
   });
 });
