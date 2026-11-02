@@ -181,6 +181,15 @@ describe('a legacy seat named lead', () => {
     );
   });
 
+  test('a nickname may not take the daemon\'s word either: it is a sender identity, not a seat', () => {
+    const loaded = validateTeamFile(NICKNAMED.replace('nickname: lead', 'nickname: daemon'));
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.errors.map((problem) => problem.message)).toContain(
+      'seat "builder-1": "daemon" is reserved: the machine daemon\'s reminders send under that name, so no nickname takes it',
+    );
+  });
+
   test('a seat named lead with another seat leading is not a load error', () => {
     expect(atlas.name).toBe('atlas');
     expect(legacySeat.name).toBe('lead');

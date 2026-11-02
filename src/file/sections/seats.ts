@@ -194,6 +194,10 @@ function readSeats(
       check.fail(nicknameEntry?.value.line ?? line, `${at}: "lead" is reserved: lead@<team> addresses the team's lead, so no nickname takes it`);
       nickname = undefined;
     }
+    if (nickname === DAEMON_NAME) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: "daemon" is reserved: the machine daemon's reminders send under that name, so no nickname takes it`);
+      nickname = undefined;
+    }
     if (!fields.get('cli')) check.fail(line, `${at}: cli is required`);
     const cli = check.oneOf(fields.get('cli'), `${at}: cli`, CLIS);
     const vendor = check.required(fields.get('vendor'), `${at}: vendor`, line);
@@ -600,6 +604,9 @@ export function nicknameProblem(
 ): { line: number; message: string } | null {
   if (nickname === LEAD_NAME) {
     return { line: 0, message: '"lead" is reserved: lead@<team> addresses the team\'s lead, so no new name or nickname takes it' };
+  }
+  if (nickname === DAEMON_NAME) {
+    return { line: 0, message: '"daemon" is reserved: the machine daemon\'s reminders send under that name, so no new name or nickname takes it' };
   }
   for (const other of seats) {
     if (other.name === own) continue;

@@ -466,6 +466,13 @@
     {
       "code": 2,
       "command": "add",
+      "id": "add.reserved-daemon",
+      "meaning": "a new seat may not be named daemon",
+      "trigger": "team add daemon"
+    },
+    {
+      "code": 2,
+      "command": "add",
       "id": "add.reserved-name",
       "meaning": "a new seat may not be named lead",
       "trigger": "team add lead"

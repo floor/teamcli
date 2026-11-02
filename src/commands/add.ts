@@ -30,7 +30,7 @@ import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/
 import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { DAEMON_NAME, displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
@@ -377,6 +377,15 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (!temporary && args.rest[0] === LEAD_NAME && !team.seats.some((seat) => seat.name === LEAD_NAME)) {
     out.stderr(`team add: "${LEAD_NAME}" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name\n${USAGE}`);
     // exit: add.reserved-name
+    return 2;
+  }
+  // The machine daemon's own reminder sends are named `daemon` in every record and history line
+  // they write, with no registry id, so no new seat may take the word: a seat of that name would
+  // be indistinguishable from the daemon. A file written before this rule may already declare
+  // one; it keeps loading, and re-adding it is a restart, never a new name.
+  if (!temporary && args.rest[0] === DAEMON_NAME && !team.seats.some((seat) => seat.name === DAEMON_NAME)) {
+    out.stderr(`team add: "${DAEMON_NAME}" is reserved: the machine daemon's reminders send under that name, so no new seat takes it as a name\n${USAGE}`);
+    // exit: add.reserved-daemon
     return 2;
   }
   // The create-grant, decided on the loaded root: the team this run would change must be under

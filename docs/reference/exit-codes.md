@@ -72,6 +72,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.model` | `add` | 2 | the --model override is not known for the seat's CLI | `team add worker --model unknown` |
 | `add.not-a-repo` | `add` | 2 | not inside a git repository | `team add worker` |
 | `add.prepared` | `add` | 2 | the prepared edit does not validate | `team add worker` |
+| `add.reserved-daemon` | `add` | 2 | a new seat may not be named daemon | `team add daemon` |
 | `add.reserved-name` | `add` | 2 | a new seat may not be named lead | `team add lead` |
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
