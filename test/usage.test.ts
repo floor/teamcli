@@ -33,6 +33,7 @@ import {
   type UsageReport,
 } from '../src/information/usage.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { generationsFolder } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
 import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
@@ -968,9 +969,11 @@ describe('team usage', () => {
   });
 
   test('an unverified file explains missing budgets and verified files use live accounts', async () => {
-    // Never approved: the store holds no record for this project, so the file's accounts — which
-    // it declares — are not in force, and the tool's own why-line for that standing prints.
+    // Never approved: the home holds neither the project's store nor the generation recorded
+    // beside the key, so the file's accounts — which it declares — are not in force, and the
+    // tool's own why-line for that standing prints.
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
+    rmSync(generationsFolder(home), { recursive: true, force: true });
     withoutReadings();
     const bare = await usageAt(root, undefined, '--tree');
     expect(bare.out).toBe([
@@ -1078,27 +1081,29 @@ describe('team usage', () => {
       approve(text);
     };
 
-    // Every refusal reason `approvalStanding` can produce, with its store.ts line. Two of the ten
-    // cannot be reached by a record on disk — `:162`, guarded by the shape check (`store.ts:159-161`),
-    // and `:179`, the belt-and-braces catch around `verifyPayload` (`store.ts:174-178`) — so eight
-    // are fed here; the pull request lists all ten.
-    const refusals: { at: string; refuse: () => void }[] = [
-      { at: ':154 the record cannot be read', refuse: () => write({ format: 3 }) },
-      { at: ':166 the key is missing', refuse: () => rmSync(keyFile, { force: true }) },
-      { at: ':169 the key cannot be read', refuse: () => writeFileSync(keyFile, 'not a key at all') },
-      { at: ':182 the signature does not verify', refuse: () => write({ ...read(), file: text.replace(/^project: .*$/m, 'project: changed-after-signing') }) },
-      { at: ':185 another project root', refuse: () => {
+    // The refusal reasons a record on disk can produce, each named for what it refuses for. The
+    // shape check before the signature and the guard around the verification refuse two shapes no
+    // record on disk can reach, so they are not fed here; a missing store, a link on the path and
+    // an unreadable generation each have their own scene in approval-store-standing.test.ts. What
+    // this scene holds for every reason it feeds: the seat's view carries the one fixed sentence,
+    // and none of the store's words.
+    const refusals: { at: string; refuse: () => void; foreign?: boolean }[] = [
+      { at: 'the record cannot be read', refuse: () => write({ format: 3 }) },
+      { at: 'the key is missing', refuse: () => rmSync(keyFile, { force: true }) },
+      { at: 'the key cannot be read', refuse: () => writeFileSync(keyFile, 'not a key at all') },
+      { at: 'the signature does not verify', refuse: () => write({ ...read(), file: text.replace(/^project: .*$/m, 'project: changed-after-signing') }) },
+      { at: 'another project root', foreign: true, refuse: () => {
         const checked = validateTeamFile(text, { home, root });
         if (!checked.ok) throw new Error('the fixture does not validate');
         writeApproval(store, { approval: approvalOf(checked.team, foreign, NOW), file: text }, [], home);
       } },
-      { at: ':189 no generation recorded', refuse: () => rmSync(generationFile(), { force: true }) },
-      { at: ':193 the record is older than the generation', refuse: () => {
+      { at: 'no generation recorded', refuse: () => rmSync(generationFile(), { force: true }) },
+      { at: 'the record is older than the generation', refuse: () => {
         const earlier = read();
         approve(text);
         write(earlier);
       } },
-      { at: ':194 only an older generation is recorded', refuse: () => {
+      { at: 'only an older generation is recorded', refuse: () => {
         approve(text);
         writeFileSync(generationFile(), `${JSON.stringify({ format: 1, generation: 1, at: NOW.toISOString() }, null, 2)}\n`);
       } },
@@ -1126,7 +1131,7 @@ describe('team usage', () => {
       // The owner keeps the store's own words, byte for byte — the leak's own path included.
       const theirs = await usageAt(root, OWNER);
       expect(theirs.out, one.at).toContain(why);
-      if (one.at.startsWith(':185')) {
+      if (one.foreign === true) {
         expect(why, one.at).toContain(foreign);
         expect(theirs.out, one.at).toContain(foreign);
         expect(mine.out, one.at).not.toContain('FOREIGN-ROOT-8ZKQ');

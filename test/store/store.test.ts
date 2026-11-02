@@ -242,7 +242,15 @@ describe('a project rename', () => {
     const alpha = approve('alpha', root, 'a\n');
     const gamma = approve('gamma', root, 'g\n');
     expect(findStore(root, home)).toBeNull();
-    expect(approvalStanding(root, home).kind).toBe('none');
+    // An approval was recorded for this root, so the ambiguity is refused, not read as a
+    // project with no approval: the reason names both stores and the repair.
+    const standing = approvalStanding(root, home);
+    expect(standing.kind).toBe('refused');
+    if (standing.kind === 'refused') {
+      expect(standing.why).toContain('several stores match this root');
+      expect(standing.why).toContain(basename(alpha));
+      expect(standing.why).toContain(basename(gamma));
+    }
     expect(otherMatchingStores(root, home)).toEqual([basename(alpha), basename(gamma)].sort());
     expect(existsSync(join(alpha, 'approval.json'))).toBe(true);
     expect(existsSync(join(gamma, 'approval.json'))).toBe(true);

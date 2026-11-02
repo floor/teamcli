@@ -37,6 +37,7 @@ import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
 import { emptySession, isSeatId, liveHold, pauseText, readState, type PauseRecord, type SessionState } from '../state.ts';
 import { compare, type Comparison, type Difference, type Live } from '../status/compare.ts';
+import { seatWakeOf, wakeCell, type SeatWake } from '../status/wake.ts';
 import { waitOrStop } from '../wait.ts';
 import { realSources as realStatusSources, type StatusSources } from './status.ts';
 
@@ -74,6 +75,13 @@ export type SeatTraceSources = {
    * incomplete answer, never a hook-only route.
    */
   presenceSeats?: PresenceSeatsRead;
+  /**
+   * Whether each row carries its wakeability reading (src/status/wake.ts): the class a send
+   * measures, the endpoint and the conversation bound to it, the seat's inbox listener, and its
+   * oldest unread drop's age. The display commands ask for it; a caller that wants only the
+   * state reading leaves it off and pays for no inbox listing.
+   */
+  wake?: boolean;
 };
 
 /**
@@ -150,6 +158,9 @@ export type SeatRegistryRow = {
   pane: string | null;
   launch_line: string | null;
   start_cwd?: string;
+  /** Whether a message can reach the seat while it is idle (src/status/wake.ts), and the facts
+   *  the class was read from. Present when the caller asked for the wake reading. */
+  wake?: SeatWake;
 };
 
 export interface SeatsJson {
@@ -190,6 +201,9 @@ export interface SeatsJson {
     /** Present, and true, only for a record a dev-mode registration wrote. */
     dev_mode?: boolean;
     start_cwd?: string;
+    /** Whether a message can reach the seat while it is idle, and the facts behind the class
+     *  (src/status/wake.ts). */
+    wake?: SeatWake;
   }>;
 }
 
@@ -346,6 +360,22 @@ export function seatRegistryRows(
     const record = traceSources?.home === undefined
       ? null
       : findAgent(traceSources.home, { team: teamIdOf(traceSources.root), seat: row.name });
+    // The wakeability reading a display prints: the class a send measures (read from the same
+    // records), the endpoint and the conversation bound to it, the seat's inbox listener, and its
+    // oldest unread drop. The drop folder lives under the state folder, and the unread read needs
+    // the home its receipts are kept in; without either, the facts it cannot prove stay absent.
+    const wake = traceSources?.wake === true && traceSources.stateDir !== undefined && traceSources.session !== undefined
+      ? seatWakeOf({
+          dir: traceSources.stateDir,
+          root: traceSources.root,
+          session: traceSources.session,
+          seat: row.name,
+          ...(declared !== undefined ? { declared } : {}),
+          ...(recorded !== undefined ? { state: recorded } : {}),
+          ...(traceSources.home !== undefined ? { home: traceSources.home } : {}),
+          now,
+        })
+      : undefined;
     rows.push({
       name: row.name,
       nickname,
@@ -367,6 +397,7 @@ export function seatRegistryRows(
       pane,
       launch_line: launchLine,
       ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
+      ...(wake !== undefined ? { wake } : {}),
     });
   }
   return rows;
@@ -402,7 +433,7 @@ export function blindDifferences(
 
 export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: TtyStyle = ttyStyle(false)): string {
   const lines = renderTable({
-    headers: ['SEAT', 'NICKNAME', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE'],
+    headers: ['SEAT', 'NICKNAME', 'ID', 'ROLE', 'CLI', 'MODEL', 'EFFORT', 'STATUS', 'STATE', 'SOURCE', 'LAST ACTIVE', 'PANE', 'WAKE'],
     rows: rows.map((row) => [
       row.name,
       row.nickname ?? '-',
@@ -420,6 +451,10 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: Tt
       row.state_source,
       row.last_active_display,
       row.pane ?? '-',
+      // Whether a message can reach the seat while it is idle, `!` marking the ones it cannot:
+      // the class, and the facts that explain it (a recorded endpoint with no bound
+      // conversation, a live inbox listener, the oldest unread drop's age).
+      row.wake === undefined ? '-' : wakeCell(row.wake),
     ]),
     indent,
     style,
@@ -581,6 +616,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       session,
       presenceChannelHealthy: presenceHealthy,
       ...(presenceSeats === undefined ? {} : { presenceSeats }),
+      wake: true,
     });
 
     if (json) {
@@ -608,6 +644,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
           ...(row.presence !== undefined ? { presence: row.presence } : {}),
           ...(row.presence_unreadable === true ? { presence_unreadable: true as const } : {}),
+          ...(row.wake !== undefined ? { wake: row.wake } : {}),
         })),
         ...(whole.pause !== undefined ? { pause: whole.pause } : {}),
       });

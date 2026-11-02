@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-11-02
+
+Clearer delivery reports and approval cards, steadier team recovery, and tighter checks before
+an action changes a team or answers a dialog.
+
+### Added
+
+- `team peek` shows a seat's captured screen lines with credential masking, without sending
+  input to its terminal.
+- Seats can receive accepted inbox records through a webhook with configurable headers and
+  request bodies. Delivery reports identify the route that accepted a message, and status shows
+  whether each seat can be woken while idle or reads its inbox on its next turn.
+- `team answer` handles supported questions, plan approvals and confirmations. The watch
+  reports these dialog kinds and reads questions whose blocks reach the edge of the window.
+- An entity can require unique seat nicknames across teams. Configuration changes keep a
+  seat's label and nickname together, and checks report conflicting names.
+- Signed send grants can reach another team's orchestrator while retaining their operation
+  and entity limits. `team daemon restart` accepts a verified general grant.
+
+### Changed
+
+- Owner approval cards describe the action in plain words, with optional `--reason` text and
+  the full record in details. Development-mode changes can be sent as an owner-seat request.
+- A team's lead can restart its own stopped seat. A failed revival preserves the stopped
+  mark. Development mode admits the lead's supported team and seat edits with a warning and an
+  audit record written after a successful change.
+- The machine daemon reports health while roots are starting, follows current registry
+  records, renews its own watch heartbeat and reports failed endpoints. Installation uses a
+  verified program copy without grant credentials in the service definition, and a failed
+  refresh restores and checks the previous program.
+
+### Fixed
+
+- Quoted launch scripts retain their intended arguments, conversation identity and supported
+  options. Launch records and fallback reports describe the conversation actually started,
+  and managed endpoint sockets remain usable for teams in deeply nested folders.
+- Restored seats refresh their displayed state on the first watch cycle. Slow process and
+  screen reads finish before the state lock is taken.
+- Signed bus verification keeps an authenticated checkpoint across restarts. Closing a bus
+  cancels deferred work, and webhook delivery preserves configured header and body values
+  while refusing redirects and unsafe file inputs.
+- Approval history checks read the complete record chain and distinguish a missing prior
+  record from a team with no approval history. Policy logs credit the caller who made a change.
+
+### Security
+
+- Grant and approval checks follow the operation, entity and resolved target folder the
+  command actually names. Grant denials and approval revocations require the record's owner.
+- Dialog answers recheck the recorded launch, supported CLI version, current dialog and
+  resolved trust folder immediately before acting.
+- Credential checks recognise framed tokens in team configuration. Private-text checks also
+  scan binary-looking files and complete commit messages containing NUL bytes.
+
 ## [0.5.10] - 2026-11-01
 
 0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is

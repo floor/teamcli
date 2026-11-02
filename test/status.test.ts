@@ -20,6 +20,7 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 import { compare, type Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
+import { writeListener } from '../src/mcp/inbox.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas, wrapperPane } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
@@ -31,6 +32,13 @@ const NOW = new Date('2026-10-03T14:10:00Z');
 const WARNING = 'team status: warning, line 5: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read\n';
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
+
+/** The wakeability reading of every seat in this fixture: a hook or inbox watcher serves its
+ *  turns, nothing wakes it while it is idle, and no home stands in for its receipts. */
+const PULL_ONLY = {
+  class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
+  oldest_unread_seconds: null,
+};
 const codexScreen = (name: string) => readFileSync(new URL(`./fixtures/codex/0.157.0/${name}.txt`, import.meta.url), 'utf8');
 const codexRateLimitSwitch = `Approaching rate limits
 Switch to gpt-6-luna for lower credit usage?
@@ -150,10 +158,10 @@ describe('team status', () => {
   test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
-    expect(out).toContain('  SEAT                     STATE                                 MODEL                                   PANE   REACH');
+    expect(out).toContain('  SEAT                     STATE                                 MODEL                                   PANE   REACH  WAKE');
     // An unread screen keeps the declared display, marked declared and unread together.
-    expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked\s+GPT-6 Sol \(declared, unread\)\s+w2:p1/);
-    expect(out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
+    expect(out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+!pull-on-turn`));
+    expect(out).toMatch(new RegExp(`claude-coordinator-acme\\s+working\\s+Claude Opus 5\\.5\\s+${paneOf(built(), 'claude-coordinator-acme')}\\s+typed\\s+!pull-on-turn`));
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(out).not.toMatch(/grok-acme\s+stopped/);
     const all = await status('--all');
@@ -161,6 +169,42 @@ describe('team status', () => {
     // The suffix is a reading, not a difference: a team that matches its file still reads clean.
     expect(out).toContain('no differences');
     expect(code).toBe(0);
+  });
+
+  test('an unwakeable seat is flagged, with its live inbox and its oldest unread drop', async () => {
+    // The seat's own inbox, as a running server and a waiting send leave it: a listener whose
+    // process is this one, and one unsigned drop five minutes old. The home holds the receipts;
+    // without one the reading would call no message unread.
+    const inbox = join(dir, '.agents', 'send-drops', 'acme-web', 'codex-acme');
+    mkdirSync(inbox, { recursive: true });
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    expect(writeListener(inbox, {
+      v: 1, seat: 'codex-acme', session: 'acme-web', root: dir, cli: 'codex',
+      pid: process.pid, ts: NOW.toISOString(),
+    })).toBe(true);
+    const drop = '019a0000-4444-7555-8666-777788889999';
+    writeFileSync(join(inbox, drop), 'hello\n');
+    writeFileSync(
+      join(inbox, `${drop}.pending`),
+      `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
+    );
+    // A home turns the rules-file reading on, and this fixture writes none: status exits nonzero
+    // for that difference. The wakeability row is the reading under test here.
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
+    // The class is the same word, flagged; the notes say what the class cannot: the inbox will
+    // serve the drop on the seat's next turn, and it has been waiting five minutes.
+    expect(io.out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+!pull-on-turn \\(inbox, unread 5m\\)`));
+    expect(io.out).toMatch(new RegExp(`${paneOf(built(), 'claude-coordinator-acme')}\\s+typed\\s+!pull-on-turn\\n`));
+
+    const jsonIo = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file, '--json'], jsonIo, { ...sources, home })).toBe(1);
+    const row = JSON.parse(jsonIo.out).rows.find((one: { name: string }) => one.name === 'codex-acme');
+    expect(row.seat_wake).toEqual({
+      class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false,
+      listener: true, oldest_unread_seconds: 300,
+    });
   });
 
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
@@ -829,10 +873,10 @@ describe('team status', () => {
     // each row also carries the seat's own reading beside it, seat_state/seat_state_source —
     // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
-      { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', model: 'Claude Opus 5.5', pane: 'w1:p1' },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (declared, unread)', pane: 'w2:p1' },
-      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (declared, unread)', pane: 'w3:p1' },
-      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (declared, unread)', pane: 'w4:p1' },
+      { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', seat_wake: PULL_ONLY, model: 'Claude Opus 5.5', pane: paneOf(built(), 'claude-coordinator-acme') },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'GPT-6 Sol (declared, unread)', pane: paneOf(built(), 'codex-acme') },
+      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'DeepSeek V4.1 Flash (declared, unread)', pane: paneOf(built(), 'deepseek-acme') },
+      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'DeepSeek V4.1 Flash (declared, unread)', pane: paneOf(built(), 'deepseek-acme-2') },
     ]);
   });
 
@@ -1280,6 +1324,7 @@ describe('a pane that no longer holds the process team launched', () => {
       state: 'missing',
       seat_state: 'done',
       seat_state_source: 'process',
+      seat_wake: PULL_ONLY,
       model: 'GPT-6 Sol',
       pane: 'w2:p1',
     });
@@ -1334,6 +1379,7 @@ describe('a pane that no longer holds the process team launched', () => {
       state: 'restored, not launched by team',
       seat_state: 'unknown',
       seat_state_source: 'none',
+      seat_wake: PULL_ONLY,
       blind: true,
       model: '-',
       pane: 'w2:p1',

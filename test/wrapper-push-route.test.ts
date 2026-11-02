@@ -318,6 +318,7 @@ test('a run that names no home reads the default store, never an empty one', () 
   expect(rows.length).toBe(2);
   // The two runs may differ elsewhere by design — a named home is also what the model column's
   // signing map reads. The reach word is the route's own, and it must not depend on the omission.
-  expect(rows[0]?.row).toMatch(/socket$/);
-  expect(rows[1]?.row).toMatch(/socket$/);
+  // It is the REACH cell, not the last column: the WAKE cell follows it.
+  expect(rows[0]?.row).toMatch(/  socket  /);
+  expect(rows[1]?.row).toMatch(/  socket  /);
 });

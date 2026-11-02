@@ -6,7 +6,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { publishToBus } from '../bus/server.ts';
+import { busListening, publishToBus } from '../bus/server.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
@@ -19,7 +19,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, type DeliveryClass } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -88,7 +88,7 @@ export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wa
        team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
        team send --list [--json]
-       team send <seat> <message> --request [--json]
+       team send <seat> <message> --request [--reason <text>] [--json]
        team send <seat> <message> --approval <request-id> [--dry-run] [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
@@ -115,7 +115,7 @@ admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
 and needs no caller check. --request records this send for the owner seat and sends nothing;
---approval <request-id> runs the send the owner seat signed, with no owner terminal, and a signed
+--reason <text> is the short reason the card shows; --approval <request-id> runs the send the owner seat signed, with no owner terminal, and a signed
 always rule for team-send covering this folder admits the run with no request. The owner answers
 on the owner page. --dry-run resolves the seat and the
 legs the run would walk, writes no drop file, and types nothing. It
@@ -512,9 +512,24 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
   }
 }
 
+/** The class a class read ended in, and whether the seat's webhook adapter is the only route the
+ *  reading still counts. That route is fired by the bus's announcement of the record, never by
+ *  the send itself, so a wake through it is the bus's to make, not the send's to claim. */
+type ClassRead = { cls: DeliveryClass; webhookOnly: boolean };
+
+/** The words for a class read at send time. A webhook-only push with no bus serving the
+ *  receiving root is a message queued for that bus, never a wake this send made; every other
+ *  reading keeps its class's own words. */
+function classWords(read: ClassRead, seat: string, busLive: boolean): string {
+  if (read.cls === 'push' && read.webhookOnly && !busLive) return WEBHOOK_QUEUED_WORDS;
+  return deliveryWords(read.cls, seat);
+}
+
 /** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
  *  record wins over the team file's row; a state that cannot be read is no record, so the class
- *  falls to what the file and its launch line prove, never to a guess. */
+ *  falls to what the file and its launch line prove, never to a guess. `busLive` is the bus
+ *  serving the receiving root, proved when the send ran: a webhook adapter posts only when a bus
+ *  announces the record. */
 function deliveryWordsOf(input: {
   dir: string;
   root: string;
@@ -522,9 +537,9 @@ function deliveryWordsOf(input: {
   seat: string;
   declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
   home?: string;
-}): string {
+}, busLive: boolean): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
-  return seatDeliveryClass({
+  const read = seatDeliveryClass({
     dir: input.dir,
     root: input.root,
     session: input.session,
@@ -532,7 +547,12 @@ function deliveryWordsOf(input: {
     ...(input.declared === undefined ? {} : { declared: input.declared }),
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
-  }).words;
+  });
+  return classWords(
+    { cls: read.class, webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket },
+    input.seat,
+    busLive,
+  );
 }
 
 /** A console summary with the receiving seat's delivery class appended when the run read one: a
@@ -757,7 +777,7 @@ function outputMarkerLines(body: string): number {
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval'], ['wait', 'json', 'list', 'dry-run', 'request']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -789,7 +809,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (host.watch === undefined) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, seatSources);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources);
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;
@@ -967,6 +987,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // seat will read the message: the line says whether it is woken, holds the message between
   // turns, or reads it at its next turn. The class comes from the launch's own records, never
   // from the CLI's shipped profile alone.
+  //
+  // A webhook adapter is posted by the bus that announces the record, never by this send: the
+  // wake is claimed only while the bus serving the receiving root answers a connect, the same
+  // proof `busListening` gives the bus's own start walk. A marker alone is not that proof.
+  const busLive = await busListening(to.root);
   report.deliveryWords = deliveryWordsOf({
     dir: to.dir,
     root: to.root,
@@ -974,7 +999,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     seat: to.seat,
     ...(declared === undefined ? {} : { declared }),
     home: host.home,
-  });
+  }, busLive);
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
   // the team file is only the roster projection and cannot override that signed record.
@@ -1257,7 +1282,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // never falls back to a route that types or stores, whatever hook its caller built.
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const walk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const declaredWalk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  // A live inbox listener is walked even when the delivery order leaves it out or places it
+  // behind the drop: the listener is the seat's own server standing beside its inbox, so reaching
+  // it puts the record in front of the seat, while the drop file behind it would leave a
+  // listening seat to read the message a turn late. The rest of the order is walked exactly as
+  // written. A human's walk is the drop alone and a watch's walk stores nothing, so neither takes
+  // a leg spliced in here. The plain line beside the walk says the order did not put it there.
+  let inboxSplicedAt = -1;
+  const walk: readonly DeliveryLeg[] = (() => {
+    if (human || directWalk) return [...declaredWalk];
+    const dropAt = declaredWalk.indexOf('drop');
+    const inboxAt = declaredWalk.indexOf('mcp-inbox');
+    if (dropAt === -1 || (inboxAt !== -1 && inboxAt < dropAt)) return [...declaredWalk];
+    if (!inboxLive(dropDir, to.root, to.session, to.seat, host.build?.()).live) return [...declaredWalk];
+    inboxSplicedAt = dropAt;
+    return [
+      ...declaredWalk.slice(0, dropAt),
+      'mcp-inbox' as const,
+      ...declaredWalk.slice(dropAt).filter((leg) => leg !== 'mcp-inbox'),
+    ];
+  })();
   // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
   // the socket. When one of them takes the send, a channel push for the same id would wake the
   // seat a second time, so a stale serving channel is held off before the record is written.
@@ -1307,7 +1352,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // A grant is the one rule the message's own header carries a record of: the dry run names
     // it too, so a preview says which owner-signed record admits a pair no rule reaches.
     const granted = admission.ok && admission.rule.startsWith('an owner-signed grant naming send') ? `; admitted by: ${admission.rule}` : '';
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}${dryWebhookClause(declared, human)}; nothing was written${granted}`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}${dryWebhookClause(declared, human, busLive)}; nothing was written${granted}`, report);
   }
   // The display words every transport opens the message with: the receiving team's
   // `message-display` template, the sender's nickname (its seat name when the file writes none),
@@ -1478,6 +1523,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
   if (host.direct !== undefined && walk.length > 0) await ensureEpisode();
   let socketNote: string | null = null;
+  // The routes this walk has disproved, so the words a fallback prints follow the legs actually
+  // taken: a socket the walk found unusable, a runtime queue its attempt never reached. Each
+  // lowering keeps every route not yet disproved, and the class is re-read with only those.
+  const walkLost: { socket?: boolean; endpoint?: boolean } = {};
+  const lowerDelivery = (): void => {
+    report.deliveryWords = classWords(classWithout(to, host.home, walkLost, declared), to.seat, busLive);
+  };
   for (const [at, leg] of walk.entries()) {
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
@@ -1513,6 +1565,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return sentChannel(io, to.seat, report, ms);
     }
     if (leg === 'mcp-inbox') {
+      // The one line a send whose order put the drop first owes its reader: the walk is not the
+      // order, because this seat's inbox server is listening and a stored copy behind it would be
+      // read a turn late. Printed when the leg is reached, not when it takes the send.
+      if (at === inboxSplicedAt) {
+        io.stderr(`team send: ${to.seat}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
+      }
       // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
       // the message names this seat, session and root with a live pid — and, when this process
       // knows its own build, when that listener's marker names the same build. A listener left
@@ -1622,7 +1680,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // recorded one gone, or a session started before its declaration. The class cached before
       // the walk follows that evidence, so a fallback that ends in the bus inbox never claims a
       // wake the fallback itself just disproved.
-      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to, host.home), to.seat);
+      if (attempt.socketUnusable === true) {
+        walkLost.socket = true;
+        lowerDelivery();
+      }
       markLeg('socket', 'attempted', attempt.reason);
       note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
@@ -1700,6 +1761,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         if (attempt.outcome === 'enqueue') {
           report.sent = msgId;
+          // The leg that took the message decides the words. The queue accepted the pointer, so
+          // the seat is woken through its runtime queue whatever the class read said before the
+          // walk and whatever routes stand beside it — a bound endpoint or a webhook row. The
+          // adapter's bus clause belongs only to an ending where the adapter is the route left.
+          report.deliveryWords = deliveryWords('between-turns', to.seat);
           const failed = failures.length > 0 ? { failed: [...failures] } : {};
           const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
           if (wait) {
@@ -1720,8 +1786,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           return sentUnconfirmed(io, to.seat, report, ms, 'native');
         }
         // A held thread, an unreachable or refused queue, or an unreadable policy: the route did
-        // not take the send, and the walk moves to the leg behind it.
+        // not take the send, and the walk moves to the leg behind it. The class cached before
+        // the walk follows that evidence, so a fallback that ends in the bus inbox never claims
+        // the runtime queue this attempt just failed to reach.
         failures.push(`native: ${attempt.reason}`);
+        walkLost.endpoint = true;
+        lowerDelivery();
         continue;
       }
       // Any other CLI has no native route this build can walk: the leg is skipped without a
@@ -1904,6 +1974,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
       markLeg('drop', 'attempted');
+      // The bus inbox is not a wake. The runtime queue this seat may record is no way to reach
+      // it either: nothing handed that queue a pointer, so the words a queue-only class would
+      // print are the one claim this ending disproves.
+      walkLost.endpoint = true;
+      lowerDelivery();
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
       // did, and the sender is told so (src/send/no-pane-messaging.ts).
       if (!human && !dry) {
@@ -2225,14 +2300,16 @@ function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number, cli?: string)
     .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
 }
 
-/** The dry run's webhook clause: the seat's adapter as an eligible, waking route, or the reason
- *  a configured one cannot post right now. Empty for a seat that configures none and for a
- *  human's pane, which nothing wakes. */
-function dryWebhookClause(declared: Seat | undefined, human: boolean): string {
+/** The dry run's webhook clause: the seat's adapter as a waking route only while a bus serves
+ *  the root, the queued words when one does not, or the reason a configured adapter cannot post
+ *  right now. Empty for a seat that configures none and for a human's pane, which nothing
+ *  wakes. */
+function dryWebhookClause(declared: Seat | undefined, human: boolean, busLive: boolean): string {
   if (human || declared?.webhook === undefined) return '';
   const route = webhookRouteOf(declared.webhook);
   if (route === null) return '';
-  return route.ok ? '; woken through its webhook adapter' : `; its webhook adapter cannot deliver: ${route.reason}`;
+  if (!route.ok) return `; its webhook adapter cannot deliver: ${route.reason}`;
+  return busLive ? '; woken through its webhook adapter' : `; ${WEBHOOK_QUEUED_WORDS}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -2378,7 +2455,7 @@ async function handOff(
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   const at = socketPathFor(host, to, found.pane);
   if (at === null) return { kind: 'fallback', reason: noSocketReason(host) };
-  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path, host.home) };
+  if (at.kind === 'stale') return { kind: 'fallback', reason: await staleSocketReason(to, at.path, host.home) };
   const id = host.newId?.() ?? randomUUID();
   if (!PENDING_ID.test(id)) {
     return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
@@ -2638,7 +2715,7 @@ function recordDryRun(io: Io, seat: string, ms: number, report: Report): number 
  * from the handoff to this call — so two confirms of one id never both record it; a history
  * write that fails puts the record back.
  */
-function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
+async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Promise<number> {
   const id = args.values.confirm as string;
   const report: Report = { json, seat: null, sent: null, project: null, session: null };
   if (args.flags.has('wait') || args.values.timeout !== undefined) {
@@ -2714,7 +2791,8 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   const outcome: 'delivered' | 'sent (unconfirmed)' = verified ? 'delivered' : 'sent (unconfirmed)';
   // An unconfirmed confirm appends the receiving seat's class, read from the receiving team's
   // own records: the sender learns whether the seat is woken, holds the message between turns,
-  // or reads it at its next turn. A verified delivery needs none.
+  // or reads it at its next turn. A verified delivery needs none. A webhook adapter that is the
+  // only route is woken by the receiving root's bus, so the claim needs that bus serving now.
   if (outcome === 'sent (unconfirmed)') {
     const receiving = readTeamConfig(record.root, { home: host.home });
     const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
@@ -2725,7 +2803,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       seat: record.to,
       ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
       home: host.home,
-    });
+    }, await busListening(record.root));
   }
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
@@ -4039,8 +4117,11 @@ async function deliverClientRecord(
       }
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
-      // the reported class, so the summary never claims a wake that did not happen.
-      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(aim, host.home), aim.seat);
+      // the reported class, so the summary never claims a wake that did not happen. The bus
+      // that posts a webhook is read the way the send's own first read reads it.
+      if (attempt.socketUnusable === true) {
+        report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat, await busListening(root));
+      }
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       continue;
@@ -4450,7 +4531,7 @@ async function deliverSocketFrame(
   }
   const first = socketPathFor(host, to, found.pane);
   if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
-  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path, host.home), socketUnusable: true };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: await staleSocketReason(to, first.path, host.home), socketUnusable: true };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
@@ -4620,36 +4701,61 @@ function declaredWebhookAt(to: Aim, home: string | undefined): Seat['webhook'] |
   }
 }
 
-/** The class the receiving seat reads under once the walk proved its socket unusable: the socket
+/** The class the receiving seat reads under once the walk proved one route unusable: that route
  *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
- *  it — its webhook adapter, its runtime queue, its next turn, or nothing. A record that cannot
- *  be read keeps the class the launch line the registry carries implies. */
-function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
+ *  it — its other route, its webhook adapter, its next turn, or nothing. The evidence this walk
+ *  did not disprove is kept: a failed socket leaves the runtime queue and the webhook adapter
+ *  standing, and a failed queue leaves the socket and the adapter. A record that cannot be read
+ *  keeps the class the launch line the registry carries implies. */
+function classWithout(
+  to: Aim,
+  home: string | undefined,
+  lost: { socket?: boolean; endpoint?: boolean },
+  /** The receiving team file's row for the seat, when the caller has it: the launch line, human
+   *  word, inbound word and webhook row the class was first read with. Without it the walk's own
+   *  reading of the seat stands in, exactly as the first read did. */
+  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>,
+): ClassRead {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
     record = readState(to.dir).sessions[to.session]?.seats[to.seat];
   } catch {
     record = undefined;
   }
-  const webhook = declaredWebhookAt(to, home);
+  // The handed-in row already carries the webhook; a read without a row (a frame redelivery has
+  // no team file in hand) asks the file itself.
+  const webhook = declaredRow === undefined ? declaredWebhookAt(to, home) : declaredRow.webhook;
   const read = seatDeliveryClass({
     dir: to.dir,
     root: to.root,
     session: to.session,
     seat: to.seat,
-    declared: { cli: to.cli, launch: record?.launch_line ?? '', ...(webhook === undefined ? {} : { webhook }) },
+    declared: declaredRow ?? { cli: to.cli, launch: record?.launch_line ?? '', ...(webhook === undefined ? {} : { webhook }) },
     ...(record === undefined ? {} : { state: record }),
     ...(home === undefined ? {} : { home }),
   });
-  return effectiveDeliveryClass({
-    declared: read.evidence.declared,
-    watcher: read.evidence.watcher,
-    channel: read.evidence.channel,
-    socket: false,
-    endpoint: read.evidence.endpoint,
-    ...(read.evidence.human ? { human: true } : {}),
-    ...(read.evidence.webhook ? { webhook: true } : {}),
-  });
+  const channel = read.evidence.channel;
+  const socket = lost.socket === true ? false : read.evidence.socket;
+  const webhookStanding = read.evidence.webhook;
+  return {
+    cls: effectiveDeliveryClass({
+      declared: read.evidence.declared,
+      watcher: read.evidence.watcher,
+      channel,
+      socket,
+      endpoint: lost.endpoint === true ? false : read.evidence.endpoint,
+      ...(read.evidence.human ? { human: true } : {}),
+      ...(webhookStanding ? { webhook: true } : {}),
+    }),
+    // The adapter is the only reason left for `push` when no direct route stands: a failed
+    // socket or queue leaves it, and its wake belongs to the bus that announces the record.
+    webhookOnly: webhookStanding && !channel && !socket,
+  };
+}
+
+/** The class once the walk proved its socket unusable. */
+function classWithoutSocket(to: Aim, home: string | undefined): ClassRead {
+  return classWithout(to, home, { socket: true });
 }
 
 /** The two endings an address that cannot take a frame has, in the words a person reads: nothing
@@ -4659,8 +4765,11 @@ function noSocketReason(host: SendHost): string {
   return `no socket was found for its pane's processes (looked in ${socketDirs(host)})`;
 }
 
-function staleSocketReason(to: Aim, path: string, home: string | undefined): string {
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutSocket(to, home), to.seat)}`;
+async function staleSocketReason(to: Aim, path: string, home: string | undefined): Promise<string> {
+  // The words follow the class the walk can still prove, and a webhook that is the only route
+  // left is only the bus's wake: the same liveness proof the send's first read makes.
+  const busLive = await busListening(to.root);
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat, busLive)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the

@@ -8,6 +8,7 @@ import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, 
 import { insideTrust } from '../file/paths.ts';
 import { LINK_NOT_FOLLOWED, NOT_A_REPO, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readLaunchedTeam } from '../file/team-text.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
@@ -154,11 +155,16 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
-    home: sources.home,
-    checkOnly: true,
-  });
+  const readOptions = { home: sources.home, checkOnly: true };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so the seats and the worktree placement are the record's,
+  // never missed over the file the session launched from. A `--file` names its file, and is read
+  // as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   const placed = loaded.ok ? placedProblems(loaded.team, loaded.root, sources.home) : [];
   if (!loaded.ok || placed.length) {
     const problems = loaded.ok ? placed : loaded.errors;
