@@ -74,6 +74,7 @@ const REACHED = [
   'bus',
   'delegate',
   'drops',
+  'fallback prune',
   'feed',
   'grant',
   'hold',

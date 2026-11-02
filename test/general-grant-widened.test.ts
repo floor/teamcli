@@ -31,8 +31,8 @@ const EXPIRES = new Date('2027-01-01T00:00:00Z');
 // Ops whose route the dispatcher has but no release row measures yet. A release that first
 // ships one adds its row and takes the op out of this list; a route that is neither measured
 // nor named here fails the check below, so a new op cannot slip past unmeasured. The 0.5.11
-// row measures `peek`, so the list is empty today.
-const UNRELEASED_OPS: readonly string[] = [];
+// row measures `peek`, and `fallback` and `waits` are the 0.5.12 routes no release has shipped.
+const UNRELEASED_OPS: readonly string[] = ['fallback', 'waits'];
 
 const homes: string[] = [];
 afterAll(() => {

@@ -361,7 +361,7 @@ describe('the other doors', () => {
       ops: ['config'],
       mayIssue: true,
       expires: new Date(Date.now() + 86_400_000),
-    });
+    }, NOW);
     if (!grant.ok) throw new Error(grant.why);
     const root = world.roots.site!;
     const sources = sourcesOf(world);
@@ -431,7 +431,7 @@ describe('the word is set through team config', () => {
       ops: ['config'],
       mayIssue: true,
       expires: new Date(Date.now() + 86_400_000),
-    });
+    }, NOW);
     if (!grant.ok) throw new Error(grant.why);
     const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
     const code = await runConfig(['set', 'floor.names.unique', 'team', '--general', grant.path, '--key', keys.keyPath], io, sourcesOf(world));
@@ -453,7 +453,7 @@ describe('the word is set through team config', () => {
       ops: ['config'],
       mayIssue: true,
       expires: new Date(Date.now() + 86_400_000),
-    });
+    }, NOW);
     if (!grant.ok) throw new Error(grant.why);
     const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
     const code = await runConfig(['set', 'floor.names.unique', 'team', '--general', grant.path, '--key', keys.keyPath], io, sourcesOf(world));
