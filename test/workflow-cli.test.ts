@@ -618,4 +618,28 @@ signals: []
       expect(io.out).not.toContain('EVIDENCE_PARSE_MARKER');
     }
   });
+
+  test('a journal that does not parse is refused in fixed words, never quoting the file', async () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, 'workflow.yaml'),
+      `workflow: parser-echo
+version: 1
+initial: draft
+states:
+  draft: {}
+transitions: []
+`,
+    );
+    // The marker is a bare token, so a parser's own message would quote it back into the refusal.
+    writeFileSync(join(dir, 'unparsed-journal.json'), '{"format": JOURNAL_PARSE_MARKER}\n');
+    writeFileSync(join(dir, 'evidence.json'), '{}\n');
+
+    for (const mode of [[], ['--json']]) {
+      const io = testIo(dir);
+      expect(await runWorkflow(['replay', 'workflow.yaml', 'unparsed-journal.json', '--evidence', 'evidence.json', ...mode], io)).toBe(1);
+      expect(io.out).toContain('the journal is not valid JSON');
+      expect(io.out).not.toContain('JOURNAL_PARSE_MARKER');
+    }
+  });
 });
