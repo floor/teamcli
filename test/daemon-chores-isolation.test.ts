@@ -10,13 +10,22 @@
 // because the point of the isolation is that one root's work cannot hold the others.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { serveChoresChild } from '../src/daemon/chores/child.ts';
+import { readEvents } from '../src/bus/log.ts';
+import { messageFile } from '../src/commands/messages.ts';
+import { serveChoresChild, type ChoresSlices } from '../src/daemon/chores/child.ts';
+import { createFallbackPass } from '../src/daemon/chores/fallback.ts';
+import { FALLBACK_STORE_PASS_MS } from '../src/daemon/fallback-sweep.ts';
 import { choresPolicyFor, tightestPolicy, type ChoresPolicy } from '../src/daemon/chores/policy.ts';
-import type { ChoresChildMessage, ChoresHostMessage } from '../src/daemon/chores/protocol.ts';
+import {
+  parseChoresFrame,
+  readChildMessage,
+  type ChoresChildMessage,
+  type ChoresHostMessage,
+} from '../src/daemon/chores/protocol.ts';
 import {
   spawnChoresChild,
   type ChoresChild,
@@ -37,6 +46,16 @@ import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import {
+  escalatedRecordId,
+  escalationMailboxId,
+  markerPathOf,
+  noteTransport,
+  type CanonicalRecipient,
+  type FallbackContext,
+  type FallbackMarker,
+  type TransportFact,
+} from '../src/send/fallback-events.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -58,6 +77,8 @@ seats:
 
 const NOW = Date.parse('2026-11-02T03:00:00Z');
 const AT = new Date(NOW).toISOString();
+const DIGEST = 'a'.repeat(64);
+const CALLER = { kind: 'seat', name: 'crew-lead', pane: 'p1', session: 'acme-dev' } as const;
 const dirs: string[] = [];
 
 /** A fixture child: consumes its token, heartbeats on the beat the token carries, and holds its
@@ -263,6 +284,112 @@ async function waitUntil(check: () => boolean, ms = 3000): Promise<void> {
     if (Date.now() > deadline) throw new Error('timed out waiting for the chores state');
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+/** A second, entity-level registry record: the lead a pass that names no orchestrator climbs to,
+ *  exactly as the machine daemon's own fallback pass must. `register` files the checkout under
+ *  its own project, so only this record has `project === entity` and answers the climb. */
+function entityLead(home: string, base: string): string {
+  const root = repo(base, 'floor-lobby');
+  upsertTeam(home, teamIdOf(root), {
+    project: 'floor',
+    entity: 'floor',
+    session: 'floor-dev',
+    root,
+    roster: [{ agent: 'agt_floorlead000', seat: 'floor-lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  return root;
+}
+
+const recipientOf = (root: string): CanonicalRecipient => ({
+  team: 'acme',
+  seat: 'crew-lead',
+  toId: null,
+  session: 'acme-dev',
+  root,
+});
+
+function writeMarkerFile(recipient: CanonicalRecipient, messageId: string, marker: FallbackMarker): void {
+  const path = markerPathOf(recipient, messageId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(marker));
+}
+
+function markerNow(recipient: CanonicalRecipient, messageId: string): FallbackMarker | null {
+  try {
+    return JSON.parse(readFileSync(markerPathOf(recipient, messageId), 'utf8')) as FallbackMarker;
+  } catch {
+    return null;
+  }
+}
+
+/** A due episode as a failed walk leaves it: every route gone, the escalation scheduled at
+ *  `dueAt`, no intent and no escalation decided yet. */
+function dueMarker(root: string, messageId: string, dueAt: number): CanonicalRecipient {
+  const recipient = recipientOf(root);
+  writeMarkerFile(recipient, messageId, {
+    format: 1,
+    messageId,
+    recipient,
+    recordDigest: DIGEST,
+    sender: 'owner',
+    status: 'all-failed',
+    attempts: [],
+    allFailedAt: new Date(dueAt - 60_000).toISOString(),
+    dueAt: new Date(dueAt).toISOString(),
+    receipt: { kind: 'unknown' },
+    updatedAt: new Date(dueAt).toISOString(),
+  });
+  return recipient;
+}
+
+/** A delivery that finished, the store's ordinary retirement candidate. */
+function deliveredMarker(root: string, messageId: string, at: number): CanonicalRecipient {
+  const recipient = recipientOf(root);
+  writeMarkerFile(recipient, messageId, {
+    format: 1,
+    messageId,
+    recipient,
+    recordDigest: DIGEST,
+    sender: 'owner',
+    status: 'delivered',
+    attempts: [],
+    receipt: { kind: 'unknown' },
+    updatedAt: new Date(at - 60_000).toISOString(),
+  });
+  return recipient;
+}
+
+/** The main-escalation events the retained log holds for one episode. */
+function escalationEvents(root: string, home: string, recipient: CanonicalRecipient, messageId: string) {
+  const log = readEvents('acme', root, home);
+  if (!log.ok) throw new Error(log.reason);
+  return log.events.filter((event) => event.payload.record_id === escalatedRecordId(recipient, messageId));
+}
+
+/** The slice seam a pass gets in the child: open, with time enough that no scene here meets it. */
+const openSlices: ChoresSlices = { sliceMs: 2000, stopping: () => false, yield: async () => true };
+
+/** The child's frames, read from its standard output by the protocol's own reader. */
+function collectFrames(stream: NodeJS.ReadableStream): ChoresChildMessage[] {
+  const frames: ChoresChildMessage[] = [];
+  let buffer = '';
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk: string | Buffer) => {
+    buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    let nl = buffer.indexOf('\n');
+    while (nl !== -1) {
+      const line = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      nl = buffer.indexOf('\n');
+      if (line.trim() === '') continue;
+      const parsed = parseChoresFrame(line);
+      const message = parsed === null ? null : readChildMessage(parsed);
+      if (message !== null) frames.push(message);
+    }
+  });
+  return frames;
 }
 
 function stateNow(home: string): DaemonState | null {
@@ -831,4 +958,160 @@ describe('under the machine daemon', () => {
       expect(closed).toBe(true);
     }
   }, 60_000);
+});
+
+describe('the child carries the team file the daemon validated', () => {
+  test('a pass uses the token-carried file with the root file gone, and its escalation is one event and one mailbox', async () => {
+    const made = world();
+    const carried = teamFile();
+    // The token's snapshot is the only team file this pass may read: the root's own file is gone
+    // before the child starts, so a pass that reached for the file would refuse the root by name.
+    rmSync(join(made.root, '.agents', 'team.yaml'));
+    const lead = entityLead(made.home, made.base);
+    const recipient = dueMarker(made.root, 'm-due-1', NOW - 60_000);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const frames = collectFrames(output);
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 2000,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev', teamFile: carried }],
+      },
+      stdin: input,
+      stdout: output,
+      now: () => new Date(NOW),
+    });
+    try {
+      await waitUntil(() => frames.some((frame) => frame.type === 'pass'), 5000);
+    } finally {
+      input.end();
+    }
+    expect(await served).toBe(0);
+    const pass = frames.find((frame) => frame.type === 'pass');
+    expect(pass).toBeDefined();
+    if (pass?.type !== 'pass') throw new Error('the child reported no pass');
+    expect(pass.passes).toEqual([
+      { root: made.root, at: AT, notes: ['fallback sweep: escalated 1, refused 0, unreadable 0'] },
+    ]);
+    expect(markerNow(recipient, 'm-due-1')?.escalatedAt).toBe(AT);
+
+    // The escalation is the signed event the sweep always writes, addressed to the entity lead.
+    const events = escalationEvents(made.root, made.home, recipient, 'm-due-1');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      record_id: escalatedRecordId(recipient, 'm-due-1'),
+      session: 'acme-dev',
+      to: 'floor-lead',
+      seat: 'crew-lead',
+      thread: 'm-due-1',
+      via: 'fallback',
+    });
+    // A lead in another checkout is also reached by its own mailbox record.
+    expect(existsSync(messageFile(lead, 'floor-lead', escalationMailboxId(recipient, 'm-due-1')))).toBe(true);
+  }, 30_000);
+});
+
+describe('the daemon beat leaves a hosted root to its child', () => {
+  test('an inline root escalates on the beat while a per-root root keeps its episode pending', async () => {
+    const first = world('inline-root');
+    const second = repo(first.base, 'per-root-root');
+    register(first.home, second);
+    const lead = entityLead(first.home, first.base);
+    word(first.home, first.root, 'daemon.chores', 'inline');
+    word(first.home, second, 'daemon.chores', 'per-root');
+    // Long enough that the never-heartbeating fake child stays in place through the observation.
+    word(first.home, second, 'daemon.chores-missed-beats', 60);
+    const realNow = Date.now();
+    const dueInline = dueMarker(first.root, 'm-due-inline', realNow - 60_000);
+    const dueHosted = dueMarker(second, 'm-due-hosted', realNow - 60_000);
+    const made: Fake[] = [];
+    const started = await startMachineDaemon({
+      home: first.home,
+      roots: [first.root, second],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 100,
+      choresHosting: true,
+      choresFactory: () => {
+        const child = fakeChild(4700 + made.length);
+        made.push(child);
+        return child.child;
+      },
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitUntil(
+        () => rowFor(first.home, first.root)?.mode === 'inline' && rowFor(first.home, second)?.mode === 'per-root',
+        5000,
+      );
+      // The beat owns the inline root and escalates its due episode itself.
+      await waitUntil(() => markerNow(dueInline, 'm-due-inline')?.escalatedAt !== undefined, 5000);
+      expect(escalationEvents(first.root, first.home, dueInline, 'm-due-inline')).toHaveLength(1);
+      expect(existsSync(messageFile(lead, 'floor-lead', escalationMailboxId(dueInline, 'm-due-inline')))).toBe(true);
+
+      // The hosted root's child is alive and nudged while the daemon's beat is observed moving.
+      await waitUntil(() => (made[0]?.sends.filter((message) => message.type === 'tick').length ?? 0) >= 2, 5000);
+      const beforeHeartbeat = stateNow(first.home)?.heartbeatAt;
+      await waitUntil(() => stateNow(first.home)?.heartbeatAt !== beforeHeartbeat, 5000);
+
+      // That root's episode is untouched: the child owns it, and the daemon never swept it.
+      expect(markerNow(dueHosted, 'm-due-hosted')).toMatchObject({ status: 'all-failed' });
+      expect(markerNow(dueHosted, 'm-due-hosted')?.escalatedAt).toBeUndefined();
+      expect(markerNow(dueHosted, 'm-due-hosted')?.outbox).toBeUndefined();
+      expect(escalationEvents(second, first.home, dueHosted, 'm-due-hosted')).toHaveLength(0);
+      expect(existsSync(messageFile(lead, 'floor-lead', escalationMailboxId(dueHosted, 'm-due-hosted')))).toBe(false);
+    } finally {
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 10_000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+});
+
+describe('the store pass is per root and from the child\'s own start', () => {
+  test('the first pass only escalates, and retirement waits for the store interval', async () => {
+    const made = world();
+    entityLead(made.home, made.base);
+    const due = dueMarker(made.root, 'm-due-1', NOW - 60_000);
+    const done = deliveredMarker(made.root, 'm-done-1', NOW);
+    const route = { root: made.root, team: 'acme', session: 'acme-dev', teamFile: teamFile() };
+    const pass = createFallbackPass({
+      version: 1,
+      home: made.home,
+      beatMs: 100,
+      sliceMs: 2000,
+      since: AT,
+      routes: [route],
+    });
+
+    // First pass: the due episode is escalated, and nothing is retired.
+    expect(await pass({ route, at: new Date(NOW), slices: openSlices })).toEqual([
+      'fallback sweep: escalated 1, refused 0, unreadable 0',
+    ]);
+    expect(markerNow(due, 'm-due-1')?.escalatedAt).toBe(AT);
+    expect(existsSync(markerPathOf(done, 'm-done-1'))).toBe(true);
+
+    // A beat later is not housekeeping: the store keeps its history.
+    expect(await pass({ route, at: new Date(NOW + 1000), slices: openSlices })).toEqual([]);
+    expect(existsSync(markerPathOf(done, 'm-done-1'))).toBe(true);
+
+    // One store interval after this child's first pass, retirement runs: the delivered and the
+    // refused episodes both leave, and the note names the store's own words.
+    expect(await pass({ route, at: new Date(NOW + FALLBACK_STORE_PASS_MS), slices: openSlices })).toEqual([
+      'fallback store: retired 2, reclaimed 0, refused 0, unreadable 0',
+    ]);
+    expect(markerNow(due, 'm-due-1')).toBeNull();
+    expect(markerNow(done, 'm-done-1')).toBeNull();
+  }, 30_000);
 });
