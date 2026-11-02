@@ -11,7 +11,7 @@ import { runDown, type DownLaunch, type DownSources } from '../../src/commands/d
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { upPlan } from '../../src/launch/plan.ts';
 import { profileFor } from '../../src/profiles/index.ts';
-import { inboxEntryName, launchCommand } from '../../src/profiles/profile.ts';
+import { fillInboxPlace, inboxEntryName, launchCommand, shellQuote } from '../../src/profiles/profile.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { claudeBox, gitEnv, testIo } from '../helpers.ts';
 
@@ -39,6 +39,22 @@ describe('launchCommand with a seat folder', () => {
   test('a folder holding a quote reaches the JSON escaped, and the shell as one word', () => {
     expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, '/work/ac"me'))
       .toBe(`AGENT_UNATTENDED=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":["/work/ac\\"me"]}'`);
+  });
+
+  test('a folder holding a replacement pattern reaches the JSON as itself', () => {
+    // A string replacement would read these as patterns: "$&" the whole match, "$'" and "$`"
+    // the text after and before it, "$$" one dollar. The fill is a function, so each stays part
+    // of the folder.
+    for (const folder of ['/work/$&', "/work/$'", '/work/$`', '/work/$$']) {
+      const value = JSON.stringify({ trustedWorkspaces: [folder] });
+      expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, folder))
+        .toBe(`AGENT_UNATTENDED=1 agy --dangerously-skip-permissions --settings ${shellQuote(value)}`);
+    }
+  });
+
+  test('a seat name holding a replacement pattern is filled in literally', () => {
+    const place = { seat: 'a$&b', session: "c$'d", command: 'e$$f', entry: 'g$`h' };
+    expect(fillInboxPlace('{seat}:{session}:{command}:{entry}', place)).toBe("a$&b:c$'d:e$$f:g$`h");
   });
 
   test('no folder means no settings: a caller that launches nothing invents no trust', () => {
@@ -112,10 +128,22 @@ describe('upPlan trusts each seat\'s own resolved folder', () => {
 });
 
 describe('the per-seat inbox entry name', () => {
-  test('it names the team and the seat, in the characters the store accepts', () => {
-    expect(inboxEntryName('acme-web', 'builder-4')).toBe('team-inbox-acme-web-builder-4');
-    expect(inboxEntryName('acme/web', 'builder 4')).toBe('team-inbox-acme-web-builder-4');
-    expect(inboxEntryName('...', '...')).toBe('team-inbox-x-x');
+  test('it names the team and the seat, in the characters the store accepts, with the pair\'s hash', () => {
+    const name = inboxEntryName('acme-web', 'builder-4');
+    expect(name).toMatch(/^team-inbox-acme-web-builder-4-[0-9a-f]{8}$/);
+    // The folded parts are readable but not one-to-one, so the hash is what tells two pairs
+    // that fold alike apart — and a pair that folds away still leaves a usable name.
+    const spaces = inboxEntryName('acme/web', 'builder 4');
+    expect(spaces).toMatch(/^team-inbox-acme-web-builder-4-[0-9a-f]{8}$/);
+    expect(spaces).not.toBe(name);
+    expect(inboxEntryName('...', '...')).toMatch(/^team-inbox-x-x-[0-9a-f]{8}$/);
+  });
+
+  test('two pairs that fold to the same readable name are still two entries', () => {
+    const first = inboxEntryName('red-team', 'writer');
+    const second = inboxEntryName('red', 'team-writer');
+    for (const entry of [first, second]) expect(entry).toMatch(/^team-inbox-red-team-writer-[0-9a-f]{8}$/);
+    expect(first).not.toBe(second);
   });
 });
 

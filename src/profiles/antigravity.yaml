@@ -34,7 +34,8 @@ settings:
   value: '{"trustedWorkspaces":["{cwd}"]}'
 # The inbox registers in the CLI's own user-level store (under the seat's HOME, which every team
 # on the machine shares), so the entry is named per seat — `{inbox}` is
-# team-inbox-<session>-<seat> — and never replaces another entry. A run on 1.4.12 measured:
+# team-inbox-<session>-<seat>-<hash>, the hash of the exact pair keeping two pairs that fold to
+# the same readable part apart — and never replaces another entry. A run on 1.4.12 measured:
 # `agy mcp add <name> ...` adds or updates exactly that entry and keeps every other one;
 # `agy mcp remove <name>` removes exactly that one and keeps the rest (the owner's
 # `floor-committee` entry stayed); removing a name that is not there exits 1 with

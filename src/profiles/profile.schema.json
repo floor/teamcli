@@ -165,7 +165,7 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "the CLI's own command that removes this seat's user-level entry, run by team down for a seat it closes; {inbox} is the entry name, team-inbox-<session>-<seat>; it needs add and no target"
+          "description": "the CLI's own command that removes this seat's user-level entry, run by team down and team remove for a seat they close; {inbox} is the entry name, team-inbox-<session>-<seat>-<hash>; it needs add and no target"
         }
       },
       "anyOf": [

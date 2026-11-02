@@ -24,15 +24,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readTeamConfig } from '../file/team-config.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
-import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
+import { fillInboxPlace, inboxEntryName, profileFor, type InboxPlace } from '../profiles/profile.ts';
 import { registeredRootOf, type RegisteredRoot } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
 export type InboxRegistration = { ok: true } | { ok: false; reason: string };
 
-/** One command run in the seat's folder. `code` is null when it did not run at all. */
-export type InboxRun = { code: number | null };
+/** One command run in the seat's folder. `code` is null when it did not run at all; `stderr` is
+ *  what the command wrote there, when the caller captured it — the remove route reads it to tell
+ *  a name the store does not hold from a failure that kept the entry. */
+export type InboxRun = { code: number | null; stderr?: string };
 
 const SERVER_NAME = 'team-inbox';
 
@@ -76,7 +78,7 @@ function runIn(cwd: string): (command: string, args: readonly string[]) => Inbox
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000,
     });
-    return { code: result.status ?? null };
+    return { code: result.status ?? null, stderr: typeof result.stderr === 'string' ? result.stderr : '' };
   };
 }
 
@@ -229,13 +231,17 @@ export function removeInbox(input: {
     || block.target !== null || block.file !== null) return null;
   const place: InboxPlace = { seat: input.seat, session: input.session, ...selfRunner() };
   const args = block.remove.map((word) => fillInboxPlace(word, place));
+  const entry = inboxEntryName(input.session, input.seat);
   const run = input.run ?? ((command, argv) => runIn(process.cwd())(command, argv));
   const result = run(profile.binary, args);
   if (result.code === 0) return { ok: true, removed: true };
   // agy 1.4.12's one measured remove failure is a name the store does not hold: exit 1 with
-  // `Error: MCP server "<name>" not found`. That entry is already gone, so the teardown is
-  // done; any other exit — or a command that never ran — is reported and the entry is kept.
-  if (result.code === 1) return { ok: true, removed: false };
+  // `Error: MCP server "<name>" not found` on stderr. Only that message says the entry is
+  // already gone; an exit 1 for any other reason is a failure, and the entry is kept — the
+  // teardown still proceeds, and its line says what happened.
+  if (result.code === 1 && (result.stderr ?? '').includes(`MCP server "${entry}" not found`)) {
+    return { ok: true, removed: false };
+  }
   return {
     ok: false,
     reason: result.code === null

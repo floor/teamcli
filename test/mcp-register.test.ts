@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { profileFor } from '../src/profiles/profile.ts';
+import { inboxEntryName, profileFor } from '../src/profiles/profile.ts';
 import { registerInbox, removeInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -266,7 +266,7 @@ describe('the antigravity user-level route', () => {
     expect(calls).toEqual([{
       command: 'agy',
       cwd: dir,
-      args: ['mcp', 'add', 'team-inbox-acme-web-helper', runner.command, runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+      args: ['mcp', 'add', inboxEntryName('acme-web', 'helper'), runner.command, runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
     }]);
   });
 
@@ -326,12 +326,29 @@ describe('removeInbox', () => {
       session: 'acme-web',
       run: (command, args) => { calls.push({ command, args }); return { code: 0 }; },
     })).toEqual({ ok: true, removed: true });
-    expect(calls).toEqual([{ command: 'agy', args: ['mcp', 'remove', 'team-inbox-acme-web-helper'] }]);
+    expect(calls).toEqual([{ command: 'agy', args: ['mcp', 'remove', inboxEntryName('acme-web', 'helper')] }]);
   });
 
-  test('a name the store does not hold is already gone: exit 1 is measured for exactly that', () => {
-    expect(removeInbox({ cli: 'antigravity', seat: 'helper', session: 'acme-web', run: () => ({ code: 1 }) }))
-      .toEqual({ ok: true, removed: false });
+  test('the store\'s one measured not-found message, and only it, means the entry is gone', () => {
+    // The message names the entry that was asked for: the run says "not found", and the entry it
+    // names is this seat's. Exit 1 alone proves nothing.
+    const entry = inboxEntryName('acme-web', 'helper');
+    expect(removeInbox({
+      cli: 'antigravity', seat: 'helper', session: 'acme-web',
+      run: () => ({ code: 1, stderr: `Error: MCP server "${entry}" not found\n` }),
+    })).toEqual({ ok: true, removed: false });
+  });
+
+  test('exit 1 for any other reason is a failed removal, and the entry is kept', () => {
+    const other = (stderr?: string) => removeInbox({
+      cli: 'antigravity', seat: 'helper', session: 'acme-web',
+      run: () => (stderr === undefined ? { code: 1 } : { code: 1, stderr }),
+    });
+    expect(other('Error: the store is locked\n')).toEqual({ ok: false, reason: '`agy mcp remove` exited 1' });
+    expect(other()).toEqual({ ok: false, reason: '`agy mcp remove` exited 1' });
+    // A not-found message for another entry is not proof that this one is gone.
+    expect(other('Error: MCP server "team-inbox-somewhere-else" not found\n'))
+      .toEqual({ ok: false, reason: '`agy mcp remove` exited 1' });
   });
 
   test('a command that did not run, or exited otherwise, is reported and the entry kept', () => {
@@ -341,7 +358,7 @@ describe('removeInbox', () => {
       .toEqual({ ok: false, reason: '`agy mcp remove` exited 2' });
   });
 
-  test('the session and seat are slugged the same way the add named the entry', () => {
+  test('the session and seat are folded the same way the add named the entry', () => {
     const calls: string[][] = [];
     removeInbox({
       cli: 'antigravity',
@@ -349,7 +366,8 @@ describe('removeInbox', () => {
       session: 'acme/web',
       run: (_command, args) => { calls.push([...args]); return { code: 0 }; },
     });
-    expect(calls).toEqual([['mcp', 'remove', 'team-inbox-acme-web-builder-4']]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![2]).toMatch(/^team-inbox-acme-web-builder-4-[0-9a-f]{8}$/);
   });
 
   test('a route that leaves nothing in a shared store removes nothing', () => {

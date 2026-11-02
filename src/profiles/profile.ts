@@ -1,5 +1,5 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -222,17 +222,23 @@ export type SettingsBlock = { option: string; value: string };
 export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string; epoch?: string };
 
 /**
- * This seat's own entry name in a CLI's user-level MCP store: `team-inbox-<session>-<seat>`.
- * A CLI whose store is shared by every team on the machine needs the session and the seat in
- * the name, so two seats and two teams never overwrite each other's entry; the characters a
- * team or seat name may not use are folded to `-`, so the name survives any store's parser.
+ * This seat's own entry name in a CLI's user-level MCP store:
+ * `team-inbox-<session>-<seat>-<hash>`. A CLI whose store is shared by every team on the machine
+ * needs the session and the seat in the name, so two seats and two teams never overwrite each
+ * other's entry; the characters a team or seat name may not use are folded to `-`, so the name
+ * survives any store's parser.
+ *
+ * The folded parts are readable but not one-to-one — `red-team` with `writer` and `red` with
+ * `team-writer` fold alike — so a short hash of the exact pair follows them: pairs a store could
+ * confuse stay distinct entries.
  */
 export function inboxEntryName(session: string, seat: string): string {
   const slug = (value: string): string => {
     const folded = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
     return folded === '' ? 'x' : folded;
   };
-  return `team-inbox-${slug(session)}-${slug(seat)}`;
+  const digest = createHash('sha256').update(`${session}\u0000${seat}`).digest('hex').slice(0, 8);
+  return `team-inbox-${slug(session)}-${slug(seat)}-${digest}`;
 }
 
 /** A profile word with the launch's own values filled in.
@@ -260,18 +266,20 @@ export function inboxEntryName(session: string, seat: string): string {
  *  same name. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {
   const inside = (value: string): string => JSON.stringify(value).slice(1, -1);
+  // The replacements are functions: a value holding `$&`, `$'`, `` $` `` or `$$` is a path a
+  // profile must fill, never a replacement pattern.
   return text
-    .replaceAll('{inbox}', inboxEntryName(place.session, place.seat))
-    .replaceAll('{seat}', place.seat)
-    .replaceAll('{session}', place.session)
-    .replaceAll('{command}', place.command)
-    .replaceAll('{entry}', place.entry)
-    .replaceAll('{command_json}', inside(place.command))
-    .replaceAll('{entry_json}', inside(place.entry))
-    .replaceAll('{seat_json}', inside(place.seat))
-    .replaceAll('{session_args}', place.file === undefined ? `,"--session",${JSON.stringify(place.session)}` : '')
-    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`)
-    .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
+    .replaceAll('{inbox}', () => inboxEntryName(place.session, place.seat))
+    .replaceAll('{seat}', () => place.seat)
+    .replaceAll('{session}', () => place.session)
+    .replaceAll('{command}', () => place.command)
+    .replaceAll('{entry}', () => place.entry)
+    .replaceAll('{command_json}', () => inside(place.command))
+    .replaceAll('{entry_json}', () => inside(place.entry))
+    .replaceAll('{seat_json}', () => inside(place.seat))
+    .replaceAll('{session_args}', () => (place.file === undefined ? `,"--session",${JSON.stringify(place.session)}` : ''))
+    .replaceAll('{file_args}', () => (place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`))
+    .replaceAll('{epoch_args}', () => (place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`));
 }
 
 /** Add defaults as complete options: a line's own flag keeps its value, including when the
@@ -359,7 +367,9 @@ export function launchCommand(
   if (profile.settings !== null && cwd !== undefined && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
     options.push(
       profile.settings.option,
-      profile.settings.value.replaceAll('{cwd}', JSON.stringify(cwd).slice(1, -1)),
+      // A function replacement: a folder holding `$&`, `$'`, `` $` `` or `$$` is a path, never a
+      // replacement pattern.
+      profile.settings.value.replaceAll('{cwd}', () => JSON.stringify(cwd).slice(1, -1)),
     );
   }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
