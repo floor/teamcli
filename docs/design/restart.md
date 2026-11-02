@@ -49,7 +49,7 @@ Given `<seat>`:
    ```
    team restart: <seat> is not a signed declared seat
    ```
-3. **Stopped seat (`restart.signed-off`, exit 1)**: a declared seat with `stopped: true` is signed off. The owner, or a seat this team's map admits as `leads` on its own recorded pane, restarts it: the run clears the mark in the same write that records the launch, then relaunches the seat. Anyone else refuses:
+3. **Stopped seat (`restart.signed-off`, exit 1)**: a declared seat with `stopped: true` is signed off. The owner, or a seat this team's map admits as `leads` on its own recorded pane, restarts it: the run clears the mark in the same write that records the launch, then relaunches the seat, and a launch that does not reach ready — a failed workspace creation or launch command — puts the mark back in its own validated write. A failed revival leaves the seat stopped. Anyone else refuses:
    ```
    team restart: <seat> is signed off; a `leads` seat of its own team clears it with `team restart <seat>`
    ```
