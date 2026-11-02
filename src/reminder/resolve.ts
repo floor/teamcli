@@ -6,9 +6,11 @@
 //
 // A target that does not resolve refuses its whole reminder, named, and the other reminders
 // read: a reminder that could reach only some of the seats it names would deliver a partial
-// instruction with no sign that it was partial. Whether the checkout is hosted by the daemon is
-// not decided here — the daemon's admission refuses a recipient its principal did not host, with
-// the root named, at the fire rather than at the read.
+// instruction with no sign that it was partial. The caller may pass the checkouts its daemon
+// hosts (`hosted`) and then a target whose checkout is not hosted refuses the reminder the same
+// way, before any fire: the daemon cannot send to a root it does not serve. A reader without
+// that list (status, which reads no checkout's team file) reports what is configured, and the
+// fire's admission still refuses an unhosted recipient with the root named.
 import type { DaemonRecipient } from '../commands/send.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -20,12 +22,20 @@ import type { ReminderSpec, ReminderTarget } from './run.ts';
 
 export type ReminderResolution = { specs: ReminderSpec[]; problems: ReminderConfigProblem[] };
 
+/** What the resolver is told about the reader's world: the canonical roots that reader's daemon
+ *  hosts. Absent, hosting is not decided here (the status reader names no checkout). */
+export type ReminderResolveOptions = { hosted?: readonly string[] };
+
 /** Every entry resolved to the runtime's spec, or refused alone. */
-export function resolveReminderEntries(home: string, entries: readonly ReminderConfigEntry[]): ReminderResolution {
+export function resolveReminderEntries(
+  home: string,
+  entries: readonly ReminderConfigEntry[],
+  options: ReminderResolveOptions = {},
+): ReminderResolution {
   const specs: ReminderSpec[] = [];
   const problems: ReminderConfigProblem[] = [];
   for (const entry of entries) {
-    const resolved = resolveEntry(home, entry);
+    const resolved = resolveEntry(home, entry, options.hosted);
     if ('why' in resolved) {
       problems.push({ entity: entry.entity, name: entry.name, why: resolved.why });
       continue;
@@ -43,13 +53,16 @@ export function resolveReminderEntries(home: string, entries: readonly ReminderC
 
 type ResolvedEntry = { targets: ReminderTarget[] } | { why: string };
 
-function resolveEntry(home: string, entry: ReminderConfigEntry): ResolvedEntry {
+function resolveEntry(home: string, entry: ReminderConfigEntry, hosted: readonly string[] | undefined): ResolvedEntry {
   const targets: ReminderTarget[] = [];
   const seen = new Set<string>();
   for (const target of entry.targets) {
     const where = resolveAddress(home, entry, target.address);
     if ('why' in where) return where;
     const { recipient, team } = where;
+    if (hosted !== undefined && !hosted.includes(recipient.root)) {
+      return { why: `${target.address}: the checkout ${recipient.root} is not one this daemon hosts` };
+    }
     const key = `${recipient.root}\u0000${recipient.session}\u0000${recipient.seat}`;
     if (seen.has(key)) continue;
     seen.add(key);

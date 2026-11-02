@@ -22,6 +22,9 @@ export type ReminderProvider = (log: ReminderProviderLog) => readonly ReminderSp
 export type ReminderProviderInput = {
   /** The home whose entity record is read; the daemon's own. */
   home: string;
+  /** The canonical checkouts this daemon hosts: a target outside them refuses the reminder at
+   *  the read, before any fire. Absent, hosting is left to the send's admission. */
+  hosted?: readonly string[];
   /** The zone a reminder without one of its own is read in; the machine's when absent. */
   defaultZone?: string;
 };
@@ -38,7 +41,9 @@ export function createReminderProvider(input: ReminderProviderInput): ReminderPr
     try {
       const config = readReminderConfig(input.home, { defaultZone: input.defaultZone ?? machineZone() });
       for (const problem of config.problems) log(`reminders: ${problem.why}`);
-      const resolved = resolveReminderEntries(input.home, config.entries);
+      const resolved = input.hosted === undefined
+        ? resolveReminderEntries(input.home, config.entries)
+        : resolveReminderEntries(input.home, config.entries, { hosted: input.hosted });
       for (const problem of resolved.problems) log(`reminders: ${problem.why}`);
       specs = resolved.specs;
     } catch (error) {

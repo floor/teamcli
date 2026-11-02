@@ -211,10 +211,11 @@ on later beats under the message id it already staged, until the window closes, 
 send stands as it is.
 
 A reminder is machine-scoped: one list, run by the one daemon. Each send proves the daemon's own
-authority and admits its target by the same rules a direct send does; a checkout this daemon
-does not host is refused at the fire with the checkout named, and that refusal is recorded. The
-chore runs whenever the daemon runs — there is no opt-in flag, and an entity that writes no
-reminder fires nothing.
+authority and admits its target by the same rules a direct send does. A reminder that names a
+checkout this daemon does not host is refused when the list is read — the whole reminder, named
+with the checkout, since a partial instruction would carry no sign that it was partial — so
+nothing of it fires. The chore runs whenever the daemon runs — there is no opt-in flag, and an
+entity that writes no reminder fires nothing.
 
 The chore keeps `reminders.state.json` beside the daemon's own state record: mode 0600 in the
 0700 machine folder, written atomically. For every reminder name it holds the wall-clock key
@@ -249,7 +250,8 @@ install that leaves no daemon running, which names where a kept unit is. Each ho
 endpoints. On every beat the daemon also reads the machine folder's entity record for the
 reminder list, holding it on a stamp of the file's modification time and size so an unchanged
 file is not re-parsed, and resolves each target's address through the team registry and that
-checkout's team file. It writes the reminder state record `reminders.state.json` (mode 0600,
+checkout's team file, refusing a reminder whose target checkout it does not host. It writes the
+reminder state record `reminders.state.json` (mode 0600,
 written atomically) beside its own. Under `run --presence` the daemon additionally reads each hosted checkout's presence
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,

@@ -96,6 +96,18 @@ describe('resolving a reminder address', () => {
     expect(resolved.problems[2]?.why).toContain('no team registry record matches "ghost"');
   });
 
+  test('a target checkout the caller does not host refuses the reminder, naming the checkout', () => {
+    const one = registered();
+
+    const resolved = resolveReminderEntries(one.home, [entry()], { hosted: ['/somewhere/else'] });
+
+    expect(resolved.specs).toEqual([]);
+    expect(resolved.problems[0]?.why).toContain('lead@acme: the checkout');
+    expect(resolved.problems[0]?.why).toContain(one.root);
+    expect(resolved.problems[0]?.why).toContain('is not one this daemon hosts');
+    expect(resolveReminderEntries(one.home, [entry()], { hosted: [one.root] }).specs).toHaveLength(1);
+  });
+
   test('a scope two records answer is refused, naming both ids', () => {
     const one = registered();
     const other = world();

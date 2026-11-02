@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { entitiesPath } from '../src/entities.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { testIo } from './helpers.ts';
 import { world, type World } from './send-native-fixtures.ts';
@@ -100,6 +101,62 @@ describe('the daemon run reads the entity record', () => {
     expect(second).toEqual(first);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('declares no seat or nickname "nobody"');
+  });
+
+  test('a target outside the hosted checkouts refuses the reminder at the read, named', async () => {
+    const one = worldWithReminders(
+      [
+        'acme:',
+        '  reminders:',
+        '    - name: far',
+        '      at: ["19:00"]',
+        '      to: [lead@beta]',
+        '      text: "Go {team}."',
+      ].join('\n'),
+    );
+    // A second checkout in the same home: its file trusts this home's lobby, and its registry
+    // record is project beta, but this daemon hosts only `one.root`.
+    const other = world();
+    made.push(other);
+    writeFileSync(
+      join(other.root, '.agents', 'team.yaml'),
+      [
+        'format: 1',
+        'project: beta',
+        'coordinator: lead',
+        'operator: lead',
+        'session: beta',
+        'workspace:',
+        '  mode: shared',
+        'trust:',
+        `  - ${lobbyDir(one.home)}`,
+        `  - ${other.root}`,
+        'seats:',
+        '  - role: coordinator',
+        '    name: lead',
+        '    cli: claude-code',
+        '    vendor: test',
+        '    model: Test',
+        '    version: "1"',
+        '    launch: claude',
+        '    inbound: accept',
+      ].join('\n'),
+    );
+    upsertTeam(one.home, teamIdOf(other.root), {
+      project: 'beta',
+      session: 'beta',
+      root: other.root,
+      by: 'reminder-wiring-test',
+      at: '2026-11-02T00:00:00.000Z',
+    });
+    const input = await started(one);
+    const lines: string[] = [];
+
+    const specs = input.reminders?.((line) => lines.push(line));
+
+    expect(specs).toEqual([]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`lead@beta: the checkout ${other.root} is not one this daemon hosts`);
   });
 
   test('an injected status reader is what the host runs, its refused entries logged', async () => {

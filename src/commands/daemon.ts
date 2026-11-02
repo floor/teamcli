@@ -41,7 +41,7 @@ import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type Start
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
-import { routeId, routeOf } from '../daemon/routes.ts';
+import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
   systemServiceManager,
   type ServiceInstallFailure,
@@ -1112,9 +1112,12 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     let fatalWhy: string | null = null;
     let endRun: (() => void) | null = null;
     // The configured list the beat runs: the entity record read on its own stamp, or the
-    // caller's injected reader, whose refused entries are named through the beat's log.
+    // caller's injected reader, whose refused entries are named through the beat's log. The
+    // reader is told which checkouts this daemon hosts, so a reminder whose target lies outside
+    // them is refused when the list is read rather than half-sent at the fire.
+    const hosted = roots.map((root) => canonicalRoot(root)).filter((root): root is string => root !== null);
     const reminderReader = sources.reminders === undefined
-      ? createReminderProvider({ home })
+      ? createReminderProvider({ home, hosted })
       : (log: (line: string) => void) => {
           const read = sources.reminders!();
           for (const problem of read.problems ?? []) log(problem);
