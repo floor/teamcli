@@ -1,6 +1,6 @@
-// Urania's independent scenes (writer-04) for the FLO-1208 lane: the replaced record's mode,
-// and the short-write loop under byte-at-a-time writes. The write interception follows the only
-// shape bun allows (mock.module before the writer's import, as the lane's own test does); the
+// Independent scenes: the replaced record's mode, and the short-write loop under byte-at-a-time
+// writes. The write interception follows the only shape bun allows (mock.module before the
+// writer's import, as the feature's own test does); the
 // checks are different: a 0644 record replaced to 0600 with its neighbor table kept, a
 // byte-at-a-time write whose result is byte-identical to an uncapped write, and a stall that
 // begins AFTER real progress — a partially-written temporary that must be discarded, leaving the

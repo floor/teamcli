@@ -1,6 +1,6 @@
-// Urania's independent scene (writer-04) for FLO-1205 at b8614960c: the session server is never
-// handed an empty or a relative PATH when the forge shim cannot stand. The checks differ from the
-// lane's own: the fail-closed PATH is pinned end-to-end on a MIXED value — a folder holding a
+// An independent scene: the session server is never handed an empty or a relative PATH when the
+// forge shim cannot stand. The checks differ from the feature's own: the fail-closed PATH is
+// pinned end-to-end on a MIXED value — a folder holding a
 // fake CLI, a relative folder, an empty entry and one free folder — where the free folder alone
 // must survive, exactly; the nothing-keepable shape must land on the four system folders, never
 // the empty string the fix replaced; and the CLI bound behind a STANDING shim must be the
