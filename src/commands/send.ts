@@ -54,6 +54,7 @@ import {
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
@@ -357,6 +358,10 @@ export type SendHost = {
   deliver(socketPath: string, frame: string): Promise<SendOutcome>;
   /** Types a native seat's trigger and reads herdr's status. Tests pass a fake. */
   native: NativePane;
+  /** The pane operations a profile's `typed_wake` needs, bound to one session. Absent, the real
+   *  herdr binding is used; tests pass a fake. Every other binding in this host still refuses to
+   *  type — this one is the single wake the profile gate allows (src/send/typed-wake.ts). */
+  typedWake?: (session: string) => TypedWakeHost;
   now(): Date;
   /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
    *  the docs runner pins one so the printed confirm line is exact. */
@@ -423,6 +428,7 @@ export const realHost: SendHost = {
     sendKey: refuseTyping,
     foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
+  typedWake: (session) => herdrTypedWakeHost(session),
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
@@ -520,7 +526,7 @@ function deliveryWordsOf(input: {
   home?: string;
 }): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
-  return seatDeliveryClass({
+  const effect = seatDeliveryClass({
     dir: input.dir,
     root: input.root,
     session: input.session,
@@ -528,7 +534,18 @@ function deliveryWordsOf(input: {
     ...(input.declared === undefined ? {} : { declared: input.declared }),
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
-  }).words;
+  });
+  // A profile that declares a typed wake is not a seat with no way to be woken: a send can type
+  // one line into an empty composer it saw twice (src/send/typed-wake.ts). Typing is not an
+  // event adapter, so the class — and every dispatch gate that reads it — stays `none`; only the
+  // class's "no way to be woken" sentence would now be untrue. The words say what happens next
+  // instead: the message waits in the bus inbox for the seat's next turn. A human's pane is
+  // never typed, so its words stay as they were.
+  const cli = state?.cli ?? input.declared?.cli ?? '';
+  if (effect.class === 'none' && effect.evidence.human !== true && (profileFor(cli)?.typedWake ?? null) !== null) {
+    return deliveryWords('pull-on-turn', input.seat);
+  }
+  return effect.words;
 }
 
 /** A console summary with the receiving seat's delivery class appended when the run read one: a
@@ -1217,12 +1234,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
   const human = overrides.human ?? (declared?.human === true);
-  // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked;
-  // the drop leg always closes the walk, so a seat with no event adapter keeps the message in its
-  // bus inbox and the sender is told so.
-  const eventLegs: DeliveryLeg[] = ordered.filter((leg) => !isTypingLeg(leg));
+  // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
+  // with one profile-gated exception (src/send/typed-wake.ts). A profile that declares
+  // `typed_wake: screen` keeps the order's own `typed` word, wherever the order puts it: the
+  // event legs still run first as the order resolves them, the typed wake is the fallback, and
+  // the drop leg closes the walk as the bus inbox. The `native` leg is set aside as before, and
+  // every CLI that declares no typed wake keeps the absolute refusal. A human's walk stays the
+  // drop leg alone: the ruling runs further than any profile.
+  const typedWake = human ? null : (profileFor(to.cli)?.typedWake ?? null);
+  const walkingTyped = typedWake !== null && ordered.includes('typed');
+  // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
+  // adapter keeps the message in its bus inbox and the sender is told so.
+  const eventLegs: DeliveryLeg[] = ordered.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
-  const typingSetAside = ordered.filter((leg) => isTypingLeg(leg));
+  const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop');
   const chosen: readonly DeliveryLeg[] = human ? ['drop'] : eventLegs;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
@@ -1868,7 +1893,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
     });
-    if (trigger === null && compose === null) {
+    if (trigger === null && compose === null && typedWake === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
       markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent` }));
@@ -1882,9 +1907,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const daemonSock = host.daemonSocket ?? daemonSocketPath(to.project, to.root, host.home);
     // A daemon dial is a route attempt: the record is staged before it, so a daemon that took the
     // request and died before answering still leaves the walk a durable copy. No socket file at
-    // the path means no daemon to dial, so a send every leg will refuse stages nothing.
-    if (!to.cross && compose === null && !wait && existsSync(daemonSock)) await ensureEpisode();
-    const viaDaemon = to.cross || compose !== null || wait
+    // the path means no daemon to dial, so a send every leg will refuse stages nothing. A typed
+    // wake is never handed to the daemon: its type and Enter refuse there, and the screen walk and
+    // the seat lock belong to this process.
+    if (!to.cross && compose === null && typedWake === null && !wait && existsSync(daemonSock)) await ensureEpisode();
+    const viaDaemon = to.cross || compose !== null || typedWake !== null || wait
       ? null
       : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
@@ -1907,6 +1934,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // behind the typed leg that is the walk's ending, and when one does the send goes on to it.
     const found: Found = findAgent(host, to.session, to.seat);
     if (!found.ok) {
+      // A typed wake is the order's fallback, not its only route: an ambiguous pane is one this
+      // wake will not type into, and the send goes on to the leg behind it (the drop inbox).
+      if (found.kind === 'refused' && typedWake !== null && at + 1 < walk.length) {
+        const why = `${to.seat}: herdr lists more than one agent of this name; nothing was typed`;
+        failures.push(`typed: ${why}`);
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
       if (found.kind === 'refused') {
         markLeg('typed', 'refused', found.reason);
         note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: found.reason }));
@@ -1925,6 +1961,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
     if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
+      const why = 'the seat is back at its shell; nothing was typed';
+      if (typedWake !== null && at + 1 < walk.length) {
+        failures.push(`typed: ${why}`);
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) };
       appendHistory(to.project, to.root, host.home, entry);
       markLeg('typed', 'skipped', 'the seat is back at its shell; nothing was typed');
@@ -1932,6 +1975,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return unreachable(io, dir, who, to.seat, 'the seat is back at its shell; nothing was typed', host, report);
     }
     report.sent = msgId;
+    if (typedWake !== null) {
+      // The profile-gated typed wake: one line into the empty idle box the wake saw twice, and a
+      // delivery only when the profile's working screen shows. A wake that does not deliver is
+      // not the walk's ending — the message is in the bus inbox, and the drop leg behind this one
+      // queues it there and reports that — so its reason joins the walk and the send goes on.
+      if (trigger === null) {
+        const why = `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was typed`;
+        failures.push(`typed: ${why}`);
+        markLeg('typed', 'skipped', why);
+        note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      await ensureEpisode();
+      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note);
+      if (wake.delivered) {
+        markLeg('typed', 'attempted');
+        return wake.exit;
+      }
+      failures.push(`typed: ${wake.reason}`);
+      markLeg('typed', 'attempted', wake.reason);
+      note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: wake.reason }));
+      continue;
+    }
     if (compose !== null) {
       // The seat's own folder: the record's `cwd` under the receiving team's root, else the
       // folder this send already writes to.
@@ -3351,6 +3417,81 @@ async function deliverNative(
     ...failed,
   });
   return sentUnconfirmed(io, seatName, report, ms, 'typed', noteLine);
+}
+
+/**
+ * The profile-gated typed wake (`typed_wake: screen`, walked for a seat whose profile declares
+ * it; src/send/typed-wake.ts). The signed record is written under the seat lock first — the same
+ * drop file every leg leaves — so a wake that cannot deliver leaves the message in the bus
+ * inbox, and the walk goes on to the drop leg, which queues it. The lock is held across the
+ * typing so a second send cannot type into the same composer. Only the profile's working screen,
+ * seen after an Enter this wake pressed, ends the send as `delivered (typed wake)`; a box that
+ * held other text, a working screen seen before any Enter, and a pane that could not be read are
+ * all reasons to leave the message to the bus, never a delivery.
+ */
+async function deliverTypedWakeSeat(
+  io: Io,
+  dir: string,
+  root: string,
+  who: string,
+  from: string,
+  project: string,
+  session: string,
+  seatName: string,
+  cli: string,
+  pane: string,
+  dropDir: string,
+  payload: RecordPayload,
+  trigger: string,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+  /** The reasons the legs before this one did not take the send: every history line carries them. */
+  failures: readonly string[] = [],
+  /** The address as written, when it was a form: every history line carries it beside the seat. */
+  sentAs: SentAs | null = null,
+  walkNote: WalkNote = (_attempt) => { /* no episode */ },
+): Promise<{ delivered: true; exit: number } | { delivered: false; reason: string }> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return { delivered: false, reason: `another command holds the seat (pid ${String(lock.held)}); nothing was typed` };
+  }
+  try {
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      return { delivered: false, reason: 'the record could not be written; nothing was typed' };
+    }
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    if (!written.ok) {
+      return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
+    }
+    const wakeHost = host.typedWake?.(session);
+    if (wakeHost === undefined) return { delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
+    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli);
+    if (!wake.delivered) return { delivered: false, reason: wake.reason };
+    const ms = host.now().getTime() - startedAt;
+    logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      ...historySender(report),
+      body: payload.body,
+      id: payload.id,
+      thread: payload.thread,
+      outcome: 'delivered (typed wake)',
+      note: wake.reason,
+      ms,
+      via: 'typed',
+      ...(failures.length > 0 ? { failed: [...failures] } : {}),
+    });
+    walkNote(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: wake.reason }));
+    return { delivered: true, exit: delivered(io, seatName, report, 'typed wake', 'typed') };
+  } finally {
+    lock.release();
+  }
 }
 
 /**

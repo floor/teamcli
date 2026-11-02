@@ -27,8 +27,17 @@ unattended:
 rules:
   launch_prompt: positional
 # The delivery class a run measured: no MCP inbox is registered for this CLI and it has no event
-# adapter, so an idle seat cannot be woken; a message waits in its bus inbox.
+# adapter, so no event leg wakes an idle seat; a message waits in its bus inbox, and the typed
+# wake below is the one fallback that can reach the box itself.
 delivery: none
+# The one exception to the no-pane-messaging rule (2026-10-31), granted for this profile alone
+# and narrowly: a send may type one trigger line into a composer two reads showed as the empty
+# idle prompt, presses Enter only while the box still holds exactly that line, and calls itself
+# delivered only when the `working` screen above appears. Nothing else is typed, no draft is
+# moved or cleared, and a wake that cannot deliver leaves the message in the bus inbox. The
+# screen rules below are what the wake reads back: `idle` is the empty box, `working` is the
+# acknowledgement. See src/send/typed-wake.ts.
+typed_wake: screen
 # herdr 0.7.1 reports a muse pane as no agent, or `unknown`, while the CLI runs: `agent list`
 # carried the 1.4.11 pane with no `agent` type and `agent_status: "unknown"` while Muse sat at
 # its ready box. The profile's own screen reading is the seat's state there: a recognised idle

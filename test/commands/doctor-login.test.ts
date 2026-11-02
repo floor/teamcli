@@ -117,6 +117,7 @@ describe('checkLogin with fake command results', () => {
       lobbyFiles: [],
       startupReads: [],
       mcpInbox: null,
+      typedWake: null,
       delivery: 'none',
       idleTimeout: 30,
       exitTimeout: 10,
