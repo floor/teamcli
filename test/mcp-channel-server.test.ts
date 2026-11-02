@@ -54,6 +54,11 @@ function place(launch = `claude ${FLAG}`): Place {
   mkdirSync(join(root, '.agents'));
   mkdirSync(join(root, 'home'), { mode: 0o700 });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamText(launch));
+  // The state `team up` leaves: the server proves its caller stands on lead's recorded pane.
+  writeFileSync(
+    join(root, '.agents', 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: 'pane-lead' } }, worktrees: {} } } })}\n`,
+  );
   // A server started with no --file resolves its team from the registry record holding the seat.
   upsertTeam(join(root, 'home'), teamIdOf(root), {
     project: 'acme',
@@ -140,8 +145,13 @@ async function until(check: () => boolean, limit = 400): Promise<void> {
   for (let at = 0; at < limit && !check(); at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+/** The caller lead's own launch line places: the seat, on its recorded pane, in the session. */
+function seatCaller(): { kind: 'seat'; name: string; pane: string; session: string } {
+  return { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION };
+}
+
 async function preloaded(root: string, home: string, lines: readonly string[]) {
-  const io = testIo(root);
+  const io = testIo(root, seatCaller());
   const replies: string[] = [];
   const code = await runMcpServe({ seat: 'lead', session: SESSION }, io, {
     lines: (async function* () {
@@ -196,7 +206,7 @@ describe('the push', () => {
   test('a record that arrives while the server runs is pushed once, with its header and id-only meta', async () => {
     const at = place();
     try {
-      const io = testIo(at.root);
+      const io = testIo(at.root, seatCaller());
       const feed = queue();
       const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       await until(() => existsSync(listenerPath(at.dropDir)));
@@ -229,7 +239,7 @@ describe('the push', () => {
   test('ack writes the signed read receipt with read_by channel, and the message is not pushed again', async () => {
     const at = place();
     try {
-      const io = testIo(at.root);
+      const io = testIo(at.root, seatCaller());
       const feed = queue();
       const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       await until(() => existsSync(listenerPath(at.dropDir)));
@@ -258,7 +268,7 @@ describe('the push', () => {
   test('an ack for an id this inbox does not hold is refused, and writes nothing', async () => {
     const at = place();
     try {
-      const io = testIo(at.root);
+      const io = testIo(at.root, seatCaller());
       const feed = queue();
       const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       await until(() => existsSync(listenerPath(at.dropDir)));

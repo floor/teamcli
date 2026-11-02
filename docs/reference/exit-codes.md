@@ -7,7 +7,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | Id | Command | Code | Meaning | Example |
 | --- | --- | --- | --- | --- |
 | `ack.read` | `ack` | 0 | the message was marked read, or another reader had already marked it read or answered it | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped` | `ack` | 0 | every record of the seat due by the window was marked read, or already was | `team ack --seat worker --older-than 7d` |
 | `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped-failed` | `ack` | 1 | at least one record of the seat due by the window could not be marked read; the others were | `team ack --seat worker --older-than 7d` |
+| `ack.scoped-refused` | `ack` | 1 | the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands | `team ack --seat worker --older-than 7d` |
 | `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
 | `add.approval-requested` | `add` | 0 | an owner-seat request for this add was recorded and sent to the owner seat | `team add <name> --request` |
@@ -118,10 +121,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
 | `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
+| `archive.scoped` | `archive` | 0 | every family of the seat due by the window was moved, or nothing was due | `team archive --seat worker --older-than 7d` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
 | `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
 | `archive.file-owner` | `archive` | 1 | --file is the owner’s | `team archive --file .agents/team.yaml` |
 | `archive.out-owner` | `archive` | 1 | --out is the owner’s | `team archive --out ~/archives` |
+| `archive.scoped-failed` | `archive` | 1 | at least one family of the seat due by the window could not be moved; the others were | `team archive --seat worker --older-than 7d` |
+| `archive.scoped-refused` | `archive` | 1 | the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands | `team archive --seat worker --older-than 7d` |
 | `archive.file` | `archive` | 2 | the team file can’t be read | `team archive --file missing.yaml` |
 | `archive.file-invalid` | `archive` | 2 | the team file can’t be parsed | `team archive --file team.yaml` |
 | `archive.invocation` | `archive` | 2 | the invocation can’t be read | `team archive extra` |
@@ -805,6 +811,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
 | `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
+| `team.mcp-serve-replacement-ended` | `team` | 1* | the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it) | `team mcp serve` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
@@ -963,3 +970,5 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.remove-flags` | `worktree` | 2 | remove takes no --kind or --seat | `team worktree remove task --kind fix` |
 | `worktree.subcommand` | `worktree` | 2 | a subcommand is required | `team worktree` |
 | `worktree.task-required` | `worktree` | 2 | a task name is required | `team worktree new` |
+
+`*` the command leaves with the code the process it waited on exited with. The code listed is the fallback: what it leaves when that process gave none, because a signal ended it.

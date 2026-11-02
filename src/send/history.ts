@@ -13,7 +13,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { storePath, storesFolder } from '../store/store.ts';
 
@@ -196,6 +196,40 @@ import { mkdirSync } from 'node:fs';
 function createDir0700(path: string): void {
   mkdirSync(path, { mode: 0o700 });
   chmodSync(path, 0o700);
+}
+
+/**
+ * Ensures each folder, relative to `storeDir`, exists as a real directory of this user's.
+ * Every component is checked with the ladder's `lstat` rule and missing levels are created one
+ * at a time at mode 0700, never recursively: a symbolic link anywhere below the store is
+ * refused and never followed, so a write beneath the store cannot land outside it. Returns
+ * null when every folder is ready, or the offending path and reason.
+ */
+export function ensureFoldersBelow(storeDir: string, folders: readonly string[]): string | null {
+  const base = ladderProblem(storeDir);
+  if (base !== null) return `${storeDir}: ${base}`;
+  const ready = new Set<string>();
+  for (const folder of folders) {
+    let at = storeDir;
+    for (const part of folder.split(sep)) {
+      if (part === '' || part === '.') continue;
+      at = join(at, part);
+      if (ready.has(at)) continue;
+      const held = heldAt(at);
+      if (held.kind === 'missing') {
+        try {
+          createDir0700(at);
+        } catch {
+          return `${at}: the state folder could not be created`;
+        }
+      } else {
+        const problem = ladderProblem(at);
+        if (problem !== null) return `${at}: ${problem}`;
+      }
+      ready.add(at);
+    }
+  }
+  return null;
 }
 
 /**

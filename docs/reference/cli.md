@@ -34,6 +34,7 @@ Hidden: no
 Usage:
 
     team ack <id> [--json]
+    team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -45,17 +46,20 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
+| `--seat` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id` | yes | no |
 
 ## `add`
 
@@ -314,6 +318,7 @@ Hidden: no
 Usage:
 
     team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+    team archive --seat <seat> --older-than <dur> [--dry-run] [--file <path>]
 
 ### Who may run it
 
@@ -330,7 +335,9 @@ Usage:
 | `--help` | no | no | no |
 | `--keep-running` | no | no | no |
 | `--key` | yes | no | no |
+| `--older-than` | yes | no | no |
 | `--out` | yes | no | no |
+| `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
@@ -1705,7 +1712,7 @@ Usage:
 
 ### Who may run it
 
-`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either
+`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat, and its own row says who it admits
 
 ### Flags
 
@@ -1756,7 +1763,7 @@ Usage:
 
 #### Who may run it
 
-`any-caller` — the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller
+`seat-only` — the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team's own session, and never the owner; the seat's current claim, when there is one, must be the --epoch the server carries
 
 #### Flags
 

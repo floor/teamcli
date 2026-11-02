@@ -68,6 +68,21 @@ seats:
 `;
 }
 
+/** The state `team up` leaves: every seat ready on the pane it was launched on. A server proves
+ *  its caller against this record before it opens an inbox. */
+function writeState(root: string, session: string, seats: readonly string[]): void {
+  const rows = Object.fromEntries(seats.map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
+  writeFileSync(
+    join(root, '.agents', 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [session]: { seats: rows, worktrees: {} } } })}\n`,
+  );
+}
+
+/** The caller a seat's own launch line places: the seat, on its recorded pane, in the session. */
+function seatCaller(seat: string, session: string): { kind: 'seat'; name: string; pane: string; session: string } {
+  return { kind: 'seat', name: seat, pane: `pane-${seat}`, session };
+}
+
 type World = { home: string; root: string; lobby: string };
 
 /** A registry team in the shape `team init` + `team migrate` leave: the record in the scene's
@@ -91,6 +106,7 @@ function registryWorld(cli: string): World {
       { agent: 'agt_000000000002', seat: 'helper', role: 'worker' },
     ],
   });
+  writeState(root, SESSION, ['lead', 'helper']);
   return { home, root, lobby: temp('team-inbox-lobby-') };
 }
 
@@ -113,6 +129,7 @@ function otherRegistryTeam(at: World, session = 'other', seat = 'helper'): strin
     root,
     roster: [{ agent: 'agt_000000000003', seat, role: 'worker' }],
   });
+  writeState(root, session, [seat]);
   return root;
 }
 
@@ -207,7 +224,9 @@ async function serveFrom(at: World, args: readonly string[]): Promise<{ code: nu
     const index = args.indexOf(flag);
     return index < 0 ? undefined : args[index + 1];
   };
-  const io = testIo(at.lobby);
+  const seat = value('--seat');
+  const session = value('--session') ?? SESSION;
+  const io = testIo(at.lobby, seat === undefined ? undefined : seatCaller(seat, session));
   const replies: string[] = [];
   const code = await runMcpServe(
     { seat: value('--seat'), session: value('--session') },

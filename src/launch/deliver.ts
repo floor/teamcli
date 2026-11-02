@@ -186,6 +186,27 @@ export function boxHoldsOther(cli: string, text: string, screen: string | undefi
   return holdsBox(text, box) ? null : (readsBack(text, box).row ?? '');
 }
 
+/** Whether the box shows exactly `text` on its input row and then one empty row under it — the
+ *  frame Muse Code 1.4.14 leaves when the Enter lands before its completion row has settled: the
+ *  text stays on the input row, the Enter is drawn as a typed newline, one empty row inside the
+ *  box, and the completion row is gone. Measured on 1.4.14 (echo provider, a scratch pane): an
+ *  Enter pressed on the newline frame runs the text (10/10 runs), while ctrl+u does nothing there.
+ *  False for anything else, a box that is not readable included. */
+export function boxHoldsTextAndEmptyRow(cli: string, text: string, screen: string | undefined, options?: ScreenOptions): boolean {
+  if (screen === undefined) return false;
+  if (readScreen(cli, screen, options).kind !== 'unsent') return false;
+  const box = readBox(cli, screen, options);
+  return box !== null && box.first === text && box.rows.length === 1 && box.rows[0] === '';
+}
+
+/** How long an exit typing waits, on a profile that declares `exit_completion`, between the box
+ *  reading back as the exit text and the Enter, so the CLI's own completion row has settled.
+ *  Muse Code 1.4.14, measured on a scratch pane (echo provider): the row appears about 21 ms
+ *  after the text is typed, and an Enter pressed 0 ms or 50 ms after the row appeared typed a
+ *  newline in 2/2 runs each, while 100 ms, 150 ms and 250 ms ran the command in 2/2 runs each.
+ *  250 ms is the longest measured delay, with its margin. */
+export const EXIT_COMPLETION_SETTLE_MS = 250;
+
 /** How long a reading waits for the pane to draw what a send left. `send-text` returns before
  *  the pane renders — a capture taken the instant after a typing still read the idle screen,
  *  and read the text a moment later — so the reading that decides the next key waits, ending

@@ -110,6 +110,10 @@ export interface Profile {
    *  key is established for this CLI: a seat that asks the question is one that could not be
    *  stopped by asking. */
   exitConfirm: string | null;
+  /** Whether the CLI draws its own completion row for the exit text inside the box, so the exit
+   *  typing has to wait for that row to settle and an Enter that lands early is drawn as a typed
+   *  newline. False where no capture shows one. */
+  exitCompletion: boolean;
   /** The measured way into this CLI's box — its clear keys and paste surface. Null when no run
    *  measured them: a delivery that finds unsent text there holds, and a restart refuses. */
   input: InputBlock | null;
@@ -122,6 +126,12 @@ export interface Profile {
   /** How the team inbox registers with this CLI, from the route a run measured. Null when no
    *  route is measured for this CLI: its seats stay on the drop and typed legs. */
   mcpInbox: InboxBlock | null;
+  /** The one wake a send may type into this CLI's pane, when the profile declares one
+   *  (`typed_wake`). Null, the default, keeps the no-pane-messaging rule: the typed leg never
+   *  runs for this CLI. `screen` means one trigger line into an empty idle box the send saw on
+   *  two reads, and `delivered` only when the profile's own working screen shows — see
+   *  src/send/typed-wake.ts. */
+  typedWake: TypedWake | null;
   /** How an idle seat of this CLI can be told it has a message, as the profile's own
    *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
    *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
@@ -193,6 +203,14 @@ export type DeliveryClass = 'push' | 'between-turns' | 'pull-on-turn' | 'none';
 
 /** The delivery classes a profile may declare, in the order an effective class is chosen. */
 export const DELIVERY_CLASSES = ['push', 'between-turns', 'pull-on-turn', 'none'] as const;
+
+/** The one wake a send may type, when a profile declares `typed_wake`. `screen` is the measured
+ *  Muse wake: one trigger line into an empty idle box seen on two reads, and `delivered` only
+ *  when the profile's working screen shows (src/send/typed-wake.ts). */
+export type TypedWake = 'screen';
+
+/** The typed wakes a profile may declare: a closed set, never a guess. */
+export const TYPED_WAKES = ['screen'] as const;
 
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
@@ -1517,7 +1535,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers', 'public_only'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'typed_wake', 'not_started', 'abandon_answers', 'public_only'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1630,6 +1648,16 @@ function deliveryOf(entry: YamlEntry): DeliveryClass {
     fail(entry.line, `"delivery" must be one of: ${DELIVERY_CLASSES.join(', ')}`);
   }
   return value as DeliveryClass;
+}
+
+/** The value of `typed_wake`: one word from the closed set, never a guess. Only a profile whose
+ *  own screens were captured may name one: the wake is read back through those screens. */
+function typedWakeOf(entry: YamlEntry): TypedWake {
+  const value = text(entry, 'typed_wake');
+  if (!(TYPED_WAKES as readonly string[]).includes(value)) {
+    fail(entry.line, `"typed_wake" must be one of: ${TYPED_WAKES.join(', ')}`);
+  }
+  return value as TypedWake;
 }
 
 /** The value of `herdr_status`: `reliable` (the default when the key is absent) or
@@ -1853,6 +1881,13 @@ export function exitClearKey(text: string): string | null {
   return entry === undefined ? null : clearKeyOf(entry);
 }
 
+/** The `typed_wake` a profile snippet names, by the loader's own rule: for tests. A word outside
+ *  the closed set throws; an absent key reads as null, as an absent optional key does. */
+export function typedWakeKey(text: string): TypedWake | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'typed_wake');
+  return entry === undefined ? null : typedWakeOf(entry);
+}
+
 /** The `input` block a profile snippet names, by the loader's own rule: for tests. A key outside
  *  the closed sets, or a `mid_turn` with no `clear_working`, throws; an absent block reads as
  *  null, as an absent optional key does. */
@@ -1918,10 +1953,12 @@ function launchOf(root: YamlNode): Shipped {
   const unreadModelEntry = optional(entries, 'unread_model');
   const exitClearEntry = optional(entries, 'exit_clear');
   const exitConfirmEntry = optional(entries, 'exit_confirm');
+  const exitCompletionEntry = optional(entries, 'exit_completion');
   const inputEntry = optional(entries, 'input');
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
+  const typedWakeEntry = optional(entries, 'typed_wake');
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
@@ -1966,10 +2003,12 @@ function launchOf(root: YamlNode): Shipped {
       sessionCli: sessionCliEntry ? sessionCliOf(sessionCliEntry) : null,
       exitClear: exitClearEntry ? clearKeyOf(exitClearEntry) : null,
       exitConfirm: exitConfirmEntry ? confirmKeyOf(exitConfirmEntry) : null,
+      exitCompletion: exitCompletionEntry ? boolOf(exitCompletionEntry.value, 'exit_completion') : false,
       input: inputEntry ? inputOf(inputEntry) : null,
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
+      typedWake: typedWakeEntry ? typedWakeOf(typedWakeEntry) : null,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),

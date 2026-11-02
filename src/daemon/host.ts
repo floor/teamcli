@@ -42,7 +42,7 @@ import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
 import type { NextAnswer, NextClaim, NextHandlerInput } from './next.ts';
 import { createFaultInbox } from './fault.ts';
-import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
+import { createHostedBeat, createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
@@ -542,6 +542,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed && !afterClose) return;
     appendDaemonLog(home, line, now());
   };
+
+  // The beat between hosted routes: the interval owns it, and a hosted pass that holds the event
+  // loop carries the due beats it displaces to every other route. It never touches the calling
+  // route's state — that pass may hold the state lock — and it writes no daemon record: the
+  // interval's own beat does that when it next runs.
+  const hostedBeat = createHostedBeat({
+    intervalMs: heartbeatMs,
+    watches: () => hostedWatches.map((one) => one.watch),
+    log: (text) => logLine(text),
+    now,
+  });
 
   const stuckNow = (): DaemonStuckRequest[] => {
     const at = now().getTime();
@@ -1352,6 +1363,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           required: build.required,
           standby: build.standby,
           ...(build.tick === undefined ? {} : { onTick: build.tick }),
+          // A due beat landing inside this route's pass renews the other routes, never this one:
+          // the pass can hold this route's state lock in its fold.
+          onBeat: () => hostedBeat.midPass(route),
           now,
         }),
       });
@@ -1825,14 +1839,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     // A tick releases only the waits whose own due instant has passed and returns at once: a
     // pass that is still running is never awaited here, so one slow or hanging route cannot
-    // stop the daemon's liveness or another route's cycles. Each route is isolated.
-    for (const one of hostedWatches) {
-      try {
-        one.watch.tick(now());
-      } catch (error) {
-        logLine(`root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`);
-      }
-    }
+    // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
+    // is marked so a pass that displaced this one carries the next due beat itself.
+    hostedBeat.tick();
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each

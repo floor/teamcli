@@ -56,6 +56,18 @@
 // Two publishes are not sites: `process.exitCode = code` in the `.then` callback of `main`, and
 // `process.exitCode = reportFailure(...)` for the declaration in `src/cli.ts`.
 //
+// One form leaves with a code this command did not choose, and it is allowed at exactly one site:
+// `process.exit(<parameter>)` inside `restartSelf`'s default `exit` hook in `src/mcp/serve.ts`,
+// where the parameter is that hook's own and is never assigned or shadowed. That hook in turn is
+// called from exactly one place — the child's `exit` or `close` handler, as
+// `exit(<that handler's code parameter> ?? 1)` — and any other caller, argument or use of the name
+// is an error. Every row marked on that site has `"inherits": true`; the row's code is the
+// fallback — the code the command leaves when the process it waited on gave none (a signal ended
+// it) — and the page says the site leaves with the child's code. Any other
+// `process.exit(<parameter>)`, an assignment to the hook's parameter, or another binding of its
+// name inside the hook is an error: the form is not a general way past the contract. An inherited
+// row on any other site, or a fixed row on this one, is an error too.
+//
 // A `throw` with its own marker is a row. An unmarked `throw` a run function can reach outside
 // a try that catches it is covered by `team.command-threw`.
 //
@@ -75,6 +87,8 @@ export type ExitRow = {
   code: number;
   command: string;
   id: string;
+  /** The site leaves with a code a child handed it; `code` is the fallback when the child gave none. */
+  inherits?: true;
   meaning: string;
   trigger: string;
 };
@@ -86,6 +100,8 @@ export type ExitSite = {
   command: string;
   file: string;
   ids: string[];
+  /** The exit's argument is a parameter of the enclosing function: a code handed in, not chosen here. */
+  inherited?: true;
   line: number;
 };
 
@@ -251,6 +267,212 @@ function numericArgument(expression: ts.Expression): number | null {
   if (!ts.isNumericLiteral(expr)) return null;
   const code = Number(expr.text);
   return Number.isInteger(code) ? code : null;
+}
+
+/** The one site whose exit code is a child's: `restartSelf`'s default exit hook, written as
+ *  `const exit = hooks.exit ?? ((code: number): void => { … process.exit(code) })` directly in
+ *  that function's body. Every other `process.exit(<parameter>)` is refused, so the form cannot
+ *  become a general way past the contract. */
+const INHERITED_SITE = { file: 'src/mcp/serve.ts', func: 'restartSelf', hook: 'exit', parameter: 'code' } as const;
+
+/** `process.exit(<parameter>)` — the form, whether or not it is allowed here and whether or not
+ *  the parameter can still hold the argument the hook was called with. */
+type InheritedCheck = { form: false } | { form: true; problem: string | null };
+
+/** The nearest function that contains `node`, not counting `node` itself. */
+function enclosingFunction(node: ts.Node): ExitFunc | undefined {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (isFunc(current)) return current;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+/** Whether `owner` is the one allowed inherited site — the `exit` variable's default hook,
+ *  written directly in `restartSelf`'s body, with the parameter the allowlist names — and the
+ *  declaration of that hook, which the caller check reads. */
+function allowedInheritedSite(owner: ExitFunc, name: string, file: string): ts.VariableDeclaration | null {
+  if (file !== INHERITED_SITE.file || name !== INHERITED_SITE.parameter) return null;
+  let node: ts.Node = owner;
+  while (
+    node.parent &&
+    (ts.isParenthesizedExpression(node.parent) ||
+      (ts.isBinaryExpression(node.parent) &&
+        node.parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+        node.parent.right === node))
+  ) {
+    node = node.parent;
+  }
+  const declaration = node.parent;
+  if (!declaration || !ts.isVariableDeclaration(declaration)) return null;
+  if (!ts.isIdentifier(declaration.name) || declaration.name.text !== INHERITED_SITE.hook) return null;
+  const statement = declaration.parent?.parent;
+  if (!statement || !ts.isVariableStatement(statement)) return null;
+  const body = statement.parent;
+  if (!body || !ts.isBlock(body)) return null;
+  const func = body.parent;
+  return func !== undefined && ts.isFunctionDeclaration(func) && func.body === body && func.name?.text === INHERITED_SITE.func
+    ? declaration
+    : null;
+}
+
+/** Whether an identifier is a use of a value, not a property's name, a label or a declaration. */
+function isValueReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (!parent) return true;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return false;
+  if (ts.isLabeledStatement(parent) || ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) return false;
+  return true;
+}
+
+/** The hook's one caller: `exit(<the handler's code parameter> ?? 1)` inside the child's `exit`
+ *  or `close` handler, and no other use of the name. A literal, another expression, a second
+ *  call or an alias would leave a code the hook did not receive from the child; so would
+ *  assigning or shadowing the handler's own code parameter before the call. */
+function inheritedCallerProblem(hook: ts.VariableDeclaration, name: string): string | null {
+  const sentence = `the exit hook is called once, from the child's exit or close handler, with that handler's code parameter and 1`;
+  const body = hook.parent?.parent?.parent;
+  if (!body || !ts.isBlock(body)) return sentence;
+  const references: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name && node !== hook.name && isValueReference(node)) references.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  if (references.length !== 1) return `${sentence}; the hook is used ${String(references.length)} times there`;
+  const reference = references[0]!;
+  const call = reference.parent;
+  if (!call || !ts.isCallExpression(call) || call.expression !== reference) return sentence;
+  const arg = call.arguments[0];
+  if (!arg || call.arguments.length !== 1) return sentence;
+  const expr = unwrap(arg);
+  if (!ts.isBinaryExpression(expr) || expr.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken) return sentence;
+  const left = unwrap(expr.left);
+  const right = unwrap(expr.right);
+  if (!ts.isIdentifier(left) || !ts.isNumericLiteral(right) || Number(right.text) !== 1) return sentence;
+  const handler = enclosingFunction(call);
+  if (!handler) return sentence;
+  // The exit and close events hand the code first: only that parameter is the one the argument
+  // must name. A later parameter is the signal, never the code.
+  const first = handler.parameters[0];
+  if (!first || !ts.isIdentifier(first.name) || first.name.text !== left.text) return sentence;
+  let node: ts.Node = handler;
+  while (node.parent && (ts.isParenthesizedExpression(node.parent) || ts.isAsExpression(node.parent))) node = node.parent;
+  const listening = node.parent;
+  if (!listening || !ts.isCallExpression(listening) || !listening.arguments.includes(node as ts.Expression)) return sentence;
+  const callee = unwrap(listening.expression);
+  if (!ts.isPropertyAccessExpression(callee) || (callee.name.text !== 'once' && callee.name.text !== 'on')) return sentence;
+  if (!ts.isIdentifier(callee.expression) || callee.expression.text !== 'child') return sentence;
+  const event = listening.arguments[0];
+  if (!event || !ts.isStringLiteral(event) || (event.text !== 'exit' && event.text !== 'close')) return sentence;
+  return inheritedParameterProblem(handler, left.text, 'the child exit handler');
+}
+
+/** Every assignment operator. The compiler exposes the predicate only internally, so the kinds
+ *  are listed: a compound assignment changes the code as surely as a plain one. */
+const ASSIGNMENT_KINDS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+  ts.SyntaxKind.SlashEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.LessThanLessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.AmpersandEqualsToken,
+  ts.SyntaxKind.BarEqualsToken,
+  ts.SyntaxKind.CaretEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** The identifiers an assignment target writes to. `code.x = 1` writes a property, not `code`. */
+function writtenNames(target: ts.Expression): string[] {
+  const expr = unwrap(target);
+  if (ts.isIdentifier(expr)) return [expr.text];
+  if (ts.isArrayLiteralExpression(expr)) return expr.elements.flatMap((element) => writtenNames(element));
+  if (ts.isObjectLiteralExpression(expr)) {
+    return expr.properties.flatMap((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) return [property.name.text];
+      if (ts.isPropertyAssignment(property)) return writtenNames(property.initializer);
+      if (ts.isSpreadAssignment(property)) return writtenNames(property.expression);
+      return [];
+    });
+  }
+  return [];
+}
+
+/** Whether the hook's parameter can still be the argument it was called with: one assignment, one
+ *  update, or one other binding of its name inside the hook is enough to make its code unreadable. */
+function inheritedParameterProblem(owner: ExitFunc, name: string, inside = 'the hook'): string | null {
+  let problem: string | null = null;
+  const fail = (why: string): void => {
+    problem ??= why;
+  };
+  const visit = (node: ts.Node): void => {
+    if (problem !== null) return;
+    if (node !== owner && isFunc(node) && node.parameters.some((param) => bindingNames(param.name).includes(name))) {
+      fail(`the inherited exit parameter ${name} is shadowed by a nested function parameter`);
+      return;
+    }
+    if (ts.isVariableDeclaration(node) && bindingNames(node.name).includes(name)) {
+      fail(`the inherited exit parameter ${name} is shadowed by a declaration`);
+      return;
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name?.text === name) {
+      fail(`the inherited exit parameter ${name} is shadowed by a declaration`);
+      return;
+    }
+    if (ts.isCatchClause(node) && node.variableDeclaration && bindingNames(node.variableDeclaration.name).includes(name)) {
+      fail(`the inherited exit parameter ${name} is shadowed by a catch binding`);
+      return;
+    }
+    if (ts.isBinaryExpression(node) && ASSIGNMENT_KINDS.has(node.operatorToken.kind) && writtenNames(node.left).includes(name)) {
+      fail(`the inherited exit parameter ${name} is assigned inside ${inside}`);
+      return;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      ts.isIdentifier(unwrap(node.operand)) &&
+      (unwrap(node.operand) as ts.Identifier).text === name
+    ) {
+      fail(`the inherited exit parameter ${name} is updated inside ${inside}`);
+      return;
+    }
+    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && ts.isExpression(node.initializer) && writtenNames(node.initializer).includes(name)) {
+      fail(`the inherited exit parameter ${name} is assigned inside ${inside}`);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(owner);
+  return problem;
+}
+
+/** Whether `call` exits with a parameter of the function that contains it — the inherited form.
+ *  `form: false` is any other argument; otherwise `problem` is why this use is refused. */
+function inheritedExit(call: ts.CallExpression, file: string): InheritedCheck {
+  const arg = call.arguments[0];
+  if (!arg) return { form: false };
+  const expr = unwrap(arg);
+  if (!ts.isIdentifier(expr)) return { form: false };
+  const owner = enclosingFunction(call);
+  if (!owner) return { form: false };
+  if (!owner.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === expr.text)) return { form: false };
+  const hook = allowedInheritedSite(owner, expr.text, file);
+  if (!hook) {
+    return {
+      form: true,
+      problem: `the inherited exit form is allowed only at ${INHERITED_SITE.file}'s ${INHERITED_SITE.func} ${INHERITED_SITE.hook} hook`,
+    };
+  }
+  return { form: true, problem: inheritedParameterProblem(owner, expr.text) ?? inheritedCallerProblem(hook, INHERITED_SITE.hook) };
 }
 
 const UNREADABLE = "exit expression the contract can't read: return a marked literal or a covered call";
@@ -843,8 +1065,9 @@ export function analyze(files?: ReadonlyMap<string, string>): Analysis {
     return { unreadable: name };
   }
 
-  function reject(file: string, source: ts.SourceFile, node: ts.Node): void {
-    unreadable.push(`${file}:${lineOf(source, node)}: ${UNREADABLE}`);
+  function reject(file: string, source: ts.SourceFile, node: ts.Node, why?: string | null): void {
+    const detail = why ? `${why}: ` : '';
+    unreadable.push(`${file}:${lineOf(source, node)}: ${detail}${UNREADABLE}`);
   }
 
   function classify(expr: ts.Expression, file: string, fn: ts.Node, at: ts.Node, command: string, fromArrow: boolean): void {
@@ -916,6 +1139,15 @@ export function analyze(files?: ReadonlyMap<string, string>): Analysis {
         const code = arg ? numericArgument(arg) : null;
         if (arg && code !== null) {
           sites.push({ command, file, line: lineOf(source, node), codes: [code], ids: attachedIds(source, node) });
+        } else if (arg) {
+          const inherited = inheritedExit(node, file);
+          if (inherited.form && inherited.problem === null) {
+            sites.push({ command, file, line: lineOf(source, node), codes: [], ids: attachedIds(source, node), inherited: true });
+          } else {
+            // A parameter's exit is refused everywhere but the one allowlisted hook, and there
+            // only while the parameter still holds the argument the hook was called with.
+            reject(file, source, node, inherited.form ? inherited.problem : null);
+          }
         } else {
           reject(file, source, node);
         }
@@ -1132,7 +1364,13 @@ export function render(rows: readonly ExitRow[]): string {
     '',
     '| Id | Command | Code | Meaning | Example |',
     '| --- | --- | --- | --- | --- |',
-    ...sorted.map((row) => `| \`${row.id}\` | \`${row.command}\` | ${row.code} | ${row.meaning.replaceAll('|', '\\|')} | \`${row.trigger.replaceAll('|', '\\|')}\` |`),
+    ...sorted.map((row) => `| \`${row.id}\` | \`${row.command}\` | ${row.code}${row.inherits ? '*' : ''} | ${row.meaning.replaceAll('|', '\\|')} | \`${row.trigger.replaceAll('|', '\\|')}\` |`),
+    ...(sorted.some((row) => row.inherits)
+      ? [
+          '',
+          '`*` the command leaves with the code the process it waited on exited with. The code listed is the fallback: what it leaves when that process gave none, because a signal ended it.',
+        ]
+      : []),
     '',
   ];
   return lines.join('\n');
@@ -1143,6 +1381,7 @@ function canonical(contract: Contract): string {
     code: row.code,
     command: row.command,
     id: row.id,
+    ...(row.inherits ? { inherits: true as const } : {}),
     meaning: row.meaning,
     trigger: row.trigger,
   }));
@@ -1219,6 +1458,7 @@ export function problems(input: CheckInput = {}): string[] {
     if (seen.has(row.id)) out.push(`contract/exit-codes.json: ${row.id} is listed twice`);
     seen.add(row.id);
     if (!Number.isInteger(row.code) || row.code < 0) out.push(`contract/exit-codes.json: ${row.id} has a bad code`);
+    if (row.inherits !== undefined && row.inherits !== true) out.push(`contract/exit-codes.json: ${row.id} has a bad inherits value`);
     if (!row.meaning || !row.trigger) out.push(`contract/exit-codes.json: ${row.id} needs a meaning and a trigger`);
   }
   if (render(contract.rows) !== page) out.push('docs/reference/exit-codes.md: differs from the contract');
@@ -1234,6 +1474,10 @@ export function problems(input: CheckInput = {}): string[] {
   const analysis = analyze(input.files);
   for (const line of analysis.unreadable) out.push(line);
   const sites = analysis.sites;
+  const inherited = sites.filter((site) => site.inherited === true);
+  if (inherited.length > 1) {
+    out.push(`the inherited exit form is allowed at one site; ${String(inherited.length)} sites use it`);
+  }
   const claimed = new Map<string, { file: string; line: number }>();
   for (const site of sites) {
     const where = `${site.file}:${site.line}`;
@@ -1248,6 +1492,14 @@ export function problems(input: CheckInput = {}): string[] {
         continue;
       }
       if (row.command !== site.command) out.push(`${where}: ${id} is marked on ${site.command}, the row says ${row.command}`);
+      if (site.inherited) {
+        if (!row.inherits) out.push(`${where}: ${id} is on an inherited exit, the row names code ${row.code}`);
+        continue;
+      }
+      if (row.inherits) {
+        out.push(`${where}: ${id} is an inherited row, the site returns ${site.codes.join(' or ')}`);
+        continue;
+      }
       if (!site.codes.includes(row.code)) {
         out.push(`${where}: ${id} says code ${row.code}, the site returns ${site.codes.join(' or ')}`);
       }

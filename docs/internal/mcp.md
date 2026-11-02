@@ -36,6 +36,17 @@ seat's folder or a path: a message id must be a lowercase UUID (or the `unread-<
 build before 0.5.3 wrote for a lead's runtime report), and a string that is anything else never
 reaches the filesystem.
 
+The server also serves only its own launch. Before it opens the inbox it proves the process that
+started it is the seat `--seat` names: the caller must place as that seat, on the pane the team's
+state records for it, in the team's own session — the same reading every command makes of its
+caller. A process started with another seat's file, seat or session is refused even when it holds
+that seat's own launch epoch, and a seat the state records on another pane, or with no pane, is
+refused too. The state's current claim for the seat is the launch's other half: when a claim is
+there, `--epoch` must name that claim's epoch; when there is none, the server must carry no epoch.
+Both proofs run again on every tool call and every channel push, so a seat stopped, moved or
+relaunched while an old process lives is served nothing by it — no list, no body and no receipt —
+and a push it would have made is not written.
+
 `inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
 cannot leave that receipt is refused, so the server never hands over a body it did not record. The
 receipt is the signed status receipt `team messages` also writes: `{payload: {kind, status, id, to,
@@ -296,8 +307,9 @@ document on stdout — `error.id` `mcp.invocation`, `error.message` the sentence
 | `team mcp: unexpected "x"` / `team mcp: unknown option --x` (each with the usage) | 2 |
 | `team mcp: --seat <seat> is required` / `team mcp: unknown option --json` (each with the usage) | 2 |
 
-`serve` refuses to start, writing one line on stderr and nothing on stdout, when the placement
-can't be read (the reason is the team file's own when it can't be read):
+`serve` refuses to start, writing one line on stderr and nothing on stdout, when the placement,
+the caller's own placement or the launch can't be read (the reason is the team file's own when it
+can't be read):
 
 | Message | Exit |
 | --- | --- |
@@ -306,12 +318,25 @@ can't be read (the reason is the team file's own when it can't be read):
 | `team mcp serve: the team registry cannot be read: <reason>` (no `--file`, and the registry file does not parse) | 2 |
 | `team mcp serve: the team file declares no seat "ghost"` | 2 |
 | `team mcp serve: the team's session is "acme", not "other"` | 2 |
+| `team mcp serve: the team state cannot be read, so this server cannot prove its caller: <reason>` | 2 |
+| ``team mcp serve: the state records no pane for seat "lead" in session "acme", so this server cannot prove the pane it was started on; a lead stops that seat and runs `team up` `` | 2 |
+| `team mcp serve: the state records pane pane-lead for seat "lead" in session "acme", not the pane this server runs in; a lead stops the team and starts it again` | 2 |
+| `team mcp serve: this server serves seat "lead" in session "acme", and this call is placed as seat "worker"` | 2 |
+| `team mcp serve: this server serves seat "lead" in session "acme", and this call is placed as seat "lead" in session "other"` | 2 |
+| `team mcp serve: this server serves seat "lead" and starts inside that seat's own process; this call is unplaced (<reason>)` | 2 |
+| `team mcp serve: the team state records no session "acme", so this server cannot prove which seat started it` | 2 |
+| `team mcp serve: --epoch "run_aaaaaaaaaaaa" names a launch the seat's state no longer holds; start the server from the seat's launch line` | 2 |
+| `team mcp serve: seat "lead" has a current brief claim and this server was started without its epoch; start the server from the seat's launch line` | 2 |
+| `team mcp serve: --epoch "run_aaaaaaaaaaaa" is not the seat's current launch epoch; start the server from the seat's launch line` | 2 |
+| `team mcp serve: the team state cannot be read, so this server cannot prove the launch it belongs to: <reason>` | 2 |
 | `team mcp serve: the inbox folder is not a real folder: a link, a file or a failed write stands in its path` | 2 |
 | `team mcp serve: the inbox listener marker could not be written` | 2 |
 
 A start refusal is `mcp.serve-refused`, not `mcp.invocation`; a clean end of stdin is
-`mcp.serve-ended`. The folder path is checked again on every tool call, so a folder that becomes
-a link after start makes the call fail (`isError: true`) instead of being followed.
+`mcp.serve-ended`. The folder path, the caller's placement and the launch are checked again on
+every tool call, so a folder that becomes a link after start, or a seat stopped, moved or
+relaunched under a running server, makes the call fail (`isError: true`, carrying the same
+sentence without the `team mcp serve: ` prefix) instead of serving a body or writing a receipt.
 
 ```console
 $ team mcp  ; echo "exit $?"
@@ -319,7 +344,7 @@ team mcp: a subcommand is required: status, doctor or serve
 
 Usage: team mcp status [--json]
        team mcp doctor [--json]
-       team mcp serve --seat <seat> [--session <session>] [--file <path>]
+       team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
 `status` prints one table per leg and the state they add up to; `doctor`
 turns the same surface into findings, each missing one with a one-line fix.
@@ -336,8 +361,14 @@ Its stdout carries JSON-RPC lines only. --seat is required; --session
 defaults to the team's session and must match it. --file is the team file
 the seat's launch read: a seat that starts in a lobby has none in its
 folder, so its registration names the launch's file and the server reads
-that. It exits 0 when stdin closes and 2 when the invocation or the team
-placement can't be read.
+that. Without --file the server reads the registry record that holds the
+seat (--session picks between teams that share a seat name), never a team
+file from the folder it starts in. --epoch is the runtime epoch the launch
+registered the seat under: when the seat's state holds a current brief claim,
+the server serves only under that claim's epoch, and a server started without
+one does not serve.
+It exits 0 when stdin closes and 2 when the invocation, the team placement,
+the caller's placement or the launch can't be read.
 
 Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
 1 when a leg is down, the bridge is not set up, or doctor finds something
