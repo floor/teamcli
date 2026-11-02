@@ -4,11 +4,12 @@
 // it is. A dry run writes nothing. A config file or folder that is a link is left
 // untouched, and the seat gets the repair line. Antigravity's record was not captured,
 // so that seat still starts: a guessed file is not written, and a refusal could not be cleared.
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { charterCoversFolder } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { profileFor } from '../profiles/index.ts';
+import { assertNoLink, tomlString, writePrivate } from './private-file.ts';
 
 /** The fields a launch seat needs for the lobby trust decision. */
 export interface PretrustSeat {
@@ -277,38 +278,6 @@ function plain(value: unknown): value is Record<string, unknown> {
 /** The slug cursor-agent uses for `~/.cursor/projects/<slug>`. */
 function cursorSlug(path: string): string {
   return path.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function tomlString(value: string): string {
-  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
-}
-
-function writePrivate(file: string, text: string, home: string): void {
-  assertNoLink(file, home);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, text, { mode: 0o600 });
-}
-
-/** The file and each folder under the home are opened as themselves. A link, including
- *  one whose target is absent, is not a path this run reads or writes. */
-function assertNoLink(path: string, home: string): void {
-  let current = path;
-  while (current.startsWith(`${home}/`)) {
-    let linked = false;
-    try {
-      linked = lstatSync(current).isSymbolicLink();
-    } catch (error) {
-      if (!absent(error)) throw error;
-    }
-    if (linked) throw new Error('a symbolic link');
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-}
-
-function absent(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT';
 }
 
 function tableValue(text: string, header: string, key: string): string | null {
