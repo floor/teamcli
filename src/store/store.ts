@@ -328,11 +328,11 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
       return { kind: 'refused', why: `${generation}the folder its store lives in cannot be read (${located.why ?? 'an unknown error'}): no approval is judged until it is back` };
     }
     if (located.miss === 'several') {
-      return { kind: 'refused', why: `${generation}several stores match this root and none is its own (${located.others.join(', ')}): approve the team again, or leave one store in place` };
+      return { kind: 'refused', why: `${generation}several stores match this root and none is its own (${located.others.join(', ')}): leave one store in place` };
     }
     const project = projectAt(root, home);
     const wanted = project === null ? null : storePath(project, root, home);
-    return { kind: 'refused', why: `${generation}its store is missing${wanted === null ? '' : ` (${wanted})`}: restore the store, or approve the team again` };
+    return { kind: 'refused', why: `${generation}its store is missing${wanted === null ? '' : ` (${wanted})`}: restore the store` };
   }
   const link = linkOnRecordPath(store, home);
   if (link !== null) {
@@ -347,7 +347,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   }
   if (record === null) {
     if (recorded !== null) {
-      return { kind: 'refused', why: `approval #${recorded.generation} is recorded for this project, but its record is missing (${join(store, APPROVAL)}): restore approval.json, or approve the team again` };
+      return { kind: 'refused', why: `approval #${recorded.generation} is recorded for this project, but its record is missing (${join(store, APPROVAL)}): restore approval.json` };
     }
     return { kind: 'none' };
   }
