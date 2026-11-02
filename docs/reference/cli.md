@@ -893,12 +893,13 @@ Usage:
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon restart [--dry-run] [--json]
     team daemon uninstall [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
-`owner-only` — the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session
+`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session
 
 ### Flags
 
@@ -952,7 +953,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way
 
 #### Flags
 
@@ -966,6 +967,33 @@ Usage:
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--watch` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `restart`
+
+Hidden: no
+
+Usage:
+
+    team daemon restart [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way; the restart writes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

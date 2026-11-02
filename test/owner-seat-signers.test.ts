@@ -11,6 +11,7 @@ import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, 
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder, setApprovalMode } from '../src/client/team-create.ts';
 import type { Caller } from '../src/caller.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
+import { GRANT_REQUEST_DOMAIN, GRANT_RULE_DOMAIN, grantApprovalsFolder, grantEmissionAuditFolder, grantRequestsFolder, pendingGrantHash, type PendingGrantParams } from '../src/client/emission.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runPolicy } from '../src/commands/policy.ts';
@@ -18,7 +19,8 @@ import { acceptOwnerSigner, acceptedSigners, readOwnerSeat } from '../src/client
 import { runGrant } from '../src/commands/grant.ts';
 import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { keyOf, messageKeyOf, signDomain } from '../src/store/keys.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { keyOf, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 
 const made: string[] = [];
 afterAll(() => {
@@ -690,5 +692,179 @@ describe('approval mode none for team-create: one owner signature at setup, none
     expect(seat.code, seat.out).toBe(1);
     expect(seat.json.error.id).toBe('init.approval-refused');
     expect(existsSync(path)).toBe(true);
+  });
+});
+
+// Removing or narrowing an approval record — denying a pending grant request, revoking a
+// standing rule — is the owner's, on the same gate `team init` and `team approvals revoke` read:
+// her terminal, or an owner-signer's `team-revoke-approval` always rule. The rule must cover the
+// record it changes; the caller's own folder is not the record's. A refused call writes nothing.
+describe("grant deny and revoke cover the record they change", () => {
+  const seatCaller: Caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+
+  function setup(label: string) {
+    const h = home(label);
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
+    const sources = { home: h.home, ownerSeatStore: store };
+    const grantAs = async (caller: Caller, argv: string[]) => {
+      const c = io(h.base);
+      c.io.caller = caller;
+      const code = await runGrant(argv, c.io, sources);
+      return { code, out: c.out(), err: c.err() };
+    };
+    const initAs = async (caller: Caller, cwd: string, argv: string[]) => {
+      const c = io(cwd);
+      c.io.caller = caller;
+      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: store });
+      return { code, out: c.out(), err: c.err() };
+    };
+    return { ...h, store, sources, grantAs, initAs };
+  }
+
+  /** Registers one team whose root is `root`; a rule covers its parent folder. */
+  function teamAt(s: ReturnType<typeof setup>, name: string, root: string): void {
+    mkdirSync(root, { recursive: true });
+    upsertTeam(s.home, teamIdOf(root), { project: name, entity: 'floor', session: name, root, lobby: join(root, '.lobby'), roster: [], lifecycle: 'running' });
+  }
+
+  /** A pending grant request, signed as `team grant --request` writes one. */
+  function pending(s: ReturnType<typeof setup>, id: string, team: string): string {
+    const params: PendingGrantParams = {
+      client_id: 'grok-bot', entity: 'floor', public_key: `04${'ab'.repeat(64)}`, key_id: 'key-1', key_dir: join(s.base, 'keys'),
+      team, seat: null, expires: null, inbox: false, allow_grant: false, grant_scope: null,
+    };
+    const now = new Date();
+    const body = {
+      request_id: id,
+      params,
+      params_sha256: pendingGrantHash(params),
+      created: now.toISOString(),
+      expires_at: new Date(now.getTime() + 900_000).toISOString(),
+      adapter: 'owner-answer',
+      seal: '',
+    };
+    const signature = signDomain(GRANT_REQUEST_DOMAIN, { name: id, grant_request: body as unknown as Json }, keyOf(s.home));
+    mkdirSync(grantRequestsFolder(s.home), { recursive: true });
+    writeFileSync(join(grantRequestsFolder(s.home), `${id}.json`), `${JSON.stringify({ grant_request: body, signature }, null, 2)}\n`);
+    return id;
+  }
+
+  /** A standing approval rule signed by the owner key, naming one team. */
+  function standingRule(s: ReturnType<typeof setup>, id: string, team: string): string {
+    const rule = { rule_id: id, created: new Date().toISOString(), approved_by: 'test', client_id: 'grok-bot', entity: 'floor', teams: [team], seats: ['orchestrator'], ops: ['send'], max_duration_seconds: 604800 };
+    const signature = signDomain(GRANT_RULE_DOMAIN, { name: id, approval_rule: rule }, keyOf(s.home));
+    mkdirSync(grantApprovalsFolder(s.home), { recursive: true });
+    const path = join(grantApprovalsFolder(s.home), `${id}.json`);
+    writeFileSync(path, `${JSON.stringify({ approval_rule: rule, signature }, null, 2)}\n`);
+    return path;
+  }
+
+  /** An owner-signer `always` rule for team-revoke-approval, scoped to `<base>/code`. */
+  async function admittingRule(s: ReturnType<typeof setup>): Promise<void> {
+    const at = repo(s.base, 'ask');
+    const made = JSON.parse((await s.initAs({ kind: 'owner' }, at, ['--request', '--json'])).out);
+    const teamRule = made.request_id as string;
+    expect((await s.initAs({ kind: 'owner' }, at, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(at);
+    ask.io.caller = seatCaller;
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+  }
+
+  /** Every approval record under this home, by file, byte for byte. */
+  function records(h: string): Record<string, Record<string, string>> {
+    const folders = [grantRequestsFolder(h), grantApprovalsFolder(h), actionApprovalsFolder(h), actionAuditFolder(h), actionRequestsFolder(h), grantEmissionAuditFolder(h)];
+    const snap: Record<string, Record<string, string>> = {};
+    for (const folder of folders) {
+      try {
+        snap[folder] = Object.fromEntries(readdirSync(folder).sort().map((name) => [name, readFileSync(join(folder, name), 'utf8')]));
+      } catch {
+        snap[folder] = {};
+      }
+    }
+    return snap;
+  }
+
+  test("a seat's deny and revoke are refused and every record stays byte-identical", async () => {
+    const s = setup('record-caller');
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'1'.repeat(24)}`, 'team-a');
+    const ar = `ar_${'2'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const before = records(s.home);
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(1);
+    expect(deny.err).toContain('only the owner denies a pending grant request');
+    expect(deny.err).toContain('probe');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('only the owner revokes an approval rule');
+    expect(revoke.err).toContain('probe');
+    expect(records(s.home)).toEqual(before);
+  });
+
+  test('an owner-signer always rule covering the record admits a seat', async () => {
+    const s = setup('record-admitted');
+    await admittingRule(s);
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'3'.repeat(24)}`, 'team-a');
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(0);
+    expect(existsSync(join(grantRequestsFolder(s.home), `${gr}.used`))).toBe(true);
+    const ar = `ar_${'4'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(0);
+    expect(existsSync(join(grantApprovalsFolder(s.home), `${ar}.json`))).toBe(false);
+  });
+
+  test('a rule for one folder admits no record outside it', async () => {
+    const s = setup('record-outside');
+    await admittingRule(s);
+    teamAt(s, 'team-b', join(s.base, 'other', 'team-b'));
+    const gr = pending(s, `gr_${'5'.repeat(24)}`, 'team-b');
+    const ar = `ar_${'6'.repeat(24)}`;
+    standingRule(s, ar, 'team-b');
+    const before = records(s.home);
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(1);
+    expect(deny.err).toContain('outside');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('outside');
+    expect(records(s.home)).toEqual(before);
+  });
+
+  test('the owner at a terminal denies and revokes with no rule at all', async () => {
+    const s = setup('record-owner');
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'7'.repeat(24)}`, 'team-a');
+    const deny = await s.grantAs({ kind: 'owner' }, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(0);
+    expect(existsSync(join(grantRequestsFolder(s.home), `${gr}.used`))).toBe(true);
+    const ar = `ar_${'8'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const revoke = await s.grantAs({ kind: 'owner' }, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(0);
+    expect(existsSync(join(grantApprovalsFolder(s.home), `${ar}.json`))).toBe(false);
+  });
+
+  test('a rule that does not verify cannot place the record, and the seat is refused', async () => {
+    const s = setup('record-tamper');
+    await admittingRule(s);
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const ar = `ar_${'9'.repeat(24)}`;
+    const path = standingRule(s, ar, 'team-a');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"send"', '"status"'));
+    const before = records(s.home);
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('cannot be checked');
+    expect(records(s.home)).toEqual(before);
   });
 });

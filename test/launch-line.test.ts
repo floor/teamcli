@@ -131,6 +131,16 @@ describe('the launch line check', () => {
     expect(finding).toEqual({ level: 'miss', why: 'its launch line starts `team-deepseek`, which is not on the PATH' });
   });
 
+  test('a line whose quoting never closes is refused, never read as words it does not have', () => {
+    // No shell can read this line: a word after the half-open quote is not a word at all, so the
+    // check says so plainly rather than guessing at a program and paths inside the unread text.
+    const text = team('/bin/sh -c "claude --model m');
+    expect(launchLineFinding(text, text.seats[1] as Seat, root, sources())).toEqual({
+      level: 'miss',
+      why: 'its launch line has an unclosed quote or a trailing backslash: close it before the line can run',
+    });
+  });
+
   test("its profile's own binary is left to the install finding", () => {
     const text = team('claude --model claude-opus-5-5');
     expect(launchLineFinding(text, text.seats[1] as Seat, root, sources({ onPath: () => false }))).toBeNull();

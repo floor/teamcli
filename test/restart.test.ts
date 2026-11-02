@@ -498,7 +498,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(1);
     expect(io.out).toContain('worker: input box: empty\n');
     expect(io.out).toContain('worker: turn: not working (free)\n');
-    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript\n');
+    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation\n');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
 
@@ -1544,7 +1544,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     // The resume read refuses the record that is another agent's, and the relaunch starts fresh.
     expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // The pull-only reason is the binder's own: the endpoint read it made proves no thread.
+    expect(io.out).toContain('pull-only: the Codex endpoint socket is not listening (ENOENT)');
     // The managed launch did its part: endpoint and incarnation are recorded, bound to each other.
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.presence_binding).toBe(BOUND);
@@ -1658,7 +1659,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // Several threads prove nothing; the summary says which reading refused it.
+    expect(io.out).toContain("pull-only: its Codex endpoint holds 2 threads; none is proven to be this seat's");
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.agent_session).toBeUndefined();
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_old');
@@ -1818,6 +1820,217 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain(
       `AGENT_UNATTENDED=1 ${launch} -r ${GROK_SESSION} --always-approve`,
     );
+  });
+
+  test('a restored Claude Code wrapper resumes inside its quoted script and says so before the close', async () => {
+    // The launch line runs the CLI inside a quoted script: a word after the closing quote never
+    // reaches `claude`, so the resume and the profile's options go inside it, and the pre-close
+    // line quotes the line the run launches rather than the bare declaration.
+    const launch = 'zsh -lc "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const resumed = 'zsh -lc "claude --model claude-opus-5-5 --resume ses_keep"';
+    const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+    const ran = run.did.runs.find((line) => line.includes('zsh -lc'));
+    expect(ran).toBeDefined();
+    // The resume and every profile option sit inside the quoted script, where the CLI reads
+    // them; the settings file is the last word before the closing quote.
+    expect(ran?.startsWith('AGENT_UNATTENDED=1 zsh -lc "claude --model claude-opus-5-5 --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt ')).toBe(true);
+    expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
+    expect(io.out).toContain(
+      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
+    );
+    // The recipe the launch records is the declared line, with the resume it carried.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
+  });
+
+  test('a wrapper chain hands the carried resume to the CLI as an argument', async () => {
+    // The field's shape: a shell starts a wrapper that execs the command it is given, which starts
+    // a second wrapper that handles some words itself and collects the rest for the CLI. Running
+    // the line the restart plans proves which words reach the CLI, and in what order.
+    const launch = '/bin/sh as-floor.sh /bin/bash claude-kimi.sh';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    // A stub CLI on PATH records the argv it is handed. The wrappers sit in the seat's folder,
+    // where its launch line runs.
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+    writeFileSync(join(fixture.root, 'as-floor.sh'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(
+      join(fixture.root, 'claude-kimi.sh'),
+      [
+        '#!/bin/bash',
+        'args=()',
+        'while [ "$#" -gt 0 ]; do',
+        '  case "$1" in',
+        '    --model) model="$2"; shift 2 ;;',
+        '    *) args+=("$1"); shift ;;',
+        '  esac',
+        'done',
+        'exec claude --model "${model:-kimi-k2}" "${args[@]}"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('claude-kimi.sh'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // The exact words the CLI receives, in order: the wrapper's own model, then the carried resume,
+    // then the profile's unattended, naming, rules and hook options — and no positional prompt.
+    // The stub terminates each word with NUL, so the multi-line rules text stays one word.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'kimi-k2',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
+  });
+
+  test("a shell's own -c is not read as Claude Code's continue, so the line resumes", async () => {
+    // `<shell> -c "<script>"` is the common quoted-script shape: the shell's -c is the shell's
+    // option, not the CLI's continue. Both lines carry the recorded conversation, and the
+    // profile's options go inside the script with it. The line is planned and recorded here;
+    // the next scene runs one.
+    for (const launch of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
+      const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+      const { fixture, run } = seeded({
+        registry: 'ses_keep',
+        state: 'ses_keep',
+        workerSession: 'ses_keep',
+        launched: true,
+        launch,
+        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      const io = testIo(fixture.root, { kind: 'owner' });
+
+      expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+      const ran = run.did.runs.find((line) => line.includes('--resume ses_keep'));
+      expect(ran).toBeDefined();
+      const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+      expect(ran?.startsWith(
+        `AGENT_UNATTENDED=1 ${launch.slice(0, -1)} --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt `,
+      )).toBe(true);
+      expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
+      expect(io.out).toContain('resumes the recorded conversation ses_keep');
+    }
+  });
+
+  test('a quoted script hands the profile options to the CLI as arguments', async () => {
+    // The field's shape: a launch line whose last word is a quoted script running the CLI. A word
+    // after the closing quote never reaches the CLI, so the profile's options must go inside it.
+    // Running the planned line with a stub CLI on PATH proves which words the CLI is handed — the
+    // containment check on the line cannot see the difference. The shell's own -c is not Claude
+    // Code's --continue: only the words inside the script are the CLI's.
+    const launch = '/bin/sh -c "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('/bin/sh -c'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // Every word the CLI receives, in order: the line's own model, the carried resume, then the
+    // profile's unattended, naming, rules and hook options — none of them after the closing quote.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'claude-opus-5-5',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
   });
 
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
@@ -2087,6 +2300,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    // The caller's own flag is the reason: the context line does not present it as none recorded.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "codex -m gpt-6.1-sol" in a new workspace without passing the old transcript; abandoned by the caller\n',
+    );
   });
 
   test('a restored Codex seat running another conversation is still left as it is', async () => {
@@ -2179,6 +2396,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
+    // The context line repeats the reason the run gave: it never reads as a silent fresh start.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
+    );
   });
 
   test('a record that changes between the caller\'s read and the run lock is not resumed', async () => {
@@ -2209,6 +2430,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(moved).toBe(true);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
+    // The carried resume was dropped under the run lock: the context line says so, with the why.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
+    );
   });
 
   test('a dry run prints the resume the launch would use, and writes no log line', async () => {
