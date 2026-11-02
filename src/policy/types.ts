@@ -121,6 +121,8 @@ export const ENFORCED_POLICY_NAMES = [
   'codex-daemon',
   'idle-threshold',
   'daemon.broker',
+  'daemon.fallback-backlog-above',
+  'daemon.fallback-backlog-limit',
   'watch-rhythm',
   'grant-emission',
   'owner-signers',
@@ -177,6 +179,14 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   message_display: 'message-display',
   daemon_broker: 'daemon.broker',
   'daemon-broker': 'daemon.broker',
+  daemon_fallback_backlog_above: 'daemon.fallback-backlog-above',
+  'daemon-fallback-backlog-above': 'daemon.fallback-backlog-above',
+  fallback_backlog_above: 'daemon.fallback-backlog-above',
+  'fallback-backlog-above': 'daemon.fallback-backlog-above',
+  daemon_fallback_backlog_limit: 'daemon.fallback-backlog-limit',
+  'daemon-fallback-backlog-limit': 'daemon.fallback-backlog-limit',
+  fallback_backlog_limit: 'daemon.fallback-backlog-limit',
+  'fallback-backlog-limit': 'daemon.fallback-backlog-limit',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -438,6 +448,20 @@ function parsePositiveCount(raw: unknown): number | null {
   return null;
 }
 
+/** One daemon store backlog knob's accepted range, and the release default its message offers. */
+type BacklogRange = { min: number; max: number; release: number };
+
+/** A backlog knob's word: a whole count, written with digits, inside its own range. */
+function parseBacklogCount(raw: unknown, range: BacklogRange): number | null {
+  const n = typeof raw === 'string' && /^[0-9]+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= range.min && n <= range.max ? n : null;
+}
+
+function backlogCountProblem(name: string, raw: unknown, range: BacklogRange): string | null {
+  if (parseBacklogCount(raw, range) !== null) return null;
+  return `policy "${name}" needs a whole number from ${String(range.min)} to ${String(range.max)}, such as ${String(range.release)}`;
+}
+
 /**
  * A delay threshold: a positive whole number of seconds, never above its release default. The
  * ceiling is part of the spec's range, so every path that parses a word — `team policy set`
@@ -597,6 +621,18 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
   typed: 15,
   native: 15,
 };
+
+/**
+ * The daemon's two fallback-store backlog knobs: the finished-episode count above which one pass
+ * drains a backlog, and how many it then takes. Both are bounded so one pass stays a bounded
+ * amount of work, never a whole history: the threshold ranges to a million episodes and the bulk
+ * limit to ten thousand, the same order as the steady limit's multiples. The release defaults
+ * are shared with the daemon's reader so the catalogue and the sweep cannot drift apart.
+ */
+export const DAEMON_BACKLOG_DEFAULTS = { above: 256, limit: 500 } as const;
+
+const BACKLOG_ABOVE_RANGE: BacklogRange = { min: 1, max: 1_000_000, release: DAEMON_BACKLOG_DEFAULTS.above };
+const BACKLOG_LIMIT_RANGE: BacklogRange = { min: 1, max: 10_000, release: DAEMON_BACKLOG_DEFAULTS.limit };
 
 /**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
@@ -967,6 +1003,36 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
+  },
+  // The machine daemon's fallback-store retirement, for a store that was never retired before and
+  // carries its whole history. Above `daemon.fallback-backlog-above` eligible finished episodes,
+  // one pass retires up to `daemon.fallback-backlog-limit` instead of the steady 256: the first
+  // passes after an upgrade empty the backlog, then the steady limit returns as soon as the
+  // backlog is under the threshold. A higher threshold makes one pass do less and a smaller bulk
+  // limit retires fewer episodes, so those are the tighter words. Only the entity, project and
+  // team levels set them. The daemon reads them for each hosted root; a chain that cannot be read
+  // keeps the release defaults, because retirement is housekeeping and never stops the sweep.
+  'daemon.fallback-backlog-above': {
+    name: 'daemon.fallback-backlog-above',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: BACKLOG_ABOVE_RANGE.release,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseBacklogCount(raw, BACKLOG_ABOVE_RANGE),
+    valueProblem: (raw: unknown) => backlogCountProblem('daemon.fallback-backlog-above', raw, BACKLOG_ABOVE_RANGE),
+    // A higher threshold is tighter: bulk mode engages later, so one pass does less.
+    isWithin: (lower: number, higher: number) => lower >= higher,
+  },
+  'daemon.fallback-backlog-limit': {
+    name: 'daemon.fallback-backlog-limit',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: BACKLOG_LIMIT_RANGE.release,
+    gateLifting: false,
+    parseValue: (raw: unknown) => parseBacklogCount(raw, BACKLOG_LIMIT_RANGE),
+    valueProblem: (raw: unknown) => backlogCountProblem('daemon.fallback-backlog-limit', raw, BACKLOG_LIMIT_RANGE),
+    // A smaller bulk limit is tighter: one pass retires fewer episodes.
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The watch's own pace: how often a pass sweeps and how long its six waits run. One value
   // names a preset (`urgent`, `normal`, `relaxed`, `night`, `dormant`), optionally with an
