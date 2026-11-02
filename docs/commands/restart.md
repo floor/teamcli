@@ -66,6 +66,11 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
 
+A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
+leaving it out, and the owner or a `leads` seat of that seat's own team brings it back with `team restart
+<seat>`, which clears the mark in the same write that records the launch, then relaunches it. A launch that
+does not reach ready puts the mark back, so a failed restart leaves the seat stopped.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
@@ -158,11 +163,17 @@ state file written before the id was recorded is no bar to recognizing the seat,
 resuming it either. The seat is then relaunched with that recorded conversation through its
 launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
 <id>`, Antigravity as `--conversation=<id>` appended to the seat's launch line, Grok as
-`-r <id>` appended to the seat's launch line. A CLI with
-no measured resume form is left as it is unless the caller abandons the
-conversation with `--abandon`, a state that names another id is relaunched without one, and a
+`-r <id>` appended to the seat's launch line. A line that runs the CLI inside a quoted script
+takes the resume inside that script, where the CLI reads it; a word after the closing quote
+never reaches it. A CLI with no measured resume form is left as it is unless the caller abandons
+the conversation with `--abandon`, a state that names another id is relaunched without one, and a
 conversation that differs or cannot be read remains refused (`<seat> has a process in its old
 pane that is not the signed seat; left as it is`, exit 1).
+
+The pre-close context line says what happens to that conversation: when the launch carries it, the
+line names the line the relaunch runs and says it resumes the recorded conversation `<id>`; when it
+carries none, the line says why — no recorded conversation, the refusal's own reason, a resume
+dropped before the launch, or the caller's `--abandon`.
 
 A launch line that itself names a conversation — another id, `--last`, or a resume with no id —
 is never run: the repair is refused before the stop, and `--abandon` does not start it fresh

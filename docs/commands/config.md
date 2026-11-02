@@ -31,8 +31,11 @@ A record the registry holds is written there (`edited_by: config <verb>`);
 on the legacy `file` source the team file is written instead.
 
 Writes are the owner's, from a terminal outside a pane, as editing the file was; `get` is any
-caller's. The change is validated by the team-file validator before it is stored; the record it
-stores is the record the team runs.
+caller's. One unset is the exception: a team's `leads` seat clears its own team's stopped mark —
+`team config unset seats.<seat>.stopped` — with no card, dev mode on or off, the same seat that
+may revive it with `team restart <seat>`. Every other key keeps the owner's door. The change is
+validated by the team-file validator before it is stored; the record it stores is the record the
+team runs.
 
 | Outcome | Exit |
 | --- | --- |
