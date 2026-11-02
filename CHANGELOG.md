@@ -58,6 +58,14 @@ an action changes a team or answers a dialog.
   while refusing redirects and unsafe file inputs.
 - Approval history checks read the complete record chain and distinguish a missing prior
   record from a team with no approval history. Policy logs credit the caller who made a change.
+- A seat's declaration time now changes only when its cross-session acceptance setting changes,
+  so a rewritten hook command no longer makes a running seat look stale to senders.
+- A recovery pass that launches no seat leaves running seats' hook files untouched, so it
+  cannot move their declaration times.
+- `team route` reports the same stale session state a send would meet, instead of calling a
+  socket live that a send would pass over.
+- Hook commands name the installed program instead of the private copy the system's service
+  manager runs, so a later refresh cannot leave a seat's hooks naming a removed folder.
 
 ### Security
 
