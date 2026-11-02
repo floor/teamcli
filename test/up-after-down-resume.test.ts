@@ -416,6 +416,11 @@ test('a recorded conversation that is not on disk is launched fresh, with a note
   expect(held?.stage).toBe('ready');
   expect(held?.agent_session).toBe(sessionFor(ran[0]?.command ?? '') ?? undefined);
   expect(`${io.out}${io.err}`).toContain(`its recorded conversation ${SES_A} is not on disk; launched a fresh one`);
+  // The fallback is evidence, not just a stderr line: the team log keeps it after the terminal
+  // is gone.
+  expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain(
+    `up [owner] worker: its recorded conversation ${SES_A} is not on disk; launched a fresh one`,
+  );
   expect(made.trace.typed).toEqual([]);
 });
 
@@ -458,5 +463,9 @@ test('a resume the CLI refuses at runtime is launched again fresh in the same pa
   expect(ran[1]?.command).toContain('--session-id');
   expect(held?.agent_session).toBe(sessionFor(ran[1]?.command ?? '') ?? undefined);
   expect(`${io.out}${io.err}`).toContain('its recorded conversation was not found by the CLI; launched a fresh one');
+  // The runtime refusal is logged too: the terminal's line alone would be lost with the scrollback.
+  expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain(
+    'up [owner] worker: its recorded conversation was not found by the CLI; launched a fresh one',
+  );
   expect(made.trace.typed).toEqual([]);
 });

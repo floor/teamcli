@@ -99,12 +99,12 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^team migrate: owner-seat request \$\{id\} recorded; \$\{where\}\\n\$\{made\.text\}\\nwaiting for the signed approval\\n$/, why: "migrate shows the owner-seat card and waits for the signature" },
   { literal: /^--dry-run checks an answered request: pass --approval <request-id>$/, why: "batch's dry run names the owner-seat door's --approval flag" },
   { literal: /^--approval runs the recorded batch and takes no --do$/, why: "batch's --approval runs the recorded list and takes no further command" },
-  { literal: /^only the owner revokes an approval rule, from a terminal outside herdr; this call is \$\{describeCaller\(caller\)\}$/, why: "approvals' caller refusal: the owner revokes a standing rule" },
-  // `init`'s two owner doors, in role words: only the owner changes an approval mode or revokes
-  // an approval rule, and this call is refused. Neither tells the caller to approve anything —
-  // both refuse it, and neither is a copy of the live file.
-  { literal: /^only the owner changes an approval mode, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "init's approval-mode refusal: the owner changes a mode, not this caller" },
-  { literal: /^only the owner revokes an approval rule, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "init's revoke-approval refusal: the owner revokes a rule, not this caller" },
+  // `approvals` and `init`'s two owner doors, in role words: only the owner revokes a standing
+  // rule or changes an approval mode, and this call is refused. Neither tells the caller to
+  // approve anything — both refuse it, and neither is a copy of the live file. Every live line
+  // with either wording after the integration is one of these two, and each is used.
+  { literal: /^only the owner changes an approval mode, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "init's approval-mode caller refusal: the owner changes a mode record" },
+  { literal: /^only the owner revokes an approval rule, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "approvals and init: the owner revokes a standing rule" },
   { literal: /^"\$\{id\}" is not an approval rule id$/, why: "approvals refuses an id that is neither a team-create nor an owner-action rule" },
   { literal: /^"\$\{id\}" is not an approval rule id; nothing was run$/, why: "batch refuses a revoke id that is not a rule, and runs nothing" },
   { literal: /^team init: (?:team-create approval rules|approval rule revoked)/, why: "init's standing team-create rules: an owner-seat answer, not an approval copy" },

@@ -119,6 +119,41 @@ export function getTeam(home: string, id: string): TeamRecord | null {
   return readTeams(home)[id] ?? null;
 }
 
+/** What `registeredRootOf` found: the team a seat is on by the registry's roster, or why none
+ *  could be named. Every failure is structured, so each caller words its own sentence. */
+export type RegisteredRoot =
+  | { ok: true; root: string; session: string }
+  | { ok: false; kind: 'unreadable'; message: string }
+  | { ok: false; kind: 'none' }
+  | { ok: false; kind: 'ambiguous'; ids: readonly string[] };
+
+/**
+ * The root of the registered team whose roster holds `seat`: how a seat that names no file finds
+ * its team. The folder a seat starts in says nothing about the team — a seat starts in a lobby,
+ * which is not a work tree of any checkout — so the registry's roster is what names it, and
+ * `session` narrows between teams that hold the same seat name. A lone holder is returned even
+ * when its session differs, so a caller's own session check can name the difference.
+ */
+export function registeredRootOf(home: string, seat: string, session?: string): RegisteredRoot {
+  let teams: Record<string, TeamRecord>;
+  try {
+    teams = readTeams(home);
+  } catch (error) {
+    return { ok: false, kind: 'unreadable', message: (error as Error).message };
+  }
+  const holders = Object.values(teams).filter((team) => team.roster.some((line) => line.seat === seat));
+  if (holders.length === 0) return { ok: false, kind: 'none' };
+  const matching = session === undefined
+    ? holders
+    : holders.filter((team) => team.session === session || team.lobbies[session] !== undefined);
+  const candidates = matching.length > 0 ? matching : holders;
+  if (candidates.length > 1) {
+    return { ok: false, kind: 'ambiguous', ids: candidates.map((team) => team.id ?? team.project).sort() };
+  }
+  const team = candidates[0]!;
+  return { ok: true, root: team.root, session: team.session };
+}
+
 /** What `upsertTeam` takes: any of the record's fields, and who is writing and when. A team not
  *  yet registered needs `project`, `session` and `root` at least. */
 export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance' | 'issueTracker'>> & {

@@ -105,6 +105,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
 | `answer.state` | `answer` | 1 | the seat is not waiting at the dialog this word answers | `team answer lead trust` |
+| `answer.trust-identity` | `answer` | 1 | the seat's launched identity was not recorded; no process in its pane can be checked against it | `team answer lead trust` |
 | `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
 | `answer.version` | `answer` | 1 | this version has no answer for the dialog | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
@@ -245,6 +246,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe | `team daemon install` |
+| `daemon.restart-dry-run` | `daemon` | 0 | the restart plan was printed and nothing was stopped or started | `team daemon restart --dry-run` |
+| `daemon.restarted` | `daemon` | 0 | the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket | `team daemon restart` |
 | `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
@@ -257,10 +260,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-route` | `daemon` | 1 | the route id does not name this checkout's own canonical route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch` | `daemon` | 1 | the daemon record carries no hosted watch for this checkout's route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch-state` | `daemon` | 1 | the route's hosted watch was not started as required, is standing down, or has stopped | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.grant-refused` | `daemon` | 1 | the general grant recorded on the run no longer admits the daemon op: its chain, its key or its ops failed verification | `team daemon install` |
 | `daemon.install-failed` | `daemon` | 1 | the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back | `team daemon install` |
 | `daemon.install-rollback-failed` | `daemon` | 1 | the system's service manager refused the new unit or its daemon did not answer the health probe, and the previous one could not be started again, so no daemon was started | `team daemon install` |
 | `daemon.install-rolled-back` | `daemon` | 1 | the new unit failed or its daemon did not answer the health probe; the previous unit was put back, and its daemon started again and answered | `team daemon install` |
-| `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
+| `daemon.not-installed` | `daemon` | 1 | no user service unit is installed, so a restart had nothing to stop or start | `team daemon restart` |
+| `daemon.not-owner` | `daemon` | 1 | the caller may not install, restart or remove the machine daemon | `team daemon install` |
+| `daemon.restart-failed` | `daemon` | 1 | the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running | `team daemon restart` |
+| `daemon.restart-rollback-failed` | `daemon` | 1 | the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running | `team daemon restart` |
+| `daemon.restart-rolled-back` | `daemon` | 1 | the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers | `team daemon restart` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
 | `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system's service manager starts it | `team daemon run` |
 | `daemon.service-managed.pid` | `daemon` | 1 | the system's service manager's record of the job does not name this process | `team daemon run --started-by service-manager` |

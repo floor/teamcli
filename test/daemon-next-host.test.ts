@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMachineDaemon, type NextPrincipalVerdict } from '../src/daemon/host.ts';
 import type { NextAnswer, NextClaim, NextHandlerInput } from '../src/daemon/next.ts';
 import { answerDaemonRequest, parseDaemonRequest, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { daemonSocketPath } from '../src/daemon/paths.ts';
+import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -343,5 +344,125 @@ describe('one machine daemon: a proved next request reaches the handler on its r
     } finally {
       await started.daemon.close();
     }
+  });
+});
+
+describe('a hosted registry root is served from the registry, never from a file left behind', () => {
+  // The daemon loads each root once at start. A routed request re-reads the team, the way the
+  // route's writers do: a file root re-reads the file the read opened, and a registry root
+  // resolves the registry again. The conventional path a registry read carries is a handle for
+  // state and the watch binding, not a team: a file standing there is a leftover, and serving it
+  // would address seats the registry's team does not declare.
+  //
+  // A valid team that is NOT this checkout's: what a file retired by `team migrate` would say
+  // after someone edited it, or a copy left beside a team that now lives in the registry.
+  const STALE_TEAM = `${TEAM.replace('project: acme', 'project: stale').replace('session: acme', 'session: stale')}
+  - role: worker
+    name: stale-worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "4.6"
+    launch: claude
+`;
+
+  /** A checkout whose team `team migrate` moved into `home`'s registry. The conventional file
+   *  is left as `migrate` leaves it unless the scene says otherwise: `null` removes it (a team
+   *  that only ever existed in the registry), a string puts a different team there. */
+  function registryScratch(leftover: string | null): { root: string; home: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-registry-')));
+    bases.push(base);
+    const root = join(base, 'repo');
+    const home = join(base, 'home');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+    intoRegistry(root, home);
+    if (leftover === null) rmSync(join(root, '.agents', 'team.yaml'));
+    else writeFileSync(join(root, '.agents', 'team.yaml'), leftover);
+    return { root, home };
+  }
+
+  /** Starts the one machine daemon over `root` with a proved principal and a recording handler,
+   *  lets `between` change the checkout once the start-time load is done, then asks one v2 next
+   *  for the route's clerk. `registry` runs the whole scene under the registry source, which the
+   *  suite's preload otherwise leaves at `file` for the older tests. */
+  async function served(
+    root: string,
+    home: string,
+    between?: () => void,
+    registry = false,
+  ): Promise<{ answer: Record<string, unknown>; calls: NextHandlerInput[] }> {
+    const run = async (): Promise<{ answer: Record<string, unknown>; calls: NextHandlerInput[] }> => {
+      const calls: NextHandlerInput[] = [];
+      const started = await startMachineDaemon({
+        home,
+        roots: [root],
+        version: 'test',
+        heartbeatMs: 10_000,
+        nextPrincipal: ({ claim }) => ({ kind: 'verified', seat: claim.seat, pane: claim.pane }),
+        nextHandler: async (input) => {
+          calls.push(input);
+          return { ok: true, kind: 'none', why: 'nothing-takeable' };
+        },
+      });
+      expect(started.kind).toBe('serving');
+      if (started.kind !== 'serving') throw new Error(`the daemon did not serve: ${started.kind}`);
+      try {
+        between?.();
+        const answer = await request(daemonSocketPath(home), {
+          v: 2,
+          id: 'registry',
+          op: 'next',
+          scope: fullScope(root),
+          action: 'release',
+          mine: true,
+        });
+        return { answer, calls };
+      } finally {
+        await started.daemon.close();
+      }
+    };
+    return registry ? underRegistry(run) : run();
+  }
+
+  test('a registry root with no team file is served', async () => {
+    const { root, home } = registryScratch(null);
+    const { answer, calls } = await served(root, home, undefined, true);
+    // The registry is the definition, so the route's team is read again from it: the handler is
+    // reached with that team. A read of the conventional path would refuse here — no file
+    // stands there — and the answer would be the daemon's own internal refusal.
+    expect(answer).toMatchObject({ v: 2, id: 'registry', ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.team).toMatchObject({ project: 'acme', session: 'acme' });
+    expect(calls[0]?.team.seats.map((seat) => seat.name)).toEqual(['clerk', 'op-1']);
+  });
+
+  test('a registry root with a stale leftover is served from the registry, not the file', async () => {
+    const { root, home } = registryScratch(STALE_TEAM);
+    // The leftover is a valid team; reading it would dispatch to a team the registry does not
+    // define. The daemon must name the registry's team instead.
+    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(true);
+    const { answer, calls } = await served(root, home, undefined, true);
+    expect(answer).toMatchObject({ v: 2, id: 'registry', ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.team).toMatchObject({ project: 'acme', session: 'acme' });
+    expect(calls[0]?.team.seats.map((seat) => seat.name)).toEqual(['clerk', 'op-1']);
+  });
+
+  test('a file root is unchanged: the file read at start stays the team read per request', async () => {
+    const { root, home } = scratch();
+    const { answer, calls } = await served(root, home, () => {
+      // Edited after start, so the answer can only carry the second team by reading the file
+      // again: a cached team, or a registry read, would keep the first seat list.
+      writeFileSync(
+        join(root, '.agents', 'team.yaml'),
+        TEAM.replace('name: op-1', 'name: file-worker').replace('operator: op-1', 'operator: file-worker'),
+      );
+    });
+    expect(answer).toMatchObject({ v: 2, id: 'registry', ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.team.seats.map((seat) => seat.name)).toEqual(['clerk', 'file-worker']);
   });
 });

@@ -12,7 +12,7 @@ import {
   standingOf,
   walkCaller,
 } from '../caller.ts';
-import { TEAM_FILE } from '../file/load.ts';
+import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -124,8 +124,8 @@ const realLaunch: Launch = {
   sessionUp: () => null,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
@@ -450,6 +450,22 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     if (briefs.recording !== undefined) sayBrief(`the general seat brief was written and not recorded (${briefs.recording})`);
   };
   if (detail === null && rulesProblem === null && source === null) {
+    // A seat can run exactly what the file declares and still hold no inbox: a launch that could
+    // not resolve the team registered nothing, and the seat's window is gone by the time anyone
+    // reads it. Reload is the command `team check` names for this, so its no-op path registers
+    // again — idempotent when the registration is already there. A refusal is one line, said
+    // where the reader of the document meets warnings, and names the command that retries it.
+    const inboxCli = recorded.cli ?? seat.cli;
+    const register = sources.launch.registerInbox;
+    if (recorded.start_cwd !== undefined && register !== undefined) {
+      const inbox = register(inboxCli, seat.name, recorded.start_cwd, session, launchTeamFile(loaded));
+      if (inbox && !inbox.ok) {
+        const said = `${seat.name}: its team inbox was not registered: ${inbox.reason}; team restart ${seat.name} retries it`;
+        if (json) jsonNotes.push(said);
+        else out.stderr(`team reload: ${said}\n`);
+        logLine(dir, 'reload', who, said, now());
+      }
+    }
     await deliverBrief(false);
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
@@ -656,7 +672,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       seats: [planned],
       sessionRunning: true,
       startWatch: false,
-      teamFile: loaded.path,
+      teamFile: launchTeamFile(loaded),
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -694,7 +710,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
           }),
       ...(launch.registerInbox
-        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+        ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
       reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,

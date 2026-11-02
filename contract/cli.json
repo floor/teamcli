@@ -1922,7 +1922,58 @@
           ],
           "who": {
             "gate": "owner-only",
-            "why": "registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way"
+            "why": "registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "restart",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon restart [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way; the restart writes nothing"
           }
         },
         {
@@ -2083,12 +2134,13 @@
         "team daemon status [--json]",
         "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
         "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]",
+        "team daemon restart [--dry-run] [--json]",
         "team daemon uninstall [--json]",
         "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",
-        "why": "the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session"
+        "why": "the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session"
       }
     },
     {

@@ -7,9 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
-import { callerLabel, callerOf } from '../caller.ts';
+import { callerLabel, callerOf, isOwner, type Caller } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, boundWords, canonicalRoot, createOwnerActionRequest, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
+import { isSameOrInside } from '../grant.ts';
+import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
 import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -144,6 +145,42 @@ export function ownerSeatRuleAdmits(action: OwnerAction, cwd: string, dry: boole
 export function ownerSeatRuleFolder(cwd: string): string | null {
   const root = findRoot(cwd);
   return root === null ? null : dirname(canonicalRoot(root));
+}
+
+export type OwnerRecordAdmission =
+  | { ok: true; via: 'owner' }
+  | { ok: true; via: 'rule'; ruleId: string; signer: string; ruleFolder: string }
+  | { ok: false; kind: 'caller'; caller: Caller }
+  | { ok: false; kind: 'target'; caller: Caller; ruleFolder: string | null; targets: readonly string[] | null };
+
+/**
+ * The one check for changing an approval record: removing a standing rule or spending a pending
+ * grant (`team approvals revoke`, `team init --revoke-approval` and `--approval-mode`,
+ * `team grant --deny` and `--revoke-approval`). Its default is the owner at a terminal. The
+ * configured way in is a verified owner-signer `always` rule for `team-revoke-approval`, and the
+ * rule must cover the folder of the record the call changes (every folder in `targets`) — the
+ * target, never merely the caller's own folder: a rule is the owner's standing consent for that
+ * folder's records, wherever the call is made from. With no known target (a record that does not
+ * verify or cannot be placed) no rule admits anything. A refusal writes no record; an admission
+ * by rule is recorded in the owner-action audit folder, as a rule admission always was.
+ */
+export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly string[] | null, sources: OwnerSeatSources): OwnerRecordAdmission {
+  const caller = callerOf(io);
+  if (isOwner(caller)) return { ok: true, via: 'owner' };
+  const home = sources.home ?? homedir();
+  try {
+    const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
+    const now = sources.now?.() ?? new Date();
+    const rules = listOwnerActionRules(home, store, now).rules.filter((rule) => rule.actions.includes(action));
+    if (rules.length === 0) return { ok: false, kind: 'caller', caller };
+    if (targets === null || targets.length === 0) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    const rule = rules.find((one) => targets.every((target) => isSameOrInside(one.scope, target)));
+    if (rule === undefined) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    auditRuleAdmission(home, rule, action, targets, now);
+    return { ok: true, via: 'rule', ruleId: rule.rule_id, signer: rule.signer, ruleFolder: rule.scope };
+  } catch {
+    return { ok: false, kind: 'caller', caller };
+  }
 }
 
 /** Presents one owner-action request to the owner seat's Touch ID signer. `why` is null when no

@@ -36,6 +36,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
@@ -587,6 +588,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     }),
   );
   comparison.notes.push(...record.notes);
+  // A Codex seat whose last launch fell back to an unmanaged line says so here, with the reason:
+  // the fallback is a reading worth acting on, never a silent state.
+  comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),

@@ -863,6 +863,10 @@ function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
       calls.push('uninstall');
       return { ok: true, unitPath: join(home, 'unit.plist'), removed: true };
     },
+    restart: (home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    },
   };
   return { ...base, ...overrides, calls, programs };
 }
@@ -981,7 +985,7 @@ describe('team daemon status, install, uninstall and run', () => {
     const seat = { kind: 'seat', name: 'worker-1', pane: 'w1:p2', session: 'acme' } as const;
     const install = testIo(root, seat);
     expect(await runDaemon(['install'], install, sourcesOf(home, { service: fakeService() }))).toBe(1);
-    expect(install.err).toContain('only the owner installs or removes the machine daemon');
+    expect(install.err).toContain('only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
 
     const started: string[] = [];
     const run = testIo(root, seat);
