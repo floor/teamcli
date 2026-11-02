@@ -151,6 +151,19 @@ function declare(w: World, seat: string, policy: string | null = 'accept'): stri
   return path;
 }
 
+/** This build's generated settings file with no `crossSessionInbound` word at all: the file a
+ *  launch wrote before the team file accepted, which the running CLI read as unset. Backdated so
+ *  a socket written after it stands as the newer file. */
+function declareNothing(w: World, seat: string): string {
+  const path = cliHookSettingsPath(w.dir, 'acme', seat);
+  if (path === null) throw new Error(`the fixture declares no settings path for ${seat}`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ hooks: {} }));
+  const past = new Date(NOW.getTime() - 60_000);
+  utimesSync(path, past, past);
+  return path;
+}
+
 type Ready = { name: string; pane: string; launch: string; cli?: 'claude-code' | 'codex'; pid: number };
 
 /** The state the launch leaves: the watch recorded and each seat ready on the pane it was given,
@@ -322,6 +335,23 @@ describe('team check names a live seat whose socket a send would skip', () => {
     const { code, out } = check(w, liveOn([seat]));
     expect(out).toContain(`difference: heldreg: ${NOT_SOCKET}: its last socket frame was held at its box`);
     expect(out).toContain('  repair: team restart heldreg');
+    expect(code).toBe(1);
+  });
+
+  test('a team file that accepts with generated settings that do not: the restart is the repair', () => {
+    const w = world([{ name: 'mismatch', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'mismatch', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    // The generated file the seat's CLI read at start carries no word, though the team file has
+    // accepted since: the running session would hold every frame, and only a relaunch reads a
+    // file that declares the team's word.
+    declareNothing(w, 'mismatch');
+    writeSocket(w, seat);
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(
+      `difference: mismatch: ${NOT_SOCKET}: its launch-effective generated settings do not declare crossSessionInbound accept, though its team file declares inbound accept`,
+    );
+    expect(out).toContain('  repair: team restart mismatch');
     expect(code).toBe(1);
   });
 

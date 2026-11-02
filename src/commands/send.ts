@@ -69,7 +69,7 @@ import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, recordHeldSocket,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket, recordHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
   type CrossSessionInbound, type InboundDeclaration,
 } from '../send/inbound.ts';
@@ -1399,7 +1399,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ? (order.includes('drop') ? order : [...order, 'drop'])
     : walk;
   const impliedSocketReason = !human && to.cli === 'claude-code' && !declaredOrder && !order.includes('socket')
-    ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding)
+    ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true)
     : null;
   report.delivery = [
     ...(impliedSocketReason === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocketReason }]),
@@ -1426,7 +1426,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       cli: to.cli,
       declaredOrder,
       human,
-      socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding),
+      socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true),
       handoffEligible: callerNative && !wait,
     });
     // A grant is the one rule the message's own header carries a record of: the dry run names
@@ -1700,7 +1700,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         continue;
       }
       if (!socketEligible(socketWord, inbound)) {
-        const why = socketSkipReason(socketWord, inbound);
+        const why = preciseSocketSkipReason(socketWord, inbound);
         failures.push(`socket: ${why}`);
         markLeg('socket', 'skipped', why);
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
@@ -4358,7 +4358,7 @@ async function deliverClientRecord(
     : defaultWalk;
   // The implied socket default's omission is named when the walk does not carry it, the same
   // way an ordinary send's report explains the socket it did not dial.
-  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding);
+  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
   report.delivery = [
     ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
     ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
@@ -4399,7 +4399,7 @@ async function deliverClientRecord(
       // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
       // host capability a client send may lack.
       const why = canSocket
-        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding)
+        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding, true)
         : 'the send host cannot read a pane or write a socket, so no frame was dialed';
       if (why !== null) {
         failures.push(`socket: ${why}`);

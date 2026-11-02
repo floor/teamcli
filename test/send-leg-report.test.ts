@@ -112,7 +112,7 @@ test('a dry run lists the socket the walk would not dial with its reason instead
       leg: 'socket',
       state: 'skipped',
       eligible: false,
-      reason: 'the receiving Claude session does not declare crossSessionInbound accept',
+      reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)',
     },
     { leg: 'mcp-inbox', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },

@@ -650,7 +650,29 @@ test('a launch with no accept word is never dialed, whatever the team file omits
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
     `typed: ${NO_PANE_MESSAGING}`,
-    'socket: the receiving Claude session does not declare crossSessionInbound accept',
+    'socket: the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)',
+  ]);
+});
+
+test('a generated settings file with no accept word names the file in the send’s reason', async () => {
+  // The file is on the launch line, so it is the whole effective word: its silence is the reason
+  // the socket is skipped, and the send names the file a relaunch would rewrite.
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer', launch: 'claude' }]);
+  cleanup = made.cleanup;
+  const path = declareSeat(made, 'plain', null);
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+
+  const code = await runSend(['plain', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
+    `socket: the receiving Claude session does not declare crossSessionInbound accept in its launch-effective settings (${path}); owner CLI settings are not read`,
   ]);
 });
 

@@ -210,17 +210,22 @@ export function preciseSocketSkipReason(
 /**
  * Why this run would not dial the socket leg, or null when it would. The checks are the walk's
  * own, in its order, so a dry run never promises a socket the walk would refuse — and `team
- * status` reads this same gate, so its reach column can never promise one either.
+ * status` reads this same gate, so its reach column can never promise one either. The short
+ * words are the status row's; a caller that prints the reason to a person asks for the precise
+ * ones, which name the launch-effective settings the CLI read instead of only the missing word.
  */
 export function socketIneligibleReason(
   cli: string,
   teamWord: CrossSessionInbound | undefined,
   declaration: InboundDeclaration,
   heldStanding: string | null,
+  precise = false,
 ): string | null {
   if (cli !== 'claude-code') return `${cli} sessions have no cross-session socket`;
   if (!SOCKET_SEND) return 'this build does not carry the cross-session socket';
-  if (!socketEligible(teamWord, declaration)) return socketSkipReason(teamWord, declaration);
+  if (!socketEligible(teamWord, declaration)) {
+    return precise ? preciseSocketSkipReason(teamWord, declaration) : socketSkipReason(teamWord, declaration);
+  }
   if (heldStanding !== null) return heldStanding;
   return null;
 }
