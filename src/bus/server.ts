@@ -29,8 +29,10 @@ import { connect, createServer, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { logLine } from '../log.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
+import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import {
   checkPrivilegedSelfSubscription,
@@ -166,7 +168,8 @@ export type StartBusInput = {
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
   /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
-   *  each seat's configured adapter row, and a caller may inject its own for a scene. */
+   *  each seat's configured adapter row and re-reads it when the root's registry record changes;
+   *  a caller may inject its own for a scene, and that one is the caller's to refresh. */
   deliver?: (record: SignedEventRecord) => void;
 };
 
@@ -620,12 +623,31 @@ export async function startBus(input: StartBusInput): Promise<StartBusResult> {
   }
 }
 
+/** The registry record's canonical digest when it reads, or `''` when it is absent or cannot be
+ *  read yet: the bus already has its team, so a missing baseline is not a failure. */
+function storedRecordDigest(home: string, id: string): string {
+  try {
+    return readStoredTeamConfig(home, id)?.record_sha256 ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** One line per distinct reload failure: a record that stays broken is not repeated on every
+ *  pass, and a different failure is still said. */
+function reportReloadProblem(stderr: (text: string) => void, previous: string | null, why: string): string {
+  const line = `team bus: the seat webhook rows were not reloaded: ${why}\n`;
+  if (line !== previous) stderr(line);
+  return line;
+}
+
 async function startBusWalk(input: StartBusInput, path: string): Promise<StartBusResult> {
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
+  const registryTeamId = teamIdOf(input.root);
   // A routing word may name a seat by its registry id; resolve it against the registry on disk so
   // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
-  const resolveSeat = readSeatResolver(home, teamIdOf(input.root));
+  const resolveSeat = readSeatResolver(home, registryTeamId);
   // The entity's own lead, for the `entity` routing position: a lead's prompt and a climbed
   // `seat.prompt-escalated` name it. Read once at start; the watch resolves the mailbox target
   // fresh on every climb, so a reregistered entity team is reached without a bus restart.
@@ -677,7 +699,36 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
     // awaits, so a pass or a publish is never failed by a routine.
-    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root });
+    const builtIn = input.deliver === undefined
+      ? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root })
+      : null;
+    const deliver = input.deliver ?? builtIn!;
+
+    // A row changed in the root's registry record applies to this running bus: each pass re-reads
+    // the record and rebuilds the routes only when its canonical digest moved. The team the bus
+    // routes and subscribes with stays as it started — this reload touches the webhook rows alone.
+    // A delivery already scheduled captured its row, so nothing in flight is cancelled or moved.
+    let seenRecord = storedRecordDigest(home, registryTeamId);
+    let reloadProblem: string | null = null;
+    const reloadWebhookRoutes = (): void => {
+      if (builtIn === null) return;
+      let stored: ReturnType<typeof readStoredTeamConfig>;
+      try {
+        stored = readStoredTeamConfig(home, registryTeamId);
+      } catch (error) {
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, (error as Error).message);
+        return;
+      }
+      if (stored === null || stored.record_sha256 === seenRecord) return;
+      const parsed = validateTeamFile(stored.text, { home, root: input.root });
+      if (!parsed.ok) {
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team does not validate');
+        return;
+      }
+      seenRecord = stored.record_sha256;
+      builtIn.reload(parsed.team);
+      reloadProblem = null;
+    };
 
     const fanOut = (record: SignedEventRecord): void => {
       deliver(record);
@@ -718,6 +769,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     let reconcileRun: Promise<SignedEventRecord[]> | null = null;
     const runReconcile = (): Promise<SignedEventRecord[]> => {
       if (closing.signal.aborted) return Promise.resolve([]);
+      reloadWebhookRoutes();
       if (reconcileRun !== null) return reconcileRun;
       const run = reconcilePassAsync({
         project: input.team.project,
