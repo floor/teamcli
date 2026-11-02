@@ -68,7 +68,8 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 
 A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
 leaving it out, and the owner or a `leads` seat of that seat's own team brings it back with `team restart
-<seat>`, which clears the mark in the same write that records the launch, then relaunches it.
+<seat>`, which clears the mark in the same write that records the launch, then relaunches it. A launch that
+does not reach ready puts the mark back, so a failed restart leaves the seat stopped.
 
 ## Output and exit codes
 
