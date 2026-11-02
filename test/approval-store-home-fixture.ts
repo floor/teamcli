@@ -2,7 +2,7 @@
 import { expect, test } from 'bun:test';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 const CHILD = 'TEAM_INDEPENDENT_HOME_CHILD';
@@ -12,11 +12,35 @@ const PARENT = 'TEAM_INDEPENDENT_HOME_PARENT';
 let activeSuite: string | undefined;
 
 
+/** The fixture's own owner permissions, restored before removal: a scene that proves an access
+ *  refusal leaves one of its folders mode 0, and a removal cannot read through it. Only the given
+ *  fixture is walked, and links are never followed. */
+function restorePermissions(path: string): void {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink()) return;
+  if (!stat.isDirectory()) {
+    try { chmodSync(path, 0o600); } catch { /* the removal names what it cannot take */ }
+    return;
+  }
+  try { chmodSync(path, 0o700); } catch { /* the removal names what it cannot take */ }
+  let children: string[] = [];
+  try { children = readdirSync(path); } catch { return; }
+  for (const child of children) restorePermissions(join(path, child));
+}
+
 /** Keep fixtures inside a supplied temporary workspace; normal runs use their usual trash. */
 export function releaseIndependentFixture(path: string): void {
   const retain = process.env.TEAM_INDEPENDENT_RETAIN;
   if (retain) renameSync(path, join(realpathSync(retain), basename(path)));
-  else discardFixtures([path]);
+  else {
+    restorePermissions(path);
+    discardFixtures([path]);
+  }
 }
 
 /** Replaces a fixed external path check with proof of the suite's own startup HOME. */

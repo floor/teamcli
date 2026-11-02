@@ -1,5 +1,5 @@
 // Synthetic homes and units, with an inert runner beneath the real service adapter.
-import { afterEach, expect, test } from 'bun:test';
+import { afterAll, afterEach, expect, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { discardFixtures } from './fixture-cleanup.ts';
@@ -16,8 +16,16 @@ import { keyOf } from '../src/store/keys.ts';
 import { writeDevelopmentMode } from '../src/development_mode.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
+// The unit worlds hold client keys, which the product refuses inside the OS temp directory, so
+// they live under the machine home. They sit inside one declared root — a subfolder of the home,
+// never the home itself — so a machine without trash can still remove them within the cleanup
+// bound, and nothing outside that root is ever a removal target.
+const controlRoot = join(process.env.HOME!, '.cache', 'teamcli-test-controls');
+fs.mkdirSync(controlRoot, { recursive: true });
+const fixtureRoot = fs.realpathSync(fs.mkdtempSync(join(controlRoot, 'daemon-unit-no-key-')));
 const bases: string[] = [];
-afterEach(() => { const owned = bases.splice(0); if (owned.length) discardFixtures(owned); }, 30_000);
+afterEach(() => { const owned = bases.splice(0); if (owned.length) discardFixtures(owned, { roots: [fixtureRoot] }); }, 30_000);
+afterAll(() => { discardFixtures([fixtureRoot], { roots: [controlRoot] }); });
 const NOW = new Date('2026-11-01T16:00:00Z');
 /** The reading the install's confirmation gate receives: the daemon the command just wrote
  *  answers, so a scene never opens the machine socket. */
@@ -66,7 +74,7 @@ function must<T extends { ok: boolean }>(value: T): Extract<T, { ok: true }> {
   if (!value.ok) throw new Error(JSON.stringify(value)); return value as Extract<T, { ok: true }>;
 }
 function world() {
-  const base = fs.realpathSync(fs.mkdtempSync(join(process.env.HOME!, 'unit-'))); bases.push(base);
+  const base = fs.realpathSync(fs.mkdtempSync(join(fixtureRoot, 'unit-'))); bases.push(base);
   const root = join(base, 'r'); const dir = join(root, '.agents'); const home = join(base, 'h'); const entry = join(base, 'synthetic-entry.ts');
   fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(home); execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   fs.writeFileSync(join(dir, 'team.yaml'), FILE); fs.writeFileSync(entry, '// synthetic service program, never executed\n');
