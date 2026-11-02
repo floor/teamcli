@@ -19,7 +19,7 @@ import type { Command, Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 
 export const USAGE = `Usage: team migrate [--keep-file] [--dry-run] [--json]
-       team migrate [--keep-file] --request [--json]
+       team migrate [--keep-file] --request [--reason <text>] [--json]
        team migrate [--keep-file] --approval <request-id> [--json]
 
 Moves this team's definition from .agents/team.yaml into the registry, once. The team
@@ -32,7 +32,8 @@ stays in force: it is signed over the canonical record, not the file.
 The owner runs it from a terminal outside herdr. Anyone else asks the owner seat:
 the card names the team, the project, the seat count and the canonical-record hash,
 the owner signs it with Touch ID or the iPhone passkey, and the same run continues
-once that signature verifies. --request records the card and stops; --approval runs
+once that signature verifies. --request records the card and stops (--reason <text> is the short
+reason it shows); --approval runs
 one the owner already signed. A denial, an expiry, or a signature that does not
 match writes nothing. No signer approves a request they asked for.
 
@@ -41,6 +42,8 @@ what the registry says, and refuses one that does not (team import replaces the 
 
   --keep-file  import and verify, and leave .agents/team.yaml where it is
   --dry-run    say what would be imported, and write nothing; anyone in the project may run it
+  --reason <text>
+               the short reason the owner's card shows
   --request    record this migrate for the owner seat and do not import yet
   --approval <request-id>
                run the migrate the owner seat signed for, once
@@ -66,7 +69,7 @@ export type ImportSources = {
 
 /** The command with its home and clock named, for tests that keep the registry in a temp home. */
 export async function runMigrate(argv: string[], io: Io, sources: ImportSources = {}): Promise<number> {
-  const ended = await runTeamImport('migrate', argv, readArgs(argv, ['approval'], ['json', 'dry-run', 'keep-file', 'request']), io, sources);
+  const ended = await runTeamImport('migrate', argv, readArgs(argv, ['approval', 'reason'], ['json', 'dry-run', 'keep-file', 'request']), io, sources);
   switch (ended) {
     case 'done':
       // exit: migrate.done
@@ -283,7 +286,7 @@ export async function runTeamImport(
   // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
   // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
   const seat = mode === 'import'
-    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, sources)
+    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources)
     : { kind: 'none' as const };
   if (seat.kind === 'requested') return 'approval-requested';
   if (seat.kind === 'refused') return 'approval-refused';

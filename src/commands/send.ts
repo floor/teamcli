@@ -87,7 +87,7 @@ export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wa
        team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
        team send --list [--json]
-       team send <seat> <message> --request [--json]
+       team send <seat> <message> --request [--reason <text>] [--json]
        team send <seat> <message> --approval <request-id> [--dry-run] [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
@@ -114,7 +114,7 @@ admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
 and needs no caller check. --request records this send for the owner seat and sends nothing;
---approval <request-id> runs the send the owner seat signed, with no owner terminal, and a signed
+--reason <text> is the short reason the card shows; --approval <request-id> runs the send the owner seat signed, with no owner terminal, and a signed
 always rule for team-send covering this folder admits the run with no request. The owner answers
 on the owner page. --dry-run resolves the seat and the
 legs the run would walk, writes no drop file, and types nothing. It
@@ -773,7 +773,7 @@ function outputMarkerLines(body: string): number {
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval'], ['wait', 'json', 'list', 'dry-run', 'request']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -805,7 +805,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (host.watch === undefined) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, seatSources);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources);
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;

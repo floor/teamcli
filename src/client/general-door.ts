@@ -328,5 +328,5 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   if (doubled !== null) return { kind: 'refused', why: doubled, json };
   const covered = grantCoversOp(read.grant, op);
   if (!covered.ok) return { kind: 'refused', why: covered.why, json };
-  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' }, general: { grant: grantPath, key: keyPath } }, grant: read.grant, json };
+  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' }, general: { grant: grantPath, key: keyPath, grantId: read.grant.grant_id, clientId: read.grant.client_id } }, grant: read.grant, json };
 }
