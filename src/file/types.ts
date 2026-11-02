@@ -165,10 +165,12 @@ export type Seat = {
   inbound?: CrossSessionInbound;
   /**
    * The seat is public-only, when the file marks it with `public_only: true`: the team's rules are
-   * never prepended to its briefs, and a send reads the whole body against the machine's private
-   * lists before the CLI's session call. A profile may declare every seat of its CLI public-only
-   * on its own; a seat can only add the guard, never remove it — `public_only: false` reads as
-   * absent. Omitted when the file marks none, so a file that marks no seat keeps its digest.
+   * never prepended to its briefs, a send reads the whole body against the machine's private
+   * lists before the CLI's session call, and the session's target repository must be proven
+   * public by one read of the forge's own record. A profile may declare every seat of its CLI
+   * public-only on its own; a seat can only add the guard, never remove it — `public_only: false`
+   * reads as absent. Omitted when the file marks none, so a file that marks no seat keeps its
+   * digest.
    */
   publicOnly?: true;
   /**

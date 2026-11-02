@@ -134,6 +134,18 @@ leg behind it, and the message still lands in the seat's own drop folder. A list
 and cannot be read refuses the body the same way; a machine with neither list has nothing
 configured to protect, and the send proceeds.
 
+The repository travels with the body: the CLI clones `owner/repo` from the forge, so a private
+one would hand the service the code the brief is about. Before the session call, the repository
+the seat's folder names as its `origin` is proven public by one credential-free read of the
+forge's own record — no header of any kind, no redirect followed, and only a 200 that marks the
+repository public counts (`src/send/repo-visibility.ts`). A repository that is not public, a read
+that cannot be made, and a folder that names no repository all refuse the leg the same way a
+private-list hit does — `session: the target repository owner/repo is not public; no session was
+created`, `session: the target repository owner/repo could not be read for visibility; no session
+was created`, or `session: the seat's folder names no repository, so the session's target cannot
+be proved public; no session was created` — and the walk falls through to the leg behind it, so
+the message still lands locally. A read the walk cannot make must not pass a message.
+
 A listener that runs another install is no route for the channel or the `mcp-inbox` leg: the
 marker names the version, the entry build and the packed commit the server started from, and a
 listener of another install cannot take a record this build signs, so the channel is not walked

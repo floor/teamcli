@@ -29,10 +29,12 @@ tested:
 unattended: []
 rules: prepend
 # Every jules session runs on Google's service, not on this machine, so every seat of this CLI
-# is public-only: the team's rules never ride a brief, and a send reads the whole body against
-# the machine's private lists before the CLI's session call, refusing a body that matches one
-# (the walk then falls through to the leg behind it). A team file can mark one seat the same
-# way; nothing can turn it off for this CLI.
+# is public-only: the team's rules never ride a brief, a send reads the whole body against the
+# machine's private lists before the CLI's session call, and the target repository must be proven
+# public by one credential-free read of the forge's own record before the call — the CLI clones
+# it, so a private repository would hand the service the code the brief is about. A refusal
+# names its reason and the walk then falls through to the leg behind it. A team file can mark one
+# seat the same way; nothing can turn it off for this CLI.
 public_only: true
 # The delivery class a run measured: a fresh session per brief means no runtime holds a queue
 # for it, and no MCP inbox is registered; an idle seat cannot be woken.

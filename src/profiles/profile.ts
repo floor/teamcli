@@ -116,8 +116,9 @@ export interface Profile {
    *  says `prepend`. */
   rulesMode: 'option' | 'message' | 'prepend';
   /** Whether a seat of this CLI is public-only: the team's rules are never prepended to its
-   *  briefs, and a send scans the whole body with the machine's private lists before the CLI's
-   *  session call, so nothing private reaches a public service. False when the profile says
+   *  briefs, a send scans the whole body with the machine's private lists before the CLI's
+   *  session call, and the session's target repository must be proven public by one read of the
+   *  forge's own record, so nothing private reaches a public service. False when the profile says
    *  nothing; a team file may mark one seat so (`public_only: true`). */
   publicOnly: boolean;
   /** For a first-message seat: how its launch line carries the one line that points at its rules

@@ -5616,7 +5616,7 @@ scene('queue.record', async (place) => {
  *  the seat also answers at the sender's own pid path, as a session does. No path calls this
  *  deliver while SOCKET_SEND (src/send/uds.ts) is off, so `reply` stands unused until the
  *  answered scene returns with the native leg. No session is read. */
-function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; reply?: string; inboxGraceMs?: number } = {}): SendHost & { frames: string[] } {
+function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; reply?: string; inboxGraceMs?: number; repoVisibility?: SendHost['repoVisibility'] } = {}): SendHost & { frames: string[] } {
   const sockets = join(place.base, 'cc-socks');
   mkdirSync(sockets, { recursive: true });
   if (over.socket !== false) writeFileSync(join(sockets, '400.sock'), '');
@@ -5648,6 +5648,7 @@ function sendHost(place: Place, over: { agents?: boolean; socket?: boolean; repl
     now: () => NOW,
     home: place.home,
     ...(over.inboxGraceMs === undefined ? {} : { inboxGraceMs: over.inboxGraceMs }),
+    ...(over.repoVisibility === undefined ? {} : { repoVisibility: over.repoVisibility }),
   };
   return host;
 }
@@ -5849,8 +5850,12 @@ scene('send.client-usage', async (place) => {
 // spawn path and never reaches a real CLI.
 scene('send.session-created', async (place) => {
   approve(place, SESSION_TEAM);
+  // The seat's folder names a repository and the forge read proves it public: the checkout a
+  // repo layout builds has no origin, and a public-only session leg refuses a target it cannot
+  // prove. Both answers are stand-ins, so no scene touches the network.
+  git(place.root, 'remote', 'add', 'origin', 'git@github.com:acme/site.git');
   return withJules(place, { status: 0, stdout: SESSION_CREATED_LINE }, async (jules) => {
-    const ran = await sent(place, ['solo', 'hello'], owner, sendHost(place));
+    const ran = await sent(place, ['solo', 'hello'], owner, sendHost(place, { repoVisibility: async () => 'public' }));
     const calls = jules.calls();
     expect(calls).toHaveLength(1);
     const call = calls[0];
