@@ -1,12 +1,13 @@
-// A send to a seat with an event adapter reaches that adapter within seconds: after the drop is
-// written, the send nudges the root's bus, and the bus re-reads and verifies the signed record
-// before it fans the arrival out. The interval pass stays the safety net for a bus that was not
-// running at send time. A nudge that names a missing or unsigned record delivers nothing.
+// A send to a seat with an event adapter reaches that adapter within seconds: the send posts the
+// adapter itself and nudges the root's bus, which re-reads and verifies the signed record before
+// it fans the arrival out. A bus's first pass raises a record sent while it was not running, and
+// the mark beside the record keeps the adapter from a second post. A nudge that names a missing
+// or unsigned record delivers nothing.
 //
 // The team is a synthetic world under a temp folder, the adapter a loopback listener in this
 // process, and the bus the real one. No live seat, no real routine.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startBus, nudgeBus, publishToBus, type BusHandle } from '../src/bus/server.ts';
@@ -120,15 +121,31 @@ describe('a send nudges the bus its seat reads from', () => {
     expect(carrying.event?.payload.to).toBe('iris');
   });
 
-  test('a bus started after the send delivers the record on its pass', async () => {
+  test('a bus started after the send raises the record on its pass, with no second post', async () => {
     const hook = receiver();
     const files = hookFiles(hook.url);
     const at = withHookSeat(files);
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
-    expect(hook.hits.length).toBe(0);
+    // The send posts the seat's adapter itself: one POST, holding the claim beside the record,
+    // and it leaves the mark that says the arrival is posted.
+    expect(hook.hits.length).toBe(1);
+    const sent = hook.hits[0];
+    expect(sent?.method).toBe('POST');
+    expect(sent?.authorization).toBe(`Bearer ${SECRET}`);
+    const carrying = JSON.parse(sent?.body ?? '{}') as { event?: SignedEventRecord };
+    expect(carrying.event?.payload.kind).toBe('message.arrived');
+    expect(carrying.event?.payload.to).toBe('iris');
+    const id = carrying.event?.payload.record_id ?? '';
+    expect(id).not.toBe('');
+    const dir = join(at.root, '.agents', 'send-drops', 'acme', 'iris');
+    expect(existsSync(join(dir, `${id}.posted`))).toBe(true);
+    // The claim ended as the mark; nothing is left in flight.
+    expect(existsSync(join(dir, `${id}.posting`))).toBe(false);
 
+    // A bus that starts later still raises the record on its first pass: the arrival is in the
+    // bus's log, verified and addressed to the seat, even though the webhook already has it.
     const started = await startBus({
       root: at.root,
       team: await loaded(at),
@@ -139,12 +156,19 @@ describe('a send nudges the bus its seat reads from', () => {
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     buses.push(started.handle);
-    const posted = await until(() => hook.hits.length > 0, 5_000);
-    expect(posted).toBe(true);
-    const sent = hook.hits[0];
-    const carrying = JSON.parse(sent?.body ?? '{}') as { event?: SignedEventRecord };
-    expect(carrying.event?.payload.record_id).toBeDefined();
-    expect(carrying.event?.payload.to).toBe('iris');
+    const read = readEvents('acme', at.root, at.home);
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      const arrivals = read.events.filter(
+        (event) => event.payload.kind === 'message.arrived' && event.payload.record_id === id,
+      );
+      expect(arrivals).toHaveLength(1);
+      expect(arrivals[0]?.payload.to).toBe('iris');
+    }
+    // And it posts nothing a second time: the mark the send left is what the adapter skips.
+    // The wait is past the adapter's own scheduling; a second POST would land within ms.
+    await Bun.sleep(200);
+    expect(hook.hits.length).toBe(1);
   });
 
   test('a nudge for a missing record delivers nothing', async () => {
