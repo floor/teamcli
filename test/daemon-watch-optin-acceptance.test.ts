@@ -155,6 +155,10 @@ function fakeService(): ServiceManager & { calls: string[]; programs: ServicePro
       calls.push('uninstall');
       return { ok: true, unitPath: join(home, 'unit.plist'), removed: true };
     },
+    restart: (home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    },
   };
 }
 

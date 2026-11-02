@@ -46,11 +46,11 @@ const IDLE = CLAUDE_IDLE;
 const NOW = new Date('2026-10-15T12:00:00Z');
 const UNPLACED = { kind: 'unplaced' as const, reason: 'it runs under herdr' };
 
-test('the dev-mode scope is one list: exactly these nine commands', () => {
+test('the dev-mode scope is one list: exactly these ten commands', () => {
   // The one place the scope is written (`src/policy/types.ts`, re-exported by `src/dev_mode.ts`).
   // A command added here is a caller gate dev mode folds; a command left off stays owner-only in
-  // every mode.
-  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename']);
+  // every mode. `peek` is the one lift that only reads.
+  expect([...DEV_MODE_COMMANDS]).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename', 'peek']);
 });
 
 let dirs: string[] = [];
@@ -983,7 +983,7 @@ const OWNER_AT_CWD = [
   { command: 'policy', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
   { command: 'broker', refusal: 'only the owner runs `broker`, from a terminal outside herdr; this call is lead' },
   { command: 'tempo', refusal: 'only the owner runs tempo, from a terminal outside herdr; this call is lead' },
-  { command: 'daemon', refusal: 'only the owner installs or removes the machine daemon; this call is lead' },
+  { command: 'daemon', refusal: 'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is lead' },
   { command: 'down', refusal: 'only the owner abandons a team, from a terminal outside herdr' },
 ];
 

@@ -123,7 +123,7 @@ describe('authoritative', () => {
     expect(current()).toEqual({ pid: process.pid, epoch: started.epoch, heartbeat: iso(T0 + 5_000) });
   });
 
-  test('a busy renew changes nothing, and a busy tick never extends an expired proof', () => {
+  test('a busy renew changes nothing, and the next free renew refreshes the expired proof', () => {
     const watch = host();
     const started = watch.start();
     if (started.phase !== 'authoritative') throw new Error('start failed');
@@ -132,10 +132,20 @@ describe('authoritative', () => {
     expect(watch.tick()).toEqual(started);
     expect(current()).toEqual({ pid: process.pid, epoch: started.epoch, heartbeat: iso(T0) });
     releaseLock();
-    // The proof is still the T0 one: the busy tick did not extend it, so this renew is lost.
+    // The proof is still the T0 one — the busy tick did not extend it — but it is this host's
+    // own captured epoch and pid, and no other host could acquire it: the next free renew
+    // refreshes it instead of ending the host.
     nowMs = T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1;
-    expect(watch.tick()).toEqual({ phase: 'draining', epoch: started.epoch, why: 'lost' });
-    expect(current()).toEqual({ pid: process.pid, epoch: started.epoch, heartbeat: iso(T0) });
+    expect(watch.tick()).toEqual({
+      phase: 'authoritative',
+      epoch: started.epoch,
+      renewedAt: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1),
+    });
+    expect(current()).toEqual({
+      pid: process.pid,
+      epoch: started.epoch,
+      heartbeat: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1),
+    });
   });
 
   test('a busy tick whose captured proof has lapsed drains on that same tick', () => {
@@ -169,13 +179,17 @@ describe('authoritative', () => {
     expect(current()).toEqual({ pid: process.pid, epoch: started.epoch, heartbeat: iso(T0) });
   });
 
-  test('an expired proof with no contention is lost and drains at once', () => {
+  test('an expired proof with no contention is refreshed at once, not drained', () => {
     const watch = host();
     const started = watch.start();
     if (started.phase !== 'authoritative') throw new Error('start failed');
     nowMs = T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1;
-    expect(watch.tick()).toEqual({ phase: 'draining', epoch: started.epoch, why: 'lost' });
-    expect(watch.phase()).toBe('draining');
+    expect(watch.tick()).toEqual({
+      phase: 'authoritative',
+      epoch: started.epoch,
+      renewedAt: iso(T0 + WATCH_AUTHORITY_MAX_AGE_MS + 1),
+    });
+    expect(watch.phase()).toBe('authoritative');
   });
 
   test('an unreadable record drains rather than continuing on unproven authority', () => {

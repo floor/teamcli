@@ -24,6 +24,21 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // sentence is held under: internal names, none of them printed as a sentence.
   { literal: /^approval$/, why: "the check's own name, and the key it reports under" },
   { literal: /^approval:\$\{approvalReason\}$/, why: 'a told-set key: the case is said once, and the key itself is never printed' },
+  // The answerable dialog kind the screen reader classifies. Its own name is a screen class —
+  // `DIALOG_KINDS` in `src/watch/dialog.ts`, the `Screen` kind, the `Attention` and `PromptKind`
+  // unions, and every `screen.kind === 'plan approval'` comparison in the commands and the
+  // watch — and the pass files the kind's told-set under the same name. The profile's key for
+  // the kind is written `plan_approval` (`StageName` in `src/watch/screen-core.ts`, `STAGES` and
+  // `question_text` in `src/watch/screen-file.ts`). Neither is an approval copy, and neither
+  // tells a seat to approve anything: the watch's reports name the dialog and leave it to its
+  // operator, and no key is sent from this word.
+  { literal: /^plan approval$/, why: "the answerable dialog kind's own name: a screen class (src/watch/dialog.ts DIALOG_KINDS and the screen-kind unions), never an approval copy" },
+  { literal: /^plan approval:$/, why: "the attention key prefix the pass files the kind's reports under (src/watch/pass.ts): a told-set key, never printed" },
+  { literal: /^plan_approval$/, why: "the profile's own stage and question_text key for the kind (src/watch/screen-core.ts, src/watch/screen-file.ts): a YAML key, never an approval copy" },
+  // The two sentences that name those kinds in prose: both refuse, and both say the pane waits
+  // at no answerable dialog.
+  { literal: /^\$\{seatName\}: it is not waiting at a question, plan approval or confirmation dialog$/, why: "answer's state refusal: the kinds it can answer, said of a seat that waits at none" },
+  { literal: /^the pane is not at a question, plan approval or confirmation dialog$/, why: "answer's not-a-question refusal after a fresh read: the pane is at no answerable dialog" },
   // The watch's drifting case: the file changed since the record was written. The note is the
   // watch's own, and the record it names is the one the live file is held against.
   { literal: /^the file has changed since the last approval: /, why: "the watch's note for a file edited since the record was written" },
@@ -84,6 +99,10 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^team migrate: owner-seat request \$\{id\} recorded; \$\{where\}\\n\$\{made\.text\}\\nwaiting for the signed approval\\n$/, why: "migrate shows the owner-seat card and waits for the signature" },
   { literal: /^--dry-run checks an answered request: pass --approval <request-id>$/, why: "batch's dry run names the owner-seat door's --approval flag" },
   { literal: /^--approval runs the recorded batch and takes no --do$/, why: "batch's --approval runs the recorded list and takes no further command" },
+  // `approvals` and `init`'s two owner doors, in role words: only the owner revokes a standing
+  // rule or changes an approval mode, and this call is refused. Neither tells the caller to
+  // approve anything — both refuse it, and neither is a copy of the live file. Every live line
+  // with either wording after the integration is one of these two, and each is used.
   { literal: /^only the owner changes an approval mode, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "init's approval-mode caller refusal: the owner changes a mode record" },
   { literal: /^only the owner revokes an approval rule, from a terminal outside the terminal host; this call is \$\{describeCaller\(caller\)\}$/, why: "approvals and init: the owner revokes a standing rule" },
   { literal: /^"\$\{id\}" is not an approval rule id$/, why: "approvals refuses an id that is neither a team-create nor an owner-action rule" },
