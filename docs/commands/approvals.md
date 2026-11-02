@@ -17,7 +17,7 @@ log, and `team approvals details <id>` prints it.
     team approvals list [--json]
     team approvals details <id> [--json]
     team approvals revoke <id...> [--json]
-    team approvals revoke <id...> --request [--json]
+    team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
 
 Each `<id>` is `tc_…` for a team-create rule or `oa_…` for an owner-action rule.
@@ -25,8 +25,8 @@ Each `<id>` is `tc_…` for a team-create rule or `oa_…` for an owner-action r
 ## Who may run it
 
 Anyone may list or read details. Revoking is the owner's, from a terminal outside the terminal host, or an
-owner-seat answer for that revoke: `--request` records every id as one request and the owner
-answers on the owner page; `--approval` runs it once. A signed always rule for
+owner-seat answer for that revoke: `--request` records every id as one request (`--reason <text>` is
+the short reason the card shows) and the owner answers on the owner page; `--approval` runs it once. A signed always rule for
 `team-revoke-approval` covering the folder of every rule named admits the revoke with no request.
 The rule covers the rules' folders, not the caller's; a rule whose file does not verify has no
 folder that can be checked, so it admits nothing. A run with no terminal and no such answer is
@@ -52,7 +52,7 @@ team approvals: a verb is required: list, details or revoke
 Usage: team approvals list [--json]
        team approvals details <id> [--json]
        team approvals revoke <id...> [--json]
-       team approvals revoke <id...> --request [--json]
+       team approvals revoke <id...> --request [--reason <text>] [--json]
        team approvals revoke <id...> --approval <request-id> [--json]
 
 Lists the owner seat's always rules — team-create (tc_…) and owner-action (oa_…) — or removes
@@ -60,7 +60,7 @@ every id in the one command. Listing reads the owner's folder and changes nothin
 one request's full record — request id, repository, HEAD, bound arguments, hashes — and the audit
 entries written for it; the card the owner answers never carries them. Revoking is the owner's,
 from a terminal outside the terminal host, or an owner-seat answer for that revoke: --request records every
-id as one request and --approval <request-id> runs it once the owner has answered on the owner
+id as one request (--reason <text> is the short reason the card shows) and --approval <request-id> runs it once the owner has answered on the owner
 page. One card and one Touch ID cover the whole list. A signed always rule for
 team-revoke-approval covering the folder of every rule named admits the revoke with no request. A bad id revokes
 nothing.
