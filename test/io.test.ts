@@ -168,7 +168,9 @@ describe('doctor and status cleaning', () => {
       expect(io.out).toContain('difference: stray agent (pane-b) is running and is not in the file');
       expect(io.out).toContain('difference: the protected checkout "." is on "feat/dirty branch", not on "main"');
       const rowLine = io.out.split('\n').find((line) => line.includes('claude-coordinator-acme')) ?? '';
-      expect(rowLine).toBe('  claude-coordinator-acme  working  Claude Opus 5.5      pane-a  typed');
+      // The row ends with the wake cell: this seat records no endpoint, no bound conversation
+      // and no live listener, so a message cannot wake it while it is idle.
+      expect(rowLine).toBe('  claude-coordinator-acme  working  Claude Opus 5.5      pane-a  typed  !pull-on-turn');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
