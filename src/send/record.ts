@@ -44,6 +44,22 @@ export const CLOSE_KIND = 'thread-close';
 export const CLIENT_REPLY_RULE = 'a reply on a client thread, to the client that opened it';
 
 /**
+ * The kinds a message can carry (`team send --kind`), each in the sender's own words. A `task` or
+ * a `question` expects an answer, so a record of either kind with no verifying `replied` receipt
+ * is a wait (`team waits`). The rest name what they are and wait on nothing.
+ */
+export const MESSAGE_KINDS = ['task', 'question', 'answer', 'result', 'ready', 'blocked'] as const;
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/** The kinds that wait on an answer: `team waits` lists a record of one of these, with no
+ *  verifying reply beside it, until the addressee answers. */
+export const WAITING_KINDS: readonly MessageKind[] = ['task', 'question'];
+
+export function isMessageKind(value: string): value is MessageKind {
+  return (MESSAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
  * One message record's signed payload. The two registry ids are `null` only where the registry
  * holds none — the owner, or a seat the store has no record for yet; the rule that admitted the
  * pair is always named.
@@ -72,6 +88,13 @@ export type RecordPayload = {
   /** The sender's own subject (`--subject`), when the send wrote one: a display field only, and
    *  never the summary — that is the body's first content line. */
   subject?: string;
+  /** What the message is for (`--kind`), when the send named one: a task or a question expects
+   *  an answer, and its record is what `team waits` lists until the addressee replies. Absent on
+   *  a record written before the field, which reads as no kind at all. */
+  message_kind?: MessageKind;
+  /** The work item the message is about (`--work`), in the sender's own words: an issue key, a
+   *  branch, a task id. Display only; shown beside a wait. */
+  work?: string;
   /** The id of the record this one answers, on a reply only. */
   in_reply_to?: string;
   /** A general seat brief's delivery: the delivered body's sha256 and the lifetime it belongs
@@ -187,7 +210,8 @@ export type Sealed = { payload: RawPayload; signature: string };
  *  the field narrows or widens what the record means, so it never acts on the record. */
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
-  'thread', 'subject', 'in_reply_to', 'brief_sha256', 'incarnation', 'from_client', 'to_client',
+  'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
+  'from_client', 'to_client',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -326,6 +350,8 @@ export function projectRecord(value: unknown): RecordProjection | null {
   if (value.from_id === undefined || value.to_id === undefined) return null;
   if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
   if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
+  if (value.message_kind !== undefined && (typeof value.message_kind !== 'string' || !isMessageKind(value.message_kind))) return null;
+  if (value.work !== undefined && !nonEmpty(value.work)) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
   const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
@@ -349,6 +375,8 @@ export function projectRecord(value: unknown): RecordProjection | null {
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
   if (value.subject !== undefined) payload.subject = value.subject as string;
+  if (value.message_kind !== undefined) payload.message_kind = value.message_kind as MessageKind;
+  if (value.work !== undefined) payload.work = value.work as string;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
   // maps have exactly the same strict shape.
