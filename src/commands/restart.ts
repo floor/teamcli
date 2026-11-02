@@ -1174,7 +1174,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // it proves to both records, so a send right after the restart is addressed to a real
     // conversation rather than falling to a pull. A read that proves nothing — no thread, several,
     // or an endpoint that does not answer — leaves the records as they were, and the result below
-    // says pull-only with the reason the record gives.
+    // says pull-only with the binder's own reason: none, several or unreadable.
+    let bindWhy: string | null = null;
     if (
       afterwards !== undefined
       && nativePushBindingFor(launching.cli) === 'conversation'
@@ -1201,6 +1202,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         afterwards = readState(dir).sessions[session]?.seats[name] ?? afterwards;
         logLine(dir, input.command, who, `${name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, sources.now());
       } else {
+        bindWhy = bound.why;
         logLine(dir, input.command, who, `${name}: no thread was bound from its Codex endpoint (${bound.why})`, sources.now());
       }
     }
@@ -1232,7 +1234,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
-      ...(record.kind === 'bound' ? {} : { pullOnly: record.why }),
+      ...(record.kind === 'bound' ? {} : { pullOnly: bindWhy ?? record.why }),
     };
   } finally {
     runLock.release();

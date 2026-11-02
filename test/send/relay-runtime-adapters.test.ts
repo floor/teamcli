@@ -474,7 +474,8 @@ describe('deliverRuntimeRelayRoute copy-before-attempt, non-blocking skip, and r
     const scene = makeScene('codex');
     const copy = { dir: scene.dropDir, name: MESSAGE_ID };
 
-    // 1. Would-hold on Codex native aborts before spawning codex queue, but stages the signed copy first.
+    // 1. An idle thread that declines direct input is would-hold: the wrapper refuses before
+    // spawning codex queue, but stages the signed copy first.
     let spawnCount = 0;
     const wouldHoldAttempt = await deliverRuntimeRelayRoute(
       {
@@ -495,7 +496,7 @@ describe('deliverRuntimeRelayRoute copy-before-attempt, non-blocking skip, and r
           ok: true,
           thread: {
             id: THREAD_ID,
-            status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+            status: { type: 'idle' },
             canAcceptDirectInput: false,
           },
         }),
@@ -521,6 +522,45 @@ describe('deliverRuntimeRelayRoute copy-before-attempt, non-blocking skip, and r
         messageKeyOf(scene.home),
       ),
     ).toBe(true);
+
+    // 1b. An active thread is a hold, not unavailability: the wrapper still hands the pointer to
+    // codex queue under the same budget, and reports the queue's acceptance.
+    let activeSpawns = 0;
+    const activeAttempt = await deliverRuntimeRelayRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy,
+        root: scene.root,
+        home: scene.home,
+        session: SESSION,
+        seat: scene.seat,
+        sender: { seat: 'lead', team: 'acme' },
+      },
+      { id: MESSAGE_ID, record: scene.recordText, pointer: scene.pointer },
+      {
+        now: () => NOW,
+        sessionBinding: { kind: 'bound', recorded: makeBoundSession('codex', THREAD_ID, scene.seat) },
+        liveProbe: async () => ({
+          ok: true,
+          thread: {
+            id: THREAD_ID,
+            status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+            canAcceptDirectInput: true,
+          },
+        }),
+        spawn: async () => {
+          activeSpawns += 1;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+    );
+    expect(activeSpawns).toBe(1);
+    expect(activeAttempt.outcome).toBe('delivered');
+    if (activeAttempt.outcome === 'delivered') {
+      expect(activeAttempt.adapterOutcome).toBe('enqueue');
+      expect(activeAttempt.readReceiptVerified).toBe(false);
+    }
 
     // 2. Idle accepting thread spawns codex queue and returns outcome: 'delivered' (never 'read' without verified receipt).
     const deliveredAttempt = await deliverRuntimeRelayRoute(
@@ -1044,7 +1084,7 @@ describe('walkRuntimeRelayRoutes binding owner addendum scenes', () => {
     ]);
   });
 
-  test('skips would-hold routes (socket hold + Codex active thread) without dialing or spawning and delivers via Cursor headless-resume', async () => {
+  test('skips would-hold routes (socket hold + Codex idle thread declining input) without dialing or spawning and delivers via Cursor headless-resume', async () => {
     const scene = makeScene('cursor');
     const copy = { dir: scene.dropDir, name: MESSAGE_ID };
     const socketPath = join(scene.sockets, '222.sock');
@@ -1097,7 +1137,7 @@ describe('walkRuntimeRelayRoutes binding owner addendum scenes', () => {
               ok: true,
               thread: {
                 id: THREAD_ID,
-                status: { type: 'active', activeFlags: ['waitingOnUserInput'] },
+                status: { type: 'idle' },
                 canAcceptDirectInput: false,
               },
             }),

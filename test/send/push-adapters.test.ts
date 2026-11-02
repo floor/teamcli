@@ -1406,7 +1406,10 @@ seats:
         canAcceptDirectInput: false,
       });
 
-      const wouldHoldDeliver = await deliverCodexNativeRoute(
+      // 9c2. An active thread is a hold, not unavailability: the pointer is handed to `codex
+      // queue` under the same bounded budget, and the attempt is a queue acceptance.
+      let activeSpawns = 0;
+      const activeDeliver = await deliverCodexNativeRoute(
         {
           route: 'native',
           runtime: 'codex',
@@ -1429,22 +1432,21 @@ seats:
           liveRoutesRemain: true,
           liveProbe: true,
           spawn: () => {
-            throw new Error('must never spawn codex queue when live thread/read reports would-hold');
+            activeSpawns += 1;
+            return { status: 0, stdout: 'Queued\n', stderr: '' };
           },
         },
       );
-      expect(wouldHoldDeliver.outcome).toBe('unreachable');
-      if (wouldHoldDeliver.outcome !== 'enqueue') {
-        expect(wouldHoldDeliver.wouldHold).toBe(true);
-      }
-      expect(wouldHoldDeliver.walkAttempt).toEqual({
+      expect(activeSpawns).toBe(1);
+      expect(activeDeliver.outcome).toBe('enqueue');
+      expect(activeDeliver.walkAttempt).toEqual({
         route: 'native',
-        outcome: 'unreachable',
-        liveRoutesRemain: true,
+        outcome: 'delivered',
+        liveRoutesRemain: false,
         at: new Date('2026-10-20T01:00:00.000Z'),
         ms: 0,
-        reason: `codex thread ${scene.sessionId} is active (waitingOnApproval); codex queue would hold the message`,
-        receipt: { kind: 'stored', id: SAMPLE_ID },
+        reason: 'pushed to codex queue; no read receipt yet',
+        receipt: { kind: 'maybe-consumed' },
       });
 
       // 9d. Live notLoaded thread -> unavailable
