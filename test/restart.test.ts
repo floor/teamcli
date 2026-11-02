@@ -1628,7 +1628,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).toContain(
-      `AGENT_UNATTENDED=1 grok -r ${GROK_SESSION} --always-approve`,
+      `AGENT_UNATTENDED=1 grok -r ${GROK_SESSION} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --sandbox team-seat-acme`,
     );
     expect(io.err).toBe('');
   });
@@ -1655,7 +1655,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).toContain(
-      `AGENT_UNATTENDED=1 ${launch} -r ${GROK_SESSION} --always-approve`,
+      `AGENT_UNATTENDED=1 ${launch} -r ${GROK_SESSION} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --sandbox team-seat-acme`,
     );
   });
 

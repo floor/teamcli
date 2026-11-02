@@ -234,36 +234,44 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
 
-/** Add defaults as complete options: a line's own flag keeps its value, including when the
- *  flag uses an alias or the value is joined with `=` or attached to a short flag. Quoted
- *  arguments are kept whole so a flag appearing inside a prompt or config value does not
- *  suppress a default. */
-function unattendedOptions(profile: Profile, launch: string): string[] {
-  const aliases: Record<string, string> = profile.cli === 'codex'
-    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
-    : {};
-  const key = (word: string): string => {
-    const flag = word.split('=', 1)[0]!;
-    const alias = aliases[flag];
-    if (alias !== undefined) return alias;
-    // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
-    // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
-    // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
-    const attached = /^-([as]).+$/.exec(flag);
-    return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
-  };
+/** The option names a launch line names, as the profile's CLI writes them: a line's own flag
+ *  keeps its value, including when the flag uses an alias or the value is joined with `=` or
+ *  attached to a short flag. Quoted arguments are kept whole so a flag appearing inside a prompt
+ *  or config value is not read as one. */
+export function lineOptionKeys(cli: string, launch: string): Set<string> {
   const words = launch.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const flags = new Set<string>();
   for (const word of words) {
     if (word === '--') break;
-    if (word.startsWith('-')) flags.add(key(word));
+    if (word.startsWith('-')) flags.add(optionKey(cli, word));
   }
+  return flags;
+}
+
+/** The long name of one option word, so an alias and the option it stands for are one key. */
+function optionKey(cli: string, word: string): string {
+  const aliases: Record<string, string> = cli === 'codex'
+    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
+    : {};
+  const flag = word.split('=', 1)[0]!;
+  const alias = aliases[flag];
+  if (alias !== undefined) return alias;
+  // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
+  // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
+  // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
+  const attached = /^-([as]).+$/.exec(flag);
+  return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
+}
+
+/** Add defaults as complete options: a line's own flag keeps its value. */
+function unattendedOptions(profile: Profile, launch: string): string[] {
+  const flags = lineOptionKeys(profile.cli, launch);
   const options: string[] = [];
   for (let i = 0; i < profile.unattended.length; i++) {
     const flag = profile.unattended[i]!;
     const next = profile.unattended[i + 1];
     const value = !flag.includes('=') && next !== undefined && !next.startsWith('-') ? next : undefined;
-    if (!flags.has(key(flag))) {
+    if (!flags.has(optionKey(profile.cli, flag))) {
       options.push(flag);
       if (value !== undefined) options.push(value);
     }
@@ -277,7 +285,9 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * file's launch line, then the profile's options and, where the CLI takes
  * them at launch, the rules. A CLI that loads a per-launch settings file also
  * gets that file, named at the end, unless its launch line already names one.
- * A launch with a place adds the profile's measured team-inbox arguments.
+ * A launch with a place adds the profile's measured team-inbox arguments. A
+ * sandbox profile is named only when the caller wrote one for this launch and
+ * the line names none of its own: the file's choice of profile stands.
  */
 export function launchCommand(
   profile: Profile,
@@ -288,6 +298,7 @@ export function launchCommand(
   displayName?: string,
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
   rulesLine?: string,
+  sandboxProfile?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = unattendedOptions(profile, launch);
@@ -295,6 +306,9 @@ export function launchCommand(
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
     else options.push('--no-daemon');
+  }
+  if (sandboxProfile !== undefined && sandboxProfile !== '' && !lineOptionKeys(profile.cli, launch).has('--sandbox')) {
+    options.push('--sandbox', sandboxProfile);
   }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's

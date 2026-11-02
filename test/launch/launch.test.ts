@@ -208,7 +208,7 @@ describe('up --dry-run', () => {
         '+ herdr --session acme-web agent rename <pane of claude-coordinator-acme> claude-coordinator-acme',
         "+ herdr --session acme-web pane report-metadata <pane of claude-coordinator-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label grok-acme --no-focus',
-        "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.'",
+        "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --trust --permission-mode auto --allow '\\''Bash(bun *)'\\'' --allow '\\''Bash(team *)'\\'' --allow '\\''Bash(git *)'\\'' --rules Rules.'",
         '    (reads its drops through its MCP inbox)',
         '  wait until grok-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of grok-acme> grok-acme',

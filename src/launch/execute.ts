@@ -15,6 +15,7 @@ import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
+import { withoutGrokSandbox, writeGrokSandbox } from './grok-sandbox.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
@@ -1197,6 +1198,17 @@ export async function executePlan(
         // attach is added only once an endpoint exists to attach to. A start failure is said
         // once and the seat launches on the line it had; presence for it is unproven, not guessed.
         let command = op.command;
+        // A Grok seat's sandbox profile is written before its command runs, the same place the
+        // plan decided to name it. Grok refuses to start for a profile it cannot find, so a file
+        // that cannot be written takes the plan's own `--sandbox` off the line and the seat
+        // launches on the profile the workspace already gives it; the owner hears why.
+        if (op.grokSandbox !== undefined) {
+          const written = writeGrokSandbox(op.grokSandbox);
+          if (!written.ok) {
+            command = withoutGrokSandbox(command, op.grokSandbox.profile);
+            hold(op.seat, `${op.seat}: its sandbox profile was not written: ${written.why}; launched without it\n`);
+          }
+        }
         let startedEndpoint = false;
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
