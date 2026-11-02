@@ -628,15 +628,19 @@ the message:
 ```
 woken through its event adapter                        an event adapter wakes the seat
 woken through its runtime queue                        the runtime holds the message between turns
+queued; its webhook fires when the bus takes it        the seat's webhook adapter is its route: the bus posts it after the send returns
 queued; <seat> reads it at its next turn (pull-only)   the seat reads its inbox when it takes a turn
 queued; <seat> has no way to be woken while idle       a person, or a launch with no route at all
 ```
 
-`<delivery>` below stands for one of those four sentences. It is read from the seat's launch as
-the send runs — the watched endpoint, the channel, the socket route the send itself admits (its
-cross-session declaration, the team file's own `inbound` word, and the address the seat's launch
-recorded that still stands), the watcher — and a delivered line has none, because the delivery
-itself is the answer. A fallback whose walk proved the receiving session has no dialable socket
+`<delivery>` below stands for one of those five sentences. It is read from the seat's launch as
+the send runs — the watched endpoint, the channel, a webhook adapter the bus posts, the socket
+route the send itself admits (its cross-session declaration, the team file's own `inbound` word,
+and the address the seat's launch recorded that still stands), the watcher — and a delivered
+line has none, because the delivery itself is the answer. A webhook-only route reads as queued
+whether or not a bus is serving: the bus posts it after the send returns, so the send can never
+claim that wake; the bus's own report and the seat's recorded delivery outcome say what the
+adapter answered. A fallback whose walk proved the receiving session has no dialable socket
 lowers the class the line reports: it never claims a wake the attempt just disproved.
 
 | Outcome | Exit | Printed |

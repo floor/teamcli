@@ -110,6 +110,12 @@ not predate them. A socket that is nowhere is the ordinary state of its delivery
 the gate would say — absence wins — and is not a broken promise: it is a note naming the class
 and what happens to its sends next, and it does not change the exit.
 
+The seat's last webhook delivery is one more note of that kind: when its recorded outcome is not
+delivered, one line says how the delivery ended — `<seat>: its last webhook delivery did not
+arrive: it failed after <n> attempts at <instant>: <reason>; the delivery left the drop record
+for the seat's own pull`, or the same sentence with the sent-unknown or refused words — and it
+never enters the total or the exit. A delivered record draws no line.
+
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
 process team launched — back at its shell, or replaced by one the state's stored session does not
