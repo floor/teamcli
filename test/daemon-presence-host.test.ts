@@ -260,6 +260,68 @@ describe('the presence pass', () => {
   }, 15_000);
 });
 
+describe('the health answer during startup', () => {
+  test('a probe while the roots loop is still starting answers running with the root starting, never an internal refusal', async () => {
+    // The machine socket is bound before the roots loop, and a root's bus start can hold that
+    // loop for minutes on a large store. A probe in that window must answer the root-level
+    // starting record: before this fix the per-seat answer was not initialised yet, the handler
+    // threw, and the probe client read the refusal as "unanswered".
+    let releaseSend: ((value: { kind: 'locked'; holderPid: number | null }) => void) | null = null;
+    const gate = new Promise<{ kind: 'locked'; holderPid: number | null }>((resolve) => {
+      releaseSend = resolve;
+    });
+    const ingester: PresenceIngester = {
+      step: async () => emptyIngest(),
+      close: async () => ({ quiesced: true }),
+      isClosed: () => false,
+    };
+    const started = startMachineDaemon({
+      home: world.home,
+      roots: [world.root],
+      startedBy: 'service-manager',
+      version: '0.5.3-presence-host-test',
+      heartbeatMs: 20,
+      presenceHosting: true,
+      presenceIngest: () => ingester,
+      presenceActivity: () => async () => activityResult(),
+      presencePublish: () => async () => publishResult(),
+      sendStart: () => gate,
+    });
+    // A failed assertion above the release must not leave the close waiting on the gate.
+    later(() => releaseSend?.({ kind: 'locked', holderPid: null }));
+    later(async () => {
+      const result = await started;
+      if (result.kind === 'serving') await result.daemon.close();
+    });
+    await waitUntil(() => {
+      const read = readDaemonState(world.home);
+      return read.kind === 'ok'
+        && read.state.roots.some((one) => one.root === world.root && one.send === 'starting');
+    });
+    const answer = await probeDaemonHealth(daemonSocketPath(world.home), {
+      id: 'probe-during-startup',
+      timeoutMs: 2_000,
+    });
+    expect(answer.kind).toBe('answered');
+    if (answer.kind === 'answered') {
+      expect(answer.health.roots).toEqual([{
+        root: world.root,
+        presence: {
+          session: 'crew',
+          state: 'pending',
+          healthy: false,
+          checkedAt: expect.any(String),
+          why: 'the daemon is still starting this root',
+        },
+      }]);
+    }
+    releaseSend!({ kind: 'locked', holderPid: null });
+    const result = await started;
+    expect(result.kind).toBe('serving');
+    if (result.kind === 'serving') await result.daemon.close();
+  }, 30_000);
+});
+
 describe('closing', () => {
   test('admission closes first, the in-flight pass drains, and ownership is released only then', async () => {
     const order: string[] = [];
