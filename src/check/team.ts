@@ -1687,6 +1687,8 @@ function socketSkippedDeliveries(
       order = deliveryOrder(chain);
       declaredOrder = Object.values(chain).some((word) => word !== undefined && word.length > 0);
     } catch {
+      // A project registry or policy record this reader cannot read is named once by
+      // `registryDifferences`; this seat's socket reading never guesses an order around it.
       continue;
     }
     // A declared order that names neither the socket nor `typed` — whose wake the socket stands

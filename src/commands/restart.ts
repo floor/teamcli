@@ -28,7 +28,7 @@ import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/
 import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, readTeamTextTarget, teamPlace, writeTeamText } from '../file/team-text.ts';
 import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -260,6 +260,13 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
+
+  // The team's text is the registry's record whenever the registry holds this team, whatever
+  // file the caller named: a record that cannot be read is the refusal the plain read already
+  // gives, in the same words and at the same exit, before anything is stopped or planned. Never
+  // a fallback to the stale file, and never an exception out of the policy reader below.
+  const teamText = readTeamTextTarget(path, { home: sources.home });
+  if (!teamText.ok) return configuration(out, json, teamText.why);
 
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: owner or `leads` for this team, decided from records.

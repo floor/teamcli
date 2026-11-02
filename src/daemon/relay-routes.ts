@@ -40,7 +40,7 @@ import type { DeliveryTimeoutRoute } from '../policy/types.ts';
 import { ofTeam as projectOfTeamInRegistry, type ProjectRecord } from '../registry/projects.ts';
 import type { RecordedSeatSessionRead } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { deliveryChainOf, type DeliveryChain } from '../send/delivery.ts';
+import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import { frameFor, frameReplyFor } from '../send/frame.ts';
@@ -315,18 +315,28 @@ export function selectDaemonRelayRoutes(
 
   const capabilities = runtimeRelayCapabilities(declaredSeat.cli, declaredSeat.version);
 
-  const rawChain: DeliveryChain =
-    input.chain
-    ?? deliveryChainOf({
-      root: route.root,
-      seat,
-      home,
-      file: team,
-      projectOfTeam:
-        deps.projectOfTeam ?? ((id: string) => projectOfTeamInRegistry(home, id)),
-      overrides,
-      now,
-    });
+  // A project word this selection cannot read refuses the relay: it may keep legs out, and the
+  // fallback behind it could wake a seat the project does not let a send reach that way.
+  let rawChain: DeliveryChain;
+  if (input.chain !== undefined) {
+    rawChain = input.chain;
+  } else {
+    try {
+      rawChain = deliveryChainOf({
+        root: route.root,
+        seat,
+        home,
+        file: team,
+        projectOfTeam:
+          deps.projectOfTeam ?? ((id: string) => projectOfTeamInRegistry(home, id)),
+        overrides,
+        now,
+      });
+    } catch (error) {
+      if (!(error instanceof DeliveryChainUnreadable)) throw error;
+      return refuseSelection('daemon.route-settings', error.message);
+    }
+  }
 
   const baseOrder = deliveryOrder(
     rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>,

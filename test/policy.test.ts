@@ -35,7 +35,9 @@ import {
   writePolicyUnset,
   type Policy,
 } from '../src/policy/index.ts';
+import { resolveDevMode } from '../src/dev_mode.ts';
 import { registerAgent } from '../src/registry/agents.ts';
+import { teamConfigRecordPath } from '../src/registry/team-config-store.ts';
 import { projectsFile, upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -43,7 +45,7 @@ import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, deliverBriefs, fixtureBase, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
-import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -1668,6 +1670,65 @@ describe('under the registry source', () => {
       expect(before).not.toContain('dev-mode');
       expect(realRegistryTouched()).toBe(false);
     } finally {
+      fx.cleanup();
+    }
+  });
+
+  // The team source asks the writers' seam where the team's text is; a record that cannot be
+  // read is this source's own refusal, naming the registry — never an exception out of the
+  // policy reader, and never a fallback to the file beside it.
+  test('a record that cannot be read is a team refusal naming the registry', async () => {
+    const fx = makeFixture();
+    try {
+      intoRegistry(fx.root, fx.home);
+      const record = join(fx.home, '.config', 'team', 'team-config', `${teamIdOf(fx.root)}.json`);
+      writeFileSync(record, '{"format": 1, "text": ');
+      await underRegistry(async () => {
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(false);
+        if (!read.ok) {
+          expect(read.level).toBe('team');
+          expect(read.why).toContain("the registry's record of this team cannot be read: ");
+          expect(read.why).toContain(record);
+          expect(read.why).toContain('JSON Parse error');
+        }
+      });
+      expect(realRegistryTouched()).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  // A folder that cannot be read is not a registry that holds nothing. The team's control that
+  // lives only in its record (dev mode off) must not disappear into the stale file beside it:
+  // the source refuses, the chain refuses, and dev mode stays off even though the entity policy
+  // allows it and the compatibility variable is set.
+  test('an unreadable registry folder refuses the team source, and dev mode stays off', async () => {
+    const fx = makeFixture();
+    let registry: ReturnType<typeof unreadableRegistryFolder> | undefined;
+    try {
+      intoRegistry(fx.root, fx.home);
+      expect(writePolicySet(fx.home, { level: 'entity', target: 'floor', name: 'dev-mode', value: 'on' }, { now: NOW }).ok).toBe(true);
+      expect(writePolicySet(fx.home, { level: 'team', target: fx.teamId, teamRoot: fx.root, name: 'dev-mode', value: 'off' }, { now: NOW }).ok).toBe(true);
+      const fileBefore = readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8');
+      await underRegistry(async () => {
+        registry = unreadableRegistryFolder(fx.home);
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(false);
+        if (!read.ok) {
+          expect(read.level).toBe('team');
+          expect(read.why).toContain("the registry's record of this team cannot be read: ");
+          expect(read.why).toContain(teamConfigRecordPath(fx.home, fx.teamId));
+        }
+        const chain = loadAndResolvePolicyChain({ home: fx.home, entity: 'floor', teamRoot: fx.root }, { now: NOW, upToLevel: 'team' });
+        expect(chain.ok).toBe(false);
+        const dev = resolveDevMode('restart', { env: { TEAMCLI_DEV_MODE: '1' } }, { home: fx.home, root: fx.root, entity: 'floor', now: NOW });
+        expect(dev.on).toBe(false);
+      });
+      // The file beside the registry was never read as the team while the folder was unreadable.
+      expect(readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8')).toBe(fileBefore);
+    } finally {
+      registry?.restore();
       fx.cleanup();
     }
   });

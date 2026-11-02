@@ -7,7 +7,7 @@
 // lose each other's update.
 
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
 import * as projects from './projects.ts';
@@ -93,15 +93,19 @@ export function teamsFile(home: string): string {
  *  record with the field absent reads as it always did — a team with no roster lines. */
 export type ReadTeamsOptions = { strictRoster?: boolean };
 
-/** Every registered team, by team ID. A missing file is no teams. A file that does not read as
- *  a team registry throws `TeamsError`, so a writer never replaces a file it could not read. */
+/** Every registered team, by team ID. A missing file is no teams; a file that cannot be read —
+ *  a corrupt one, or one under a folder this user cannot search — throws `TeamsError`, so no
+ *  reader takes an unreadable registry as an empty one (the bridge would fall back to the team
+ *  file's own declaration) and no writer replaces a file it could not read. */
 export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<string, TeamRecord> {
   const path = teamsFile(home);
-  if (!existsSync(path)) return {};
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
+    // Absence is ENOENT alone: an existence check would read a folder this user cannot search
+    // as "no registry", and callers decide seats on that answer.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw new TeamsError(`${path}: ${(error as Error).message}`);
   }
   if (!text.trim()) return {};

@@ -1,11 +1,12 @@
 // Registry scenes for the writers (phase 3): a fixture's team moved into the registry of the
 // scene's own temp home, and the `registry` source for the scene only. Nothing here reads or
 // writes the real ~/.config/team: every call names the temp home it was given.
+import { mkdirSync, readFileSync, renameSync, rmdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { importTeamFile } from '../../src/file/team-import.ts';
-import { readStoredTeamConfig, type StoredTeamConfig } from '../../src/registry/team-config-store.ts';
-import { teamIdOf } from '../../src/registry/teams.ts';
+import { readStoredTeamConfig, teamConfigDir, type StoredTeamConfig } from '../../src/registry/team-config-store.ts';
+import { teamIdOf, teamsFile } from '../../src/registry/teams.ts';
 
 /** Moves the checkout's team file into `home`'s registry, as `team migrate` does. */
 export function intoRegistry(root: string, home: string): void {
@@ -17,6 +18,51 @@ export function intoRegistry(root: string, home: string): void {
 /** The team's record in `home`'s registry, or null. */
 export function storedTeam(root: string, home: string): StoredTeamConfig | null {
   return readStoredTeamConfig(home, teamIdOf(root));
+}
+
+/**
+ * Makes one of the scene's own folders unreadable without chmod and without touching a real
+ * path: the fixture's folder is moved beside itself, and a mode-000 folder takes its place.
+ * `held` reads the original, and `restore` puts it back.
+ *
+ * Measured on this host with Bun 1.4.2, inside the mode-000 folder: `existsSync` of an entry is
+ * false, `readFileSync` throws `EACCES: permission denied`, the empty folder removes with
+ * `rmdirSync`, and the fixture base still cleans up with `rmSync(..., { recursive: true })`.
+ */
+export function unreadableFolder(path: string): { path: string; held: string; restore: () => void } {
+  const held = `${path}.held`;
+  renameSync(path, held);
+  mkdirSync(path, { mode: 0o000 });
+  return {
+    path,
+    held,
+    restore: () => {
+      rmdirSync(path);
+      renameSync(held, path);
+    },
+  };
+}
+
+/** The scene's registry record folder, unreadable; the record inside stays readable by
+ *  `heldRecord`. */
+export function unreadableRegistryFolder(home: string): {
+  path: string;
+  heldRecord: (id: string) => string;
+  restore: () => void;
+} {
+  const folder = unreadableFolder(teamConfigDir(home));
+  return {
+    path: folder.path,
+    heldRecord: (id) => readFileSync(join(folder.held, `${id}.json`), 'utf8'),
+    restore: folder.restore,
+  };
+}
+
+/** The home's whole team folder — `teams.yaml`, `projects.yaml` and every record folder under
+ *  it — unreadable: the registry as a machine whose user cannot search what holds it presents
+ *  itself. Every read under it fails with `EACCES`, not with absence. */
+export function unreadableTeamFolder(home: string): { path: string; held: string; restore: () => void } {
+  return unreadableFolder(dirname(teamsFile(home)));
 }
 
 /** Runs `body` under `team-config.source: registry`, then puts the suite's source back. */

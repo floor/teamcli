@@ -28,7 +28,7 @@ import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
-import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
+import { intoRegistry, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -230,6 +230,16 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
   const file = join(dir, 'team.yaml');
   writeFileSync(file, yaml);
   return { base, root, home, file, dir, yaml };
+}
+
+/** A registry record torn by a write that did not finish: JSON a reader cannot parse. */
+const CORRUPT_RECORD = '{"format": 1, "text": ';
+
+/** Overwrites the registry's record of the fixture team with `CORRUPT_RECORD`; its path. */
+function corruptStoredTeam(fixture: Fixture): string {
+  const path = join(fixture.home, '.config', 'team', 'team-config', `${teamIdOf(fixture.root)}.json`);
+  writeFileSync(path, CORRUPT_RECORD);
+  return path;
 }
 
 function makeHarness(
@@ -1126,6 +1136,64 @@ describe('team restart <seat>', () => {
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
+  });
+
+  // A team the registry holds is edited in its record; `--file` names the file a session was
+  // launched from, not a second copy of the team. A record that cannot be read is the refusal
+  // the plain read already gives, in the same words and at the same exit — before anything is
+  // stopped or planned — never an exception out of the policy reader and never an answer read
+  // from the stale file.
+  test('a corrupt registry record refuses a `--file` restart plainly, before anything is stopped or planned', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const record = corruptStoredTeam(fixture);
+    await underRegistry(async () => {
+      const { sources, did } = makeHarness(fixture);
+      for (const extra of [[], ['--dry-run']]) {
+        const io = testIo(fixture.root, { kind: 'owner' });
+        expect(await runRestart(['worker', '--file', fixture.file, ...extra], io, sources), extra.join(' ')).toBe(2);
+        expect(io.out).toBe('');
+        expect(io.err).toContain("team restart: the registry's record of this team cannot be read: ");
+        expect(io.err).toContain(record);
+        expect(io.err).toContain('JSON Parse error');
+      }
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      // Nothing was rewritten: the file the session launched from and the unreadable record stand.
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+      expect(readFileSync(record, 'utf8')).toBe(CORRUPT_RECORD);
+    });
+  });
+
+  // The same refusal when the registry's folder cannot be read: it is not an empty registry, so
+  // the restart neither falls back to the file beside it nor stops and plans a seat on an answer
+  // the registry never gave.
+  test('an unreadable registry folder refuses a `--file` restart plainly, before anything is stopped or planned', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const id = teamIdOf(fixture.root);
+    const registry = unreadableRegistryFolder(fixture.home);
+    try {
+      await underRegistry(async () => {
+        const { sources, did } = makeHarness(fixture);
+        for (const extra of [[], ['--dry-run']]) {
+          const io = testIo(fixture.root, { kind: 'owner' });
+          expect(await runRestart(['worker', '--file', fixture.file, ...extra], io, sources), extra.join(' ')).toBe(2);
+          expect(io.out).toBe('');
+          expect(io.err).toContain("team restart: the registry's record of this team cannot be read: ");
+          expect(io.err).toContain(registry.path);
+        }
+        expect(did.typed).toEqual([]);
+        expect(did.closed).toEqual([]);
+        expect(did.created).toBe(0);
+      });
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+      // The record itself was never rewritten: the held copy still says the team it was imported from.
+      expect(registry.heldRecord(id)).toContain('project: acme');
+    } finally {
+      registry.restore();
+    }
   });
 
   // The stop is a session mutation, so a restart stands aside while another run mutates the
