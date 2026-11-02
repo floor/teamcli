@@ -1,12 +1,13 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const roots: string[] = [];
 const fixtureRoot = fileURLToPath(new URL('../../banner-current-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
-afterAll(() => { if (roots.length > 0) spawnSync('trash', roots, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (roots.length > 0) discardFixtures(roots, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 const header = ' ▐▛███▛█   Claude Code v2.1.291';
 const line = (id: string) => `▝▜██████▀  ${id} · API Usage Billing`;
 const current = `${header}\n${line('glm-5.3')}`;

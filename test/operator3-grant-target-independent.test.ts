@@ -1,8 +1,9 @@
 import {afterAll,afterEach,expect,spyOn,test} from 'bun:test';
 import {createHash,generateKeyPairSync,randomBytes,sign as cryptoSign,type KeyObject} from 'node:crypto';
 import * as child from 'node:child_process';
-import {existsSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,statSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,mkdtempSync,realpathSync,readFileSync,readdirSync,statSync,writeFileSync} from 'node:fs';
 import {join,relative} from 'node:path';
+import { tmpdir } from 'node:os';
 import {runGrant} from '../src/commands/grant.ts';
 import {runApprovals} from '../src/commands/approvals.ts';
 import {runInit} from '../src/commands/init.ts';
@@ -18,11 +19,12 @@ import type {Io} from '../src/io.ts';
 
 // The sole external command allowed is git operating in this file's own synthetic folders.
 // No credential-store helper, notification, terminal host or agent CLI can be reached.
+const fixturePrefix = join(realpathSync(tmpdir()), 'o3gr-');
 const external:string[]=[];
 const realExec=child.execFileSync;
 const execGuard=spyOn(child,'execFileSync').mockImplementation(((command:any,args:any,options:any)=>{
  const where=options?.cwd??(Array.isArray(args)&&args.includes('-C')?args[args.indexOf('-C')+1]:undefined);
- if(command==='git'&&typeof where==='string'&&where.startsWith('/private/tmp/o3gr-'))return realExec(command,args,options);
+ if(command==='git'&&typeof where==='string'&&where.startsWith(fixturePrefix))return realExec(command,args,options);
  external.push(String(command));throw Error('independent fixture blocked an external command');
 }) as typeof child.execFileSync);
 const spawnGuard=spyOn(child,'spawn').mockImplementation((()=>{external.push('spawn');throw Error('no external launch');}) as typeof child.spawn);
@@ -32,7 +34,7 @@ const owner:Caller={kind:'owner'};
 const seat:Caller={kind:'seat',name:'independent-caller',pane:'synthetic-pane'};
 const now=new Date();
 function fixture(){
- const base=mkdtempSync('/private/tmp/o3gr-'),home=join(base,'home'),scope=join(base,'covered');mkdirSync(scope,{recursive:true});
+ const base=realpathSync(mkdtempSync(fixturePrefix)),home=join(base,'home'),scope=join(base,'covered');mkdirSync(scope,{recursive:true});
  const keys=new Map<string,{privateKey:KeyObject;publicKey:string}>();const pins=new Map<string,string>();
  const store:OwnerSeatKeyStore={name:'independent-in-memory',available:()=>true,
   create:label=>{const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'});const jwk=pair.publicKey.export({format:'jwk'});const publicKey='04'+Buffer.from(jwk.x!,'base64url').toString('hex')+Buffer.from(jwk.y!,'base64url').toString('hex');keys.set(label,{privateKey:pair.privateKey,publicKey});return{ok:true,publicKey};},

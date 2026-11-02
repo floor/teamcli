@@ -24,10 +24,12 @@ import {
   closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, renameSync,
   unlinkSync, writeSync, type Stats,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { inboundPolicyOf, wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
+import { stableHookPath } from '../daemon/runtime-entry.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { cliWordList, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { STATE_FILE, emptySession, readState, updateState } from '../state.ts';
@@ -156,11 +158,23 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
 }
 
 /**
- * This install's own CLI, the way `watchCommand` builds the watchdog's line, so `team` need not
- * be on the CLI's PATH. The hook commands append their own subcommand and words.
+ * The `team` entry a hook command names, for one `cli-hook` module location: this build's own
+ * CLI, the way `watchCommand` builds the watchdog's line, so `team` need not be on the CLI's
+ * PATH. A run from a daemon runtime copy (the daemon's restore pass installs hooks in-process)
+ * resolves to the installed program the copy was made from — never the private copy, which a
+ * later install may replace or delete. Null when the copy's origin is not recorded and resolvable:
+ * the seat then gets no CLI hook rather than a command that names a path a refresh can remove.
  */
-function cliRunner(): string {
-  return `${shellQuote(process.execPath)} ${shellQuote(ownEntry())}`;
+export function hookRunnerFor(here: string, home: string = homedir()): string | null {
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  const stable = stableHookPath(cli, home);
+  if (stable === null) return null;
+  return `${shellQuote(process.execPath)} ${shellQuote(stable)}`;
+}
+
+/** This install's own CLI entry for a hook command. */
+function cliRunner(): string | null {
+  return hookRunnerFor(fileURLToPath(import.meta.url));
 }
 
 /**
@@ -168,8 +182,9 @@ function cliRunner(): string {
  * session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
  * place a record is verified and its signed receipt written.
  */
-export function dropReadRunner(): string {
-  return `${cliRunner()} drops --read`;
+export function dropReadRunner(): string | null {
+  const runner = cliRunner();
+  return runner === null ? null : `${runner} drops --read`;
 }
 
 /** The fields the presence hook needs: every one is written into its argv at install time. The
@@ -195,9 +210,10 @@ export type CliHookPresence = {
 function presenceHookCommand(
   presence: CliHookPresence,
   event: 'turn-start' | 'turn-end' | 'human-wait',
+  runner: string,
 ): string {
   const filter = event === 'human-wait' ? ' --notification permission_prompt' : '';
-  return `${cliRunner()} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
+  return `${runner} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
 }
 
 /**
@@ -253,11 +269,11 @@ const LANDING_ESCAPER = (() => {
  * `epoch`, when the launch has written the seat's claim, is the runtime the read is bound to: the
  * hook then serves only a brief delivered under the same epoch.
  */
-function dropReadCommand(seat: string, session: string, epoch?: string): string {
+function dropReadCommand(seat: string, session: string, runner: string, epoch?: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
   const bound = epoch === undefined ? '' : ` --epoch ${shellQuote(epoch)}`;
   return [
-    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `ctx=$(${runner} drops --read --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
     `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }
@@ -283,25 +299,30 @@ export function cliHookSettings(
   guard?: string,
   inbound?: CrossSessionInbound | null,
   presence?: CliHookPresence,
+  /** The CLI a command hook runs. `undefined` resolves this build's own entry; `null` writes the
+   *  state and declaration without a command that needs the CLI — the seat keeps its declaration
+   *  rather than naming a path this run cannot prove stable. */
+  runner?: string | null,
 ): string {
+  const cli = runner === undefined ? cliRunner() : runner;
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
   const start: unknown[] = [hook('working')];
-  if (presence !== undefined) {
-    start.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-start') }] });
+  if (presence !== undefined && cli !== null) {
+    start.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-start', cli) }] });
   }
-  if (drops) {
-    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, drops.epoch) }] });
+  if (drops !== undefined && cli !== null) {
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, cli, drops.epoch) }] });
   }
   const stop: unknown[] = [hook('idle')];
-  if (presence !== undefined) {
-    stop.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end') }] });
+  if (presence !== undefined && cli !== null) {
+    stop.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end', cli) }] });
   }
   const hooks: Record<string, unknown> = {};
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
-  if (presence !== undefined) {
-    hooks.Notification = [{ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'human-wait') }] }];
+  if (presence !== undefined && cli !== null) {
+    hooks.Notification = [{ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'human-wait', cli) }] }];
   }
   hooks.UserPromptSubmit = start;
   hooks.Stop = stop;
@@ -371,20 +392,69 @@ function holdsText(path: string, text: string): boolean {
   }
 }
 
+/** A settings file is small; a file past this is not one this writer made, and its word is not
+ *  guessed from a prefix. */
+const MAX_SETTINGS_BYTES = 262_144;
+
+/** The top-level `crossSessionInbound` word one settings text declares: `null` for a document
+ *  that omits it or names a value the CLI does not accept, the way the send side reads it. */
+function declaredWordIn(text: string): CrossSessionInbound | null {
+  try {
+    return inboundPolicyOf(JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/** The word the settings file at `path` already declares, read without following a link.
+ *  `undefined` when the file cannot be read whole — a fault, another owner, a link, or a file
+ *  past the size cap: the caller then treats the write as a real change rather than guessing
+ *  that the declaration stood still. A document that does not parse declares no word, the same
+ *  reading the send side makes of it. */
+function declaredWordAt(path: string): CrossSessionInbound | null | undefined {
+  const held = lstatOrNull(path);
+  if (held === null || !held.isFile() || !mine(held) || held.size > MAX_SETTINGS_BYTES) return undefined;
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const buffer = Buffer.alloc(held.size);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    if (read !== buffer.length) return undefined;
+    return declaredWordIn(buffer.toString('utf8'));
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Writes one settings file without following a link: the name may hold this user's regular
  *  file or nothing at all, the open carries `O_NOFOLLOW`, and the mode is set on the descriptor
  *  so an existing wider file comes out `0600`. False on every fault — the seat then launches
  *  without the flag, exactly as it does today.
  *
  *  A file already holding this text at `0600` is left untouched. Its mtime is the seat's
- *  `declaredAt` (`src/send/inbound.ts` compares it with a running seat's socket), so a rewrite
- *  of identical bytes would make a live session look stale — the fault `up` hit when it
- *  installed hooks for every seat, launched or not. A real change, a fresh launch's new
- *  binding, or a wider mode is still written. */
+ *  `declaredAt` (`src/send/inbound.ts` compares it with a running seat's socket), so the times
+ *  mean the declaration, not the last write: a rewrite whose top-level `crossSessionInbound`
+ *  word is unchanged — a new command path, a claim epoch, a presence binding — puts the old
+ *  atime and mtime back after writing, and a running session stays live. A real word change
+ *  (unset to `accept`), a fresh file, or one whose current bytes cannot be read whole lets the
+ *  mtime advance; the seat is then stale until its next launch, the declaration rule's question. */
 function writeSettings(path: string, text: string): boolean {
   const held = lstatOrNull(path);
   if (held !== null && (!held.isFile() || !mine(held))) return false;
-  if (held !== null && (held.mode & 0o777) === 0o600 && holdsText(path, text)) return true;
+  const privateHeld = held !== null && (held.mode & 0o777) === 0o600;
+  if (privateHeld && holdsText(path, text)) return true;
+  const before = held === null ? undefined : declaredWordAt(path);
+  // The declaration time stands only when the file was already the private declaration and
+  // still holds the same word: then the rewrite changed nothing but the command paths. A
+  // wider mode is a protection change rather than a command-path-only rewrite, and an
+  // unreadable file or a different word is a new declaration either way.
+  const kept = privateHeld && before !== undefined && before === declaredWordIn(text) ? held : null;
   let fd;
   try {
     fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW, 0o600);
@@ -398,17 +468,22 @@ function writeSettings(path: string, text: string): boolean {
     }
     // `O_CREAT` leaves an existing file's mode alone: the descriptor sets the one we keep.
     fchmodSync(fd, 0o600);
-    return true;
   } catch {
     return false;
   } finally {
     closeSync(fd);
   }
+  // The link form: a name swapped for a link between the write and here has its own times set,
+  // never the target's. A failure to restore them leaves the write in place.
+  if (kept !== null) {
+    try {
+      lutimesSync(path, kept.atime, kept.mtime);
+    } catch {
+      // The file still holds the new text; only the declaration time moved.
+    }
+  }
+  return true;
 }
-
-/** A settings file is small; a file past this is not one the writer made, and its declaration
- *  is not read from a prefix. */
-const MAX_SETTINGS_BYTES = 262_144;
 
 /** The top-level `crossSessionInbound` word one settings text declares: null for a document
  *  that omits it, names a value the CLI does not accept, or does not parse — the send side's
@@ -560,6 +635,8 @@ export function installCliHooks(
   seats: readonly CliHookSeat[],
   guard?: CommandGuardContext,
   root: string = dirname(dir),
+  /** The CLI a hook command runs; see `cliHookSettings`. Callers leave it to this build. */
+  runner?: string | null,
 ): Record<string, string> {
   const planned = plannedCliHooks(dir, session, seats);
   if (Object.keys(planned).length === 0) return {};
@@ -570,6 +647,7 @@ export function installCliHooks(
   if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
+  const cli = runner === undefined ? cliRunner() : runner;
   const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
   const byName = new Map(seats.map((seat) => [seat.name, seat]));
   const landed: Record<string, string> = {};
@@ -578,7 +656,7 @@ export function installCliHooks(
     if (statePath === null) continue;
     const epoch = claimEpochAt(dir, session, seat);
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
-    const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
+    const command = guarded ? commandGuardHookCommand(guard, session, seat) ?? undefined : undefined;
     const launchWord = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
     const teamWord = byName.get(seat)?.inbound;
     const inbound = launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
@@ -587,7 +665,7 @@ export function installCliHooks(
       ? recordPresenceBinding(dir, session, seat)
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence))) continue;
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence, cli))) continue;
     landed[seat] = settingsPath;
   }
   return landed;

@@ -1,6 +1,6 @@
 // Load HOME-sensitive modules only in a child whose HOME this suite creates itself.
 import { expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ let activeSuite: string | undefined;
 export function releaseIndependentFixture(path: string): void {
   const retain = process.env.TEAM_INDEPENDENT_RETAIN;
   if (retain) renameSync(path, join(realpathSync(retain), basename(path)));
-  else execFileSync('trash', [path]);
+  else discardFixtures([path]);
 }
 
 /** Replaces a fixed external path check with proof of the suite's own startup HOME. */
