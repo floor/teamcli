@@ -204,8 +204,9 @@ export function readArchive(folder: string, cwd: string): { ok: true; text: stri
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  } catch (error) {
-    return { ok: false, reason: `the manifest in ${folder} doesn't parse: ${error instanceof Error ? error.message : String(error)}` };
+  } catch {
+    // Fixed words: a parser's own message quotes the bytes it choked on, and this file is the reader's.
+    return { ok: false, reason: `the manifest in ${folder} is not valid JSON` };
   }
   const problem = manifestProblem(parsed);
   if (problem !== null) return { ok: false, reason: `the manifest in ${folder} ${problem}` };
