@@ -165,7 +165,8 @@ function ready(w: World, seats: readonly Ready[]): void {
         pane: seat.pane,
         workspace: 'fixture-workspace',
         cli: seat.cli ?? 'claude-code',
-        launch_line: seat.launch,
+        // A current launch's record: a Codex seat's line carries its profile's pinned feature.
+        launch_line: seat.cli === 'codex' ? `${seat.launch} -c features.mcp_oauth_refresh_coordination=false` : seat.launch,
       };
     }
   });

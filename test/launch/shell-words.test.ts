@@ -1,10 +1,11 @@
 // The launch line is read the way a POSIX shell splits it into words: single quotes literal,
 // double quotes honouring `\`, `"`, `$` and a backtick, a backslash outside quotes taking the
 // next character, a backslash-newline removed as a line continuation outside single quotes, and
-// the standard `'\''` splice reading as one word. An ANSI-C (`$'…'`) word is never decoded: the
-// two shells read the same word differently, so a line holding one is unreadable at the `ansi`
-// reason. A NUL byte is unreadable at `nul`, and a line whose quoting never closes at
-// `unclosed`. A line with no knowable words reads as null, never as a guess.
+// the standard `'\''` splice reading as one word. An ANSI-C (`$'…'`) word with no backslash is
+// its literal text, the same in every shell that reads it; one holding a backslash is not
+// decoded, because the two shells read its escapes differently, so a line holding one is
+// unreadable at the `ansi` reason. A NUL byte is unreadable at `nul`, and a line whose quoting
+// never closes at `unclosed`. A line with no knowable words reads as null, never as a guess.
 import { expect, test } from 'bun:test';
 import { shellWords, shellWordsReason } from '../../src/launch/shell-words.ts';
 
@@ -42,15 +43,22 @@ test('a backslash-newline is a line continuation everywhere but inside single qu
   expect(texts("'pre\\\npost'")).toEqual(['pre\\\npost']);
 });
 
-test(`every ANSI-C ($'…') word is unreadable, never decoded`, () => {
+test(`an ANSI-C ($'…') word with no backslash is its literal text`, () => {
+  // With no escape there is nothing for the shells to read differently: each hands the text
+  // between the quotes to the program unchanged, whichever shell runs the line.
+  expect(texts("$'claude --model m'")).toEqual(['claude --model m']);
+  expect(texts("/bin/bash -c $'claude --model m'")).toEqual(['/bin/bash', '-c', 'claude --model m']);
+  expect(texts("x$'y'z $''")).toEqual(['xyz', '']);
+});
+
+test(`an ANSI-C ($'…') word holding a backslash is unreadable, never decoded`, () => {
   // Measured here with the same `printf %s $'…'` probe on bash 3.2.57 and zsh 5.9: the word
   // `x\u00e9y` is the literal text in bash (78 5c 75 30 30 65 39) and `xéy` in zsh (78 c3 a9 79);
   // `x\x00y` is `x` in bash (78) and `x`, a NUL, `y` in zsh (78 00 79); a short `\u00` is literal
   // in bash (78 5c 75 30 30 79) and a NUL in zsh (78 00 79); `\8` is literal in bash (78 5c 38 79)
-  // and `8` in zsh (78 38 79). Every `$'…'` word is unreadable, including the escapes the two
+  // and `8` in zsh (78 38 79). Every such word is unreadable, including the escapes the two
   // shells read alike: one rule, no subset.
   for (const line of [
-    "/bin/bash -c $'claude --model m'",
     "$'a\\nb'",
     "$'it\\'s'",
     "$'a\\\\b'",
@@ -65,11 +73,13 @@ test(`every ANSI-C ($'…') word is unreadable, never decoded`, () => {
     "$'a\\$b'",
     "$'a\\`b'",
     "$'\\cA'",
-    "$'never closes",
   ]) {
     expect(shellWords(line)).toBeNull();
     expect(shellWordsReason(line)).toBe('ansi');
   }
+  // A `$'…'` that never closes is a line no shell can run, like any other unclosed quote.
+  expect(shellWords("$'never closes")).toBeNull();
+  expect(shellWordsReason("$'never closes")).toBe('unclosed');
 });
 
 test('a NUL byte and an unclosed line each have their own reason', () => {

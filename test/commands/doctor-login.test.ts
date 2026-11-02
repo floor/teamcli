@@ -102,6 +102,7 @@ describe('checkLogin with fake command results', () => {
       binary: 'custom',
       tested: { from: '1.0', to: '1.0' },
       unattended: [],
+      features: [],
       rulesOption: null,
       rulesMode: 'message', rulesPrompt: null,
       publicOnly: false,

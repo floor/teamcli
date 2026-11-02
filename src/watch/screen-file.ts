@@ -47,9 +47,10 @@ export function loadScreen(text: string, baseDir?: string, profileFile?: string)
   const root = parseYaml(text);
   const entries = mapping(root, 'a profile');
   // Launch keys are read by profile.ts. A screen-only snippet, as in the tests, omits them.
-  // Both sides' keys: the settings edit, the delivery CLI the session runs and the public-only
-  // declaration are each read by profile.ts, so a screen-only snippet may name all of them.
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'session_cli', 'public_only', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'settings', 'typed_wake', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
+  // Every side's keys: the settings edit, the delivery CLI the session runs, the public-only
+  // declaration and the pinned feature set are each read by profile.ts, so a screen-only
+  // snippet may name all of them.
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', 'binary', 'process_names', 'tested', 'unattended', 'features', 'rules', 'delivery', 'standing_rules', 'herdr_status', 'login', 'exit', 'exit_keys', 'compose_module', 'session_cli', 'public_only', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'mcp_inbox', 'settings', 'typed_wake', 'timeouts', 'models', 'status_model', 'last_used_model', 'unread_model', 'not_started', 'abandon_answers']);
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
   const cli = required(entries, 'cli', root.line);

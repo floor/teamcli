@@ -5,16 +5,20 @@
 // shell removes it; inside single quotes the backslash is literal. The standard `'\''` splice —
 // close the single quotes, an escaped quote, reopen — reads as one word, as a shell reads it.
 //
-// `$'…'` (ANSI-C quoting) is not read at all. What it means depends on the shell that runs the
-// line, and the shells disagree: measured here on GNU bash 3.2.57(1)-release and zsh 5.9 with the
+// `$'…'` (ANSI-C quoting) is read when it holds no backslash: every shell that reads such a
+// word then hands on the literal text between its quotes, so there is nothing to guess. A word
+// holding a backslash is not read at all. What its escapes mean depends on the shell that runs
+// the line, and the shells disagree: measured here on GNU bash 3.2.57(1)-release and zsh 5.9 with the
 // same `printf %s $'…'` probe, `x\u00e9y` is the literal text `x\u00e9y` in bash
 // (78 5c 75 30 30 65 39) and `xéy` in zsh (78 c3 a9 79); `x\x00y` is `x` in bash (78) and `x`,
 // a NUL, `y` in zsh (78 00 79); and `\0`, a short `\u00` and `\8` differ the same way. Even the
-// escapes the two shells read alike are not read here: one rule covers every `$'…'` word, so a
+// escapes the two shells read alike are not read here: one rule covers every such word, so a
 // line holding one is unreadable at the `ansi` reason, and nothing built on it may guess — a
-// launch keeps 0.5.10's placement instead. A NUL byte is unreadable at the `nul` reason: no
-// shell can hand one to a program in a word. A line with an unclosed quote or a trailing
-// backslash is unreadable at the `unclosed` reason: no shell can run it.
+// launch refuses it (`lineDelimiterRisk` in `cli-scope.ts`), as it refuses any unread suffix
+// holding a `--`, a backslash or an ANSI-C opening; only a suffix that plainly cannot spell the
+// CLI's delimiter keeps 0.5.10's placement. A NUL byte is unreadable at
+// the `nul` reason: no shell can hand one to a program in a word. A line with an unclosed quote
+// or a trailing backslash is unreadable at the `unclosed` reason: no shell can run it.
 
 export type ShellWord = {
   /** The word as the shell hands it to the program, quotes removed and escapes resolved. */
@@ -29,10 +33,17 @@ export type ShellWord = {
  *  are a line some shell may run, whose words this reader cannot know without guessing. */
 export type ShellWordsUnreadable = 'unclosed' | 'ansi' | 'nul';
 
-type ShellWordsRead = { words: ShellWord[] } | { unreadable: ShellWordsUnreadable };
+/** A line's words, or the reason they stop: the words read before the stop come with the reason,
+ *  so a caller can see whether they named the CLI's delimiter, and `at` is where the word being
+ *  read when it stopped begins, so a caller can see what it did not read. */
+export type ShellWordsRead =
+  | { words: ShellWord[] }
+  | { words: ShellWord[]; unreadable: ShellWordsUnreadable; at: number };
 
-function readShellWords(command: string): ShellWordsRead {
-  if (command.includes('\u0000')) return { unreadable: 'nul' };
+/** Read a line to its words. Exported for the one caller that must decide about a line it could
+ *  not read (`lineDelimiterRisk`), which needs the words read before the unreadable part. */
+export function readShellWords(command: string): ShellWordsRead {
+  if (command.includes('\u0000')) return { words: [], unreadable: 'nul', at: 0 };
   const words: ShellWord[] = [];
   const length = command.length;
   let at = 0;
@@ -52,7 +63,7 @@ function readShellWords(command: string): ShellWordsRead {
     if (start < 0) start = at;
     if (char === "'") {
       const close = command.indexOf("'", at + 1);
-      if (close < 0) return { unreadable: 'unclosed' };
+      if (close < 0) return { words, unreadable: 'unclosed', at: start };
       text += command.slice(at + 1, close);
       at = close + 1;
       continue;
@@ -60,7 +71,7 @@ function readShellWords(command: string): ShellWordsRead {
     if (char === '"') {
       at += 1;
       for (;;) {
-        if (at >= length) return { unreadable: 'unclosed' };
+        if (at >= length) return { words, unreadable: 'unclosed', at: start };
         const inner = command[at]!;
         if (inner === '"') {
           at += 1;
@@ -68,7 +79,7 @@ function readShellWords(command: string): ShellWordsRead {
         }
         if (inner === '\\') {
           const next = command[at + 1];
-          if (next === undefined) return { unreadable: 'unclosed' };
+          if (next === undefined) return { words, unreadable: 'unclosed', at: start };
           // Inside double quotes a backslash is special only before `$`, a backtick, `"`, a
           // backslash or a newline; a backslash-newline is removed as a continuation, and
           // anywhere else the backslash stands for itself.
@@ -92,7 +103,7 @@ function readShellWords(command: string): ShellWordsRead {
     }
     if (char === '\\') {
       const next = command[at + 1];
-      if (next === undefined) return { unreadable: 'unclosed' };
+      if (next === undefined) return { words, unreadable: 'unclosed', at: start };
       // A backslash-newline outside quotes is a line continuation: both characters vanish, and
       // the word goes on either side of them.
       if (next === '\n') {
@@ -103,10 +114,19 @@ function readShellWords(command: string): ShellWordsRead {
       at += 2;
       continue;
     }
-    // An unquoted `$'` opens ANSI-C quoting, which the two shells do not read alike. Inside
-    // double quotes it is not quoting at all (the `$` is literal there), so this check is here,
-    // outside the double-quote branch above.
-    if (char === '$' && command[at + 1] === "'") return { unreadable: 'ansi' };
+    // An unquoted `$'` opens ANSI-C quoting. Inside double quotes it is not quoting at all (the
+    // `$` is literal there), so this check is here, outside the double-quote branch above. A
+    // word with no backslash is the literal text between its quotes in every shell that reads
+    // it; one with a backslash is unreadable, because the shells disagree on its escapes.
+    if (char === '$' && command[at + 1] === "'") {
+      const close = command.indexOf("'", at + 2);
+      if (close < 0) return { words, unreadable: 'unclosed', at: start };
+      const body = command.slice(at + 2, close);
+      if (body.includes('\\')) return { words, unreadable: 'ansi', at: start };
+      text += body;
+      at = close + 1;
+      continue;
+    }
     text += char;
     at += 1;
   }
