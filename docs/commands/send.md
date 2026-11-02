@@ -204,12 +204,13 @@ lands on the thread and moves the record's status once to `replied`.
 The socket frame — the channel the native leg will carry — is a measured observation of Claude Code 2.1.295, not a stable API: JSON
 lines, one frame per line, a first-line deadline of 30,000 ms, and a buffer limit of 1,048,576
 characters. A frame over that limit is refused, never truncated. The message's body is written
-down: a run that ends `delivered`, `delivered (read)`, `sent (unconfirmed)`, `answered`, `held`,
-`queued (receiver busy)`, `not-submitted`, `timeout` or `unreachable` appends one line
+down: a run that ends `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent
+(unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout` or
+`unreachable` appends one line
 to the project's message history, which [team feed](feed.md) reads. The daily log keeps the seat and the sizes.
 
-The outcome is always one of `delivered` (or `delivered (read)`), `sent (unconfirmed)`,
-`answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
+The outcome is always one of `delivered` (or `delivered (read)`, or `delivered (typed wake)`),
+`sent (unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
 each seat's human name as its `@<nickname>` address (the name a seat signed standing where the
@@ -643,6 +644,7 @@ lowers the class the line reports: it never claims a wake the attempt just dispr
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
 | delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the channel's ack, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered (typed wake) | 0 | `<seat>: delivered (typed wake)` on stdout, for the profile-gated typed wake: the signed drop record was written under the seat lock, the one-line trigger was typed into the seat's composer and Enter pressed, and the profile's working screen appeared after that Enter; the trigger is the seat reading the drop at its next turn, never the body |
 | sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms); <delivery>` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
@@ -682,8 +684,8 @@ Under `--json` the same outcomes are one document: the action surface for a send
 document for `--list`, and the structured error document for an exit 1 or 2 — `error.id` is the
 outcome's own (`send.refused`, `send.not-submitted`, …), `error.message` the text the plain run
 prints without its `team send: ` prefix, and `error.repair` a way out when there is one. Exit
-codes are the outcome's: 0 when delivered, delivered (read), sent (unconfirmed), queued
-(receiver busy), answered, listed, recorded, or resolved by
+codes are the outcome's: 0 when delivered, delivered (read), delivered (typed wake), sent
+(unconfirmed), queued (receiver busy), answered, listed, recorded, or resolved by
 `--dry-run`, 1 when held, not-submitted, timed out, unreachable, stopped, or refused, 2 when the
 invocation or team file can't be read.
 
@@ -715,8 +717,9 @@ it on its own turn.
 `not-submitted` is a line typed and never taken. No send ends here in this build: the typed leg is
 never walked, so no box is read, no Enter is pressed and no trigger is left unsent. The outcome
 stays in the contract and in [the exit-code reference](../reference/exit-codes.md); the walk's
-endings are the ones above — `delivered`, `delivered (read)`, `sent (unconfirmed)`, `sent
-(channel)`, `queued (receiver busy)`, `answered`, `held`, `timeout`, `unreachable` and `refused`.
+endings are the ones above — `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent
+(unconfirmed)`, `sent (channel)`, `queued (receiver busy)`, `answered`, `held`, `timeout`,
+`unreachable` and `refused`.
 
 `unreachable` is the seat not reached: a walk that ran out of legs prints `no leg of its delivery
 order took the send` with the legs that failed — a client send's walk, whose grant walks no drop
