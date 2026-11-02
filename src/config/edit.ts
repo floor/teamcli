@@ -12,8 +12,18 @@ import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import {
+  callerOf,
+  describeCaller,
+  detachedRefusal,
+  isOwner,
+  judgeCallerIn,
+  standingOf,
+  type Caller,
+  type SeatStanding,
+} from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
+import { gateVerdict } from '../permissions/who.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { labelPersona, nicknameProblem, SEAT_NAME } from '../file/sections/seats.ts';
 import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
@@ -191,7 +201,11 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // exit: config.detached
       return 1;
     }
-    if (!isOwner(caller)) {
+    // A stopped seat's sign-off is its own team's to lift: the lead clears exactly
+    // `seats.<seat>.stopped`, with no card, dev mode on or off — the same admission
+    // `team restart` makes when it revives that seat. Every other key, verb and seat keeps the
+    // owner door.
+    if (!isOwner(caller) && !liftsStopped(caller, verb, path, rawIo, root, home, sources)) {
       refuse(io, json, 'config', {
         id: 'config.not-owner',
         message: `only the owner edits the team's record, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
@@ -404,4 +418,34 @@ function syncSeatNames(
   if (!paired.ok || !paired.changed) return none;
   const edited = editedRecordText(text, ['seats', seatName, field], value, paired.root);
   return { text: edited.text, kept: edited.kept, changed: [{ seat: seatName, field, value }] };
+}
+
+/**
+ * Whether this write is the one a team's `leads` seat may make on its own record: `unset` of
+ * exactly `seats.<declared seat>.stopped`, judged by the same gate `team restart` uses for the
+ * revival — the caller placed as a seat of this team on its own recorded pane, in the session the
+ * map admits it in. Every other key, verb, seat and caller is not this allowance and keeps the
+ * owner door.
+ */
+function liftsStopped(
+  caller: Caller,
+  verb: string | undefined,
+  path: RecordPath,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  root: string,
+  home: string,
+  sources: ConfigSources,
+): boolean {
+  if (verb !== 'unset' || caller.kind !== 'seat') return false;
+  if (path.length !== 3 || path[0] !== 'seats' || typeof path[1] !== 'string' || path[2] !== 'stopped') return false;
+  const loaded = readTeamConfig(root, { home, ...(sources.env === undefined ? {} : { env: sources.env }) });
+  if (!loaded.ok) return false;
+  const team = loaded.team;
+  const seat = path[1];
+  if (!team.seats.some((declared) => declared.name === seat)) return false;
+  const dir = join(root, '.agents');
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, home, 'restart', at, sources.now);
+  const judged = judgeCallerIn(io, dir, team, verdictOf);
+  return verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)).kind === 'ok';
 }
