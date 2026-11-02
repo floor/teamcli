@@ -132,6 +132,40 @@ describe('the state file', () => {
     }
   });
 
+  test('a webhook delivery record enters only as the bus writes it; anything else is dropped', () => {
+    // The record is evidence a note is printed from, so the door keeps only the closed outcome,
+    // a whole count, a fixed-words reason and a parseable instant. A hand-edited file cannot make
+    // check or status print a failure the bus never reported.
+    const good = {
+      record_id: 'msg-1',
+      at: '2026-11-01T00:00:00.000Z',
+      outcome: 'failed' as const,
+      attempts: 3,
+      reason: 'could not connect (ConnectionRefused)',
+    };
+    const probes: Record<string, unknown> = {
+      outcome: { ...good, outcome: 'woken' },
+      attempts: { ...good, attempts: 1.5 },
+      negative: { ...good, attempts: -1 },
+      reason: { ...good, reason: '' },
+      at: { ...good, at: 'not a time' },
+      id: { ...good, record_id: '' },
+      array: [good],
+      text: 'failed',
+      nothing: null,
+    };
+    const seats: Record<string, unknown> = { good: { stage: 'ready', webhook_delivery: good } };
+    for (const [seat, record] of Object.entries(probes)) {
+      seats[seat] = { stage: 'ready', webhook_delivery: record };
+    }
+    writeFileSync(join(dir, STATE_FILE), JSON.stringify({ format: 1, sessions: { one: { seats, worktrees: {} } } }));
+    const state = readState(dir);
+    expect(state.sessions.one?.seats.good?.webhook_delivery).toEqual(good);
+    for (const seat of Object.keys(probes)) {
+      expect([seat, state.sessions.one?.seats[seat]?.webhook_delivery]).toEqual([seat, undefined]);
+    }
+  });
+
   test('mints seat_<12 lowercase hex> handles and validates seat registry fields at readState', () => {
     const first = mintSeatId();
     const second = mintSeatId();

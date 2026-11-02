@@ -1115,6 +1115,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       bus = await startBus({
         root: canonical,
         team: loaded.team,
+        stateDir: dirname(loaded.path),
         home,
         stderr: (text) => logLine(text),
         heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
@@ -1633,6 +1634,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const revived = await reviveBus({
       root: loaded.root,
       team: loaded.team,
+      stateDir: dirname(loaded.path),
       home,
       stderr: (text) => logLine(text),
       heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,

@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
 import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRequest, webhookRoutesOf } from '../src/bus/webhook.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -69,13 +70,17 @@ function files(base: string, url: string, secret = 'synthetic-secret-value'): { 
 }
 
 /** The team file the bus is started with: one webhook seat. */
-function teamWith(base: string, webhook: { urlFile: string; secretFile: string; header?: string; body?: string } | null) {
+function teamWith(
+  base: string,
+  webhook: { urlFile: string; secretFile: string; header?: string; body?: string; timeoutMs?: number } | null,
+) {
   const row = webhook === null ? '' : [
     '    webhook:',
     `      url_file: ${JSON.stringify(webhook.urlFile)}`,
     `      secret_file: ${JSON.stringify(webhook.secretFile)}`,
     ...(webhook.header === undefined ? [] : [`      header: ${JSON.stringify(webhook.header)}`]),
     ...(webhook.body === undefined ? [] : [`      body: ${webhook.body}`]),
+    ...(webhook.timeoutMs === undefined ? [] : [`      timeout_ms: ${String(webhook.timeoutMs)}`]),
     '',
   ].join('\n');
   const text = `format: 1
@@ -909,6 +914,101 @@ test('a fixture inbox with side files beside its record posts once, and never re
     const said = lines.join('\n');
     expect(said).not.toContain('not a signed record');
     expect(said).not.toContain(`the message record ${MESSAGE_ID}.reported`);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus records a failed delivery on the seat\'s state row', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('no', { status: 500 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  // The seat's launch record: the bus writes facts onto an existing row, never invents one.
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stateDir: dir,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.record_id).toBe(MESSAGE_ID);
+    expect(record?.outcome).toBe('failed');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('HTTP 500');
+    expect(Number.isNaN(Date.parse(record?.at ?? ''))).toBe(false);
+    // The record repeats no secret, and the bus's own line still names the failure.
+    expect(JSON.stringify(record)).not.toContain('synthetic-secret-value');
+    expect(lines.join('\n')).toContain('not delivered after 1 attempt');
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus records a late answer as sent, response unknown, with one request', async () => {
+  // The row names its own bound; the routine takes the body and answers well after it. The seat's
+  // state records the outcome the send could not have known: the response never arrived.
+  const base = scratch();
+  const hook = files(base, '');
+  const bodies: string[] = [];
+  const get = receiver(async (hit) => {
+    bodies.push(hit.body);
+    await Bun.sleep(300);
+    return new Response('ok', { status: 200 });
+  });
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, { ...hook, timeoutMs: 60 }),
+    home: base,
+    stateDir: dir,
+    stderr: () => {},
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.outcome).toBe('sent-unknown');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('no answer within 60 ms');
+    // Past the routine's own answer time: the late 2xx is never read and never asked for twice.
+    await Bun.sleep(400);
+    expect(get.hits.length).toBe(1);
+    expect(bodies.length).toBe(1);
+    expect(readState(dir).sessions.acme?.seats.iris?.webhook_delivery?.outcome).toBe('sent-unknown');
   } finally {
     await started.handle.close();
   }

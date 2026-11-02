@@ -408,6 +408,9 @@ export type WebhookFactoryInput = {
   root?: string;
   /** Where the bus says a refusal or a final failure. Absent, the adapter stays silent. */
   stderr?: (text: string) => void;
+  /** What one scheduled delivery did, with the seat it was for and the record it carried: the bus
+   *  records the facts beside the seat. Absent, nothing is recorded. */
+  onResult?: (seat: string, record: SignedEventRecord, facts: WebhookFacts) => void;
   policy?: Partial<WebhookPolicy>;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -436,6 +439,7 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
       const webhook = routes.get(to);
       if (webhook === undefined) return;
       const report = (text: string): void => say(input.stderr, text);
+      const onResult = input.onResult;
       void deliverWebhook({
         seat: to,
         webhook,
@@ -444,6 +448,7 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
         ...(input.policy === undefined ? {} : { policy: input.policy }),
         ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
         ...(input.sleep === undefined ? {} : { sleep: input.sleep }),
+        ...(onResult === undefined ? {} : { onResult: (facts: WebhookFacts) => onResult(to, record, facts) }),
         report,
       }).catch(() => {
         report(`webhook: ${to}: the delivery adapter failed; the drop file stays in place`);
