@@ -1,4 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { accessSync, chmodSync, constants, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { resolveForgeShim } from './settings/forge-shim.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -311,16 +315,112 @@ function resultOf(args: string[], session?: string): unknown | null {
 
 const SERVER_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'LANG'] as const;
 
-// Starts a session's server in a clean environment. Refuses unless the session is absent: a
-// second server for a session that already runs has been seen to drop it.
+/** The forge CLI a credential helper calls by name. The session's shim has to carry that name:
+ *  it is the CLI's, not ours. */
+const FORGE_CLI = 'gh';
+
+/** The shim's one refusal line, on stderr. It names no value and reads none: the check below
+ *  tests whether the variable is set, never what it holds. */
+export const NO_SEAT_TOKEN = 'team: no seat token in this environment; the account login stored on this machine is not used from a seat';
+
+/** `<home>/.config/team/bin`, the session server's own programs, ahead of every other folder. */
+export function sessionBinDir(home: string): string {
+  return join(home, '.config', 'team', 'bin');
+}
+
+/** The first executable of that name on a PATH value, skipping `skip` — the shim's own folder,
+ *  so a server started from inside another session never chooses the shim as the real CLI. A
+ *  folder of that name is not it: the helper runs a program. */
+function forgeOnPath(pathValue: string | undefined, skip: string): string | null {
+  if (pathValue === undefined) return null;
+  for (const dir of pathValue.split(':')) {
+    if (dir === '' || dir === skip) continue;
+    const candidate = join(dir, FORGE_CLI);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // not here; the next folder
+    }
+  }
+  return null;
+}
+
+function shimQuote(path: string): string {
+  return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+/** The shim's text. It runs the real CLI only when the seat-token variable is set, and it never
+ *  expands, prints or forwards the value: the real CLI execs with the environment as it is. Without
+ *  a token the helper reaches no stored login, so a seat cannot inherit the shared account's
+ *  broader access by pushing without one. */
+export function forgeShimText(real: string): string {
+  return [
+    '#!/bin/sh',
+    "# Written by team for this session's server.",
+    '# The forge CLI runs only with a seat token in the environment; without one this refuses,',
+    '# so no credential helper and no command reaches the account login stored on this machine.',
+    '# The value is never read, printed or forwarded: the real CLI execs with the environment as',
+    '# it is.',
+    'case ${GH_TOKEN+x} in',
+    `  '') echo "${NO_SEAT_TOKEN}" >&2; exit 1 ;;`,
+    'esac',
+    `exec ${shimQuote(real)} "$@"`,
+    '',
+  ].join('\n');
+}
+
+/** Writes the shim when it is absent or names another real CLI: a fresh file created executable
+ *  and renamed into place, so no reader ever sees half of it. False when it could not be written;
+ *  the caller then leaves the environment as it was. */
+export function writeForgeShim(dir: string, real: string): boolean {
+  const file = join(dir, FORGE_CLI);
+  const text = forgeShimText(real);
+  try {
+    if (readFileSync(file, 'utf8') === text) return true;
+  } catch {
+    // absent or unreadable: write it
+  }
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, text, { mode: 0o755 });
+    chmodSync(temp, 0o755);
+    renameSync(temp, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The session server's environment: the clean allowlist, the SSH agent when the owner has one,
+ *  and the session's own folder first on PATH. When that PATH also holds the real forge CLI and
+ *  the machine's `forge-shim` setting is on (its default), the shim is written into the folder
+ *  first on it; a PATH without the CLI is left unchanged, because the helper's own call fails
+ *  there anyway. The setting is a mechanism, not a wall: `off` leaves the environment as it was. */
+export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const name of SERVER_ENV) {
+    const value = env[name];
+    if (value !== undefined) clean[name] = value;
+  }
+  if (env.SSH_AUTH_SOCK) clean.SSH_AUTH_SOCK = env.SSH_AUTH_SOCK;
+  if (!resolveForgeShim({ home, env }).on) return clean;
+  const dir = sessionBinDir(home);
+  const real = forgeOnPath(env.PATH, dir);
+  if (real !== null && writeForgeShim(dir, real)) {
+    clean.PATH = clean.PATH === undefined ? dir : `${dir}:${clean.PATH}`;
+  }
+  return clean;
+}
+
+// Starts a session's server in a clean environment, with the session's own folder first on PATH
+// so the forge shim stands ahead of the machine's CLI (see `seatServerEnv`). Refuses unless the
+// session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
   if (sessionState(session) !== 'absent') return false;
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of SERVER_ENV) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
-  }
-  if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
+  const env = seatServerEnv(process.env, homedir());
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
   try {
     const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
