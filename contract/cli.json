@@ -7710,6 +7710,51 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "waits",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team waits [--json]"
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true

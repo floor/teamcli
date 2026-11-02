@@ -3674,6 +3674,32 @@ Usage:
 
 None.
 
+## `waits`
+
+Hidden: no
+
+Usage:
+
+    team waits [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `watch`
 
 Hidden: no

@@ -6023,6 +6023,34 @@
     },
     {
       "code": 0,
+      "command": "waits",
+      "id": "waits.ok",
+      "meaning": "the waits were listed",
+      "trigger": "team waits"
+    },
+    {
+      "code": 1,
+      "command": "waits",
+      "id": "waits.refused",
+      "meaning": "the caller is not a seat of this team",
+      "trigger": "team waits"
+    },
+    {
+      "code": 2,
+      "command": "waits",
+      "id": "waits.configuration",
+      "meaning": "the team file, the registry or the retention policy can't be read",
+      "trigger": "team waits"
+    },
+    {
+      "code": 2,
+      "command": "waits",
+      "id": "waits.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team waits --all"
+    },
+    {
+      "code": 0,
       "command": "watch",
       "id": "watch.standby",
       "meaning": "a hosted watch stood down for a running watch",
