@@ -2,7 +2,6 @@
 import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DownSources } from '../src/commands/down.ts';
@@ -28,7 +27,8 @@ type Stop = (input: StopInput) => EndpointStopRead;
 type Place = { root: string; home: string; dir: string };
 
 function fixture(): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'gpt-down-')));
+  // Keep the recorded per-seat socket below the endpoint reader's 100-byte bound.
+  const base = realpathSync(mkdtempSync('/tmp/gpt-down-'));
   const root = join(base, 'project');
   const home = join(base, 'home');
   const dir = join(root, '.agents');
