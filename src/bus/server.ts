@@ -677,7 +677,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
     // awaits, so a pass or a publish is never failed by a routine.
-    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr });
+    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root });
 
     const fanOut = (record: SignedEventRecord): void => {
       deliver(record);
