@@ -22,8 +22,10 @@ import type { SignedRecord } from '../send/record.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import type { SignedEventRecord } from './log.ts';
 
-/** How hard one record is tried before the drop waits for the seat's own pull: three attempts in
- *  total, five seconds each, then one and four seconds between them — about twenty seconds. */
+/** How hard one record is tried when the request could not be sent at all: three attempts in
+ *  total, five seconds each, then one and four seconds between them — about twenty seconds. A
+ *  routine that answered, or one whose answer was not seen before the bound, is never asked
+ *  again: the POST may already have started a run, and a second one is worse than a report. */
 export type WebhookPolicy = {
   timeoutMs: number;
   attempts: number;
@@ -36,9 +38,19 @@ export const WEBHOOK_POLICY: WebhookPolicy = {
   backoffMs: [1000, 4000],
 };
 
-/** What one delivery ended as: the routine took it, the bound ran out, or the seat's files could
- *  not be read (so nothing was posted). */
-export type WebhookOutcome = 'delivered' | 'failed' | 'refused';
+/** What one delivery ended as: the routine took it (`delivered`, only after a 2xx), the request
+ *  could not be sent and its attempts ran out (`failed`), the body may have reached the routine
+ *  and no answer was read (`sent-unknown`), or the seat's files could not be read so nothing was
+ *  posted (`refused`). */
+export type WebhookOutcome = 'delivered' | 'failed' | 'refused' | 'sent-unknown';
+
+/** What one delivery did, beyond its outcome: the attempts it made and the fixed-words reason
+ *  the last one ended on. The bus records this beside the seat so a failure is read there. */
+export type WebhookFacts = {
+  outcome: WebhookOutcome;
+  attempts: number;
+  reason: string;
+};
 
 /** What one routine is sent: the body shape, and how the secret travels. A row that names
  *  neither header nor body posts the form every earlier row had. */
@@ -213,6 +225,9 @@ export type WebhookDeliveryInput = {
   policy?: Partial<WebhookPolicy>;
   /** Where refusals and final failures are said; absent, they are contained and dropped. */
   report?: (text: string) => void;
+  /** What the delivery did, in facts: the bus records them beside the seat. Absent, nobody
+   *  asks — a scene that only reads the outcome passes none. */
+  onResult?: (facts: WebhookFacts) => void;
   /** The POST itself, injectable so a test can watch it without a socket. */
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -225,14 +240,59 @@ function errorClass(error: unknown): string | null {
   return error instanceof Error && error.name !== '' ? error.name : null;
 }
 
-/** The reason one attempt failed, in fixed words: a timeout says so, and anything else is a
- *  connection failure, with the error's class name as the only detail. */
-function attemptReason(error: unknown, timeoutMs: number): string {
+/** The reason the request may have reached the routine and no answer was read, in fixed words:
+ *  a timeout says so, and anything else is said as a request whose fate is unknown, with the
+ *  error's class name as the only detail. */
+function unknownReason(error: unknown, timeoutMs: number): string {
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
     return `no answer within ${timeoutMs} ms`;
   }
   const cls = errorClass(error);
-  return cls === null ? 'could not connect' : `could not connect (${cls})`;
+  return cls === null ? 'the request may have been sent' : `the request may have been sent (${cls})`;
+}
+
+/** The connection-stage codes that prove the request never left this machine. Measured here:
+ *  Bun (v26.3.0) raises a TypeError whose `code` is 'ConnectionRefused' for a closed loopback
+ *  port and 'ENOTFOUND' for a name that does not resolve; the plain runtime (node v26.8.1)
+ *  wraps both in TypeError('fetch failed') with `cause.code` 'ECONNREFUSED' / 'ENOTFOUND'. The
+ *  other three are the same stage's address and route failures. A code outside this list proves
+ *  nothing about whether the body left, so the delivery is not retried on it. */
+const UNSENT_CODES = new Set(['ConnectionRefused', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH']);
+
+/** The error's code, from the error or the cause the plain runtime wraps it in. */
+function codeOf(error: unknown): string | null {
+  if (error === null || typeof error !== 'object') return null;
+  const one = error as { code?: unknown; cause?: unknown };
+  if (typeof one.code === 'string') return one.code;
+  const cause = one.cause;
+  if (cause !== null && typeof cause === 'object' && typeof (cause as { code?: unknown }).code === 'string') {
+    return (cause as { code: string }).code;
+  }
+  return null;
+}
+
+/** The reason a failure proves the request was never sent, or null when it proves nothing. Only
+ *  a proven-unsent failure is retried: a timeout after the body may already have reached the
+ *  routine, and asking again could start a second run. */
+function unsentReason(error: unknown): string | null {
+  const code = codeOf(error);
+  return code !== null && UNSENT_CODES.has(code) ? `could not connect (${code})` : null;
+}
+
+/** Whether the failure is the adapter's own refusal to follow a redirect. The answer was read
+ *  (a 3xx), so the request was sent: it is a failure, never a retry. Measured here: Bun
+ *  (v26.3.0) raises code 'UnexpectedRedirect'; node (v26.8.1) wraps a cause whose message is
+ *  'unexpected redirect' in TypeError('fetch failed'). */
+function redirected(error: unknown): boolean {
+  if (codeOf(error) === 'UnexpectedRedirect') return true;
+  if (error === null || typeof error !== 'object') return false;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause.message === 'unexpected redirect';
+}
+
+/** `1 attempt`, `2 attempts`. */
+function attemptsWord(count: number): string {
+  return `${String(count)} attempt${count === 1 ? '' : 's'}`;
 }
 
 function say(report: ((text: string) => void) | undefined, text: string): void {
@@ -252,24 +312,31 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 /**
- * Posts one accepted record, within the policy's bound. A 2xx answer is delivered; any other
- * status, a timeout or a network error is retried, and after the last attempt the drop file is
- * left exactly where it was for the seat's own pull. A route that cannot be read is refused
- * before any POST and is not retried.
+ * Posts one accepted record, within the policy's bound. A 2xx answer is delivered; a request
+ * proven never sent (a refused connection, a name that does not resolve) is retried; an answer
+ * that is not 2xx, or one not read before the bound, is reported and never asked for twice,
+ * because the body may already have reached the routine. The drop file is left exactly where it
+ * was for the seat's own pull. A route that cannot be read is refused before any POST.
  */
 export async function deliverWebhook(input: WebhookDeliveryInput): Promise<WebhookOutcome> {
+  const done = (facts: WebhookFacts): WebhookOutcome => {
+    try {
+      input.onResult?.(facts);
+    } catch {
+      // A recorder that throws is still not the delivery's failure to propagate.
+    }
+    return facts.outcome;
+  };
   const route = webhookRouteOf(input.webhook);
   if (route === null || !route.ok) {
-    say(
-      input.report,
-      `webhook: ${input.seat}: not posted: ${route === null ? 'no webhook adapter is configured' : route.reason}; the drop file stays in place`,
-    );
-    return 'refused';
+    const reason = route === null ? 'no webhook adapter is configured' : route.reason;
+    say(input.report, `webhook: ${input.seat}: not posted: ${reason}; the drop file stays in place`);
+    return done({ outcome: 'refused', attempts: 0, reason });
   }
   const shape = await shapeOf(route, input.record, input.root);
   if (!shape.ok) {
     say(input.report, `webhook: ${input.seat}: not posted: ${shape.reason}; the drop file stays in place`);
-    return 'refused';
+    return done({ outcome: 'refused', attempts: 0, reason: shape.reason });
   }
   // The row's own answer bound, when it names one, stands between the build's default and a
   // caller's injected policy: the routine's contract is the row's, and only a scene overrides it.
@@ -292,27 +359,46 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
     const cls = errorClass(error);
     const why = cls === null ? 'request refused before sending' : `request refused before sending (${cls})`;
     say(input.report, `webhook: ${input.seat}: not delivered (${why}); the drop file stays in place`);
-    return 'failed';
+    return done({ outcome: 'failed', attempts: 0, reason: why });
   }
-  let reason = 'could not connect';
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       // A redirect is never followed: it would carry the secret to a destination the routine's
       // own address never named. The policy rides on the attempt, not on the request object, so a
       // row that names neither new field builds exactly the request object it always did.
       const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
-      if (response.status >= 200 && response.status < 300) return 'delivered';
-      reason = `HTTP ${response.status}`;
+      if (response.status >= 200 && response.status < 300) {
+        return done({ outcome: 'delivered', attempts: attempt, reason: `HTTP ${response.status}` });
+      }
+      // The routine answered and refused: it was reached, so it is not asked a second time.
+      const reason = `HTTP ${response.status}`;
+      say(input.report, `webhook: ${input.seat}: not delivered after ${attemptsWord(attempt)} (${reason}); the drop file stays in place`);
+      return done({ outcome: 'failed', attempts: attempt, reason });
     } catch (error) {
-      reason = attemptReason(error, policy.timeoutMs);
-    }
-    if (attempt < attempts) {
-      const wait = policy.backoffMs[attempt - 1] ?? policy.backoffMs[policy.backoffMs.length - 1] ?? 0;
-      await sleep(wait);
+      if (redirected(error)) {
+        const reason = 'a redirect the adapter does not follow';
+        say(input.report, `webhook: ${input.seat}: not delivered after ${attemptsWord(attempt)} (${reason}); the drop file stays in place`);
+        return done({ outcome: 'failed', attempts: attempt, reason });
+      }
+      const unsent = unsentReason(error);
+      if (unsent === null) {
+        // The body may have reached the routine. An answer we did not read is reported, never
+        // retried: a second POST could start a second run far side.
+        const reason = unknownReason(error, policy.timeoutMs);
+        say(input.report, `webhook: ${input.seat}: sent, response unknown: ${reason}; not retried, so the routine is not asked twice; the drop file stays in place`);
+        return done({ outcome: 'sent-unknown', attempts: attempt, reason });
+      }
+      if (attempt < attempts) {
+        const wait = policy.backoffMs[attempt - 1] ?? policy.backoffMs[policy.backoffMs.length - 1] ?? 0;
+        await sleep(wait);
+        continue;
+      }
+      say(input.report, `webhook: ${input.seat}: not delivered after ${attemptsWord(attempt)} (${unsent}); the drop file stays in place`);
+      return done({ outcome: 'failed', attempts: attempt, reason: unsent });
     }
   }
-  say(input.report, `webhook: ${input.seat}: not delivered after ${attempts} attempts (${reason}); the drop file stays in place`);
-  return 'failed';
+  // The loop returns on every path; this is the type's floor, not a reachable ending.
+  return done({ outcome: 'failed', attempts, reason: 'could not connect' });
 }
 
 export type WebhookFactoryInput = {
