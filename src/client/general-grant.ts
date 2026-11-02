@@ -3,7 +3,7 @@
 // another principal (never to itself, never wider than its own); that child is signed by the
 // holder's client key and chains back to an owner-signed root.
 import { createPrivateKey, randomBytes, type KeyObject } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -251,4 +251,95 @@ export function admitGeneral(home: string, grantPath: string, keyPath: string, o
   const covered = grantCoversOp(read.grant, op);
   if (!covered.ok) return covered;
   return { ok: true, grant: read.grant };
+}
+
+/**
+ * The release that first shipped each op, measured from this repository's release tags: the op's
+ * route in the dispatcher table (`src/cli.ts`) at each tag, by tag date, with `abandon` read from
+ * `down --abandon` at v0.1.0. A release candidate is not a release, so `-rc.` tags are skipped.
+ * `tag` is the provenance of `at`. An op no release ships yet has no entry: `peek`'s route was
+ * added after the last release measured here.
+ */
+type OpRelease = { tag: string; at: string };
+export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonly GeneralOp[] }[] = [
+  { tag: 'v0.1.0', at: '2026-10-04T09:15:50+02:00', ops: ['up', 'down', 'abandon', 'init', 'add', 'check', 'doctor', 'remove', 'status', 'watch', 'worktree'] },
+  { tag: 'v0.3.0', at: '2026-10-06T12:23:58+02:00', ops: ['answer', 'release'] },
+  { tag: 'v0.3.3', at: '2026-10-07T12:27:51+02:00', ops: ['commits', 'pr', 'usage'] },
+  {
+    tag: 'v0.5.0',
+    at: '2026-10-18T10:09:55+02:00',
+    ops: ['restart', 'send', 'messages', 'ask-show', 'broker', 'delegate', 'feed', 'grant', 'hold', 'issues', 'list', 'lock', 'mcp', 'next', 'plan', 'policy', 'proc', 'projects', 'register', 'reload', 'rename', 'revoke', 'route', 'seats', 'tempo', 'unlock'],
+  },
+  { tag: 'v0.5.1', at: '2026-10-19T05:11:06+02:00', ops: ['reply', 'bus', 'drops', 'raise'] },
+  { tag: 'v0.5.2', at: '2026-10-19T10:12:37+02:00', ops: ['pause', 'resume', 'sessions'] },
+  { tag: 'v0.5.3-hotfix.1', at: '2026-10-19T22:33:47+02:00', ops: ['config', 'brief', 'client', 'seat', 'settings', 'swap'] },
+  { tag: 'v0.5.3-hotfix.10', at: '2026-10-20T00:30:15+02:00', ops: ['daemon', 'development-mode', 'queue'] },
+  { tag: 'v0.5.3', at: '2026-10-21T16:02:35+02:00', ops: ['ack'] },
+  { tag: 'v0.5.5', at: '2026-10-26T10:45:10+01:00', ops: ['archive', 'import', 'migrate', 'owner-seat', 'workflow'] },
+  { tag: 'v0.5.6', at: '2026-10-31T00:56:10+01:00', ops: ['approvals', 'batch', 'forget', 'setup'] },
+  { tag: 'v0.5.10', at: '2026-11-01T15:22:48+01:00', ops: ['agents'] },
+];
+/** The first release that shipped each op, or null while no release ships it. */
+export const OP_FIRST_SHIPPED: Readonly<Record<GeneralOp, OpRelease | null>> = (() => {
+  const table = {} as Record<GeneralOp, OpRelease | null>;
+  for (const op of GENERAL_OPS) table[op] = null;
+  for (const row of OP_RELEASE_GROUPS) for (const op of row.ops) table[op] = { tag: row.tag, at: row.at };
+  return table;
+})();
+
+/** One verified wildcard grant and the ops it reaches that first shipped after it was signed.
+ *  `signed` is the grant's signing time, or null when the record carries none this code can read:
+ *  an unknown signing time reads as unknown, never as new. */
+export type WidenedGrant = { grant: GeneralGrant; signed: string | null; ops: GeneralOp[] };
+
+/**
+ * Every wildcard grant in this home that reaches an op first shipped after the grant was signed,
+ * one entry per grant, reading only. A grant that does not verify — tampered, expired or
+ * unreadable — is not admitted by any door, so it is not reported here either. A listed grant
+ * never widens.
+ */
+export function wildcardGrantsWidened(home: string, now: Date = new Date()): WidenedGrant[] {
+  const folder = generalGrantsFolder(home);
+  let names: string[];
+  try {
+    names = readdirSync(folder).sort();
+  } catch {
+    return [];
+  }
+  const out: WidenedGrant[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -'.json'.length);
+    if (!GENERAL_GRANT_ID.test(id)) continue;
+    const read = readGeneralGrant(home, join(folder, name), now);
+    if (!read.ok) continue;
+    const grant = read.grant;
+    if (!grant.ops.includes(ALL_OPS)) continue;
+    const at = Date.parse(grant.issued);
+    if (Number.isNaN(at)) {
+      out.push({ grant, signed: null, ops: [] });
+      continue;
+    }
+    const ops = GENERAL_OPS.filter((op) => {
+      const release = OP_FIRST_SHIPPED[op];
+      return release !== null && Date.parse(release.at) > at;
+    });
+    if (ops.length > 0) out.push({ grant, signed: grant.issued, ops });
+  }
+  return out;
+}
+
+/** The one plain line a widened wildcard grant is named with: the day it was signed, the ops it
+ *  now reaches, and how to stop the line. */
+export function widenedGrantNote(widened: WidenedGrant): string {
+  const id = widened.grant.grant_id;
+  if (widened.signed === null) {
+    return `wildcard general grant ${id} has no readable signing time (unknown), so whether it reaches commands added in later releases cannot be told; re-sign the grant to make this readable`;
+  }
+  return `wildcard general grant ${id} signed ${widened.signed.slice(0, 10)} now reaches ${widened.ops.join(', ')}, which shipped in later releases; re-sign the grant to stop this note`;
+}
+
+/** What `team check` and `team doctor` print: one note per widened grant, in grant-id order. */
+export function widenedGrantNotes(home: string, now: Date = new Date()): string[] {
+  return wildcardGrantsWidened(home, now).map(widenedGrantNote);
 }
