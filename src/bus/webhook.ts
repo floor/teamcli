@@ -7,6 +7,8 @@
 // The hand-off is `fanOut` in `src/bus/server.ts` (builder-4's file): the returned function is
 // synchronous and schedules its work, so it never blocks a reconcile pass or a publish, and it
 // never throws into the caller — every refusal and every failure is a line on `stderr` instead.
+// The bus rebuilds the rows when the root's registry record changes (`reload`); a delivery
+// already scheduled keeps the row it started with, so a reload never drops one in flight.
 // The record is already durable and identical to the one live subscribers receive; nothing here
 // assumes it was written this tick, and a duplicate never reaches `fanOut` at all.
 //
@@ -191,7 +193,8 @@ async function shapeOf(
 }
 
 /** The seats that configure an adapter, by seat name, as the bus's team file names them. The bus
- *  reads this once at start: a changed row applies at the next bus start. */
+ *  reads this at start and rebuilds it when the root's registry record changes (`src/bus/server.ts`);
+ *  a delivery already scheduled keeps the row it started with. */
 export function webhookRoutesOf(team: TeamFile): Map<string, SeatWebhook> {
   const routes = new Map<string, SeatWebhook>();
   for (const seat of team.seats) {
@@ -307,7 +310,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
 }
 
 export type WebhookFactoryInput = {
-  /** The team file the bus was started with: its webhook rows are the routes. */
+  /** The team file the bus was started with: its webhook rows are the routes until `reload`. */
   team: TeamFile;
   /** The project root, so an inbox-body row can read the record its arrival names. */
   root?: string;
@@ -318,15 +321,22 @@ export type WebhookFactoryInput = {
   sleep?: (ms: number) => Promise<void>;
 };
 
+/** The delivery function `fanOut` calls, and the one way a running bus replaces its rows. */
+export type WebhookDelivery = ((record: SignedEventRecord) => void) & {
+  /** Rebuild the routes from `team`. A delivery already scheduled keeps the row it started on:
+   *  it captured that row's map entry, so a reload can never cancel it or send it elsewhere. */
+  reload(team: TeamFile): void;
+};
+
 /**
  * The delivery function `fanOut` calls. The returned function never throws and never awaits: it
  * matches the record, schedules the bounded POST and returns. It is a no-op for any record other
  * than a `message.arrived` whose recipient configures an adapter — the record's payload is the
  * one live subscribers receive, and its `to` is the seat the arrival is for.
  */
-export function makeWebhookDelivery(input: WebhookFactoryInput): (record: SignedEventRecord) => void {
-  const routes = webhookRoutesOf(input.team);
-  return (record: SignedEventRecord): void => {
+export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery {
+  let routes = webhookRoutesOf(input.team);
+  const deliver: WebhookDelivery = (record: SignedEventRecord): void => {
     try {
       if (record.payload.kind !== 'message.arrived') return;
       const to = record.payload.to;
@@ -350,4 +360,8 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): (record: Signed
       // The bus's pass and its publish must never fail because of this adapter.
     }
   };
+  deliver.reload = (team: TeamFile): void => {
+    routes = webhookRoutesOf(team);
+  };
+  return deliver;
 }
