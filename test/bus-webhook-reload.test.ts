@@ -5,15 +5,20 @@
 // lives in the scene's own temp home, never the real one.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approvalOf } from '../src/approve/approval.ts';
 import { readArgs } from '../src/args.ts';
 import { startBus } from '../src/bus/server.ts';
 import { runTeamImport } from '../src/commands/migrate.ts';
-import { readTeamConfig } from '../src/file/team-config.ts';
+import { canonicalTeam, readTeamConfig } from '../src/file/team-config.ts';
 import { writeTeamText } from '../src/file/team-text.ts';
 import type { TeamFile } from '../src/file/types.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { readStoredTeamConfig, sha256, teamConfigRecordPath } from '../src/registry/team-config-store.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = () => new Date('2026-11-02T00:00:00.000Z');
@@ -148,15 +153,43 @@ function drop(at: Scene, id: string): void {
   writeFileSync(join(dir, id), `from lead\n\nhello from ${id}\n`);
 }
 
-/** Replace the team's registry record with a row, exactly as `team config set` writes it. */
+/** Replace the team's registry record with a row, as the owner's edit writes it, and approve the
+ *  new copy: the bus reloads only the record the owner's approval is signed over. */
 function setRow(at: Scene, hook: { urlFile: string; secretFile: string } | null): void {
-  const wrote = writeTeamText(at.file, teamText(hook === null ? '' : webhookRow(hook)), {
+  const text = teamText(hook === null ? '' : webhookRow(hook));
+  const wrote = writeTeamText(at.file, text, {
     home: at.home,
     source: 'registry',
     command: 'team config set',
     now: NOW,
   });
   expect(wrote).toEqual({ ok: true, target: 'registry' });
+  const parsed = validateTeamFile(text, { home: at.home, root: at.root });
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  writeApproval(
+    storePath(parsed.team.project, at.root, at.home),
+    { approval: approvalOf(parsed.team, at.root, NOW()), file: text },
+    parsed.team.seats,
+    at.home,
+    NOW(),
+  );
+}
+
+/** The owner's approval of the team's current registry record, as `team approve` writes it. */
+function approveCurrent(at: Scene): void {
+  const stored = readStoredTeamConfig(at.home, teamIdOf(at.root));
+  if (stored === null) throw new Error('the scene has no registry record to approve');
+  const parsed = validateTeamFile(stored.text, { home: at.home, root: at.root });
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  writeApproval(
+    storePath(parsed.team.project, at.root, at.home),
+    { approval: approvalOf(parsed.team, at.root, NOW()), file: stored.text },
+    parsed.team.seats,
+    at.home,
+    NOW(),
+  );
 }
 
 async function waitFor(what: () => boolean, whatText: string, ms = 4000): Promise<void> {
@@ -260,4 +293,52 @@ test('another root keeps its own rows when one root\'s record changes', async ()
   expect(postedId(twoRoutine.hits[0]!)).toBe('two-1');
   expect(oneRoutine.hits.length).toBe(0);
   expect(twoRoutine.hits.length).toBe(1);
+});
+
+test('a record rewritten outside the approval chain never moves a running row', async () => {
+  const trusted = receiver();
+  const at = await scene((base) => webhookRow(hookFiles(base, 'trusted', trusted.url)));
+  approveCurrent(at);
+  const said: string[] = [];
+  const bus = await start(at, said);
+  const forged = receiver();
+  const stored = readStoredTeamConfig(at.home, teamIdOf(at.root));
+  if (stored === null) throw new Error('the scene lost its record');
+  // The forged text and both unkeyed digests are recomputed: everything but the approval agrees.
+  const replacement = teamText(webhookRow(hookFiles(at.base, 'forged', forged.url)));
+  const parsed = validateTeamFile(replacement, { home: at.home, root: at.root });
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  writeFileSync(
+    teamConfigRecordPath(at.home, teamIdOf(at.root)),
+    JSON.stringify({ ...stored, text: replacement, text_sha256: sha256(replacement), record_sha256: sha256(canonicalTeam(parsed.team)) }),
+  );
+
+  drop(at, 'msg-1');
+  await bus.reconcileNow();
+  await waitFor(() => trusted.hits.length === 1, 'the arrival at the approved row');
+  expect(forged.hits.length).toBe(0);
+  expect(postedId(trusted.hits[0]!)).toBe('msg-1');
+  const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('not the copy the owner approved');
+});
+
+test('a removed registry record is named once and the running rows keep working', async () => {
+  const routine = receiver();
+  const at = await scene((base) => webhookRow(hookFiles(base, 'stable', routine.url)));
+  approveCurrent(at);
+  const said: string[] = [];
+  const bus = await start(at, said);
+  const record = teamConfigRecordPath(at.home, teamIdOf(at.root));
+  renameSync(record, `${record}.retained`);
+
+  drop(at, 'msg-1');
+  await bus.reconcileNow();
+  await bus.reconcileNow();
+  await waitFor(() => routine.hits.length === 1, 'the retained row to receive the arrival');
+  expect(postedId(routine.hits[0]!)).toBe('msg-1');
+  const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('holds no record of this team');
 });

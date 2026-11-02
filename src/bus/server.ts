@@ -28,12 +28,14 @@ import {
 import { connect, createServer, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { canonicalTeam } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { logLine } from '../log.ts';
 import { findAgent, getAgent, isAgentId } from '../registry/agents.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { approvalStanding, approvedRecordOf } from '../store/store.ts';
 import {
   checkPrivilegedSelfSubscription,
   DEFAULT_RECONCILE_INTERVAL_SECONDS,
@@ -719,10 +721,31 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         reloadProblem = reportReloadProblem(input.stderr, reloadProblem, (error as Error).message);
         return;
       }
-      if (stored === null || stored.record_sha256 === seenRecord) return;
+      if (stored === null) {
+        // A record that was here when the bus started and is now gone is a change outside the
+        // approval chain: say it once and keep the rows that run.
+        if (seenRecord !== '') {
+          reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry holds no record of this team');
+        }
+        return;
+      }
+      if (stored.record_sha256 === seenRecord) {
+        reloadProblem = null;
+        return;
+      }
       const parsed = validateTeamFile(stored.text, { home, root: input.root });
       if (!parsed.ok) {
         reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team does not validate');
+        return;
+      }
+      // Only the copy the owner approved may move a route. The approval's signature binds the
+      // canonical record, the root and the generation (src/store/store.ts), so a record rewritten
+      // outside that chain — even with its unkeyed digests recomputed — is a miss: the running
+      // rows stay, and the line is said once.
+      const standing = approvalStanding(input.root, home);
+      const approved = standing.kind === 'verified' ? approvedRecordOf(standing.record.file) : null;
+      if (approved === null || approved !== canonicalTeam(parsed.team)) {
+        reloadProblem = reportReloadProblem(input.stderr, reloadProblem, 'the registry\'s record of this team is not the copy the owner approved');
         return;
       }
       seenRecord = stored.record_sha256;
