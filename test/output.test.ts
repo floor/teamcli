@@ -142,6 +142,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'codex-acme: version unread',
       'deepseek-acme: version unread',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running',
       'the herdr session "acme" is not running',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
@@ -151,6 +152,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'codex-acme: version unread (x2)',
       'deepseek-acme: version unread',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running (x2)',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
@@ -158,6 +160,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'hold until 2026-10-04T00:00:00.000Z: freeze deploys',
       'codex-acme, deepseek-acme: version unread (2 seats)',
       'watch: pane w9:p1, pid 4242, last heartbeat 0s ago',
+      'daemon: version unread',
       'the herdr session "acme" is not running (x2)',
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
