@@ -244,3 +244,32 @@ for (const withFile of [false, true]) test(`Grok's lobby file route serves throu
   await legitimate(w, t, { seat: flag('--seat'), session: flag('--session'), file: flag('--file'), epoch: flag('--epoch') }, placement);
   expect(existsSync(join(lobby, '.agents'))).toBe(false);
 });
+
+function markStopped(t: Team, home: string) {
+  writeFileSync(t.file, readFileSync(t.file, 'utf8').replace('    role: worker', '    role: worker\n    stopped: true'));
+  const loaded = readTeamConfig(t.root, { home });
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) throw new Error('stopped worker fixture must remain valid');
+  expect(loaded.team.seats.find(seat => seat.name === t.seat)?.stopped).toBe(true);
+}
+test('an own stopped seat with retained pane and current claim refuses before serving', async () => {
+  const w = world(), t = w.team('alpha'), p = parented(t.root, t);
+  const state = readFileSync(join(t.dir, 'team.state.json'));
+  markStopped(t, w.home);
+  const out = await serve(w.home, p.io, opts(t), [tool('read', 'inbox_read', { id: t.id })]);
+  expect(readFileSync(join(t.dir, 'team.state.json'))).toEqual(state);
+  expect({ code: out.code, replies: out.replies.length, receipted: existsSync(receiptPath(t.drop, t.id)), leaked: JSON.stringify(out.replies).includes(t.body) }).toEqual({ code: 2, replies: 0, receipted: false, leaked: false });
+});
+test('marking its own seat stopped between check and read revokes a live server despite retained pane and claim', async () => {
+  const w = world(), t = w.team('alpha'), p = parented(t.root, t);
+  const state = readFileSync(join(t.dir, 'team.state.json'));
+  const out = await serve(w.home, p.io, opts(t, false), [tool('before', 'inbox_check'), () => {
+    markStopped(t, w.home);
+    expect(readFileSync(join(t.dir, 'team.state.json'))).toEqual(state);
+  }, tool('after', 'inbox_read', { id: t.id })]);
+  expect(out.code).toBe(0);
+  expect(out.replies[0]?.result?.isError).not.toBe(true);
+  expect(JSON.stringify(out.replies[0])).toContain(t.id);
+  expect(readFileSync(join(t.dir, 'team.state.json'))).toEqual(state);
+  expect({ isError: out.replies[1]?.result?.isError === true, receipted: existsSync(receiptPath(t.drop, t.id)), leaked: JSON.stringify(out.replies[1]).includes(t.body) }).toEqual({ isError: true, receipted: false, leaked: false });
+});
