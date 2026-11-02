@@ -3,7 +3,8 @@
 // (its world/plant builders); the original describe block is replaced by the three scenes
 // below. Pins today's behaviour: an unknown message_kind value is ignored, never refused;
 // an unknown signed field is refused as unsupported; a record with neither field reads as
-// before.
+// before. At 476d644af and after, an unknown kind VALUE is served as a plain message (the
+// kind dropped from the projection), never a wait and never refused.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -213,7 +214,7 @@ function jsonOf(out: string): WaitDoc {
 
 
 describe('team waits, unknown kind value and unknown signed field (independent scenes)', () => {
-  test('an unknown message_kind value is ignored, never refused: exit 0, not a wait, not unacked-fatal', async () => {
+  test('an unknown message_kind value is served as a plain message, never a wait, never refused', async () => {
     made = world();
     const acme: At = { root: made.root, session: 'acme', seat: 'lead' };
     plant(made, { at: acme, id: 'm-task', from: 'worker', from_id: WORKER_ID, to: 'lead', to_id: LEAD_ID, kind: 'task', sentAt: '2026-10-04T10:00:00.000Z' });
@@ -224,16 +225,18 @@ describe('team waits, unknown kind value and unknown signed field (independent s
     const ids = jsonOf(ran.out).waits.map((wait) => wait.id);
     expect(ids).toContain('m-task');
     expect(ids).not.toContain('m-note');
+    // Served: the record is a plain message the unacked list shows, so a newer writer's kind
+    // never makes an older reader blind to the message itself.
     const unacked = listUnackedMessages(made.root, 'acme', made.home);
-    expect(unacked.map((message) => message.id)).not.toContain('m-note');
-    // At the auth layer the value reads 'unsupported' today — the reader never acts on it.
+    expect(unacked.map((message) => message.id)).toContain('m-note');
+    // At the auth layer the record verifies ok and the kind is dropped, never interpreted.
     const state = messageKeyState(made.home);
     if (state.kind !== 'key') throw new Error('no key');
     const sealed = sealedRecordOf(JSON.parse(readFileSync(join(recordDir(made.root, 'acme', 'lead'), 'm-note'), 'utf8')));
     if (sealed === null) throw new Error('m-note not sealed');
     const auth = recordAuthOfSealed(sealed, state.key);
-    expect(auth.kind).toBe('unsupported');
-    expect((auth as { reason?: string }).reason ?? '').toContain('not one this version writes');
+    expect(auth.kind).toBe('ok');
+    if (auth.kind === 'ok') expect(auth.value.payload.message_kind).toBeUndefined();
   });
 
   test('an unknown signed field is refused as unsupported, naming the field, and never becomes a wait', async () => {
