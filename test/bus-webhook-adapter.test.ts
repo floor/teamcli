@@ -486,6 +486,27 @@ test('a non-2xx answer keeps the drop and stops after three attempts, in plain w
   expect(readFileSync(drop, 'utf8')).toBe('hello from the bus scene\n');
 });
 
+test('a row that names its answer bound sets how long the delivery waits', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Promise<Response>(() => {}));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const said = quiet();
+
+  await deliverWebhook({
+    seat: 'iris',
+    webhook: { ...hook, timeoutMs: 60 },
+    record: arrival(),
+    // No timeout in the injected policy: the row's own bound is the one that must apply.
+    policy: { attempts: 1 },
+    report: said.report,
+  });
+
+  expect(get.hits.length).toBe(1);
+  expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('no answer within 60 ms');
+});
+
 test('a receiver that never answers times out, keeps the drop, and the retries are bounded', async () => {
   const base = scratch();
   const hook = files(base, '');

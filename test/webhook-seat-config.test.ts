@@ -122,6 +122,78 @@ test('a header named for an object\'s own map is a field name like any other', (
   }
 });
 
+test('a row may name how long one POST waits for its routine, and the record reads it back', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const row = (value: string): string => `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      timeout_ms: ${value}
+`;
+  // Both ends of the range stand, and a row that names none keeps the two fields it had.
+  for (const value of ['1', '5000', '60000']) {
+    const parsed = validateTeamFile(teamText(row(value)));
+    expect(parsed.ok, value).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.team.seats.find((seat) => seat.name === 'iris')?.webhook).toEqual({
+      urlFile,
+      secretFile,
+      timeoutMs: Number(value),
+    });
+  }
+  const absent = validateTeamFile(teamText(`    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+`));
+  expect(absent.ok).toBe(true);
+  if (!absent.ok) return;
+  expect(absent.team.seats.find((seat) => seat.name === 'iris')?.webhook).toEqual({ urlFile, secretFile });
+});
+
+test('a bound outside 1 to 60000, or one this build cannot read as a whole number, is refused', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const row = (value: string): string => `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      timeout_ms: ${value}
+`;
+  for (const value of ['0', '-1', '60001', '1.5', '"5000"']) {
+    const parsed = validateTeamFile(teamText(row(value)));
+    expect(parsed.ok, value).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors.map((problem) => problem.message).join('; '), value)
+        .toContain('webhook.timeout_ms must be a whole number from 1 to 60000');
+    }
+  }
+});
+
+test('the record editor refuses a bound outside the range and leaves the file as it stood', async () => {
+  const base = scratch();
+  const home = join(base, 'home');
+  const root = join(base, 'acme');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  const file = join(root, '.agents', 'team.yaml');
+  const before = teamText('');
+  writeFileSync(file, before);
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const io = testIo(root, { kind: 'owner' });
+  const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
+
+  const code = await runConfig(
+    ['set', 'seats.iris.webhook', `{url_file: ${urlFile}, secret_file: ${secretFile}, timeout_ms: 60001}`, '--json'],
+    io,
+    { home, env, now: () => new Date('2026-11-01T00:00:00Z') },
+  );
+
+  expect(code, io.out + io.err).not.toBe(0);
+  expect(`${io.out}${io.err}`).toContain('webhook.timeout_ms must be a whole number from 1 to 60000');
+  expect(readFileSync(file, 'utf8')).toBe(before);
+});
+
 test('a body word the adapter does not read is refused', () => {
   const base = scratch();
   const urlFile = join(base, 'hook-url');

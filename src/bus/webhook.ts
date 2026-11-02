@@ -271,7 +271,13 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
     say(input.report, `webhook: ${input.seat}: not posted: ${shape.reason}; the drop file stays in place`);
     return 'refused';
   }
-  const policy: WebhookPolicy = { ...WEBHOOK_POLICY, ...input.policy };
+  // The row's own answer bound, when it names one, stands between the build's default and a
+  // caller's injected policy: the routine's contract is the row's, and only a scene overrides it.
+  const policy: WebhookPolicy = {
+    ...WEBHOOK_POLICY,
+    ...(input.webhook.timeoutMs === undefined ? {} : { timeoutMs: input.webhook.timeoutMs }),
+    ...input.policy,
+  };
   const attempts = Math.max(1, policy.attempts);
   const fetchFn = input.fetch ?? fetch;
   const sleep = input.sleep ?? defaultSleep;
