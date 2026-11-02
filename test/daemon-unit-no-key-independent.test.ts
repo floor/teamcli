@@ -10,6 +10,7 @@ import { generalDoor } from '../src/client/general-door.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { newClientKeyPair, clientKeyDir, writeClientKeyFiles } from '../src/client/records.ts';
 import { systemServiceManager } from '../src/daemon/service.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { keyOf } from '../src/store/keys.ts';
 import { writeDevelopmentMode } from '../src/development_mode.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -17,6 +18,26 @@ import { testIo } from './helpers.ts';
 const bases: string[] = [];
 afterEach(() => { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned, { timeout: 20_000 }); }, 30_000);
 const NOW = new Date('2026-11-01T16:00:00Z');
+/** The reading the install's confirmation gate receives: the daemon the command just wrote
+ *  answers, so a scene never opens the machine socket. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
 const FILE = `format: 1
 project: unit-scene
 session: unit-scene
@@ -63,8 +84,9 @@ function world() {
 type World = ReturnType<typeof world>;
 function sources(w: World) {
   return { home: w.home, service: w.manager, program: { execPath: process.execPath, entry: w.entry }, now: () => NOW,
-    // An unexpected path must never touch a socket or start a process in these scenes.
-    health: async () => { throw new Error('unexpected synthetic health probe'); },
+    // The install confirms the daemon it wrote answers; this stands for that answer, and no
+    // scene touches a socket or starts a process.
+    health: async () => ANSWERING,
     start: async () => { throw new Error('unexpected synthetic daemon start'); },
   };
 }

@@ -388,7 +388,7 @@ This specification contributes to `registries/capabilities.md` and `registries/o
 
 1. **The holder's renunciation is not built**: `by` is `'owner'` and the command is owner-only; the amendment keeps the renunciation as its round's question 1.
 2. **No listing command, no notice**: no command lists the standing grants, no team-log line is written on a grant or a revocation, and nothing tells the owner beyond the command's own output.
-3. **The gate-lifting list is nine against the eight-command gate-lifting scope of Kernel amendment 01 Grants** (`reload` included in the eight; `rename` in the code's list and left open by Kernel amendment 01 Grants §10 question 4); the amendment reads it as the same word, to confirm or take out.
+3. **The gate-lifting list is ten against the eight-command gate-lifting scope of Kernel amendment 01 Grants** (`reload` included in the eight; `rename` in the code's list and left open by Kernel amendment 01 Grants §10 question 4, and `peek` after them, the one lift that only reads); the amendment reads it as the same word, to confirm or take out.
 4. **The role bundle is empty at the tag**: the resolver reads no per-role capabilities, so a seat's list is its seat grants within the envelope and its `leads`; the roles catalogue is the slot that fills it.
 5. **The lifecycle delegation record (§3.8) is decided and not built**; the `delegates` and file `grant` forms it replaces stay readable, and nothing reports an entry with no record behind it.
 6. **`available` and `waits` are rows with no command**, kept because the map is the Kernel's table, not the CLI's.

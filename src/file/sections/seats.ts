@@ -10,7 +10,7 @@ import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
 import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
-import type { Mode, Seat, SeatReach, SeatWebhook } from '../types.ts';
+import { WEBHOOK_BODY_SHAPES, type Mode, type Seat, type SeatReach, type SeatWebhook } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
@@ -107,6 +107,8 @@ export const seats: Section = {
           properties: {
             url_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents are the routine\'s URL, read at POST time; the URL itself is never written here, printed or logged' },
             secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
+            header: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[!#$%&\'*+\\-.^_`|~0-9A-Za-z]+$', $comment: 'an HTTP field name; the secret file\'s line is sent as this header\'s value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>' },
+            body: { enum: [...WEBHOOK_BODY_SHAPES], $comment: 'the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event' },
           },
           required: ['url_file', 'secret_file'],
           $comment: 'the seat\'s webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here',
@@ -393,11 +395,37 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     check.fail(node.line, `${at}: webhook.secret_file is required`);
     return undefined;
   }
-  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file']);
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body']);
   const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
   const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
+  const header = readWebhookHeader(fields.get('header'), `${at}: webhook.header`, check);
+  const body = check.oneOf(fields.get('body'), `${at}: webhook.body`, [...WEBHOOK_BODY_SHAPES]);
   if (urlFile === undefined || secretFile === undefined) return undefined;
-  return { urlFile, secretFile };
+  return {
+    urlFile,
+    secretFile,
+    ...(header === undefined ? {} : { header }),
+    ...(body === undefined ? {} : { body }),
+  };
+}
+
+/** An HTTP field name, as the front's own webhook reader accepts one. */
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** The header a seat names for its secret, when it names one. The adapter writes content-type
+ *  itself; a row naming it would replace the JSON one with the secret. */
+function readWebhookHeader(entry: YamlEntry | undefined, name: string, check: Check): string | undefined {
+  const value = check.text(entry, name);
+  if (value === undefined) return undefined;
+  if (value.length > 64 || !HEADER_NAME.test(value)) {
+    check.fail(entry?.value.line ?? 0, `${name} must be an HTTP field name`);
+    return undefined;
+  }
+  if (value.toLowerCase() === 'content-type') {
+    check.fail(entry?.value.line ?? 0, `${name} cannot be content-type: the adapter writes that header itself`);
+    return undefined;
+  }
+  return value;
 }
 
 function readWebhookPath(

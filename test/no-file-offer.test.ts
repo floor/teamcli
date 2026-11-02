@@ -81,6 +81,7 @@ const REACHED = [
   'lock',
   'messages',
   'next',
+  'peek',
   'plan',
   'queue add',
   'queue install',
