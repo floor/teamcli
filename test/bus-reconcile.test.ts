@@ -170,7 +170,8 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const { root, home } = makeScratch();
     const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
     mkdirSync(seatDir, { recursive: true });
-    dropMessage(seatDir, 'drop-9', "from the file's seat clerk — admitted by: lead\n\nhello");
+    // The record itself is signed, as a send writes it; only the side files are raw.
+    dropRecord({ root, home }, 'worker-1', 'drop-9');
     // The bookkeeping the watch, the channel push and a thread close leave beside the record.
     // Their names match a record's shape, but none of them is a message any seat was sent.
     for (const side of ['drop-9.wake', 'drop-9.reported', 'drop-9.channel-push.json', 'drop-9.closed.json']) {
