@@ -121,13 +121,17 @@ export function wallKey(now: Date, zone: string): string {
   return `${String(parts.year)}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
 }
 
-/**
- * Every instant whose wall-clock key in `zone` is `key`, earliest first: none for a key the
+/** Whether a value has the wall-clock key's shape, `YYYY-MM-DDTHH:MM`. */
+export function isWallKey(value: string): boolean {
+  return KEY_SHAPE.test(value);
+}
+
+/** Every instant whose wall-clock key in `zone` is `key`, earliest first: none for a key the
  * clock skipped, two inside a repeated hour. When the key never occurs, the answer is the first
  * instant after the gap — the instant the key resolves to.
  */
 export function instantsOf(key: string, zone: string): number[] {
-  if (!KEY_SHAPE.test(key)) return [];
+  if (!isWallKey(key)) return [];
   const target = utcOfKey(key);
   const probes = [-12, -6, 0, 6, 12].map((hours) => target + hours * 3_600_000);
   const offsets = [...new Set(probes.map((probe) => offsetAt(probe, zone)))];
