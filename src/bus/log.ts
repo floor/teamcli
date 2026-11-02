@@ -397,7 +397,7 @@ function declareDrop(
   const byAge = drops.some((drop) => drop.bounds.includes('age'));
   const bySize = drops.some((drop) => drop.bounds.includes('rotation') || drop.bounds.includes('total'));
   const reason = byAge && bySize ? 'age or size' : byAge ? 'age' : 'size';
-  const indexed = appendIndexOf(project, root, home, kept);
+  const indexed = appendIndexOf(project, root, home, kept, 'all');
   const retainedNewest = indexed.ok ? indexed.index.newestSeq : null;
   // The declared floor is the oldest sequence retention has dropped, carried forward from the
   // declaration records still retained and from those inside the segments this pass removes.
@@ -929,11 +929,25 @@ export function readEventsFromCursor(
  *  is not read again and a file that only grew is read from where the index stopped. */
 type LogFileStamp = { ino: number; size: number; mtimeMs: number };
 
+/** One append's dedupe key and the id a line would spell to hold it. */
+type WantedKey = { key: string; recordId: string };
+
+/** What an append asks the index for: one key (an ordinary append), every key (`declareDrop`
+ *  carries the declared segment floor forward from all retained drop records), or nothing (an
+ *  append that does not deduplicate and needs only the newest sequence). */
+type IndexRequest = WantedKey | 'all' | null;
+
 type AppendIndex = {
   keyPrint: string;
   files: (LogFileStamp | null)[];
-  /** The first verified record for each `(kind, record_id, session)`, in retained order. */
+  /** The first verified record for each `(kind, record_id, session)` this process has searched
+   *  the retained log for, in retained order. A key the map does not hold is absent from the
+   *  retained log only when `covered` vouches for the search. */
   duplicates: Map<string, SignedEventRecord>;
+  /** Keys whose presence or absence in the retained log this index has established. */
+  covered: Set<string>;
+  /** Every possible key is covered: the whole retained log was verified. */
+  coveredAll: boolean;
   newestSeq: number | null;
   path: string;
 };
@@ -1022,11 +1036,12 @@ function readTailNoFollow(path: string, from: number): string | null {
 
 /** Verifies the records in one stretch of the log, adding each to `into` when it is the first of
  *  its key, and returns them in order. Malformed and unverified lines are skipped, as in
- *  `readEvents`. */
+ *  `readEvents`. Every key it verifies is added to `covered`. */
 function verifyInto(
   text: string,
   keyState: ReturnType<typeof messageKeyState>,
   into: Map<string, SignedEventRecord>,
+  covered?: Set<string>,
 ): SignedEventRecord[] {
   const out: SignedEventRecord[] = [];
   for (const rawLine of text.split('\n')) {
@@ -1039,21 +1054,72 @@ function verifyInto(
     out.push(parsed);
     const key = eventKey(parsed.payload);
     if (!into.has(key)) into.set(key, parsed);
+    covered?.add(key);
   }
   return out;
 }
 
+/** The last record in one stretch of the log that verifies: the walk starts at the end and stops
+ *  at the first verified line, so the newest sequence costs one verification per file instead of
+ *  one per record. Null when the stretch holds no verified record, and the caller then looks at
+ *  an older file exactly as a full scan would. */
+function lastVerifiedRecord(
+  lines: string[],
+  keyState: ReturnType<typeof messageKeyState>,
+): SignedEventRecord | null {
+  if (keyState.kind !== 'key') return null;
+  for (let at = lines.length - 1; at >= 0; at--) {
+    const raw = lines[at]!;
+    if (raw.trim() === '') continue;
+    const parsed = parseSignedEventLine(raw);
+    if (parsed === null) continue;
+    if (verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+/** The first record in one stretch of the log that verifies under `wanted.key`. Only a line that
+ *  spells the wanted id literally is parsed: every id this log records is a generated token
+ *  (UUID, digest, or colon-joined name) and `JSON.stringify` escapes none of their characters, so
+ *  a line this code wrote for that id always holds it as a substring. A matching line that does
+ *  not verify is skipped, exactly as the full scan skips it. */
+function findVerifiedRecord(
+  lines: string[],
+  wanted: WantedKey,
+  keyState: ReturnType<typeof messageKeyState>,
+): SignedEventRecord | null {
+  if (keyState.kind !== 'key') return null;
+  for (const raw of lines) {
+    if (raw === '' || !raw.includes(wanted.recordId)) continue;
+    const parsed = parseSignedEventLine(raw);
+    if (parsed === null) continue;
+    if (eventKey(parsed.payload) !== wanted.key) continue;
+    if (!verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) continue;
+    return parsed;
+  }
+  return null;
+}
+
 /** What `appendEvent` needs from the retained log, kept across appends: the first verified record
- *  per `(kind, record_id, session)` and the last verified sequence. The first look reads every
- *  retained file; each later look reads only the bytes appended to `events.jsonl` since the last
- *  one, so a growing session costs O(bytes) rather than re-verifying the whole log per publish. A
- *  rotated or rewritten file — or a changed key — falls back to the full read. */
+ *  for the key this append is about to write, and the last verified sequence. The first look reads
+ *  each retained file once and verifies only the lines that can answer that key — plus the newest
+ *  line of each file, for the sequence — so a fresh process appends to a log of any retained size
+ *  without re-verifying every record it kept. Each later look reads only the bytes appended to
+ *  `events.jsonl` since the last one, so a growing session costs O(bytes). A key this process has
+ *  not searched for is searched when it is first appended; a caller that needs every key (the
+ *  retention declaration) asks for the whole map and verifies everything once. A rotated or
+ *  rewritten file — or a changed key — falls back to a fresh scan. */
 function appendIndexOf(
   project: string,
   root: string,
   home: string,
   kept: number,
+  request: IndexRequest,
 ): { ok: true; index: AppendIndex } | { ok: false; reason: string } {
+  const wantedKey = request !== null && typeof request === 'object' ? request : null;
+  const wantAll = request === 'all';
   const storeDir = storePath(project, root, home);
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
@@ -1076,12 +1142,18 @@ function appendIndexOf(
   const stamps = files.map((candidate) => fileStamp(candidate));
   const cacheKey = `${storeDir}\u0000${String(kept)}`;
   const cached = appendIndexes.get(cacheKey);
+  const answers = (index: AppendIndex): boolean =>
+    wantedKey !== null ? index.coveredAll || index.covered.has(wantedKey.key) : !wantAll || index.coveredAll;
   const sameFiles =
     cached !== undefined &&
     cached.keyPrint === keyPrint &&
     cached.files.length === stamps.length &&
     cached.files.every((stamp, at) => sameStamp(stamp, stamps[at] ?? null));
-  if (cached !== undefined && sameFiles) return { ok: true, index: cached };
+  if (cached !== undefined && sameFiles) {
+    if (answers(cached)) return { ok: true, index: cached };
+    if (wantedKey !== null) return extendIndex(cached, files, wantedKey, keyState);
+    // A whole-key map is wanted and this index knows one key: the full scan below answers it.
+  }
 
   const last = files.length - 1;
   const grew =
@@ -1097,24 +1169,69 @@ function appendIndexOf(
     const previousSize = cached.files[last]!.size;
     const tail = readTailNoFollow(path, previousSize);
     if (tail !== null && (tail === '' || tail.endsWith('\n'))) {
-      const fresh = verifyInto(tail, keyState, cached.duplicates);
+      const fresh = verifyInto(tail, keyState, cached.duplicates, cached.covered);
       if (fresh.length > 0) cached.newestSeq = fresh[fresh.length - 1]!.payload.seq;
       cached.files[last] = fileStamp(path) ?? stamps[last] ?? null;
-      return { ok: true, index: cached };
+      if (answers(cached)) return { ok: true, index: cached };
+      if (wantedKey !== null) return extendIndex(cached, files, wantedKey, keyState);
     }
   }
 
-  const duplicates = new Map<string, SignedEventRecord>();
-  let newestSeq: number | null = null;
+  // No index this process can use. A whole-key map reads and verifies every retained line; the
+  // ordinary request reads each file once and verifies the newest line of each (for the sequence)
+  // and the lines that can hold the wanted record, and nothing else.
+  const index: AppendIndex = {
+    keyPrint,
+    files: stamps,
+    duplicates: new Map(),
+    covered: new Set(),
+    coveredAll: wantAll,
+    newestSeq: null,
+    path,
+  };
   for (const candidate of files) {
     if (heldAt(candidate).kind === 'missing') continue;
     const text = readNoFollow(candidate);
     if (text === null) return { ok: false, reason: 'the event log could not be read' };
-    const verified = verifyInto(text, keyState, duplicates);
-    if (verified.length > 0) newestSeq = verified[verified.length - 1]!.payload.seq;
+    if (wantAll) {
+      const verified = verifyInto(text, keyState, index.duplicates, index.covered);
+      if (verified.length > 0) index.newestSeq = verified[verified.length - 1]!.payload.seq;
+      continue;
+    }
+    const lines = text.split('\n');
+    const newest = lastVerifiedRecord(lines, keyState);
+    if (newest !== null) index.newestSeq = newest.payload.seq;
+    if (wantedKey !== null && !index.duplicates.has(wantedKey.key)) {
+      const found = findVerifiedRecord(lines, wantedKey, keyState);
+      if (found !== null) index.duplicates.set(wantedKey.key, found);
+    }
   }
-  const index: AppendIndex = { keyPrint, files: stamps, duplicates, newestSeq, path };
+  if (wantedKey !== null) index.covered.add(wantedKey.key);
   appendIndexes.set(cacheKey, index);
+  return { ok: true, index };
+}
+
+/** Answers an index for a key this process has not searched for yet: one pass over the retained
+ *  files, verifying only the lines that can hold it. The newest sequence stays as the index has
+ *  it: the caller already matched the file stamps this pass reads, under the event lock. */
+function extendIndex(
+  index: AppendIndex,
+  files: string[],
+  wanted: WantedKey,
+  keyState: ReturnType<typeof messageKeyState>,
+): { ok: true; index: AppendIndex } | { ok: false; reason: string } {
+  for (const candidate of files) {
+    if (heldAt(candidate).kind === 'missing') continue;
+    const text = readNoFollow(candidate);
+    if (text === null) return { ok: false, reason: 'the event log could not be read' };
+    const found = findVerifiedRecord(text.split('\n'), wanted, keyState);
+    if (found !== null) {
+      index.duplicates.set(wanted.key, found);
+      index.covered.add(wanted.key);
+      return { ok: true, index };
+    }
+  }
+  index.covered.add(wanted.key);
   return { ok: true, index };
 }
 
@@ -1214,7 +1331,11 @@ export function appendEvent(
     }
   }
 
-  const indexed = appendIndexOf(project, root, home, kept);
+  // The index answers for one key at a time: a fresh process reads each retained file once and
+  // verifies only the lines that can hold the record it is about to append — plus the newest
+  // line, for the sequence — instead of every record retention kept.
+  const wanted: WantedKey | null = deduplicate ? { key: eventKey(input), recordId: input.record_id } : null;
+  const indexed = appendIndexOf(project, root, home, kept, wanted);
   if (!indexed.ok) return indexed;
 
   if (deduplicate) {
