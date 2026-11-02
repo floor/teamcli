@@ -959,3 +959,141 @@ describe('per-key fresh witness contract in typeExit', () => {
 });
 
 
+
+// Muse Code 1.4.14 draws its completion row for `/exit` inside the box, under the input row, so
+// the box reads back as the exit text only when the composer declares that row as its own
+// (`own_rows` in src/profiles/muse.yaml). Its Enter also has to wait for the row to settle: an
+// Enter that lands on the row too early is drawn as a typed newline, which the frame shows as one
+// empty row under the text, and a second Enter then runs the command. The frames and the measured
+// timings are in test/fixtures/exit-typing/README.md.
+describe('muse: the exit text carries the composer’s own completion row', () => {
+  const idle = fixture('muse-idle-ansi.txt');
+  const menu = fixture('muse-unsent-ansi.txt');
+  const newline = fixture('muse-unsent-newline-ansi.txt');
+
+  /** One Muse pane whose screen a case moves itself, with the clock at every key sent. Muse's
+   *  herdr status is unreliable, so the profile's own screen reading is its resting gate. */
+  function musePane(opts: {
+    screen: () => string;
+    foreground?: () => string[];
+    type?: () => void;
+    enter?: () => void;
+    key?: (key: string) => void;
+  }): { io: ExitIo; keys: Array<{ key: string; at: number }> } {
+    let clock = 1_000_000;
+    const keys: Array<{ key: string; at: number }> = [];
+    const io: ExitIo = {
+      typeText: () => {
+        opts.type?.();
+        return true;
+      },
+      sendKey: (key) => {
+        keys.push({ key, at: clock });
+        opts.key?.(key);
+        return true;
+      },
+      pressEnter: () => {
+        keys.push({ key: 'enter', at: clock });
+        opts.enter?.();
+        return true;
+      },
+      screen: () => opts.screen(),
+      status: () => 'idle',
+      foreground: () => opts.foreground?.() ?? ['muse'],
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    };
+    return { io, keys };
+  }
+
+  test('the captured frames: the completion row is the pane’s, the typed newline is not', () => {
+    expect(readScreen('muse', idle).kind).toBe('idle');
+    expect(readScreen('muse', menu).kind).toBe('unsent');
+    expect(boxHoldsText('muse', '/exit', menu)).toBe(true);
+    expect(boxHoldsOther('muse', '/exit', menu)).toBe(null);
+    expect(readScreen('muse', newline).kind).toBe('unsent');
+    expect(boxHoldsText('muse', '/exit', newline)).toBe(false);
+    expect(boxHoldsOther('muse', '/exit', newline)).toBe('');
+  });
+
+  test('the Enter waits the measured settle after the box reads back, then goes once', async () => {
+    let typed = false;
+    let drawn = false;
+    let gone = false;
+    const pane = musePane({
+      screen: () => (!typed || !drawn ? idle : menu),
+      type: () => {
+        typed = true;
+      },
+      // The measured outcome of the Enter that goes on the settled row: Muse runs `/exit`.
+      enter: () => {
+        gone = true;
+      },
+      foreground: () => (gone ? ['zsh'] : ['muse']),
+    });
+    // The pane draws the box one poll into the wait, as herdr's send returns before the render.
+    const sleep = pane.io.sleep;
+    pane.io.sleep = async (ms) => {
+      drawn = true;
+      await sleep(ms);
+    };
+    expect(await typeExit(pane.io, 'muse', '/exit')).toBe(true);
+    expect(pane.keys.map((one) => one.key)).toEqual(['enter']);
+    expect(pane.keys[0]?.at ?? 0).toBeGreaterThanOrEqual(1_000_000 + 250);
+  });
+
+  test('an Enter that typed a newline instead of running the text is pressed once more', async () => {
+    let phase: 'idle' | 'menu' | 'newline' | 'gone' = 'idle';
+    const pane = musePane({
+      screen: () => (phase === 'idle' ? idle : phase === 'menu' ? menu : newline),
+      type: () => {
+        phase = 'menu';
+      },
+      enter: () => {
+        if (phase === 'menu') phase = 'newline';
+        else if (phase === 'newline') phase = 'gone';
+      },
+      foreground: () => (phase === 'gone' ? ['zsh'] : ['muse']),
+    });
+    expect(await typeExit(pane.io, 'muse', '/exit')).toBe(true);
+    expect(pane.keys.map((one) => one.key)).toEqual(['enter', 'enter']);
+    const [first, second] = pane.keys;
+    expect((second?.at ?? 0) - (first?.at ?? 0)).toBeGreaterThanOrEqual(250);
+  });
+
+  test('an exit the CLI never runs is cleared, so the box is left as it was found', async () => {
+    let phase: 'idle' | 'menu' | 'cleared' = 'idle';
+    const pane = musePane({
+      screen: () => (phase === 'menu' ? menu : idle),
+      type: () => {
+        phase = 'menu';
+      },
+      key: (key) => {
+        if (key === 'ctrl+u') phase = 'cleared';
+      },
+    });
+    expect(await typeExit(pane.io, 'muse', '/exit')).toBe('cleared');
+    expect(pane.keys.map((one) => one.key)).toEqual(['enter', 'ctrl+u']);
+  });
+
+  test('a box that already holds the exit text and its completion row is cleared and typed fresh', async () => {
+    let phase: 'leftover' | 'cleared' | 'menu' | 'gone' = 'leftover';
+    const pane = musePane({
+      screen: () => (phase === 'leftover' || phase === 'menu' ? menu : idle),
+      type: () => {
+        phase = 'menu';
+      },
+      key: (key) => {
+        if (key === 'ctrl+u') phase = 'cleared';
+      },
+      enter: () => {
+        phase = 'gone';
+      },
+      foreground: () => (phase === 'gone' ? ['zsh'] : ['muse']),
+    });
+    expect(await typeExit(pane.io, 'muse', '/exit')).toBe(true);
+    expect(pane.keys.map((one) => one.key)).toEqual(['ctrl+u', 'enter']);
+  });
+});

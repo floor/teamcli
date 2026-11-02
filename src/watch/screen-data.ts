@@ -129,6 +129,10 @@ type Box = {
   placeholderStyle?: PlaceholderStyle;
   wrap?: Wrap;
   frameRows: number;
+  /** Rows the pane draws of its own inside the box — Muse 1.4.14's completion row for the text
+   *  being typed — declared only where a capture shows them. A matching row is not text in the
+   *  box: the box reads back as the text alone. */
+  ownRows?: RegExp[];
 };
 /** Where a status row must sit, from the composer section. `line` is the line directly under the
  *  row (the workspace line), which must be the pane's last non-empty one; a row matching `except`

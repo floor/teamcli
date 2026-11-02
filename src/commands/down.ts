@@ -46,7 +46,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
-import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
+import { boxHoldsOther, boxHoldsText, boxHoldsTextAndEmptyRow, DRAW_WAIT_MS, EXIT_COMPLETION_SETTLE_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { abandonAnswerKeys, isNotStartedScreen } from '../profiles/profile.ts';
@@ -315,6 +315,11 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   // never reaches a key.
   const kindOf = () => readScreen(cli, io.screen(), screenOpts()).kind;
   const holds = () => boxHoldsText(cli, text, io.screen(), screenOpts());
+  // A CLI whose composer draws a completion row for the exit text: the Enter waits for the row
+  // to settle, an Enter that lands early is retried on the typed-newline frame it leaves, and an
+  // exit the CLI never runs is cleared. The profile declares the row itself as the composer's
+  // own (`own_rows`), which is what makes the box read back while the row is drawn.
+  const completion = profileFor(cli)?.exitCompletion ?? false;
   // The reading that decides a key, waiting out the pane's late drawing — the one wait the exit
   // typing, the watch's nudge and delivery share (settleScreen in launch/deliver.ts).
   const settle = (undrawn: Screen['kind']): Promise<Screen['kind']> => settleScreen(undrawn, kindOf, io);
@@ -335,14 +340,40 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (kindOf() !== 'unsent' || !holds()) {
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
+    // Wait out the CLI's completion row before the Enter, where the profile declares one: an
+    // Enter pressed on the row too early is drawn as a typed newline instead of running the
+    // command. Every gate is read again after the wait, so the wait is not a window a changed
+    // pane can send into.
+    if (completion) {
+      await io.sleep(EXIT_COMPLETION_SETTLE_MS);
+      if (!live()) return 'no-agent';
+      if (!resting() || kindOf() !== 'unsent' || !holds()) {
+        return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
+      }
+    }
     if (!io.pressEnter()) {
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     const confirm = profileFor(cli)?.exitConfirm ?? null;
     const deadline = io.now() + DRAW_WAIT_MS;
     let confirmed = false;
+    let retried = false;
     for (;;) {
       if (!live()) return true;
+      // The frame an Enter that landed before the completion row had settled leaves: the text
+      // plus one empty row, the row gone. One more Enter on it runs the text (measured 10/10 on
+      // 1.4.14); it goes after the same settle, once, and every gate is read again first.
+      if (completion && !retried && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+        await io.sleep(EXIT_COMPLETION_SETTLE_MS);
+        if (!live()) return 'no-agent';
+        if (resting() && kindOf() === 'unsent' && boxHoldsTextAndEmptyRow(cli, text, io.screen(), screenOpts())) {
+          if (!io.pressEnter()) {
+            return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
+          }
+          retried = true;
+          continue;
+        }
+      }
       if (kindOf() === 'exit question') {
         if (confirm === null) {
           return { left: 'its exit was not confirmed; its profile names no key for the exit question; left running' };
@@ -364,6 +395,23 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (!live()) return true;
     if (kindOf() === 'exit question') {
       return { left: 'its exit was not confirmed; the exit question stayed open; left running' };
+    }
+    // The box still holds exactly the exit text: the Enter did not run it. Where the profile
+    // declares the completion row, the text is what this run typed, so it is cleared with the
+    // profile's one key and the box is left as it was found — the rule the leftover path already
+    // follows. Muse's ctrl+u was measured to clear `/exit` and its completion row to the idle
+    // box, with the CLI still running; a key that leaves anything else is reported, not retried.
+    const clear = profileFor(cli)?.exitClear ?? null;
+    if (completion && clear !== null && kindOf() === 'unsent' && holds()) {
+      if (!live()) return 'no-agent';
+      if (!resting()) return true;
+      if (kindOf() !== 'unsent' || !holds()) return true;
+      if (!io.sendKey(clear)) {
+        return { left: `its exit was not confirmed; the clearing key (${clear}) was not delivered; the text was left; left running` };
+      }
+      const after = await settle('unsent');
+      if (after === 'idle' && resting()) return 'cleared';
+      return { left: `its exit was not confirmed; the clearing key (${clear}) left the screen reading ${after}; left running` };
     }
     return true;
   };
