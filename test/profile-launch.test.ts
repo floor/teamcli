@@ -499,7 +499,7 @@ describe('the resume line a launch appends', () => {
     const profile = profileFor('grok');
     if (!profile) throw new Error('grok has no profile');
     expect(launchCommand(profile, `grok -r ${id}`, 'Rules.'))
-      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
   });
 
   test('a Grok line that already names a session keeps its own choice', () => {

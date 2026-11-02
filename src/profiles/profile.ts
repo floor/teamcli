@@ -317,19 +317,6 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
  *  prompt or config value is one word with the value and does not suppress a default, and a
  *  flag whose name is quoted (`"--sandbox"`) is still the flag the CLI reads. */
 function unattendedOptions(profile: Profile, launch: string): string[] {
-  const aliases: Record<string, string> = profile.cli === 'codex'
-    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
-    : {};
-  const key = (word: string): string => {
-    const flag = word.split('=', 1)[0]!;
-    const alias = aliases[flag];
-    if (alias !== undefined) return alias;
-    // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
-    // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
-    // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
-    const attached = /^-([as]).+$/.exec(flag);
-    return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
-  };
   // A wrapper's CLI is read inside its trailing quoted script: a `zsh -lc "codex --sandbox
   // read-only"` line set its own sandbox, and adding the profile's default would widen it. The
   // words are the decoded ones, so a quoted flag name still reads as a flag.
@@ -337,7 +324,7 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
   for (const words of launchWordScopes(launch)) {
     for (const word of words) {
       if (word === '--') break;
-      if (word.startsWith('-')) flags.add(key(word));
+      if (word.startsWith('-')) flags.add(optionKey(profile.cli, word));
     }
   }
   const options: string[] = [];
@@ -345,13 +332,28 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
     const flag = profile.unattended[i]!;
     const next = profile.unattended[i + 1];
     const value = !flag.includes('=') && next !== undefined && !next.startsWith('-') ? next : undefined;
-    if (!flags.has(key(flag))) {
+    if (!flags.has(optionKey(profile.cli, flag))) {
       options.push(flag);
       if (value !== undefined) options.push(value);
     }
     if (value !== undefined) i++;
   }
   return options;
+}
+
+/** The long name of one option word, so an alias and the option it stands for are one key. */
+function optionKey(cli: string, word: string): string {
+  const aliases: Record<string, string> = cli === 'codex'
+    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
+    : {};
+  const flag = word.split('=', 1)[0]!;
+  const alias = aliases[flag];
+  if (alias !== undefined) return alias;
+  // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
+  // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
+  // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
+  const attached = /^-([as]).+$/.exec(flag);
+  return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
 }
 
 /**
@@ -365,6 +367,8 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * resume and a minted session id do. A line whose shape this version cannot
  * prove keeps 0.5.10's placement, the options after the line, and says so
  * through `warn`: it never refuses to launch a line 0.5.10 launched.
+ * A sandbox profile is named only when the caller wrote one for this launch and
+ * the line names none of its own: the file's choice of profile stands.
  */
 export function launchCommand(
   profile: Profile,
@@ -380,6 +384,9 @@ export function launchCommand(
    *  a profile with settings contributes none, so a caller that launches nothing names no
    *  folder. */
   cwd?: string,
+  /** The Grok sandbox profile this run wrote for the seat, named only when the line names none
+   *  of its own (`--sandbox`): the file's choice of profile stands. */
+  sandboxProfile?: string,
 ): string {
   // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
   // inside a trailing quoted script counts exactly as one written on a plain line, and a quoted
@@ -397,6 +404,9 @@ export function launchCommand(
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
     else options.push('--no-daemon');
+  }
+  if (sandboxProfile !== undefined && sandboxProfile !== '' && !sets(['--sandbox'], /(^|\s)--sandbox(=|\s|$)/)) {
+    options.push('--sandbox', sandboxProfile);
   }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's

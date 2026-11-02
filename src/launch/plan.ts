@@ -7,6 +7,7 @@ import { cliWordList, launchCommand, resumeCarry, shellQuote } from '../profiles
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -52,7 +53,13 @@ export type Op =
        * state folder the endpoint's record is written in, carried by the plan so the launch's
        * host methods take no folder of their own.
        */
-      codexEndpoint?: { dir: string } }
+      codexEndpoint?: { dir: string };
+      /**
+       * A Grok seat's sandbox profile, written at launch before the pane's command runs. Set
+       * only when this plan named the profile on the line, so a failure can take the same
+       * `--sandbox` off again instead of launching a line Grok would refuse.
+       */
+      grokSandbox?: GrokSandbox }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -955,6 +962,26 @@ export function upPlan(input: UpInput): Step[] {
     // line, which is shell-quoted there.
     const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
     const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
+    // A Grok seat runs inside the sandbox profile this run writes for it: the workspace's own
+    // grant plus the two folders the seat's state lives in. The profile belongs to the team's
+    // project, and a launch line that names its own `--sandbox` keeps it — nothing is written
+    // for a profile this run did not name. A plan with no home or no team file cannot place the
+    // file, and names no profile rather than one Grok could not find.
+    const grokSandbox = profile.cli === 'grok' && input.home !== undefined && input.team !== undefined
+      ? grokSandboxOf({ home: input.home, root: input.root, project: input.team.project })
+      : undefined;
+    // The line's own `--sandbox` keeps the file's choice. Asked of the CLI's decoded words,
+    // exactly as the launch command asks every "does the line already set this": a flag inside a
+    // wrapper's trailing script is the CLI's flag, and a quoted mention in a prompt value is not.
+    // A line whose shape this version cannot prove is asked of the whole line, where a plainly
+    // written flag is still seen.
+    const lineWords = cliWordList(profile.cli, recordedLine);
+    const lineNamesSandbox = lineWords === null
+      ? /(^|\s)--sandbox(=|\s|$)/.test(recordedLine)
+      : lineWords.some((word) => word === '--sandbox' || word.startsWith('--sandbox='));
+    const plannedSandbox = grokSandbox !== undefined && !lineNamesSandbox
+      ? grokSandbox
+      : undefined;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
@@ -965,7 +992,7 @@ export function upPlan(input: UpInput): Step[] {
       // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
       // options after it; the seat says so on the launch step rather than losing the words.
       notice = notice ? `${notice}; ${text}` : text;
-    }, cwd);
+    }, cwd, plannedSandbox?.profile);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -1000,7 +1027,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}), ...(plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }) },
       });
     }
     const rules = profile.rulesMode;
