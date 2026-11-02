@@ -12,7 +12,7 @@ Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (typ
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
 line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox|channel>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox|channel>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
 
 The fields after `outcome` are optional. `from_team` is the sending team's registry id, written by
 the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a
@@ -27,7 +27,9 @@ sender wrote when it was a form rather than the seat's own name — a `@<nicknam
 way. `ms` is the whole milliseconds from send to outcome, written when the send measured it, and
 `via` is the path the message actually travelled — `typed` (a composer trigger), `socket` (a
 frame), or `mcp-inbox` (the seat's own inbox, where the message is still the signed record) —
-absent when it never left the sender. `failed` names the delivery legs a send walked past, each as
+absent when it never left the sender. `session` is the id the receiving CLI printed on its own
+session line, written on a line the `session` leg carried, so a reader can pull that session's
+result; every other line carries none. `failed` names the delivery legs a send walked past, each as
 `<leg>: <reason>`: the legs of the seat's delivery order that definitely could not take the send —
 the ones a walk passed before the leg that took it, or every leg that failed on a walk that ran
 out of legs — `native` (recorded `unavailable` while no socket write is made) or `mcp-inbox`
