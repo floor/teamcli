@@ -2165,6 +2165,12 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--dry-run",
               "repeatable": false,
               "takesValue": false
@@ -2195,6 +2201,12 @@
             },
             {
               "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--show",
               "repeatable": false,
               "takesValue": false
@@ -2217,7 +2229,9 @@
           ],
           "subcommands": [],
           "usage": [
-            "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+            "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]",
+            "team development-mode set <local-fast|pr-per-change|off> --request [--json]",
+            "team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -2227,7 +2241,9 @@
       ],
       "usage": [
         "team development-mode [--json]",
-        "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]"
+        "team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]",
+        "team development-mode set <local-fast|pr-per-change|off> --request [--json]",
+        "team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]"
       ],
       "who": {
         "gate": "any-caller",
