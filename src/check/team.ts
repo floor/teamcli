@@ -15,9 +15,11 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { resolveSeatOverrides } from '../config/apply.ts';
@@ -38,6 +40,7 @@ import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
+import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -515,6 +518,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
             : {}),
         })
       : []),
+    // A running seat whose CLI registers its inbox in a project file, and whose folder holds no
+    // registration: the seat receives nothing on its inbox leg, and nothing else says so. Read
+    // from the file the profile's route writes. A launch-line route writes no file and a seat
+    // whose launch folder was never recorded cannot be read this way: both say nothing.
+    ...inboxRegistrationNotes(team, state, live),
     // A pane watch when no hosted one owns the route: live, dead, stale or — only with a daemon
     // reading to prove no hosted watch exists — missing. Notes only, like every line above.
     ...paneWatchCheckNotes(watch, {
@@ -533,6 +541,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
     ...delegateNotes(team),
+    // A wildcard general grant signed before the release that first shipped an op reaches that op
+    // without a new approval: named once per grant, information only, never counted as a difference.
+    ...(sources.home !== undefined ? widenedGrantNotes(sources.home, sources.now()) : []),
     ...leadNameNotes(team),
     ...nicknameDriftNotes(team),
     ...nicknameTakenNotes(team, root, sources.home),
@@ -545,6 +556,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...modelRule.notes,
     ...socketSkipped.notes,
     ...unknownStatusNotes(team, state, live),
+    // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
+    // status` prints: the fallback is a reading worth acting on, never a silent state.
+    ...unmanagedEndpointNotes(team.seats, state),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
@@ -1750,6 +1764,28 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     default:
       return null;
   }
+}
+
+/**
+ * A note for a running seat whose CLI registers its inbox in a project file, and whose folder
+ * holds no such registration: that seat's inbox leg is gone, and no other line says so. The file
+ * read is the one the profile's route writes, in the folder the seat's launch started in. A
+ * seat whose launch folder is not recorded, and a profile whose registration lives on the launch
+ * line rather than in a file, are not readable this way and say nothing.
+ */
+function inboxRegistrationNotes(team: TeamFile, state: SessionState, live: Live): string[] {
+  const out: string[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const recorded = state.seats[seat.name];
+    if (recorded?.stage !== 'ready' || recorded.start_cwd === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (agent === undefined || agent.pane !== recorded.pane) continue;
+    const read = inboxRegistration(recorded.cli ?? seat.cli, recorded.start_cwd);
+    if (read === null || read.registered) continue;
+    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(recorded.start_cwd, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
+  }
+  return out;
 }
 
 /**

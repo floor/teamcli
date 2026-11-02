@@ -72,8 +72,9 @@ export function readJournal(text: string): JournalReadResult {
   let value: unknown;
   try {
     value = JSON.parse(text);
-  } catch (error) {
-    return { ok: false, code: 'workflow.journal', why: `the journal is not valid JSON: ${errorMessage(error)}` };
+  } catch {
+    // Fixed words: a parser's message quotes the bytes it choked on, and this file is the reader's.
+    return { ok: false, code: 'workflow.journal', why: 'the journal is not valid JSON' };
   }
   const problem = journalProblem(value);
   if (problem !== undefined) return { ok: false, code: 'workflow.journal', why: problem };

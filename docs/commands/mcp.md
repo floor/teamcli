@@ -15,7 +15,14 @@ it runs, and writes one receipt per message it returns — the signed status rec
 messages` writes — and it never writes the message itself. A read parses the message's signed
 record and verifies its signature with the checkout's message key before anything is shown: a
 tampered or unsigned file is refused with a tool error and no receipt, so a receipt only ever
-proves a read of a record the server authenticated.
+proves a read of a record the server authenticated. The server also serves only its own launch:
+before it opens the inbox it proves that the process that started it is the seat `--seat` names,
+placed on the pane the team's state records for that seat, in the team's own session — the
+same reading every command makes of its caller — and that the seat's current claim, when it has
+one, is carried by the server's `--epoch`. Both proofs run again on every tool call and every
+channel push, so a seat stopped, moved or relaunched while an old process lives is served nothing
+by it: no list, no body and no receipt, and no push marker. One window remains: a declaration
+that changes between that last look and the body or notification it guards.
 
 When the seat's own launch carries the development-channels flag naming this server
 (`--dangerously-load-development-channels server:team-inbox`), `serve` also declares the
@@ -46,7 +53,10 @@ the session it serves is the team file's the launch read — the file the launch
 to the registration, which names it to the server too, so a seat whose folder is a lobby (it holds
 no team file of its own) serves the same team as every other seat. A server started without a
 file resolves the team from the registry record that holds its seat, narrowed by `--session`, so
-the folder it starts in is never read as the team.
+the folder it starts in is never read as the team. The registration also carries the runtime epoch
+the launch delivered the seat's brief under (`--epoch`), when the state holds that claim, so the
+server names the launch it belongs to; a seat with no claim is registered without one, and a
+server started under a claim without its epoch does not serve.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line
 carries the reason.
@@ -55,7 +65,7 @@ carries the reason.
 
     team mcp status [--json]
     team mcp doctor [--json]
-    team mcp serve --seat <seat> [--session <session>] [--file <path>]
+    team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 ## Flags
 
@@ -65,6 +75,7 @@ carries the reason.
 | `--seat` | a seat the team file declares | `serve` only, required: the seat whose inbox is served. The server is started by that seat's launch line, and this argument must name the seat it was started for |
 | `--session` | the team's session | `serve` only: stamped on the listener and on every receipt; must be the team file's own session |
 | `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead. Without `--file` the server reads the registry record that holds the seat (`--session` picks between teams that share a seat name), never a team file from the folder it starts in |
+| `--epoch` | the runtime epoch the launch registered the seat under | `serve` only: when the seat's state holds a current brief claim, it must be that claim's epoch; when there is no claim, the server must carry none. Either mismatch is a start refusal |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it
@@ -72,7 +83,7 @@ carries the reason.
 | Caller | May |
 | --- | --- |
 | anyone, in any terminal | run `status` or `doctor`: both write nothing at all |
-| a seat's own launch line | start `serve` for that seat; it writes only that seat's listener marker, one receipt per verified read in the seat's own drop folder, and — when it declares the channel — one push marker per record it notifies |
+| a seat's own launch line | start `serve` for that seat, from the process the launch starts: the server proves that process places as that seat, on the pane the state records for it, and re-proves it on every tool call and channel push; it writes only that seat's listener marker, one receipt per verified read in the seat's own drop folder, and — when it declares the channel — one push marker per record it notifies |
 
 ## Output and exit codes
 
@@ -83,7 +94,7 @@ carries the reason.
 | `doctor`: nothing missing | the context line, then one finding per line — the level, then the sentence — with a `fix:` line under each finding that has one, then `team mcp doctor: nothing missing, <n> warnings` (`0 warnings` when there are none) | 0 |
 | `doctor`: at least one `MISS` | the same findings, and the closing count | 1 |
 | `serve`: the client closed stdin | nothing on stderr; on stdout only the JSON-RPC replies the client's requests asked for — `initialize`, `ping`, `tools/list`, each tool call's result — and, when the server declares the channel, one `notifications/claude/channel` per record that arrived while it ran — then the process ends | 0 |
-| `serve`: the invocation, the team placement or the inbox folder can't be read | `team mcp serve: <reason>` on stderr, nothing on stdout; the server never starts | 2 |
+| `serve`: the invocation, the team placement, the caller's placement, the launch or the inbox folder can't be read | `team mcp serve: <reason>` on stderr, nothing on stdout; the server never starts | 2 |
 | the invocation can't be read: no subcommand, an unknown one, an option this build does not know | `team mcp: <reason>`, with the usage | 2 |
 
 Both reports open on the context line naming the lobby whose bridge configs are read. `--json`
@@ -94,8 +105,8 @@ repair}}` — and stderr stays empty; `error.id` is `mcp.invocation`.
 
 Exits are documented in the usage: `Exits 0 when every observed leg is up (status), nothing is
 missing (doctor), or the client closed the inbox server's stdin (serve), 1 when a leg is down, the
-bridge is not set up, or doctor finds something missing, 2 when the invocation, the team placement
-or the inbox folder can't be read.`
+bridge is not set up, or doctor finds something missing, 2 when the invocation, the team placement,
+the caller's placement, the launch or the inbox folder can't be read.`
 
 ## Example
 

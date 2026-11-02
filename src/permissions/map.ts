@@ -180,7 +180,7 @@ function buildGates(): Record<string, Gate> {
     },
     daemon: {
       kind: 'owner-only',
-      why: 'the one machine daemon is the owner\'s: install, uninstall and run are owner-only, and the system service manager\'s no-terminal start is the owner\'s own login session',
+      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager\'s no-terminal start is the owner\'s own login session',
     },
     'daemon:status': {
       kind: 'any-caller',
@@ -192,7 +192,11 @@ function buildGates(): Record<string, Gate> {
     },
     'daemon:install': {
       kind: 'owner-only',
-      why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way',
+    },
+    'daemon:restart': {
+      kind: 'owner-only',
+      why: 'restarting the daemon the installed unit runs is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way; the restart writes nothing',
     },
     'daemon:fault-watch': {
       kind: 'owner-only',
@@ -292,7 +296,7 @@ function buildGates(): Record<string, Gate> {
     },
     mcp: {
       kind: 'any-caller',
-      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat and asks for none either',
+      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat, and its own row says who it admits',
     },
     pause: {
       kind: 'team-pause',
@@ -439,8 +443,8 @@ function buildGates(): Record<string, Gate> {
       why: 'the report writes nothing and asks for no caller',
     },
     'mcp:serve': {
-      kind: 'any-caller',
-      why: 'the launch line names its seat and session; the server reads and receipts only that seat\'s inbox, and asks for no caller',
+      kind: 'seat-only',
+      why: 'the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team\'s own session, and never the owner; the seat\'s current claim, when there is one, must be the --epoch the server carries',
     },
     'mcp:status': {
       kind: 'any-caller',
@@ -449,6 +453,10 @@ function buildGates(): Record<string, Gate> {
     'approvals:list': {
       kind: 'any-caller',
       why: 'the list reads team-create and owner-action always rules and writes nothing',
+    },
+    'approvals:details': {
+      kind: 'any-caller',
+      why: 'the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out',
     },
     'approvals:revoke': {
       kind: 'owner-only',

@@ -56,6 +56,13 @@ function world() {
     spawnSync('git', ['init', '--quiet'], { cwd: root });
     mkdirSync(join(root, '.agents'));
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(project, session, seats));
+    // The state `team up` leaves: the server proves its caller is a seat on its recorded pane
+    // before it opens an inbox.
+    const rows = Object.fromEntries(seats.map((seat) => [seat.name, { stage: 'ready', pane: `pane-${seat.name}` }]));
+    writeFileSync(
+      join(root, '.agents', 'team.state.json'),
+      `${JSON.stringify({ format: 1, sessions: { [session]: { seats: rows, worktrees: {} } } })}\n`,
+    );
     return;
   };
   const rosterOf = (seats: readonly Seat[]) =>
@@ -118,13 +125,19 @@ function feed() {
   };
 }
 
+/** The caller a seat's own launch line places: the seat, on its recorded pane, in the session. */
+function seatCaller(seat: string, session: string): { kind: 'seat'; name: string; pane: string; session: string } {
+  return { kind: 'seat', name: seat, pane: `pane-${seat}`, session };
+}
+
 async function startServing(
   from: string,
   options: Serving,
   candidates: readonly string[],
   home: string,
+  caller?: { kind: 'seat'; name: string; pane: string; session: string },
 ) {
-  const io = testIo(from);
+  const io = testIo(from, caller);
   const stream = feed();
   const ran = runMcpServe(options, io, stream.streams, { home });
   let settled = false;
@@ -148,7 +161,8 @@ async function servesTeam(input: {
   others: readonly string[];
 }): Promise<void> {
   const expected = marker(input.expected.root, input.expected.session);
-  const run = await startServing(input.from, input.options, [expected, ...input.others], input.home);
+  const caller = seatCaller(input.options.seat ?? 'lead', input.expected.session);
+  const run = await startServing(input.from, input.options, [expected, ...input.others], input.home, caller);
   expect(run.found).toBe(expected);
   const listener = run.found === null ? null : (JSON.parse(readFileSync(run.found, 'utf8')) as Record<string, unknown>);
   expect(listener).toMatchObject({

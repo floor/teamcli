@@ -1170,16 +1170,17 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written\n');
   });
 
-  test('a seat that watches nothing is named without the drop leg', async () => {
-    // The muse seat installs no watcher: its shape leaves drop out of the order, so the dry run
-    // names the inbox and the typed fallback behind it, and never the drop file.
+  test('a seat that watches nothing names its typed fallback and the drop file that closes the walk', async () => {
+    // The muse seat installs no watcher, but its profile declares the typed wake: the dry run
+    // names the inbox, the one trigger line as the fallback, and the drop file that closes the
+    // walk — and still types nothing.
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
 
     expect(await runSend(['watcherless', 'hello', '--dry-run'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nwatcherless: dry-run: muse via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nwatcherless: dry-run: muse via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
   });
 });
 

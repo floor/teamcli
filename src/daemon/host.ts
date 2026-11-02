@@ -25,6 +25,7 @@ import { dirname } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
+import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcesses } from '../herdr.ts';
@@ -41,7 +42,7 @@ import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
 import type { NextAnswer, NextClaim, NextHandlerInput } from './next.ts';
 import { createFaultInbox } from './fault.ts';
-import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
+import { createHostedBeat, createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
@@ -246,7 +247,7 @@ export type StartMachineDaemonInput = {
    * schedule without launching. A route with no recorded seats, or whose session is not running,
    * is skipped, and the sweep never cold-starts a team.
    */
-  restoreSweep?: boolean | ((root: string, teamFile: string) => Promise<RestoreSweepResult>);
+  restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
 };
 
 export type StartMachineDaemonResult =
@@ -278,6 +279,19 @@ type InFlight = { op: string; since: number };
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Re-reads one route's team the way its writers do: a `team-file` route re-reads exactly the
+ *  file its launch read opened; a registry route resolves its root through the one seam again.
+ *  The handle is never used as a file here — for a registry team it names the conventional path,
+ *  and a file left there is not the team. */
+function readRouteTeam(
+  entry: { root: string; file?: string; handle: string },
+  home: string,
+): ReturnType<typeof readTeamConfig> {
+  return entry.file === undefined
+    ? readTeamConfig(entry.root, { home })
+    : readTeamConfig(dirname(entry.file), { file: entry.file, home });
 }
 
 /** Whether a run settles within `ms`, whether it resolves or rejects. The timer only decides
@@ -481,8 +495,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const inFlight = new Map<string, InFlight>();
   const roots: MachineRootStatus[] = [];
   const routes: HostedRoute[] = [];
-  /** The team file each route was actually loaded from, by canonical root. */
-  const teamFiles = new Map<string, string>();
+  /** What each route must re-read, by canonical root. The route remembers the loader's root and
+   *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
+   *  from its root again the way every writer resolves it. `handle` is the path the loader
+   *  reported: state and the watch binding live beside it, but for a registry team it may name no
+   *  file at all, and a file standing there is a leftover, never the team. */
+  const routeTeams = new Map<string, { root: string; file?: string; handle: string }>();
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
@@ -530,6 +548,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed && !afterClose) return;
     appendDaemonLog(home, line, now());
   };
+
+  // The beat between hosted routes: the interval owns it, and a hosted pass that holds the event
+  // loop carries the due beats it displaces to every other route. It never touches the calling
+  // route's state — that pass may hold the state lock — and it writes no daemon record: the
+  // interval's own beat does that when it next runs.
+  const hostedBeat = createHostedBeat({
+    intervalMs: heartbeatMs,
+    watches: () => hostedWatches.map((one) => one.watch),
+    log: (text) => logLine(text),
+    now,
+  });
 
   const stuckNow = (): DaemonStuckRequest[] => {
     const at = now().getTime();
@@ -682,18 +711,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       };
     }
     const route = resolved.route;
-    const teamFile = teamFiles.get(route.root);
-    if (teamFile === undefined) {
-      return nextInternal('the resolved route has no recorded team file');
+    const entry = routeTeams.get(route.root);
+    if (entry === undefined) {
+      return nextInternal('the resolved route has no recorded team');
     }
     let loaded;
     try {
-      loaded = readTeamConfig(dirname(teamFile), { file: teamFile, home });
+      loaded = readRouteTeam(entry, home);
     } catch (error) {
-      return nextInternal(`the route's team file could not be read: ${plainText(error instanceof Error ? error.message : String(error))}`);
+      return nextInternal(`the route's team could not be read: ${plainText(error instanceof Error ? error.message : String(error))}`);
     }
     if (!loaded.ok) {
-      return nextInternal(`the route's team file could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`);
+      return nextInternal(`the route's team could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`);
     }
     const seat = scope.seat;
     const pane = scope.pane;
@@ -894,7 +923,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       loaded.team.seats.map((seat) => seat.name),
     );
     routes.push(route);
-    teamFiles.set(canonical, loaded.path);
+    routeTeams.set(canonical, { root: loaded.root, file: launchTeamFile(loaded), handle: loaded.path });
     if (input.presenceHosting === true) {
       // One ingester per canonical route, created only after the duplicate check above accepted
       // the route: the daemon's single-instance lock is what makes this process the only writer.
@@ -1286,8 +1315,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const route = routes.find((candidate) => candidate.root === status.root);
       if (route === undefined) continue;
       if (hostedWatches.some((one) => one.watch.route === route)) continue;
-      const teamFile = teamFiles.get(route.root);
-      if (teamFile === undefined) continue;
+      const entry = routeTeams.get(route.root);
+      if (entry === undefined) continue;
       // The route's channel health comes from this daemon's own fixed liveness, never from the
       // store's last word: with presence hosting off there is no pass, so the answer is absent
       // and the dispatcher holds a native projection rather than believing it.
@@ -1300,7 +1329,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const build = input.hostedWatch?.(route, log, extras)
         ?? hostedWatchAuthority({
           route,
-          teamFile,
+          // State and the binding identity live beside the loader's handle. For a registry team
+          // the conventional path may name no file: the binding is the root's identity, and the
+          // wrapper tolerates an absent file.
+          teamFile: entry.handle,
           log,
           // Proving a recorded pane watch is the process in its own pane needs this route's
           // session; a pane the terminal host cannot read stays `unproven` and is never asked
@@ -1337,6 +1369,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           required: build.required,
           standby: build.standby,
           ...(build.tick === undefined ? {} : { onTick: build.tick }),
+          // A due beat landing inside this route's pass renews the other routes, never this one:
+          // the pass can hold this route's state lock in its fold.
+          onBeat: () => hostedBeat.midPass(route),
           now,
         }),
       });
@@ -1814,14 +1849,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     // A tick releases only the waits whose own due instant has passed and returns at once: a
     // pass that is still running is never awaited here, so one slow or hanging route cannot
-    // stop the daemon's liveness or another route's cycles. Each route is isolated.
-    for (const one of hostedWatches) {
-      try {
-        one.watch.tick(now());
-      } catch (error) {
-        logLine(`root ${one.watch.route.root}: the hosted watch tick failed: ${(error as Error).message}`);
-      }
-    }
+    // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
+    // is marked so a pass that displaced this one carries the next due beat itself.
+    hostedBeat.tick();
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
@@ -2131,15 +2161,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
-      : (root: string, teamFile: string) =>
-          runRestoreSweepForRoute({ home, root, teamFile, now, isClosing: () => closed });
+      : (root: string, teamFile: string | undefined) =>
+          runRestoreSweepForRoute({ home, root, ...(teamFile === undefined ? {} : { teamFile }), now, isClosing: () => closed });
     restoreSweepRun = (async (): Promise<void> => {
       for (const route of routes) {
         if (closed) return;
-        const teamFile = teamFiles.get(route.root);
-        if (teamFile === undefined) continue;
+        const entry = routeTeams.get(route.root);
+        if (entry === undefined) continue;
         try {
-          const result = await runner(route.root, teamFile);
+          const result = await runner(route.root, entry.file);
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
           } else if (result.kind === 'lock-held') {

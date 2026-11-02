@@ -95,6 +95,7 @@ function fakeManager(over: ManagerOverrides): ServiceManager {
     plan: (_home, program: ServiceProgram) => ({ unitPath: '/synthetic/unit.plist', program: [program.execPath, program.entry] }),
     install: (): ServiceInstallResult => ({ ok: true, unitPath: '/synthetic/unit.plist' }),
     uninstall: (): ServiceUninstallResult => ({ ok: true, unitPath: '/synthetic/unit.plist', removed: true }),
+    restart: () => { throw new Error('a restart is not part of this scene'); },
     job: over.job ?? (() => managedJob()),
     unit: over.unit ?? (() => managedUnit()),
   };

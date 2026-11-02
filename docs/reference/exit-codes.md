@@ -7,7 +7,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | Id | Command | Code | Meaning | Example |
 | --- | --- | --- | --- | --- |
 | `ack.read` | `ack` | 0 | the message was marked read, or another reader had already marked it read or answered it | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped` | `ack` | 0 | every record of the seat due by the window was marked read, or already was | `team ack --seat worker --older-than 7d` |
 | `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `ack.scoped-failed` | `ack` | 1 | at least one record of the seat due by the window could not be marked read; the others were | `team ack --seat worker --older-than 7d` |
+| `ack.scoped-refused` | `ack` | 1 | the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands | `team ack --seat worker --older-than 7d` |
 | `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
 | `add.approval-requested` | `add` | 0 | an owner-seat request for this add was recorded and sent to the owner seat | `team add <name> --request` |
@@ -105,21 +108,26 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
 | `answer.state` | `answer` | 1 | the seat is not waiting at the dialog this word answers | `team answer lead trust` |
+| `answer.trust-identity` | `answer` | 1 | the seat's launched identity was not recorded; no process in its pane can be checked against it | `team answer lead trust` |
 | `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
 | `answer.version` | `answer` | 1 | this version has no answer for the dialog | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust or question | `team answer` |
 | `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
+| `approvals.details` | `approvals` | 0 | one request's full record and the audit entries written for it were printed | `team approvals details <id>` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
 | `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
 | `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id...> --approval <request-id>` |
 | `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
 | `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
+| `archive.scoped` | `archive` | 0 | every family of the seat due by the window was moved, or nothing was due | `team archive --seat worker --older-than 7d` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
 | `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
 | `archive.file-owner` | `archive` | 1 | --file is the owner’s | `team archive --file .agents/team.yaml` |
 | `archive.out-owner` | `archive` | 1 | --out is the owner’s | `team archive --out ~/archives` |
+| `archive.scoped-failed` | `archive` | 1 | at least one family of the seat due by the window could not be moved; the others were | `team archive --seat worker --older-than 7d` |
+| `archive.scoped-refused` | `archive` | 1 | the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands | `team archive --seat worker --older-than 7d` |
 | `archive.file` | `archive` | 2 | the team file can’t be read | `team archive --file missing.yaml` |
 | `archive.file-invalid` | `archive` | 2 | the team file can’t be parsed | `team archive --file team.yaml` |
 | `archive.invocation` | `archive` | 2 | the invocation can’t be read | `team archive extra` |
@@ -244,6 +252,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe | `team daemon install` |
+| `daemon.restart-dry-run` | `daemon` | 0 | the restart plan was printed and nothing was stopped or started | `team daemon restart --dry-run` |
+| `daemon.restarted` | `daemon` | 0 | the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket | `team daemon restart` |
 | `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
@@ -256,10 +266,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-route` | `daemon` | 1 | the route id does not name this checkout's own canonical route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch` | `daemon` | 1 | the daemon record carries no hosted watch for this checkout's route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch-state` | `daemon` | 1 | the route's hosted watch was not started as required, is standing down, or has stopped | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.grant-refused` | `daemon` | 1 | the general grant recorded on the run no longer admits the daemon op: its chain, its key or its ops failed verification | `team daemon install` |
 | `daemon.install-failed` | `daemon` | 1 | the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back | `team daemon install` |
 | `daemon.install-rollback-failed` | `daemon` | 1 | the system's service manager refused the new unit or its daemon did not answer the health probe, and the previous one could not be started again, so no daemon was started | `team daemon install` |
 | `daemon.install-rolled-back` | `daemon` | 1 | the new unit failed or its daemon did not answer the health probe; the previous unit was put back, and its daemon started again and answered | `team daemon install` |
-| `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
+| `daemon.not-installed` | `daemon` | 1 | no user service unit is installed, so a restart had nothing to stop or start | `team daemon restart` |
+| `daemon.not-owner` | `daemon` | 1 | the caller may not install, restart or remove the machine daemon | `team daemon install` |
+| `daemon.restart-failed` | `daemon` | 1 | the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running | `team daemon restart` |
+| `daemon.restart-rollback-failed` | `daemon` | 1 | the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running | `team daemon restart` |
+| `daemon.restart-rolled-back` | `daemon` | 1 | the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers | `team daemon restart` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
 | `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system's service manager starts it | `team daemon run` |
 | `daemon.service-managed.pid` | `daemon` | 1 | the system's service manager's record of the job does not name this process | `team daemon run --started-by service-manager` |
@@ -276,7 +291,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
 | `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |
 | `delegate.invocation` | `delegate` | 2 | the command arguments are invalid | `team delegate <session/pane> --commands up,down` |
+| `development-mode.approval-requested` | `development-mode` | 0 | an owner-seat request for this exact switch was recorded and sent to the owner seat; nothing was written | `team development-mode set local-fast --request` |
 | `development-mode.done` | `development-mode` | 0 | the machine development mode was read, shown, planned, or switched | `team development-mode set local-fast --show` |
+| `development-mode.approval-refused` | `development-mode` | 1 | the owner-seat request named another switch, is unanswered, expired or already used, or the request id is not one | `team development-mode set local-fast --approval oa_nope` |
 | `development-mode.refused` | `development-mode` | 1 | a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified | `team development-mode set off` |
 | `development-mode.invocation` | `development-mode` | 2 | the command arguments are invalid | `team development-mode set maybe` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
@@ -659,7 +676,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
 | `restart.run-lock` | `restart` | 1 | another session-mutating run is holding the session | `team restart worker` |
 | `restart.self` | `restart` | 1 | a seat caller tried to restart its own recorded pane | `team restart lead` |
-| `restart.signed-off` | `restart` | 1 | the seat is parked or stopped | `team restart worker` |
+| `restart.signed-off` | `restart` | 1 | the seat is stopped, and the caller is not the owner or its own team's leads seat | `team restart worker` |
 | `restart.temporary` | `restart` | 1 | the seat is a temporary copy | `team restart worker-tmp-1` |
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
@@ -801,6 +818,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
 | `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
+| `team.mcp-serve-replacement-ended` | `team` | 1* | the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it) | `team mcp serve` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
@@ -950,3 +968,5 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `worktree.remove-flags` | `worktree` | 2 | remove takes no --kind or --seat | `team worktree remove task --kind fix` |
 | `worktree.subcommand` | `worktree` | 2 | a subcommand is required | `team worktree` |
 | `worktree.task-required` | `worktree` | 2 | a task name is required | `team worktree new` |
+
+`*` the command leaves with the code the process it waited on exited with. The code listed is the fallback: what it leaves when that process gave none, because a signal ended it.

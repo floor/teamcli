@@ -755,6 +755,9 @@ describe('the other manager routes verify the same grant on the same team', () =
     const flagged = testIo(w.docs, noTerminal);
     expect(await runRestart(['worker', '--client', manager.path, '--key', w.grok.keyPath, '--abandon'], flagged, restartSources)).toBe(2);
     expect(flagged.err).toContain("are the owner's and take no --client");
+    const freshFlag = testIo(w.docs, noTerminal);
+    expect(await runRestart(['worker', '--client', manager.path, '--key', w.grok.keyPath, '--fresh'], freshFlag, restartSources)).toBe(2);
+    expect(freshFlag.err).toContain("--fresh are the owner's and take no --client");
   });
 });
 

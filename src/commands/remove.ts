@@ -38,7 +38,7 @@ import { resetCliHookState } from '../launch/cli-hook.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { plainText } from '../launch/plain.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export type RemoveSources = DownSources & {
   /** Foreground process names in the pane, or null when the pane can't be read. */
@@ -267,7 +267,16 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), ...(sources.home ? { home: sources.home } : {}) });
+  const readOptions = { ...(sources.home ? { home: sources.home } : {}) };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team add` put into the registry's record is
+  // removed from that record, never missed over the file the session launched from. A `--file`
+  // names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     refuse(io, json, 'remove', {

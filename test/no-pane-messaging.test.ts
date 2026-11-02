@@ -39,15 +39,28 @@ test('the pane-writer scan reads an import alias as the writer it names', () => 
   expect(importsPaneWriter("import { sendKey } from '../other.ts';")).toBe(false);
 });
 
-test('no messaging module types into a pane with herdr directly', () => {
+// The one exemption: a profile that declares `typed_wake: screen` lets a send type
+// one trigger line into an empty idle box it saw twice. That wake lives in one module, and its
+// own scenes pin what it does with the pane (test/typed-wake.test.ts); every other messaging
+// module still stops at this scan.
+const TYPED_WAKE_EXEMPTION = 'src/send/typed-wake.ts';
+
+test('no messaging module types into a pane with herdr directly, except the one profile-gated typed wake', () => {
   const messaging = [...files(join(root, 'src', 'send')), ...files(join(root, 'src', 'watch')), ...files(join(root, 'src', 'mcp')), join(root, 'src', 'daemon', 'watch-run.ts'), join(root, 'src', 'launch', 'deliver.ts'), join(root, 'src', 'commands', 'send.ts')];
+  // An allow-list entry that names no file would silently cover nothing.
+  expect(existsSync(join(root, TYPED_WAKE_EXEMPTION))).toBe(true);
   const offenders: string[] = [];
   for (const path of messaging) {
+    if (relative(root, path) === TYPED_WAKE_EXEMPTION) continue;
     const text = readFileSync(path, 'utf8');
     if (/['"]send-(text|keys)['"]/.test(text)) offenders.push(`${relative(root, path)}: herdr send-text/send-keys`);
     if (importsPaneWriter(text)) offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
   }
   expect(offenders).toEqual([]);
+  // And the exemption is exactly one module: the files that hold a pane writer are named here,
+  // so a second one cannot appear without failing this line.
+  const typers = messaging.filter((path) => importsPaneWriter(readFileSync(path, 'utf8')));
+  expect(typers.map((path) => relative(root, path))).toEqual([TYPED_WAKE_EXEMPTION]);
 });
 
 // The acts a command may use a pane's keyboard for, each said in its own words. Answering a

@@ -14,6 +14,10 @@ export type HostedLoop = {
   cycled(at: Date): void;
   /** A live pane watch owns the session: leave at the next seam without touching anything. */
   standby(why: string): void;
+  /** A synchronous seam a pass calls between seats. A due daemon beat lands here, so a pass
+   *  that holds the event loop still renews the other hosted routes' authority; the calling
+   *  route keeps its own renewal on the daemon's fixed beat. Absent, the pass never yields. */
+  beat?(): void;
 };
 
 /**

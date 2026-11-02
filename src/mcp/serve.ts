@@ -22,18 +22,19 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { callerOf, callerVerdict, describeCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { LoadResult, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { readTeams } from '../registry/teams.ts';
+import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
-import { readState } from '../state.ts';
+import { readState, type State } from '../state.ts';
 import { buildIdentity, installIdentity, version } from '../version.ts';
 import type { BuildIdentity, InstallIdentity } from '../version.ts';
 import {
@@ -102,12 +103,24 @@ function installChanged(running: BuildIdentity, onDisk: InstallIdentity): boolea
   return running.version !== onDisk.version || (running.head ?? null) !== onDisk.head;
 }
 
+/** The signals a client's shutdown arrives as. The process waiting on a fresh server is the one
+ *  a session or service manager stops, and the fresh server is the one that must receive it. */
+const SHUTDOWN_SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+
+/** Where shutdown signals are listened for. The launch passes none; a scene supplies a fake so it
+ *  can deliver a signal without sending one to a real process. */
+export type SignalWatch = {
+  on: (signal: NodeJS.Signals, listener: () => void) => unknown;
+  off: (signal: NodeJS.Signals, listener: () => void) => unknown;
+};
+
 /** The spawn and exit `restartSelf` uses. The launch passes none; a scene supplies them so it can
  *  drive the child's events without spawning a process or ending the suite. */
 export type RestartHooks = {
   spawnChild?: typeof spawn;
   exit?: (code: number) => void;
   say?: (line: string) => void;
+  signals?: SignalWatch;
 };
 
 /** Starts a fresh server from the entry this process loaded and leaves this one. The new process
@@ -115,37 +128,77 @@ export type RestartHooks = {
  *  before this is called, and the fresh process writes its own. A stdin line the old process had
  *  already read is not replayed: the client's next call is the new process's first.
  *
+ *  The old process stays the fresh one's parent until the fresh one exits. The serve proves its
+ *  caller by its parent processes on every call, and a process whose parent has left is
+ *  reparented: the fresh server's walk would no longer reach the seat's CLI, pane root and herdr,
+ *  and it would be refused at start or on its next call. The parent link is the proof the kernel
+ *  keeps — a handoff record could not stand in for it, because every seat on this home can read
+ *  the key such a record would carry. This process reads nothing more and writes nothing; it
+ *  leaves when the fresh server does, with that server's own exit code (1 when a signal ended
+ *  it). A shutdown signal aimed at the client's session is carried to the fresh server, whose
+ *  exit is then what ends this process.
+ *
  *  A start that fails reports `error` on the child after `spawn` has already returned, so the
- *  failure cannot be caught around the call: this process leaves only after the child's `spawn`
- *  event (unref, exit 0), and an `error` instead writes the reason and exits 1. A quiet exit 0
- *  would end the client's session as if the fresh server had taken over. */
+ *  failure cannot be caught around the call: this process leaves only after the child's `error`
+ *  (exit 1) or its `exit` (its own code). A quiet exit 0 would end the client's session as if
+ *  the fresh server had taken over. */
 export function restartSelf(hooks: RestartHooks = {}): void {
   const start = hooks.spawnChild ?? spawn;
+  const say = hooks.say ?? ((line: string) => process.stderr.write(line));
+  // A replacement that never started has no code of its own to leave with: the failure is this
+  // process's, and it leaves 1. A scene's `exit` sees the same call it always did.
+  const failed = (): void => {
+    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    if (hooks.exit) {
+      hooks.exit(1);
+      return;
+    }
+    // exit: team.mcp-serve-restart-failed
+    process.exit(1);
+  };
   const exit = hooks.exit ?? ((code: number): void => {
     if (code === 0) {
       // exit: team.mcp-serve-handed-over
       process.exit(0);
     }
-    // exit: team.mcp-serve-restart-failed
-    process.exit(1);
+    // exit: team.mcp-serve-replacement-ended
+    process.exit(code);
   });
-  const say = hooks.say ?? ((line: string) => process.stderr.write(line));
+  const signals = hooks.signals ?? process;
   const { command, entry } = selfRunner();
   let child: ChildProcess;
   try {
     child = start(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' });
   } catch {
-    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
-    exit(1);
+    failed();
     return;
   }
+  // The client's shutdown is aimed at the server that serves it. This process carries the signal
+  // to the fresh server instead of ending beside it, and then leaves with that server's result.
+  const listening = SHUTDOWN_SIGNALS.map((signal) => {
+    const forward = (): void => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The fresh server is already gone; its exit or error is what ends this process.
+      }
+    };
+    signals.on(signal, forward);
+    return [signal, forward] as const;
+  });
+  const forget = (): void => {
+    for (const [signal, forward] of listening) signals.off(signal, forward);
+  };
   child.once('spawn', () => {
-    child.unref();
-    exit(0);
+    // The fresh server's proof runs through this process, so this one must not leave first.
+    child.once('exit', (code) => {
+      forget();
+      exit(code ?? 1);
+    });
   });
   child.once('error', () => {
-    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
-    exit(1);
+    forget();
+    failed();
   });
 }
 
@@ -160,6 +213,10 @@ type Serving = {
   /** True when this seat's launch carries the development channel naming this server. */
   channel: boolean;
   brief?: BriefRead;
+  /** Why this server no longer serves this seat, or null while it does. Every tool call and every
+   *  channel push asks before it exposes a record or writes a receipt: a stopped, replaced or
+   *  relaunched seat's left-over process is inert, not a second reader. */
+  alive?: () => string | null;
 };
 
 /** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
@@ -310,9 +367,13 @@ function watchChannel(
     }
     return false;
   };
-  /** One id, verified on its own: the signed record is read and checked, and pushed once. */
+  /** One id, verified on its own: the signed record is read and checked, and pushed once. An id
+   *  the server may no longer serve is left unseen, so a transient reading is retried on the next
+   *  tick and a server that lost its seat never pushes again. */
   const pushOne = (id: string): void => {
     if (seen.has(id)) return;
+    const stale = serving.alive?.();
+    if (stale !== undefined && stale !== null) return;
     seen.add(id);
     if (legacyDropAt(join(serving.dropDir, id))) return;
     // An earlier server may have pushed this id before this one started, and a sender whose own
@@ -325,6 +386,12 @@ function watchChannel(
       seen.delete(id);
       return;
     }
+    // The declaration is looked at again after the record verified and before the reservation:
+    // a seat stopped, dropped or moved while its record was read pushes nothing and writes no
+    // marker. The last look is before the notification itself; if it refuses there, the marker
+    // stands (it is a reservation, not an exposure) and the body does not leave.
+    const beforeMarker = serving.alive?.();
+    if (beforeMarker !== undefined && beforeMarker !== null) return;
     // The marker is the reservation: it is written exclusively before the notification, so a
     // sender's held marker that lands after the check above wins the name and this server
     // never pushes the id; a marker this server cannot write means no push at all.
@@ -341,6 +408,10 @@ function watchChannel(
       status: CHANNEL_PUSH_STATUS,
     });
     if (!reserved) return;
+    // The body leaves here: the declaration is asked one last time, after the reservation, so a
+    // seat that lost its place during the marker write receives no notification.
+    const beforeWrite = serving.alive?.();
+    if (beforeWrite !== undefined && beforeWrite !== null) return;
     write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
@@ -417,6 +488,10 @@ function ackTool(args: unknown, serving: Serving): unknown {
   }
   if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
+  // The record is verified now; the declaration is looked at again immediately before the receipt
+  // is written, so a seat stopped while its record was being read acknowledges nothing.
+  const staleNow = serving.alive?.();
+  if (staleNow !== undefined && staleNow !== null) return toolError(staleNow);
   const outcome = publishRecordRead({
     dropDir: serving.dropDir,
     id,
@@ -440,6 +515,10 @@ function ackTool(args: unknown, serving: Serving): unknown {
 
 /** One `tools/call` body. Tool faults are results with `isError`, not JSON-RPC errors. */
 function callTool(params: unknown, serving: Serving): unknown {
+  // A server that lost its seat, or whose launch was superseded, serves nothing: every tool —
+  // list, read and receipt alike — refuses before it touches the inbox.
+  const stale = serving.alive?.();
+  if (stale !== undefined && stale !== null) return toolError(stale);
   if (typeof params !== 'object' || params === null) return toolError('tools/call needs an object with a name');
   const named = params as Record<string, unknown>;
   const name = named.name;
@@ -469,6 +548,10 @@ function callTool(params: unknown, serving: Serving): unknown {
       id,
       serving.home,
       serving.brief,
+      // Read again by the reader itself, after the record is verified and before its receipt is
+      // written, and once more before the body is handed back: the declaration that was true
+      // when the call started can change while a signed record is read.
+      () => serving.alive?.() ?? null,
     );
     if (!read.ok) {
       // A drop an earlier build wrote is refused like any file that is not a record, but it is not
@@ -557,23 +640,110 @@ function registeredRoot(
   seat: string,
   session: string | undefined,
 ): { ok: true; root: string } | { ok: false; message: string } {
-  let teams: ReturnType<typeof readTeams>;
+  const found = registeredRootOf(home, seat, session);
+  if (found.ok) return found;
+  switch (found.kind) {
+    case 'unreadable':
+      return { ok: false, message: `the team registry cannot be read: ${found.message}` };
+    case 'none':
+      return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
+    case 'ambiguous':
+      return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(found.ids.length)} registered teams (${found.ids.join(', ')}); pass --file to say which` };
+  }
+}
+
+/**
+ * The state's own proof that the caller is the seat this server serves: the caller must place as
+ * that seat, on the pane the state records for it in the team's session. The server is started by
+ * the seat's launch line, so a process that passes another seat's arguments is refused before any
+ * inbox is opened, and a seat stopped while its process survives is refused on its next call. The
+ * team's session is the one read, never another session's: a seat the state records elsewhere is
+ * not this server's seat, and the state's record for the served session is the only standing.
+ */
+function placementOf(io: Io, stateDir: string, session: string, name: string): { ok: true } | { ok: false; why: string } {
+  let sessions: State['sessions'];
   try {
-    teams = readTeams(home);
+    sessions = readState(stateDir).sessions;
   } catch (error) {
-    return { ok: false, message: `the team registry cannot be read: ${(error as Error).message}` };
+    return { ok: false, why: `the team state cannot be read, so this server cannot prove its caller: ${(error as Error).message}` };
   }
-  const holders = Object.values(teams).filter((team) => team.roster.some((line) => line.seat === seat));
-  if (holders.length === 0) return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
-  const matching = session === undefined
-    ? holders
-    : holders.filter((team) => team.session === session || team.lobbies[session] !== undefined);
-  const candidates = matching.length > 0 ? matching : holders;
-  if (candidates.length > 1) {
-    const ids = candidates.map((team) => team.id ?? team.project).sort();
-    return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(candidates.length)} registered teams (${ids.join(', ')}); pass --file to say which` };
+  if (sessions[session] === undefined) {
+    return { ok: false, why: `the team state records no session ${JSON.stringify(session)}, so this server cannot prove which seat started it` };
   }
-  return { ok: true, root: candidates[0]!.root };
+  const caller = callerOf(io, session);
+  const verdict = callerVerdict(caller, name, { session, recordedPane: sessions[session]?.seats?.[name]?.pane });
+  if (verdict.kind === 'ok') return { ok: true };
+  // The caller is placed in the served session under this seat's name: the pane is what does not
+  // match. A record with no pane proves no placement at all, and another pane is the seat
+  // restarted elsewhere while this process lives.
+  if (verdict.kind === 'no-pane') {
+    return { ok: false, why: `the state records no pane for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, so this server cannot prove the pane it was started on; a lead stops that seat and runs \`team up\`` };
+  }
+  if (verdict.kind === 'another-pane') {
+    return { ok: false, why: `the state records pane ${verdict.recordedPane} for seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, not the pane this server runs in; a lead stops the team and starts it again` };
+  }
+  if (caller.kind === 'seat') {
+    // A seat caller is refused for another name, or the same name placed in another session; the
+    // sentence names the session when it is the difference, so the refusal is not read as a pane
+    // fault.
+    const placedIn = caller.session !== undefined && caller.session !== session ? ` in session ${JSON.stringify(caller.session)}` : '';
+    return { ok: false, why: `this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}, and this call is placed as seat ${JSON.stringify(caller.name)}${placedIn}` };
+  }
+  return { ok: false, why: `this server serves seat ${JSON.stringify(name)} and starts inside that seat's own process; this call is ${describeCaller(caller)}` };
+}
+
+/** The launch the seat's state names now: the current brief claim's epoch, no claim, or a state
+ *  this server cannot read. */
+type Generation = { kind: 'claim'; epoch: string } | { kind: 'none' } | { kind: 'unreadable'; message: string };
+
+function generationOf(stateDir: string, session: string, name: string): Generation {
+  try {
+    const claim = currentBriefClaim(readState(stateDir).sessions[session]?.briefs?.[name]);
+    return claim === null ? { kind: 'none' } : { kind: 'claim', epoch: claim.epoch };
+  } catch (error) {
+    return { kind: 'unreadable', message: (error as Error).message };
+  }
+}
+
+/** Why a server started with `epoch` no longer belongs to the seat's launch, or null while it
+ *  does. A server started without an epoch serves only while the seat has no current claim: the
+ *  claim a relaunch writes makes every earlier server, and every server that named no delivery,
+ *  stop serving that seat's inbox. */
+function staleLaunch(generation: Generation, epoch: string | undefined, name: string): string | null {
+  if (generation.kind === 'unreadable') {
+    return `the team state cannot be read, so this server cannot prove the launch it belongs to: ${generation.message}`;
+  }
+  if (generation.kind === 'none') {
+    return epoch === undefined
+      ? null
+      : `--epoch ${JSON.stringify(epoch)} names a launch the seat's state no longer holds; start the server from the seat's launch line`;
+  }
+  if (epoch === undefined) {
+    return `seat ${JSON.stringify(name)} has a current brief claim and this server was started without its epoch; start the server from the seat's launch line`;
+  }
+  return epoch === generation.epoch
+    ? null
+    : `--epoch ${JSON.stringify(epoch)} is not the seat's current launch epoch; start the server from the seat's launch line`;
+}
+
+/**
+ * Why the team file no longer declares the seat this server serves, or null while it does. The
+ * file is read again at every use, never trusted as the snapshot the process started with: a seat
+ * marked `stopped: true` while the process lives is one a lead took out of the team, and a file
+ * that drops the seat, or now names another session, no longer declares it either.
+ */
+function declarationRefusal(team: TeamFile, session: string, name: string): string | null {
+  if (team.session !== session) {
+    return `the team file names session ${JSON.stringify(team.session)} now, not ${JSON.stringify(session)}; this server serves seat ${JSON.stringify(name)} in session ${JSON.stringify(session)}`;
+  }
+  const seat = team.seats.find((one) => one.name === name);
+  if (seat === undefined) {
+    return `the team file no longer declares seat ${JSON.stringify(name)}; a lead starts it again with \`team up\``;
+  }
+  if (seat.stopped) {
+    return `the team file marks seat ${JSON.stringify(name)} stopped; a lead starts it again with \`team up\``;
+  }
+  return null;
 }
 
 /**
@@ -604,10 +774,11 @@ export async function runMcpServe(
   // and reading a team file from it would be reading the checkout's folder, not the seat's team.
   const registered = options.file === undefined ? registeredRoot(host.home, options.seat, options.session) : null;
   if (registered !== null && !registered.ok) return refuse(registered.message);
-  const loaded = readTeamConfig(registered === null ? io.cwd : registered.root, {
+  const readTeam = (): LoadResult => readTeamConfig(registered === null ? io.cwd : registered.root, {
     ...(options.file === undefined ? {} : { file: options.file }),
     home: host.home,
   });
+  const loaded = readTeam();
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;
@@ -616,6 +787,19 @@ export async function runMcpServe(
   }
   const seat = team.seats.find((one) => one.name === options.seat);
   if (seat === undefined) return refuse(`the team file declares no seat ${JSON.stringify(options.seat)}`);
+  // A seat the file marks stopped is not one this server may serve, whatever its launch does:
+  // `team remove <seat> --keep` leaves the entry and its pane, and only the file's word says the
+  // seat is out of the team.
+  const stoppedNow = declarationRefusal(team, team.session, seat.name);
+  if (stoppedNow !== null) return refuse(stoppedNow);
+  // The server's own identity is the launch's, and the state has to prove it: the caller is this
+  // seat on its recorded pane, and the epoch is the claim the state holds now. Both checks run
+  // before the inbox folder or the listener is written, so a refused start leaves no trace.
+  const stateDir = dirname(loaded.path);
+  const placed = placementOf(io, stateDir, team.session, seat.name);
+  if (!placed.ok) return refuse(placed.why);
+  const stale = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+  if (stale !== null) return refuse(stale);
   const dropDir = ensureInboxFolder(loaded.root, team.session, seat.name);
   if (dropDir === null) {
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
@@ -666,7 +850,6 @@ export async function runMcpServe(
   // The launch's own brief is served under the claim its state holds. The epoch is the one the
   // registration was started with, when it has one: a server started before a relaunch serves
   // nothing of the claim that relaunch wrote, until the seat is launched again.
-  const stateDir = dirname(loaded.path);
   const claimOf = () => {
     try {
       return currentBriefClaim(readState(stateDir).sessions[team.session]?.briefs?.[seat.name]);
@@ -685,6 +868,22 @@ export async function runMcpServe(
     team,
     channel,
     brief,
+    // Re-proved on every use, not only at start: the seat may be stopped, replaced or relaunched
+    // while this process lives, and a launcher-written config that names it again must not make
+    // the old process a reader of the new seat. The team file itself is read again: the
+    // declaration this server serves is the file's current one, and a seat it has stopped or
+    // dropped is no longer a seat this server may serve.
+    alive: () => {
+      const now = placementOf(io, stateDir, team.session, seat.name);
+      if (!now.ok) return now.why;
+      const staleLaunchNow = staleLaunch(generationOf(stateDir, team.session, seat.name), options.epoch, seat.name);
+      if (staleLaunchNow !== null) return staleLaunchNow;
+      const file = readTeam();
+      if (!file.ok) {
+        return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
+      }
+      return declarationRefusal(file.team, team.session, seat.name);
+    },
   };
   const stopChannel = channel ? watchChannel(serving, streams.write, notice) : null;
   try {

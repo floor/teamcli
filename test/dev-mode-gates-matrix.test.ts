@@ -983,7 +983,7 @@ const OWNER_AT_CWD = [
   { command: 'policy', refusal: 'only the owner runs this, from a terminal outside herdr; this call is lead' },
   { command: 'broker', refusal: 'only the owner runs `broker`, from a terminal outside herdr; this call is lead' },
   { command: 'tempo', refusal: 'only the owner runs tempo, from a terminal outside herdr; this call is lead' },
-  { command: 'daemon', refusal: 'only the owner installs or removes the machine daemon; this call is lead' },
+  { command: 'daemon', refusal: 'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is lead' },
   { command: 'down', refusal: 'only the owner abandons a team, from a terminal outside herdr' },
 ];
 

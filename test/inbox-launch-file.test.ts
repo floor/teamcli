@@ -61,10 +61,24 @@ function place(options: { project: string; session: string; seats: readonly stri
 /** The real restart launch's own registration function. The launch object is the one `team
  *  restart` runs with: a missing function here is what leaves every file-route CLI unregistered
  *  on a real restart. */
-function restartRegister(): (cli: string, seat: string, cwd: string, teamFile?: string) => unknown {
+function restartRegister(): (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => unknown {
   const register = restartSources.upLaunch.registerInbox;
   if (typeof register !== 'function') throw new Error('the real restart launch carries no registerInbox');
   return register;
+}
+
+/** The caller a seat's own launch line places: the seat, on its recorded pane, in the session. */
+function seatCaller(seat: string, session: string): { kind: 'seat'; name: string; pane: string; session: string } {
+  return { kind: 'seat', name: seat, pane: `pane-${seat}`, session };
+}
+
+/** The state `team up` leaves in the served team's root. */
+function writeState(root: string, session: string, seats: readonly string[]): void {
+  const rows = Object.fromEntries(seats.map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
+  writeFileSync(
+    join(root, '.agents', 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [session]: { seats: rows, worktrees: {} } } })}\n`,
+  );
 }
 
 describe('the real restart launch registers a seat inbox', () => {
@@ -72,7 +86,7 @@ describe('the real restart launch registers a seat inbox', () => {
     const seatFolder = place({ project: 'elsewhere', session: 'elsewhere', seats: ['lead', 'worker'] });
     const chosen = place({ project: 'acme', session: 'acme', seats: ['lead', 'worker'] });
 
-    expect(restartRegister()('cursor', 'lead', seatFolder.root, chosen.teamFile)).toEqual({ ok: true });
+    expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', chosen.teamFile)).toEqual({ ok: true });
 
     // The written config is the launch's: the chosen file's session and path, not the seat
     // folder's team.
@@ -95,7 +109,7 @@ describe('the real restart launch registers a seat inbox', () => {
   ] as const) {
     test(`${label} refuses, though the seat folder holds a valid team`, () => {
       const seatFolder = place({ project: 'elsewhere', session: 'elsewhere', seats: ['lead', 'worker'] });
-      expect(restartRegister()('cursor', 'lead', seatFolder.root, launchFile(seatFolder))).toEqual({
+      expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', launchFile(seatFolder))).toEqual({
         ok: false,
         reason: 'the team file its launch read could not be read',
       });
@@ -109,7 +123,7 @@ describe('the real restart launch registers a seat inbox', () => {
     // A link to itself cannot be read; no chmod, no private state.
     const loop = join(seatFolder.root, 'loop.yaml');
     symlinkSync(loop, loop);
-    expect(restartRegister()('cursor', 'lead', seatFolder.root, loop)).toEqual({
+    expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', loop)).toEqual({
       ok: false,
       reason: 'the team file its launch read could not be read',
     });
@@ -245,8 +259,10 @@ describe('the codex launch line round-trips its values through shell quoting and
     const filled = pairs(launchCommand(codex, 'codex', 'Rules.', undefined, {
       seat: 'helper', session: 'acme', command: '/opt/bun', entry: '/src/cli.ts',
     }));
+    // No file to name, so the line carries the launch's session instead: a registry team is
+    // resolved by it, and the server refuses a team whose session is another.
     expect(JSON.parse(filled.get('mcp_servers.team_inbox.args')!)).toEqual([
-      '/src/cli.ts', 'mcp', 'serve', '--seat', 'helper',
+      '/src/cli.ts', 'mcp', 'serve', '--seat', 'helper', '--session', 'acme',
     ]);
   });
 });
@@ -264,8 +280,9 @@ describe('team mcp serve reads the selected file, never the folder team', () => 
     home: string,
     options: { seat: string; session?: string; file?: string },
     lines: string[] = [],
+    caller?: { kind: 'seat'; name: string; pane: string; session: string },
   ): Promise<{ code: number; out: string; err: string }> {
-    const io = testIo(cwd);
+    const io = testIo(cwd, caller);
     const replies: string[] = [];
     const code = await runMcpServe(
       { seat: options.seat, session: options.session, ...(options.file === undefined ? {} : { file: options.file }) },
@@ -289,18 +306,19 @@ describe('team mcp serve reads the selected file, never the folder team', () => 
   test('the chosen file\'s session and roster are the ones served', async () => {
     const cwd = place({ project: 'other', session: 'other', seats: ['lead', 'worker'] });
     const chosen = place({ project: 'acme', session: 'acme', seats: ['lead', 'worker', 'extra'] });
+    writeState(chosen.root, 'acme', ['lead', 'worker', 'extra']);
 
-    const happy = await serve(cwd.root, cwd.root, { seat: 'lead', session: 'acme', file: chosen.teamFile }, [initialize]);
+    const happy = await serve(cwd.root, cwd.root, { seat: 'lead', session: 'acme', file: chosen.teamFile }, [initialize], seatCaller('lead', 'acme'));
     expect(happy.code).toBe(0);
     expect(servedTeam(happy.out)).toBe('team-inbox');
 
     // The default session is the chosen file's too.
-    const byDefault = await serve(cwd.root, cwd.root, { seat: 'lead', file: chosen.teamFile }, [initialize]);
+    const byDefault = await serve(cwd.root, cwd.root, { seat: 'lead', file: chosen.teamFile }, [initialize], seatCaller('lead', 'acme'));
     expect(byDefault.code).toBe(0);
     expect(servedTeam(byDefault.out)).toBe('team-inbox');
 
     // A seat only the chosen file declares can be served; the folder's roster is not consulted.
-    const extra = await serve(cwd.root, cwd.root, { seat: 'extra', file: chosen.teamFile }, [initialize]);
+    const extra = await serve(cwd.root, cwd.root, { seat: 'extra', file: chosen.teamFile }, [initialize], seatCaller('extra', 'acme'));
     expect(extra.code).toBe(0);
     // With no file, the folder's team is not the team: the seat is looked for in the registry,
     // and the fixture's home holds no record, so the refusal says so and names --file.
@@ -386,12 +404,16 @@ describe('the CLI route reaches the same refusal', () => {
     const chosen = place({ project: 'acme', session: 'acme', seats: ['lead', 'worker'] });
     const home = temp('team-file-home-');
 
-    const served = await cli(['mcp', 'serve', '--seat', 'lead', '--session', 'acme', '--file', chosen.teamFile],
+    // The chosen file is read, and its roster is where the seat is looked for. The spawned child
+    // is the test runner's, not a seat this fixture's state places, so the server refuses it at
+    // the placement proof: the file was read, and no line was served.
+    const refused = await cli(['mcp', 'serve', '--seat', 'lead', '--session', 'acme', '--file', chosen.teamFile],
       { cwd: cwd.root, home, stdin: `${initialize}\n` });
-    expect(served.code, served.err).toBe(0);
-    const reply = JSON.parse(served.out.split('\n')[0]!) as { result?: { serverInfo?: { name?: string } } };
-    expect(reply.result?.serverInfo?.name).toBe('team-inbox');
+    expect(refused.code).toBe(2);
+    expect(refused.out).toBe('');
+    expect(refused.err).toBe('team mcp serve: the team state records no session "acme", so this server cannot prove which seat started it\n');
 
+    // The session belongs to the chosen file, not to the folder the server starts in.
     const wrong = await cli(['mcp', 'serve', '--seat', 'lead', '--session', 'other', '--file', chosen.teamFile],
       { cwd: cwd.root, home });
     expect(wrong.code).toBe(2);

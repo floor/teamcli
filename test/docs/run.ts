@@ -78,7 +78,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
-import { createWorld, PROC_PID, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
+import { createWorld, paneNames, PROC_PID, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
 
 export type Failure = { page: string; line: number; message: string };
 
@@ -217,12 +217,14 @@ async function setup(page: Page): Promise<void> {
     const interval = page.team?.watch.interval ?? 120;
     const ago = page.spec.watch === 'stale' ? 3 * interval : 0;
     // A watch `up` started runs in its own workspace, and its pass records that pane; a page's
-    // seeded watch is that shape, so `team status` reads the pane it runs in.
+    // seeded watch is that shape, so `team status` reads the pane it runs in. The seeded pane is
+    // index 9 — past the seats a page declares — and named the way the page's world names panes.
+    const watchNames = paneNames(page.spec, 9);
     session.watch = {
       pid: WATCH_PID,
       heartbeat: new Date(Date.parse(page.spec.now) - ago * 1000).toISOString(),
-      pane: 'w9:p1',
-      workspace: 'w9',
+      pane: watchNames.pane,
+      workspace: watchNames.workspace,
     };
   }
   for (const [key, value] of Object.entries(page.spec.state)) {

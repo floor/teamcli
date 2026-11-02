@@ -539,8 +539,21 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * receipt. The receipt is flushed to disk before the body leaves. The honest guarantee is
  * at-most-once content exposure: a crash after the receipt but before the body spends the
  * message, and a crash before the receipt leaves no shared trace, so a later reader may serve.
+ *
+ * `guard`, when given, is the serving process's last look at its own seat declaration. It is
+ * asked after the record is verified and immediately before the receipt is published, and again
+ * after the receipt is flushed and immediately before the body is returned. A refusal writes no
+ * receipt and returns no body; a refusal only at the second look means the receipt stands and
+ * the message is spent, which is the at-most-once side to err on. A declaration that changes
+ * between the second look and the caller writing the body to its client is the remaining window.
  */
-export function readMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
+export function readMessage(
+  target: InboxTarget,
+  id: string,
+  home: string,
+  brief?: BriefRead,
+  guard?: () => string | null,
+): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
@@ -661,6 +674,10 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
       return { ok: false, reason: 'the general seat brief has been superseded by a later delivery', superseded: true };
     }
   }
+  // The seat can be stopped, dropped or moved while its record was being verified. The receipt is
+  // the proof of exposure, so it is written only after this last look at the declaration.
+  const refusedNow = guard?.();
+  if (refusedNow !== undefined && refusedNow !== null) return { ok: false, reason: refusedNow };
   // The signed status receipt `team messages` also writes: one shape under one name, so `statusOf`,
   // `team drops` and the watch all read it. This reader publishes it with `link`, so the name is
   // created once and never replaced: a rival's receipt, valid or not, is left exactly as it is.
@@ -699,6 +716,11 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
   if (!flushReceipt(readName, target.dropDir)) {
     return { ok: false, reason: 'the receipt could not be made durable, so the message is not returned' };
   }
+  // The declaration is looked at once more after the receipt is durable and before the body is
+  // handed back: a seat that lost its place during the write shows nothing. The receipt stands —
+  // this is the at-most-once side — and the caller returns this refusal instead of the body.
+  const lostAfterReceipt = guard?.();
+  if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
   return { ok: true, body: payload.body };
 }
 

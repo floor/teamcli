@@ -188,10 +188,11 @@ describe('the class a send reports for its target', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a codex seat with a bound managed endpoint and its recorded conversation is woken through its runtime queue', async () => {
+  test('a codex seat with a bound managed endpoint and its recorded conversation reads at its next turn when the drop takes the send', async () => {
     made = sendWorld();
-    // The queue takes a pointer for one thread: the launch records that conversation beside the
-    // endpoint, and the class reads both. An endpoint on its own is the next scene's shape.
+    // The seat records a managed endpoint and the conversation its queue is addressed by, so the
+    // class read before the walk is between-turns. This world's walk carries no native leg: the
+    // drop takes the send, and the line must follow the leg actually taken.
     recordSeat(made, 'codex-seat', {
       id: 'seat_0123456789ab',
       cli: 'codex',
@@ -225,7 +226,9 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); woken through its runtime queue');
+    // The walk never reached the runtime queue this seat records: the drop leg took the send, so
+    // the line says what actually happens next — its next turn — never a queue nothing addressed.
+    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); queued; codex-seat reads it at its next turn (pull-only)');
   });
 
   test('a codex seat whose endpoint names no conversation is read at its next turn, and the line says so', async () => {
@@ -271,13 +274,15 @@ describe('the class a send reports for its target', () => {
     expect(io.out).toContain('pull-seat: sent (unconfirmed) (drop, 0 ms); queued; pull-seat reads it at its next turn (pull-only)');
   });
 
-  test('a CLI with no route at all is reported as a seat nothing can wake', async () => {
+  test('a seat with no event adapter is read at its next turn, and the line says so', async () => {
+    // The Muse seat declares a typed wake and no event adapter: this send ends in the bus inbox
+    // because nothing woke the pane, so the line names the seat's next turn, not a route it has.
     made = sendWorld();
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['none-seat', 'hello'], io, sendHost(made));
     console.log(`A4 code=${code} out=${JSON.stringify(io.out)} err=${JSON.stringify(io.err)}`);
     expect(code).toBe(0);
-    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; none-seat has no way to be woken while idle');
+    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; none-seat reads it at its next turn (pull-only)');
   });
 });
 

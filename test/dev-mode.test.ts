@@ -1,5 +1,6 @@
-// TEAMCLI_DEV_MODE=1 turns the no-approval refusal, the approved-copy mismatch, and the
-// caller-placement refusal into one warning and mounts the live file. `team down` turns its
+// TEAMCLI_DEV_MODE=1 turns the approved-copy mismatch and the caller-placement refusal into one
+// warning and mounts the live file; a team with no approval record is admitted in every mode,
+// and dev mode says the notice beside the warning. `team down` turns its
 // caller-placement refusal into the same kind of warning. `team tempo` and `team broker` are
 // not dev-mode commands (`dev_mode.ts`): every non-owner call is refused in every mode, the
 // file's own orchestrator and operator included, before any credential is read. Unset, each
@@ -179,10 +180,14 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(mountedIo.err).toContain('team up: warning:');
   expect(mountedIo.err).toContain('only the owner or `leads` starts the team; this call is unplaced (it runs under herdr)');
   expect(mountedIo.err).toContain('; dev mode continues\n');
-  expect(mountedIo.err).toContain('the file was never approved on this machine');
+  // No approval record is a notice, not a refusal, in either mode: the run admits and says the
+  // fact with the step a record is for — the Team change workflow's step over the file's digest.
+  expect(mountedIo.err).toContain(
+    'team up: the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one\n',
+  );
+  expect(mountedIo.err).not.toContain('the file was never approved on this machine');
   expect(mountedIo.err).not.toContain('team approve');
   expect(mountedIo.err).not.toContain('team up: only the owner or `leads` starts the team');
-  expect(mountedIo.err).not.toContain('team up: the file was never approved');
   expect(mountedIo.err).not.toContain('team up: run `team approve`');
   expect(mountedWorld.runs.map((run) => run.command).join('\n')).toContain('claude --model claude-opus-5-5');
   expect(readState(join(mounted.root, '.agents')).sessions.acme?.seats.lead?.stage).toBe('ready');
@@ -195,6 +200,33 @@ test('an unapproved file refuses, and the same file mounts when TEAMCLI_DEV_MODE
   expect(record?.provenance.registered_by).toBe('unplaced (it runs under herdr)');
   const recordFile = readFileSync(join(mounted.home, '.config', 'team', 'agents', `${record?.id}.yaml`), 'utf8');
   expect(recordFile).toContain('  dev_mode: true\n');
+});
+
+test('an owner\'s run of a no-record team admits in either mode, and dev mode says the notice', async () => {
+  // Unset: the no-record team is the ordinary file — the run admits and says nothing about an
+  // approval that was never required of it.
+  const quiet = repo();
+  const quietWorld = world();
+  const quietIo = testIo(quiet.root, { kind: 'owner' });
+  expect(await runUp([], quietIo, sources(quiet.home, quietWorld.launch))).toBe(0);
+  expect(quietWorld.runs.length).toBeGreaterThan(0);
+  expect(quietIo.err).not.toContain('approval');
+  expect(quietIo.err).not.toContain('never approved');
+  expect(quietIo.out).not.toContain('approval');
+  expect(quietIo.out).toContain('lead: ready\n');
+
+  // Set: the same admission, with the one notice naming where a record is the step's to require.
+  const said = repo();
+  const saidWorld = world();
+  const saidIo = testIo(said.root, { kind: 'owner' });
+  saidIo.env = { TEAMCLI_DEV_MODE: '1' };
+  expect(await runUp([], saidIo, sources(said.home, saidWorld.launch))).toBe(0);
+  expect(saidWorld.runs.length).toBeGreaterThan(0);
+  expect(saidIo.err).toContain(
+    'team up: the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one\n',
+  );
+  expect(saidIo.err).not.toContain('the file was never approved on this machine');
+  expect(saidIo.err).not.toContain('team approve');
 });
 
 /** Bytes of every approval record, the approval key and its generations, and grant under home.

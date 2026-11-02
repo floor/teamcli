@@ -3,7 +3,7 @@
 import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -28,7 +28,7 @@ import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
 import { runFallback } from '../src/commands/fallback.ts';
-import { actionApprovalsFolder } from '../src/client/team-create.ts';
+import { actionApprovalsFolder, actionRequestsFolder, teamCreateHash } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -37,7 +37,7 @@ import { daemonSocketPath } from '../src/daemon/paths.ts';
 import { routeId, routeOf } from '../src/daemon/routes.ts';
 import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
-import type { ServiceManager } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
@@ -55,7 +55,7 @@ import { historyPath, readHistory } from '../src/send/history.ts';
 import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signRecord, signReceiptPayload, writeReceipt, type RecordPayload } from '../src/send/record.ts';
 import { noteTransport, type CanonicalRecipient, type FallbackContext, type TransportFact } from '../src/send/fallback-events.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
@@ -1584,6 +1584,22 @@ scene('conformance-adapter.finished', async () => {
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
 });
 
+scene('development-mode.approval-requested', async (place) => {
+  // An injected store records the request and offers no Touch ID: synthetic signing only.
+  const store = seatOwner(place.home);
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--request'], io, { home: place.home, now: NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+    'owner-seat request',
+  );
+});
+scene('development-mode.approval-refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--approval', 'oa_nope'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'is not an owner-seat request id',
+  );
+});
 scene('development-mode.done', async (place) => {
   const io = testIo(place.root, other);
   return show(
@@ -1890,6 +1906,36 @@ scene('archive.exists', async (place) => {
   const first = await archived(place, ['--keep-running'], owner, downSources());
   if (first.code !== 0) throw new Error(`${first.err}${first.out}`);
   return show(await archived(place, ['--keep-running'], owner, downSources()), 'exists already');
+});
+const SCOPED_ID = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+scene('archive.scoped', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  messageKeyOf(place.home);
+  return show(await archived(place, ['--seat', 'worker', '--older-than', '7d'], owner, downSources()), 'nothing to move');
+});
+scene('archive.scoped-failed', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  plantRecord(place.home, place.root, 'acme', 'worker', SCOPED_ID, 'a stale body\n', { from: 'lead', at: NOW.toISOString() });
+  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: SCOPED_ID, to: 'worker', root: place.root, session: 'acme', at: NOW.toISOString() }, place.home);
+  const written = writeReceipt(recordDir(place.root, 'acme', 'worker'), receipt, place.home);
+  if (!written.ok) throw new Error(written.reason);
+  const dir = recordDir(place.root, 'acme', 'worker');
+  const old = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000);
+  for (const name of readdirSync(dir)) utimesSync(join(dir, name), old, old);
+  // The day's destination already holds the record's name: the family cannot move whole, so it
+  // is left in place and the run ends 1.
+  const dest = join(place.root, '.agents', 'send-drops-archive', NOW.toISOString().slice(0, 10), 'acme', 'worker');
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, SCOPED_ID), 'occupied\n');
+  return show(await archived(place, ['--seat', 'worker', '--older-than', '7d'], owner, downSources()), 'destination already holds');
+});
+scene('archive.scoped-refused', async (place) => {
+  write(place, TWO.replace('workspace:', 'session: acme\nworkspace:'));
+  messageKeyOf(place.home);
+  return show(
+    await archived(place, ['--seat', 'worker', '--older-than', '7d'], other, downSources()),
+    'only the owner or a seat this team marks `leads` moves another seat\'s messages',
+  );
 });
 
 async function initial(
@@ -3713,6 +3759,15 @@ scene('answer.identity', async (place) => {
   host.reading = () => questionReading('question', QUESTION_TEXT);
   return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
 });
+scene('answer.trust-identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+  });
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'launched identity was not recorded');
+});
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
@@ -3798,7 +3853,7 @@ scene('answer.version', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, CURSOR_TRUST, { version: '2026.10.02' })), 'no trust answer');
 });
@@ -3807,7 +3862,7 @@ scene('answer.screen', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, 'not a dialog\n')), 'not the trust dialog');
 });
@@ -3818,7 +3873,7 @@ scene('answer.label', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
@@ -3828,7 +3883,7 @@ scene('answer.folder', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
@@ -3847,7 +3902,7 @@ scene('answer.ready', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
@@ -4671,7 +4726,42 @@ function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonS
       calls.push('uninstall');
       return { ok: true, unitPath: place(home), removed: true };
     }),
+    restart: overrides.restart ?? ((home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    }),
     calls,
+  };
+}
+
+/** A manager that answers a restart by loading the installed unit again; whether the daemon it
+ *  starts answers is the scene's health seam. */
+function restartingService(): FakeDaemonService {
+  return fakeDaemonService({
+    restart: (home) => {
+      const success: ServiceRestartSuccess = {
+        ok: true,
+        unitPath: join(home, 'unit.plist'),
+        undo: () => success,
+      };
+      return success;
+    },
+  });
+}
+
+/** A health reading whose daemon runs but does not answer the probe. */
+function unansweredHealth(): DaemonHealth {
+  const reading = answeringHealth();
+  return { ...reading, probe: { state: 'unanswered', at: reading.probe.at, reason: 'closed' } };
+}
+
+/** Answers from the Nth probe on, across the windows one command opens (a restart's own, then
+ *  its undo's), so a scene reaches the restored-daemon branch without sleeping for real waits. */
+function healthFrom(probe: number): () => Promise<DaemonHealth> {
+  let probes = 0;
+  return async () => {
+    probes += 1;
+    return probes >= probe ? answeringHealth() : unansweredHealth();
   };
 }
 
@@ -4829,7 +4919,65 @@ scene('daemon.installed', async (place) => {
 scene('daemon.not-owner', async (place) =>
   show(
     await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner installs or removes the machine daemon',
+    'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon',
+  ));
+scene('daemon.grant-refused', async (place) => {
+  // A grant recorded on the run that the command's own verification cannot admit: the command
+  // refuses it and names the failed check instead of falling back to the caller.
+  const io = testIo(place.root, detachedCaller);
+  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key'), grantId: 'gg_synthetic', clientId: 'synthetic-client' };
+  const code = await runDaemon(['install', '--dry-run'], io, daemonSources(place, { service: fakeDaemonService() }));
+  return show({ code, out: io.out, err: io.err }, 'cannot be read as a general grant');
+});
+scene('daemon.restart-dry-run', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would restart');
+});
+scene('daemon.restarted', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: async () => answeringHealth() });
+  return show(ran, 'team daemon: restarted');
+});
+scene('daemon.not-installed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({ ok: false, reason: 'not-installed', why: 'no user service unit is installed, so there is no daemon to restart', detail: null }),
+      }),
+    }),
+    'no user service unit is installed',
+  ));
+scene('daemon.restart-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({
+          ok: false,
+          reason: 'refused',
+          why: 'the system\'s service manager refused to start the installed daemon again',
+          detail: 'synthetic load refused',
+        }),
+      }),
+    }),
+    'no daemon is running',
+  ));
+scene('daemon.restart-rolled-back', async (place) => {
+  // The restarted daemon's own probe window stays unanswered; the daemon the undo starts
+  // answers in the second window, so the restart is reported as undone.
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: healthFrom(10), sleep: async () => {} });
+  return show(ran, 'the installed unit was started again and its daemon answers');
+});
+scene('daemon.restart-rollback-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: restartingService(),
+      health: async () => unansweredHealth(),
+      sleep: async () => {},
+    }),
+    'no daemon is running',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
 scene('daemon.run-root', async (place) =>
@@ -6149,9 +6297,14 @@ scene('mcp.serve-ended', async (place) => {
     root: place.root,
     roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
   });
+  // The state `team up` leaves: the server proves its caller stands on lead's recorded pane.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'ready', pane: leadSeat.pane };
+  });
   const lobby = join(place.base, 'lobby');
   mkdirSync(lobby, { recursive: true });
-  const io = testIo(lobby, owner);
+  const io = testIo(lobby, leadSeat);
   const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
     lines: (async function* () {
       // stdin is already closed
@@ -6404,6 +6557,16 @@ async function forgetRun(place: Place, argv: string[], caller: Caller = owner): 
 }
 scene('approvals.invocation', async (place) => show(await approvalsRun(place, []), 'a verb is required'));
 scene('approvals.listed', async (place) => show(await approvalsRun(place, ['list']), 'no always rules'));
+scene('approvals.details', async (place) => {
+  // A recorded team-create request, in the shape `createTeamCreateRequest` writes: the details
+  // print the record the card deliberately leaves out, without an owner seat or a signature.
+  const id = `tc_${'ab'.repeat(12)}`;
+  const params = { kind: 'team-create' as const, root: place.root, team: 'demo', head: null };
+  const record = { request_id: id, params, params_sha256: teamCreateHash(params), created: '2026-01-01T00:00:00.000Z', expires_at: '2026-01-01T00:15:00.000Z' };
+  mkdirSync(actionRequestsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionRequestsFolder(place.home), `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  return show(await approvalsRun(place, ['details', id]), `request ${id}`);
+});
 scene('approvals.revoked', async (place) => {
   const id = `oa_${'ab'.repeat(12)}`;
   mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
@@ -6654,7 +6817,13 @@ scene('restart.lead', async (place) => {
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
-  return show(await restarted(place, ['worker']), 'is signed off');
+  // A stopped seat is its own team's to revive: the owner and the team's lead clear it with
+  // `team restart`. A caller outside that rule is still refused, and under dev mode the caller
+  // gate folds — so the sign-off's own refusal is what the run says.
+  const io = testIo(place.root, other);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const code = await runRestart(['worker'], io, restartSources(place));
+  return show({ code, out: io.out, err: io.err }, 'is signed off');
 });
 scene('restart.herdr', async (place) => {
   write(place, ACTIVE_TWO);
@@ -7025,8 +7194,8 @@ for (const [name, command, args, invalidArgs] of [
 {
   const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
   const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
-  async function acked(place: Place, argv: readonly string[]): Promise<Ran> {
-    const io = testIo(place.root, owner);
+  async function acked(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
     return { code: await runAck([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
   }
   scene('ack.read', async (place) => {
@@ -7044,6 +7213,30 @@ for (const [name, command, args, invalidArgs] of [
     return show(await acked(place, [SENT]), 'team ack:');
   });
   scene('ack.usage', async (place) => show(await acked(place, []), '<id> is required'));
+  scene('ack.scoped', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await acked(place, ['--seat', 'worker', '--older-than', '7d']), '0 marked read');
+  });
+  scene('ack.scoped-failed', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'worker', SENT, 'a stale body\n', { from: 'lead', at: NOW.toISOString() });
+    // The receipt name is held by a file that does not verify: the ack may not overwrite it, so
+    // this due record is reported and the run ends 1.
+    const dir = recordDir(place.root, 'acme', 'worker');
+    writeFileSync(join(dir, `${SENT}.read.json`), '{"payload":{}}\n');
+    const old = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000);
+    for (const name of readdirSync(dir)) utimesSync(join(dir, name), old, old);
+    return show(await acked(place, ['--seat', 'worker', '--older-than', '7d']), 'not marked read');
+  });
+  scene('ack.scoped-refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(
+      await acked(place, ['--seat', 'worker', '--older-than', '7d'], other),
+      'only the owner or a seat this team marks `leads` acknowledges another seat\'s messages',
+    );
+  });
 }
 
 {
@@ -7340,7 +7533,7 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
   return analyzed;
 }
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-replacement-ended', 'team.mcp-serve-restart-failed',
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
@@ -7489,7 +7682,14 @@ function canon(rows: readonly ExitRow[]): string {
   const sorted = [...rows].sort((a, b) => a.command.localeCompare(b.command) || a.code - b.code || a.id.localeCompare(b.id));
   return `${JSON.stringify({
     format: 1,
-    rows: sorted.map((row) => ({ code: row.code, command: row.command, id: row.id, meaning: row.meaning, trigger: row.trigger })),
+    rows: sorted.map((row) => ({
+      code: row.code,
+      command: row.command,
+      id: row.id,
+      ...(row.inherits ? { inherits: true as const } : {}),
+      meaning: row.meaning,
+      trigger: row.trigger,
+    })),
   }, null, 2)}\n`;
 }
 
@@ -7587,6 +7787,121 @@ analyzerTest('process.exit with no argument fails the check', () => {
 analyzerTest('a module-level process.exit fails the check', () => {
   const files = withDoctor('', "if (process.env.GATE_PROBE === '1') process.exit(17);\n");
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
+});
+
+// The inherited exit: a command that leaves with the code a process it waited on exited with.
+// The form is allowed at exactly one site — `restartSelf`'s default exit hook in
+// src/mcp/serve.ts — and the parameter there must still be the argument the hook was called
+// with. That hook in turn has one caller only: the child's exit or close handler, as
+// `exit(<that handler's code parameter> ?? 1)`. Everywhere else `process.exit(<parameter>)` is
+// refused, and the row's own code is only the fallback when the child gave none.
+const INHERITED_PROBE: ExitRow = {
+  code: 1,
+  command: 'doctor',
+  id: 'doctor.inherited-probe',
+  inherits: true,
+  meaning: 'the process doctor waited on ended and doctor left with its exit code',
+  trigger: 'team doctor',
+};
+
+function inheritedProbe(body: string, row?: ExitRow): ReturnType<typeof problems> {
+  const files = withDoctor("  if (argv[0] === '--gate-probe') inheritExit(7);\n", body);
+  const rows = row ? [...contract.rows, row] : contract.rows;
+  return problems({ files, contractText: canon(rows), page: render(rows) });
+}
+
+// The one allowed hook, exactly as src/mcp/serve.ts spells it. A probe that changes one of these
+// lines is applied to the real file text, so everything else on the site still has to stand.
+const SERVE_HOOK_EXIT = '    // exit: team.mcp-serve-replacement-ended\n    process.exit(code);';
+
+function serveProbe(mutation: (text: string) => string): ReturnType<typeof problems> {
+  const text = readFileSync(new URL('../src/mcp/serve.ts', import.meta.url), 'utf8');
+  const next = mutation(text);
+  expect(next).not.toBe(text);
+  return problems({ files: new Map([['src/mcp/serve.ts', next]]) });
+}
+
+analyzerTest('an inherited exit outside the restart hook fails the check', () => {
+  // Even a clean helper that is handed a number is refused: the form is an allowlist of one
+  // site, not a way for any command to leave with a code it never declared.
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes('allowed only'))).toBe(true);
+});
+
+analyzerTest('an inherited exit under a fixed row fails the check', () => {
+  const found = serveProbe((text) => text.replace('// exit: team.mcp-serve-replacement-ended', '// exit: team.mcp-serve-restart-failed'));
+  expect(found.some((line) => line.includes('inherited'))).toBe(true);
+});
+
+analyzerTest('an inherited row on a fixed exit fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  // exit: doctor.inherited-probe\n  process.exit(1);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('doctor.inherited-probe') && line.includes('inherited row'))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is not a parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  const code = 7;\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is an outer parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  const nested = (): void => {\n    // exit: doctor.inherited-probe\n    process.exit(code);\n  };\n  nested();\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
+});
+
+analyzerTest('assigning the restart hook\'s parameter fails the check', () => {
+  const found = serveProbe((text) => text.replace(SERVE_HOOK_EXIT, SERVE_HOOK_EXIT.replace('    // exit:', '    code = 247;\n    // exit:')));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('is assigned'))).toBe(true);
+});
+
+analyzerTest('shadowing the restart hook\'s parameter fails the check', () => {
+  const found = serveProbe((text) => text.replace(
+    SERVE_HOOK_EXIT,
+    `    {\n      const code = 247;\n${SERVE_HOOK_EXIT.replaceAll('    ', '      ')}\n    }`,
+  ));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook with a literal fails the check', () => {
+  // The hook only ever leaves with the child's code. A literal is a code the command chose,
+  // which is exactly what the inherited form is not allowed to hide.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook without the child\'s fallback fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('a second caller of the restart hook fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code ?? 1);\n      exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('assigning the child handler\'s code before the call fails the check', () => {
+  // The argument still reads `code`, but it is no longer the code the child exited with.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'code = 247;\n      exit(code ?? 1);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('is assigned inside the child exit handler'))).toBe(true);
+});
+
+analyzerTest('shadowing the child handler\'s code before the call fails the check', () => {
+  const found = serveProbe((text) => text.replace(
+    'exit(code ?? 1);',
+    '{\n        const code = 247;\n        exit(code ?? 1);\n      }',
+  ));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
 });
 
 analyzerTest('a default call that is not the command table fails the check', () => {
