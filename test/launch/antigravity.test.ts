@@ -201,8 +201,11 @@ describe('Antigravity launch and captured screens', () => {
       .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions ${trust}`);
     expect(commandOf('zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions ${trust}`);
+    // The settings ride inside the quoted script too, where the CLI reads them: the JSON's own
+    // double quotes are escaped for the script's double-quoted layer, so agy still receives one
+    // settings word rather than a word the shell broke in two.
     expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions ${trust}`);
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions --settings '{\\"trustedWorkspaces\\":[\\"/work/acme\\"]}'"`);
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({

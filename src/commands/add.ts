@@ -72,7 +72,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -154,10 +154,10 @@ export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --request [--reason <text>] [--json]
        team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
-The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, and never starts the orchestrator or the operator.
 
@@ -204,7 +204,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval'], ['temporary', 'dry-run', 'json', 'request']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval', 'reason'], ['temporary', 'dry-run', 'json', 'request']);
   const json = wantsJson;
   // The one refusal of the client form, at every site.
   const clientRefused = (message: string): number => {
@@ -252,7 +252,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, { ...sources, root: seatRoot });
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
   if (seatStep.kind === 'requested') {
     // exit: add.approval-requested
     return 0;
@@ -331,12 +331,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+  const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-  });
+  };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team rename` wrote into the registry's record is
+  // started under the name the record gives it, never missed over the file the session launched
+  // from. A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     if (json) {
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -1563,15 +1571,17 @@ function hostOf(input: {
      */
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. The identity goes in the same write as the waiting
+      // record, so the owner's later `team up` — and `team answer` — can tell a pane that is
+      // still the seat's from one that is not.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        // The process identity goes in the same write, so the owner's later `team up` — and
-        // `team answer` — can tell a pane that is still the seat's from one that is not.
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,

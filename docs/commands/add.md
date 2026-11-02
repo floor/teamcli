@@ -22,7 +22,7 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
              [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-    team add <name> [--like <seat>] --request [--json]
+    team add <name> [--like <seat>] --request [--reason <text>] [--json]
     team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
 `--request` and `--approval <request-id>` are the owner-seat door, with no owner terminal: see
@@ -409,10 +409,10 @@ Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --request [--reason <text>] [--json]
        team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
-The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, and never starts the orchestrator or the operator.
 

@@ -84,7 +84,7 @@ test('a fresh install writes no client key or general grant into the unit', asyn
   writeFileSync(key, keyMaterial, { mode: 0o600 });
   writeFileSync(grant, JSON.stringify({ synthetic: true, proof: 'synthetic-grant-proof-DO-NOT-PRINT' }), { mode: 0o600 });
   const io = testIo(fixture.root, { kind: 'owner' });
-  io.general = { key, grant };
+  io.general = { key, grant, grantId: 'gg_synthetic', clientId: 'synthetic-client' };
 
   const code = await runDaemon(['install', '--json'], io, sources(fixture));
 
@@ -161,7 +161,7 @@ test('machine dev mode admits the placed orchestrator to install with no grant, 
   const { code, io } = await install(fixture, [], { kind: 'seat', name: 'clerk', pane: 'pane1', session: 'sample' });
 
   expect(code).toBe(0);
-  expect(io.err).toContain('warning: only the owner installs or removes the machine daemon; this call is clerk; dev mode continues');
+  expect(io.err).toContain('warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is clerk; dev mode continues');
   expect(io.err).toContain('dev-mode on at machine level');
   expect(io.out).toContain('installed for');
   const unit = readFileSync(fixture.unitPath, 'utf8');
@@ -179,6 +179,6 @@ test('machine dev mode does not admit an operator that is not the team lead', as
   const { code, io } = await install(fixture, [], { kind: 'seat', name: 'op-1', pane: 'pane2', session: 'sample' });
 
   expect(code).toBe(1);
-  expect(io.err).toContain('only the owner installs or removes the machine daemon; this call is op-1');
+  expect(io.err).toContain('only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is op-1');
   expect(existsSync(fixture.unitPath)).toBe(false);
 });

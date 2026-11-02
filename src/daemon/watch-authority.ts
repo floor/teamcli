@@ -520,6 +520,12 @@ async function runAuthoritativeHost(
         setEffects('blocked');
         loop.standby(why);
       },
+      beat() {
+        // A due beat landing inside this pass carries the other routes' renewals. A lost run
+        // carries nothing: its abort is the end of everything this host would have done.
+        if (loss.signal.aborted) return;
+        loop.beat?.();
+      },
     };
 
     // Effects need both halves: the sender and the shared verifier. With either absent the watch

@@ -63,42 +63,42 @@ function take(argv: string[], name: string): { value: string | undefined; presen
  * (the door takes those off the line before this table is read). A scan must consume a value
  * where the command consumes one: `down --session --abandon` makes `--abandon` the session's
  * value and reaches no abandon op, and a door that read the flag there would check the wrong op.
- * test/general-door.test.ts holds this table to contract/cli.json.
+ * test/general-door-narrow.test.ts holds this table to contract/cli.json.
  */
 export const VALUED: Readonly<Record<string, readonly string[]>> = {
   ack: [],
-  add: ['approval', 'client', 'effort', 'file', 'like', 'model', 'session', 'team', 'until', 'worktree'],
+  add: ['approval', 'client', 'effort', 'file', 'like', 'model', 'reason', 'session', 'team', 'until', 'worktree'],
   agents: [],
   answer: ['file', 'session'],
-  approvals: ['approval'],
+  approvals: ['approval', 'reason'],
   archive: ['file', 'out', 'session'],
   'ask-show': ['ask', 'marker'],
   batch: ['approval', 'do'],
   brief: ['file', 'seat', 'session'],
   broker: [],
-  bus: ['approval', 'inherited'],
+  bus: ['approval', 'inherited', 'reason'],
   check: ['file', 'pr', 'session', 'since'],
-  client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'to', 'via'],
+  client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
-  config: ['approval'],
+  config: ['approval', 'reason'],
   daemon: ['root', 'route', 'started-by'],
   delegate: ['commands'],
-  'development-mode': [],
+  'development-mode': ['approval', 'reason'],
   doctor: ['file', 'session'],
-  down: ['approval', 'client', 'file', 'session', 'team'],
+  down: ['approval', 'client', 'file', 'reason', 'session', 'team'],
   drops: ['epoch', 'seat', 'session'],
   feed: ['audit', 'briefs', 'limit', 'seat'],
-  forget: ['approval'],
+  forget: ['approval', 'reason'],
   grant: ['answer', 'approve-as-owner-seat', 'approve', 'assertion', 'at', 'bundle', 'capabilities', 'client', 'code', 'credential-id', 'deny', 'entity', 'execute', 'expires', 'from', 'grant-entity', 'grant-project', 'grant-team', 'name', 'public-key', 'revoke-approval', 'rp-id', 'scope', 'seat', 'signer-public-key', 'signer', 'team', 'to', 'type', 'via'],
   hold: ['client', 'team', 'until'],
   import: ['approval'],
-  init: ['approval-mode', 'approve-as-owner-seat', 'assertion', 'execute', 'from-archive', 'revoke-approval', 'scope', 'signer'],
+  init: ['approval-mode', 'approve-as-owner-seat', 'assertion', 'execute', 'from-archive', 'reason', 'revoke-approval', 'scope', 'signer'],
   issues: [],
   list: [],
   lock: ['for', 'wait'],
   mcp: ['epoch', 'file', 'seat', 'session'],
   messages: ['ack', 'client', 'limit', 'request-id', 'since'],
-  migrate: ['approval'],
+  migrate: ['approval', 'reason'],
   next: [],
   'owner-seat': ['days', 'entity', 'grant-emission', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
@@ -122,7 +122,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   route: [],
   seat: ['client', 'file', 'session', 'team'],
   seats: ['client', 'file', 'session', 'team'],
-  send: ['approval', 'brief', 'channel', 'client', 'confirm', 'file', 'ms', 'record', 'request-id', 'subject', 'timeout'],
+  send: ['approval', 'brief', 'channel', 'client', 'confirm', 'file', 'ms', 'reason', 'record', 'request-id', 'subject', 'timeout'],
   sessions: ['by', 'client', 'team'],
   settings: ['file'],
   setup: ['credential-id', 'grant-duration', 'public-key', 'request-expiry', 'roots', 'rule-lifetime', 'signature', 'signer', 'team'],
@@ -130,7 +130,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   swap: ['file', 'to'],
   tempo: [],
   unlock: [],
-  up: ['approval', 'client', 'file', 'session', 'team'],
+  up: ['approval', 'client', 'file', 'reason', 'session', 'team'],
   usage: [],
   watch: ['file', 'session'],
   workflow: ['evidence', 'script'],
@@ -328,5 +328,5 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   if (doubled !== null) return { kind: 'refused', why: doubled, json };
   const covered = grantCoversOp(read.grant, op);
   if (!covered.ok) return { kind: 'refused', why: covered.why, json };
-  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' }, general: { grant: grantPath, key: keyPath } }, grant: read.grant, json };
+  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' }, general: { grant: grantPath, key: keyPath, grantId: read.grant.grant_id, clientId: read.grant.client_id } }, grant: read.grant, json };
 }

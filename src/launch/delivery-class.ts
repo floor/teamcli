@@ -92,6 +92,11 @@ export function declaredDeliveryClass(cli: string): DeliveryClass {
   return profileFor(cli)?.delivery ?? 'none';
 }
 
+/** The words for a webhook route that stands while no bus serves its root: the adapter fires
+ *  when the bus announces the record, so the send queues the message for the bus instead of
+ *  claiming a wake it did not make. */
+export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus takes it';
+
 /** The class in plain words, for a console line after the leg's own word. Never a bare
  *  "unconfirmed": each sentence says what happens to the message next. */
 export function deliveryWords(cls: DeliveryClass, seat: string): string {
@@ -124,6 +129,10 @@ export type DeliveryEvidence = {
    *  (`recordedSeatSession`), so a pointer can actually be handed over. Read only while an
    *  endpoint is recorded and bound; `false` there is what keeps the class off `between-turns`. */
   conversation: boolean;
+  /** The endpoint record bound to the current presence incarnation, before the conversation is
+   *  consulted. True with `conversation` false is an endpoint the class cannot use: there is a
+   *  queue, and no thread to hand a pointer for — the reading a status line shows separately. */
+  endpointRecorded: boolean;
   /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
@@ -274,6 +283,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       channel,
       socket: facts.socket,
       conversation,
+      endpointRecorded,
       endpoint,
       human,
       webhook,

@@ -15,9 +15,11 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { resolveSeatOverrides } from '../config/apply.ts';
@@ -539,6 +541,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
     ...delegateNotes(team),
+    // A wildcard general grant signed before the release that first shipped an op reaches that op
+    // without a new approval: named once per grant, information only, never counted as a difference.
+    ...(sources.home !== undefined ? widenedGrantNotes(sources.home, sources.now()) : []),
     ...leadNameNotes(team),
     ...nicknameDriftNotes(team),
     ...nicknameTakenNotes(team, root, sources.home),
@@ -551,6 +556,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...modelRule.notes,
     ...socketSkipped.notes,
     ...unknownStatusNotes(team, state, live),
+    // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
+    // status` prints: the fallback is a reading worth acting on, never a silent state.
+    ...unmanagedEndpointNotes(team.seats, state),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,

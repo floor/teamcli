@@ -104,6 +104,10 @@ Two seats that each want a record for the same kind of work spell the names apar
 
 ## Examples
 
+```fixture
+panes: neutral
+```
+
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
@@ -195,17 +199,18 @@ $ team proc list --json
 ```console
 $ team status
 team beacon, session "beacon"
-  SEAT           STATE  MODEL            PANE   REACH
-  claude-keeper  idle   Claude Opus 5.5  w1:p1  typed
-  claude-desk    idle   Claude Opus 5.5  w2:p1  typed
-note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
+  SEAT           STATE  MODEL            PANE   REACH  WAKE
+  claude-keeper  idle   Claude Opus 5.5  pane1  typed  !pull-on-turn
+  claude-desk    idle   Claude Opus 5.5  pane2  typed  !pull-on-turn
+note: watch: pane pane9, pid 4242, last heartbeat 0s ago
 note: proc release-build: claude-desk since 2026-10-04T09:00:00.000Z, pid 4243
 note: proc release-watch: owner since 2026-10-04T09:00:00.000Z
 no differences
 ```
 
-The seats table's last column is the word for the channel a send would take to reach each seat —
-`socket` or `typed`; [team status](status.md) explains it.
+The seats table's REACH column is the word for the channel a send would take to reach each seat —
+`socket` or `typed` — and its WAKE column the delivery class a send measures, `!` marking a seat
+a message cannot wake while it is idle; [team status](status.md) explains both.
 
 A second seat may not take a live name. The record stays where it is:
 

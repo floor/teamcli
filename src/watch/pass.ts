@@ -278,6 +278,9 @@ export type PassInput = {
   // its pane's reading: `gone`/`replaced` is no longer the seat. A null, or a pane the map
   // doesn't hold, is exactly a seat with no record: the restored check reports nothing.
   processes?: Readonly<Record<string, PaneProcesses | null>>;
+  /** A hosted pass's seam to the daemon's beat, called between seats. The CLI watch passes none:
+   *  its own loop is the only reader of the clock there. */
+  beat?: () => void;
   /** Registry signing model/version by seat, with the record's own cli and launch for the
    *  provenance the signed reader takes; null means no current registry record. */
   signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string } | null>;
@@ -334,6 +337,7 @@ export function pass({
   machineAccounts = [],
   foreground,
   processes,
+  beat,
   signing,
   continuityIds,
   readScreen: read = readScreen,
@@ -420,6 +424,8 @@ export function pass({
   };
 
   for (const { name, cli, vendor, account, parked, stopped, seat } of seats) {
+    // The pass is synchronous and can be long: a due daemon beat lands between seats.
+    beat?.();
     const liveness = limitsFor(seat);
     const agent = live.agents.find((candidate) => candidate.name === name);
     const lead = name === team.orchestrator || name === team.operator;
@@ -491,6 +497,12 @@ export function pass({
     }
 
     const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
+    const continuity = replacedSeat(verdict, {
+      asked: true,
+      namedOnPane: state.seats[name]?.pane === agent.pane,
+      recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
+      liveSession: agent.session,
+    });
     const signed = signing?.get(name);
     observations.push({
       name,
@@ -506,12 +518,7 @@ export function pass({
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
       identity: verdict,
       launcher: seat ? usesLauncher(seat) : false,
-      continuity: replacedSeat(verdict, {
-        asked: true,
-        namedOnPane: state.seats[name]?.pane === agent.pane,
-        recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
-        liveSession: agent.session,
-      }),
+      continuity,
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
@@ -536,7 +543,7 @@ export function pass({
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
     });
-    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
+    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory, continuity === 'restored'));
   }
 
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
@@ -553,6 +560,7 @@ export function pass({
   const machineReadings: MachineFigure[] = [];
   let readings = stored.slice();
   for (const seat of observations) {
+    beat?.();
     if (!seat.running) continue;
     const declared = team.seats.find((one) => one.name === seat.name)
       ?? team.seats.find((one) => one.name === state.seats[seat.name]?.temporary?.like);
@@ -589,6 +597,7 @@ export function pass({
   // check reports it as it always did and judges no rule on it.
   const paneModels = new Map<string, PaneModelReading>();
   for (const agent of live.agents) {
+    beat?.();
     if (known.has(agent.pane)) continue;
     const names = foreground?.[agent.pane] ?? null;
     const cli = CLIS.find((name) => reportedLiveAgent(names, profileFor(name)?.processNames ?? []));
@@ -641,6 +650,7 @@ export function pass({
   const off = Array.isArray(approval) ? new Set(watch.checks) : new Set<string>();
   const enabled = (name: string) => ALWAYS_ON.includes(name) || !off.has(name);
   for (const seat of observations) {
+    beat?.();
     for (const check of SEAT_CHECKS) if (enabled(check.name)) reports.push(...check.run(seat, ctx));
   }
   for (const check of TEAM_CHECKS) if (enabled(check.name)) reports.push(...check.run(teamObservation, ctx));
@@ -831,17 +841,19 @@ function pauseDrops(
 
 /** The sidebar lines a running file seat needs this pass. The first cycle paints both lines
  *  from the file, with a live model or effort in place of the file's when the screen shows
- *  one. A later cycle paints only a line that changed. A temporary seat has no file seat and
- *  is not passed here. */
+ *  one. A restored seat's pane is not trusted on its first cycle: the record's line is
+ *  painted, and a later cycle reads the pane again. A later cycle paints only a line that
+ *  changed. A temporary seat has no file seat and is not passed here. */
 function labelOf(
   seat: Seat,
   pane: string,
   workspace: string,
   screen: string | undefined,
   memory: Memory,
+  restored: boolean,
 ): PassResult['labels'] {
   const prior = memory.seatLabels[seat.name];
-  const live = liveDisplayAgent(seat, screen, prior?.effort);
+  const live = liveDisplayAgent(seat, restored && prior === undefined ? undefined : screen, prior?.effort);
   if (live.effort) (memory.seatLabels[seat.name] ??= {}).effort = live.effort;
   const title = workspaceLabel(seat);
   const push: PassResult['labels'][number] = { name: seat.name, pane, workspace };

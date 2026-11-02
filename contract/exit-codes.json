@@ -9,11 +9,32 @@
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
     },
     {
+      "code": 0,
+      "command": "ack",
+      "id": "ack.scoped",
+      "meaning": "every record of the seat due by the window was marked read, or already was",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "ack",
       "id": "ack.refused",
       "meaning": "the message can't be marked read, or the call is not the record's addressee",
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-failed",
+      "meaning": "at least one record of the seat due by the window could not be marked read; the others were",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-refused",
+      "meaning": "the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team ack --seat worker --older-than 7d"
     },
     {
       "code": 2,
@@ -697,6 +718,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.trust-identity",
+      "meaning": "the seat's launched identity was not recorded; no process in its pane can be checked against it",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.unverified",
       "meaning": "the name is not a declared seat",
       "trigger": "team answer lead trust"
@@ -728,6 +756,13 @@
       "id": "approvals.approval-requested",
       "meaning": "an owner-seat request for this revoke was recorded and sent to the owner seat",
       "trigger": "team approvals revoke <id...> --request"
+    },
+    {
+      "code": 0,
+      "command": "approvals",
+      "id": "approvals.details",
+      "meaning": "one request's full record and the audit entries written for it were printed",
+      "trigger": "team approvals details <id>"
     },
     {
       "code": 0,
@@ -772,6 +807,13 @@
       "trigger": "team archive --keep-running"
     },
     {
+      "code": 0,
+      "command": "archive",
+      "id": "archive.scoped",
+      "meaning": "every family of the seat due by the window was moved, or nothing was due",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "archive",
       "id": "archive.detached",
@@ -798,6 +840,20 @@
       "id": "archive.out-owner",
       "meaning": "--out is the owner’s",
       "trigger": "team archive --out ~/archives"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-failed",
+      "meaning": "at least one family of the seat due by the window could not be moved; the others were",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-refused",
+      "meaning": "the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team archive --seat worker --older-than 7d"
     },
     {
       "code": 2,
@@ -1670,6 +1726,20 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.restart-dry-run",
+      "meaning": "the restart plan was printed and nothing was stopped or started",
+      "trigger": "team daemon restart --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
+      "id": "daemon.restarted",
+      "meaning": "the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.status",
       "meaning": "the one-line health reading was printed: running, not running or unknown",
       "trigger": "team daemon status"
@@ -1754,6 +1824,13 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.grant-refused",
+      "meaning": "the general grant recorded on the run no longer admits the daemon op: its chain, its key or its ops failed verification",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.install-failed",
       "meaning": "the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back",
       "trigger": "team daemon install"
@@ -1775,9 +1852,37 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.not-installed",
+      "meaning": "no user service unit is installed, so a restart had nothing to stop or start",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.not-owner",
-      "meaning": "the caller may not install or remove the machine daemon",
+      "meaning": "the caller may not install, restart or remove the machine daemon",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-failed",
+      "meaning": "the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rollback-failed",
+      "meaning": "the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rolled-back",
+      "meaning": "the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers",
+      "trigger": "team daemon restart"
     },
     {
       "code": 1,
@@ -1894,9 +1999,23 @@
     {
       "code": 0,
       "command": "development-mode",
+      "id": "development-mode.approval-requested",
+      "meaning": "an owner-seat request for this exact switch was recorded and sent to the owner seat; nothing was written",
+      "trigger": "team development-mode set local-fast --request"
+    },
+    {
+      "code": 0,
+      "command": "development-mode",
       "id": "development-mode.done",
       "meaning": "the machine development mode was read, shown, planned, or switched",
       "trigger": "team development-mode set local-fast --show"
+    },
+    {
+      "code": 1,
+      "command": "development-mode",
+      "id": "development-mode.approval-refused",
+      "meaning": "the owner-seat request named another switch, is unanswered, expired or already used, or the request id is not one",
+      "trigger": "team development-mode set local-fast --approval oa_nope"
     },
     {
       "code": 1,
@@ -4520,7 +4639,7 @@
       "code": 1,
       "command": "restart",
       "id": "restart.signed-off",
-      "meaning": "the seat is parked or stopped",
+      "meaning": "the seat is stopped, and the caller is not the owner or its own team's leads seat",
       "trigger": "team restart worker"
     },
     {

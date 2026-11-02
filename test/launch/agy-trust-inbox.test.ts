@@ -32,12 +32,12 @@ describe('the antigravity profile carries the measured session settings', () => 
 
 describe('launchCommand with a seat folder', () => {
   test('the seat\'s absolute folder is trusted for the session, after the unattended flag', () => {
-    expect(launchCommand(antigravity, 'agy --model gemini-3.8-flash-high', 'Rules.', undefined, undefined, undefined, undefined, undefined, '/work/acme'))
+    expect(launchCommand(antigravity, 'agy --model gemini-3.8-flash-high', 'Rules.', undefined, undefined, undefined, undefined, undefined, undefined, '/work/acme'))
       .toBe(`AGENT_UNATTENDED=1 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --settings '{"trustedWorkspaces":["/work/acme"]}'`);
   });
 
   test('a folder holding a quote reaches the JSON escaped, and the shell as one word', () => {
-    expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, '/work/ac"me'))
+    expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, undefined, '/work/ac"me'))
       .toBe(`AGENT_UNATTENDED=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":["/work/ac\\"me"]}'`);
   });
 
@@ -47,7 +47,7 @@ describe('launchCommand with a seat folder', () => {
     // of the folder.
     for (const folder of ['/work/$&', "/work/$'", '/work/$`', '/work/$$']) {
       const value = JSON.stringify({ trustedWorkspaces: [folder] });
-      expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, folder))
+      expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, undefined, undefined, folder))
         .toBe(`AGENT_UNATTENDED=1 agy --dangerously-skip-permissions --settings ${shellQuote(value)}`);
     }
   });
@@ -63,15 +63,15 @@ describe('launchCommand with a seat folder', () => {
   });
 
   test('a line that names its own --settings keeps it, and no second value is appended', () => {
-    expect(launchCommand(antigravity, 'agy --settings ./mine.json', 'Rules.', undefined, undefined, undefined, undefined, undefined, '/work/acme'))
+    expect(launchCommand(antigravity, 'agy --settings ./mine.json', 'Rules.', undefined, undefined, undefined, undefined, undefined, undefined, '/work/acme'))
       .toBe('AGENT_UNATTENDED=1 agy --settings ./mine.json --dangerously-skip-permissions');
-    expect(launchCommand(antigravity, 'agy --settings=./mine.json', 'Rules.', undefined, undefined, undefined, undefined, undefined, '/work/acme'))
+    expect(launchCommand(antigravity, 'agy --settings=./mine.json', 'Rules.', undefined, undefined, undefined, undefined, undefined, undefined, '/work/acme'))
       .toBe('AGENT_UNATTENDED=1 agy --settings=./mine.json --dangerously-skip-permissions');
   });
 
   test('the settings ride before a first-message rules line, which stays last', () => {
     const line = '/home/owner/.config/team/demo/rules/gemini.md';
-    expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, line, '/work/acme'))
+    expect(launchCommand(antigravity, 'agy', 'Rules.', undefined, undefined, undefined, undefined, line, undefined, '/work/acme'))
       .toBe(`AGENT_UNATTENDED=1 agy --dangerously-skip-permissions --settings '{"trustedWorkspaces":["/work/acme"]}' --prompt-interactive ${line}`);
   });
 });

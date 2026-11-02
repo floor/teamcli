@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import type { Args } from './args.ts';
-import { describeCaller, isOwner, walkCaller } from './caller.ts';
+import { describeCaller, detachedRefusal, isOwner, walkCaller } from './caller.ts';
 import { devModeOwnerLiftAtCwd } from './dev_mode.ts';
 import {
   CLIENT_GRANT_ID_PATTERN,
@@ -38,7 +38,8 @@ import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { charterGate } from './charter/check.ts';
 import { createRequestLink } from './client/request-link.ts';
-import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
+import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, approvalRuleFolders, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingGrantFolders, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
+import { ownerAdmitsRecord, type OwnerRecordAdmission, type OwnerSeatSources } from './client/owner-action-step.ts';
 import type { Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
@@ -785,9 +786,48 @@ export function runOwnerSeatInboxMode(io: Io, json: boolean, home: string): 'ok'
   return 'ok';
 }
 
-/** `team grant --deny <request-id>`: spends a pending request; anyone may, it only narrows. */
-export function runDenyGrantMode(rawIo: Io, io: Io, requestId: string, json: boolean, home: string): 'ok' | 'refused' {
-  const result = denyPendingGrant(home, requestId);
+/** One refusal for `team grant --deny` / `--revoke-approval`: the shared record check said no
+ *  (src/client/owner-action-step.ts). The rule has to cover the folder of the record this call
+ *  changes; the caller's own folder was never the test. */
+function refuseRecordChange(
+  rawIo: Io,
+  io: Io,
+  json: boolean,
+  refused: Extract<OwnerRecordAdmission, { ok: false }>,
+  words: { caller: string; unknown: string; subject: string; id: string },
+): 'refused' {
+  const called = describeCaller(refused.caller);
+  let why: string;
+  if (refused.kind === 'caller') {
+    why = detachedRefusal(refused.caller, { who: 'the owner', where: 'a terminal outside the terminal host' }) ?? `${words.caller}; this call is ${called}`;
+  } else if (refused.targets === null || refused.targets.length === 0) {
+    why = `${words.unknown}; this call is ${called}`;
+  } else {
+    why = `the owner-seat rule covers ${refused.ruleFolder ?? 'no folder'}; ${words.subject} ${words.id} changes ${refused.targets.join(', ')}, outside it; this call is ${called}`;
+  }
+  if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);
+  else io.stderr(`team grant: ${why}\n`);
+  return 'refused';
+}
+
+/** `team grant --deny <request-id>`: spends a pending request. Its folder must be one the owner's
+ *  standing consent covers (src/client/owner-action-step.ts); the owner at a terminal always may. */
+export function runDenyGrantMode(rawIo: Io, io: Io, requestId: string, json: boolean, home: string, approval: GrantApprovalOptions = {}): 'ok' | 'refused' {
+  const sources: OwnerSeatSources = {
+    home,
+    ...(approval.now !== undefined ? { now: () => approval.now! } : {}),
+    ...(approval.ownerSeatStore !== undefined ? { ownerSeatStore: approval.ownerSeatStore } : {}),
+  };
+  const admitted = ownerAdmitsRecord('team-revoke-approval', io, pendingGrantFolders(home, requestId), sources);
+  if (!admitted.ok) {
+    return refuseRecordChange(rawIo, io, json, admitted, {
+      caller: 'only the owner denies a pending grant request, from a terminal outside the terminal host',
+      unknown: `pending grant request ${requestId} is not a signed request under the owner key, so the folder it changes cannot be checked`,
+      subject: 'pending grant request',
+      id: requestId,
+    });
+  }
+  const result = denyPendingGrant(home, requestId, approval.now);
   if (!result.ok) {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(result.why), null);
     else io.stderr(`team grant: ${result.why}\n`);
@@ -811,8 +851,24 @@ export function runListApprovalsMode(io: Io, json: boolean, home: string): 'ok' 
   return 'ok';
 }
 
-/** `team grant --revoke-approval <rule-id>`: removes one standing rule; anyone may. */
-export function runRevokeApprovalMode(rawIo: Io, io: Io, ruleId: string, json: boolean, home: string): 'ok' | 'refused' {
+/** `team grant --revoke-approval <rule-id>`: removes one standing rule. The rule must cover the
+ *  folder of the rule it removes (src/client/owner-action-step.ts); the owner at a terminal
+ *  always may. */
+export function runRevokeApprovalMode(rawIo: Io, io: Io, ruleId: string, json: boolean, home: string, approval: GrantApprovalOptions = {}): 'ok' | 'refused' {
+  const sources: OwnerSeatSources = {
+    home,
+    ...(approval.now !== undefined ? { now: () => approval.now! } : {}),
+    ...(approval.ownerSeatStore !== undefined ? { ownerSeatStore: approval.ownerSeatStore } : {}),
+  };
+  const admitted = ownerAdmitsRecord('team-revoke-approval', io, approvalRuleFolders(home, ruleId), sources);
+  if (!admitted.ok) {
+    return refuseRecordChange(rawIo, io, json, admitted, {
+      caller: 'only the owner revokes an approval rule, from a terminal outside the terminal host',
+      unknown: `approval rule ${ruleId} is not an approval rule the owner signed, so the folder it changes cannot be checked`,
+      subject: 'approval rule',
+      id: ruleId,
+    });
+  }
   const result = revokeApprovalRule(home, ruleId);
   if (!result.ok) {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(result.why), null);

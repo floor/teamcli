@@ -188,11 +188,12 @@ export function readEvidenceDocument(
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (error) {
+    } catch {
+      // Fixed words: a parser's own message quotes the bytes it choked on, and this file is the reader's.
       return {
         ok: false,
         code: 'workflow.evidence',
-        why: `the evidence file is not valid JSON: ${(error as Error).message}`,
+        why: 'the evidence file is not valid JSON',
       };
     }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

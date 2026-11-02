@@ -80,6 +80,10 @@
       "enum": ["enter"],
       "description": "optional: the one key that confirms the CLI's own exit question, sent by a stop on a screen the profile reads as an exit question; absent, a seat that asks the question cannot be stopped by asking"
     },
+    "exit_completion": {
+      "type": "boolean",
+      "description": "optional: the CLI draws its own completion row for the exit text inside the box, so an Enter pressed before the row settles is drawn as a typed newline instead of running the command; the composer declares that row in own_rows. True: the exit typing waits the measured settle after the box reads back, presses Enter once more on the text-plus-one-empty-row frame an early Enter leaves, and clears an exit text the CLI never ran with exit_clear. Absent (false) where no capture shows a completion row."
+    },
     "input": {
       "type": "object",
       "additionalProperties": false,
@@ -133,6 +137,10 @@
       "type": "array", "minItems": 1,
       "description": "optional: prompts team down --abandon answers so the seat closes fully; keys are only escape, ctrl+c or ctrl+u, never a menu option",
       "items": { "type": "object", "additionalProperties": false, "required": ["all", "keys"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "keys": { "type": "array", "minItems": 1, "items": { "enum": ["escape", "ctrl+c", "ctrl+u"] } } } }
+    },
+    "typed_wake": {
+      "enum": ["screen"],
+      "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
     },
     "mcp_inbox": {
       "type": "object",
@@ -650,7 +658,7 @@
           "type": "array",
           "items": { "$ref": "#/$defs/patternString" },
           "minItems": 1,
-          "description": "Rows the pane draws of its own between the input row and the status row, declared only where a capture shows them. A matching row is not text in the box. Only status-then-one reads the key."
+          "description": "Rows the pane draws of its own inside the composer's box — between the input row and the status row, or between the input row and the closing rule — declared only where a capture shows them (Muse's completion row for the text being typed). A matching row is not text in the box. status-then-one and box-to-rule read the key."
         },
         "chrome": {
           "description": "The pane's own chrome row under the status line: one string, or a list read as the union, each matching the whole line. Only status-then-one reads the key. Declared, a line under the status row is chrome only when it matches — any other line there leaves the row unread, so text the seat prints can never stand in for the pane's row and feed a quota figure. A composer that declares none keeps the trailing rule it had.",
@@ -696,7 +704,7 @@
         { "if": { "required": ["status_below"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
         { "if": { "required": ["status"] }, "then": { "properties": { "mode": { "const": "box-to-rule" } } } },
         { "if": { "required": ["border"] }, "then": { "properties": { "mode": { "enum": ["status-last", "status-then-one"] } } } },
-        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } },
+        { "if": { "required": ["own_rows"] }, "then": { "properties": { "mode": { "enum": ["status-then-one", "box-to-rule"] } } } },
         { "if": { "required": ["chrome"] }, "then": { "properties": { "mode": { "const": "status-then-one" } } } }
       ]
     }

@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 import { executePlan, type Host, type ScreenKind } from '../../src/launch/execute.ts';
 import { type Step } from '../../src/launch/plan.ts';
 import { progressWriter } from '../../src/launch/progress.ts';
+import { profileFor } from '../../src/profiles/index.ts';
+import { launchCommand } from '../../src/profiles/profile.ts';
 
 function steps(name: string, command: string): Step[] {
   const repairLine = `\`team remove ${name} --keep\` then \`team add ${name}\``;
@@ -58,6 +60,54 @@ test('a launch records the conversation id it carries, not only what herdr reads
   expect((recorded.resumed as { agent_session?: string }).agent_session).toBe('697cde83-cfd4-4811-8e01-4186093fd5e5');
   // A line that names no id falls back to herdr's reading.
   expect((recorded.herdr as { agent_session?: string }).agent_session).toBe('herdr-read-id');
+});
+
+test('an unprovable launch line logs its profile-options fallback beside the run output', async () => {
+  // The plan carries launchCommand's warning on the launch step. An operator reading team.log
+  // afterwards must see why the seat has no rules as well as why it has no recorded session.
+  let notice: string | undefined;
+  const command = launchCommand(
+    profileFor('claude-code')!,
+    '/bin/sh -c "claude --model m $TAIL"',
+    'Rules.',
+    undefined, undefined, undefined, undefined, undefined,
+    (text) => { notice = text; },
+  );
+  expect(notice ?? '').toContain('profile options are after the line');
+  const said: string[] = [];
+  const logged: string[] = [];
+  const host: Host = {
+    startServer: () => true,
+    sessionUp: () => true,
+    createWorkspace: (_s, _c, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
+    paneRun: () => true,
+    typeLine: () => true,
+    renameAgent: () => true,
+    closeWorkspace: () => true,
+    stopSession: () => true,
+    kill: () => true,
+    agentPanes: () => ['fallback-pane'],
+    classify: (): ScreenKind => 'idle',
+    sleep: async () => {},
+    now: () => 0,
+    allow: () => null,
+    record: () => {},
+    running: () => {},
+    drop: () => {},
+    say: (line) => said.push(line),
+    detail: (line) => said.push(line),
+    log: (_seat, text) => logged.push(text),
+  };
+  const repairLine = '`team remove fallback --keep` then `team add fallback`';
+  await executePlan([
+    { kind: 'run', argv: [], do: { do: 'create', seat: 'fallback', label: 'fallback', cwd: '.', repairLine } },
+    { kind: 'run', argv: [], do: { do: 'launch', seat: 'fallback', label: 'fallback', command, cli: 'claude-code', ...(notice === undefined ? {} : { notice }) } },
+    { kind: 'wait', text: 'idle', do: { do: 'idle', seat: 'fallback', label: 'fallback', cli: 'claude-code', seconds: 90, command, repairLine } },
+  ], 'acme', host, { concurrency: 1 });
+  expect(said.join('')).toContain('profile options are after the line');
+  expect(logged.join('\n')).toContain('profile options are after the line');
+  // The other notice a launch on such a line writes keeps its place in the log too.
+  expect(logged.join('\n')).toContain('launched without one');
 });
 
 test.each([

@@ -49,10 +49,11 @@ Given `<seat>`:
    ```
    team restart: <seat> is not a signed declared seat
    ```
-3. **Parked or stopped seat (`restart.signed-off`, exit 1)**: if the declared seat has `parked: true` or `stopped: true`, `team restart` refuses:
+3. **Stopped seat (`restart.signed-off`, exit 1)**: a declared seat with `stopped: true` is signed off. The owner, or a seat this team's map admits as `leads` on its own recorded pane, restarts it: the run clears the mark in the same write that records the launch, then relaunches the seat, and a launch that does not reach ready — a failed workspace creation or launch command — puts the mark back in its own validated write. A failed revival leaves the seat stopped. Anyone else refuses:
    ```
-   team restart: <seat> is signed off; the owner takes the sign-off off in the file and runs team up
+   team restart: <seat> is signed off; a `leads` seat of its own team clears it with `team restart <seat>`
    ```
+   `team up` keeps leaving a stopped seat out of its plan; `team restart <seat>` is the single-seat path that brings one back.
 
 ---
 
@@ -126,7 +127,7 @@ An idle seat holding unsent text is restarted, not refused. The run, in order:
    ```
    <seat>: input box: holds unsent text, copied to <path> and pasted back once the new pane is ready
    <seat>: turn: not working (unsent)
-   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
+   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
    ```
 4. Closes the old workspace without typing into it — the copied text is what waits for the new
    pane, so no exit sequence is typed over it — and relaunches as usual.
@@ -158,8 +159,25 @@ Whenever `team restart` closes a running or exited pane, it first prints three l
 ```
 <seat>: input box: empty | holds unsent text | holds unsent text, copied to <path> and pasted back once the new pane is ready | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
-<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
+<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
 ```
+
+`<launch>` is the line the relaunch runs, never the bare declaration: a conversation resume the
+run carried is already in it, so the line printed before the close, the line the new pane runs and
+the recipe the launch records are one and the same.
+
+`<resume words>` says what happens to the seat's recorded conversation, in the run's own plain
+words, so the terminal never shows a fresh start that was meant to be a resume:
+
+- `and resumes the recorded conversation <id>` when the run carries the conversation on the line.
+- `without passing the old transcript; no recorded conversation` when neither record binds one.
+- `without passing the old transcript; not resuming its recorded conversation (<why>)` when a
+  record exists and the run refused it — the same reason the refusal line gives.
+- `without passing the old transcript; its recorded conversation was dropped before the launch
+  (<why>)` when the record changed between the caller's read and the launch, so the id the caller
+  saw is no longer the one the records bind.
+- `without passing the old transcript; abandoned by the caller` under `--abandon`.
+- `without passing the old transcript; started fresh by the caller` under `--fresh`.
 
 If graceful exit on a `free` seat fails to return the pane to its shell or close the workspace, `team restart` aborts (`restart.busy`, exit 1) and never launches a second copy beside the still-open pane.
 
@@ -226,7 +244,7 @@ Once the old pane is stopped and closed:
 | `1` | `restart.replaced` | the old pane holds a process that is not the seat's CLI |
 | `1` | `restart.run-lock` | another session-mutating run holds the session lock |
 | `1` | `restart.self` | a seat caller tried to restart its own recorded pane |
-| `1` | `restart.signed-off` | the seat is parked or stopped |
+| `1` | `restart.signed-off` | the seat is stopped, and the caller is not the owner or its own team's `leads` seat |
 | `1` | `restart.temporary` | the seat is a temporary copy |
 | `1` | `restart.unknown` | the seat is not a declared seat |
 | `2` | `restart.configuration` | the team file cannot be read or validated, or the cwd is not a git repository |

@@ -518,6 +518,21 @@ describe('team init --from-archive', () => {
     expect(existsSync(join(project, '.agents'))).toBe(false);
   });
 
+  test('a manifest that does not parse is refused in fixed words, never quoting the file', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = join(base, 'unparsed-archive');
+    mkdirSync(dir);
+    // The marker is a bare token, so a parser's own message would quote it back into the refusal.
+    writeFileSync(join(dir, 'manifest.json'), '{"kind": ARCHIVE_PARSE_MARKER}\n');
+
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
+    expect(io.err).toContain(`the manifest in ${dir} is not valid JSON`);
+    expect(io.err).not.toContain('ARCHIVE_PARSE_MARKER');
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
   test('a file the manifest names but validation refuses is never written', async () => {
     const home = join(base, 'home');
     mkdirSync(home, { recursive: true });

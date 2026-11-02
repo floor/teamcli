@@ -45,6 +45,14 @@ A hold on the team ([team hold](hold.md)) is the last `note` line before the sum
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`
 reads as none, so a lapsed one is not printed.
 
+A general grant whose op list is the wildcard (`*`) reaches every op, including ops that shipped
+after the grant was signed. When such a grant reaches ops that first shipped after its signing,
+doctor prints one `note` finding per grant, naming the ops it now reaches and the day it was
+signed; re-signing the grant on or after that release stops the finding, and a grant whose signing
+time cannot be read says `unknown` instead of claiming an op is new. Like a hold, it is a note: the
+summary's counts do not move and no exit changes, and a focused report (`--login` or `--jules`)
+does not carry it.
+
 ## Example
 
 ```yaml file=.agents/team.yaml

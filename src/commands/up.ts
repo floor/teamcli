@@ -64,6 +64,9 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
+import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
+import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -94,6 +97,7 @@ import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -160,6 +164,10 @@ export type UpSources = {
   logGranted?: typeof logGranted;
   // Present on the shipped command. A dry run never calls it.
   launch?: Launch;
+  // The loaded threads a managed Codex endpoint holds, for binding a ready seat whose records
+  // name no conversation to the one thread its endpoint proves. Absent in a world that binds
+  // nothing: the launch's summary then names no pull-only reason.
+  codexThreads?(endpoint: string): Promise<CodexLoadedThreadsRead>;
 };
 
 export type Launch = {
@@ -361,6 +369,7 @@ export const realSources: UpSources = {
   busCommand,
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
+  codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
   superviseBus: true,
 };
@@ -368,7 +377,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--reason <text>] [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told to read their inbox and act on what is addressed to them, and not to continue earlier work unless a message asks for it; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -858,6 +867,9 @@ function seatPlan(
           launched: next,
           session: restoredSession,
           detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
+          // The pane and workspace the seat holds now: `up` paints both sidebar lines there.
+          pane: onRecordedPane?.pane ?? recorded.pane,
+          workspace: onRecordedPane?.workspace || recorded.workspace,
         },
       };
     }
@@ -1054,6 +1066,14 @@ function devModeWarning(line: string, standing: Standing, placement: string): bo
   return line === notInForce(standing);
 }
 
+/** The notice a run says when the team has no approval record. It is a fact, never a refusal:
+ *  the file is what a run acts on, and a run admits without a record in every mode. Its
+ *  destination is the inventory's — the "Team change" workflow's step "apply over the file's
+ *  digest", the owner's step over the digest — so the notice names that step, which is where a
+ *  record is required. */
+const NO_APPROVAL_NOTICE =
+  'the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one';
+
 /** The run's refusals, each sentence once, in the order the run reached them: the same cause can
  *  arrive from two readers (the gate and `doctor` both read the approval). */
 function uniqueRefusals(refusals: readonly UpRefusal[]): UpRefusal[] {
@@ -1091,7 +1111,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general', 'reason'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1183,7 +1203,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ? { kind: 'admitted' as const }
     : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, sources);
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, sources);
   if (seatStep.kind === 'requested') {
     // exit: up.approval-requested
     return 0;
@@ -1491,10 +1511,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
+  // No record at all is neither: it is the ordinary file, refused in no mode — a refusal pushed
+  // only when dev mode was on was the inverse of what its id said. Dev mode keeps the notice.
   const approvalSource = loaded.source === 'registry' ? 'registry' as const : 'team-file' as const;
-  if (standing.kind === 'none') {
-    if (dev.on) refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
-  } else if (standing.kind !== 'verified') {
+  const noApprovalNotice = dev.on && standing.kind === 'none' ? NO_APPROVAL_NOTICE : null;
+  if (standing.kind !== 'none' && standing.kind !== 'verified') {
     refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
   }
   // The budget readings the gate refuses on are the live file's own: a standing that is not
@@ -2043,7 +2064,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         .map((seat) => ({ seat, ...deliveryClassOf(seat) }))
         .filter(({ cls }) => !wakeableWhileIdle(cls))
         .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
-  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  const warnings: string[] = [
+    ...(folded ? [folded] : []),
+    ...(gateApproval === null ? [] : [gateApproval]),
+    ...(noApprovalNotice === null ? [] : [noApprovalNotice]),
+  ];
   // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry) {
@@ -2372,17 +2397,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       sleepAt.set(key, promise);
       return promise;
     };
-    /** Writes a seat's waiting record, with the process identity read in the same write. The
+    /** Writes a seat's waiting record, with the process identity read before the write. The
      *  pause's own `[s]` and a run with no terminal (the daemon's restore sweep, a `keep` dialog)
-     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane. */
+     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane.
+     *  The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+     *  while another command waits to write. */
     const writeWaiting = (name: string, waiting: WaitingRecord, pane: string, workspace?: string): void => {
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -2720,6 +2747,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       lock: () => acquireSeatLock(dir, session, input.seat),
       state: () => readState(dir).sessions[session]?.seats[input.seat],
       write(change) {
+        // The terminal host is read before the state lock, so a slow read holds no writer; the
+        // `change` itself still runs under the lock, against the record the write replaces.
+        // `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose process is gone
+        // or replaced.
+        const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[input.seat] ?? { stage: 'launched' as const };
@@ -2727,10 +2759,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           if (current.retained_seats?.[input.seat]) delete current.retained_seats[input.seat];
           const id = prior.id ?? retained?.id ?? mintSeatId();
           const record = change(prior.waiting);
-          // The process identity is read here, at the moment the record is written, in the same
-          // write: `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose
-          // process is gone or replaced.
-          const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
           current.seats[input.seat] = {
             ...prior,
             id,
@@ -2897,7 +2925,49 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // The sweep's outcome summary: ready-confirmed repairs, working skips, and refusals with
     // per-seat reasons, emitted once per pass even on 0/0/0.
     const restoreSummary = restoreSummaryOf(report.restoreBuckets);
-    const summaryLine = plainText(restoreSummary.line);
+    // A ready Codex seat whose records name no conversation is bound to the one thread its own
+    // managed endpoint holds — the same bind a restart makes, under the same proofs: the endpoint
+    // is the seat's own, the registry record is this seat's own, and a read that proves nothing
+    // (no thread, several, or an endpoint that does not answer) leaves both records exactly as
+    // they were. A seat this run refused is never bound: its identity is in doubt. The summary
+    // names each seat left pull-only and the binder's own reason, so a seat this run could not
+    // bind is never mistaken for one it healed.
+    const refusedSeats = new Set(restoreSummary.refused_seats.map((entry) => entry.seat));
+    const pullOnly: { seat: string; why: string }[] = [];
+    for (const seat of team.seats) {
+      if (refusedSeats.has(seat.name)) continue;
+      const held = afterwards[seat.name];
+      if (held === undefined || held.stage !== 'ready') continue;
+      if (nativePushBindingFor(seat.cli) !== 'conversation' || sources.codexThreads === undefined) continue;
+      if (inspectRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding).kind !== 'ok') continue;
+      const read = recordedSeatSession({
+        home: sources.home,
+        root,
+        herdrSession: session,
+        seat: { name: seat.name, cli: seat.cli },
+        state: held,
+      });
+      if (read.kind === 'bound') continue;
+      const bound = await bindCodexSeatThread({
+        home: sources.home,
+        root,
+        dir,
+        session,
+        seat: { name: seat.name, cli: seat.cli },
+        state: held,
+        read: sources.codexThreads,
+      });
+      if (bound.kind === 'bound') {
+        logLine(dir, 'up', callerLabel(caller), `${seat.name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, now());
+      } else {
+        pullOnly.push({ seat: seat.name, why: bound.why });
+        logLine(dir, 'up', callerLabel(caller), `${seat.name}: no thread was bound from its Codex endpoint (${bound.why})`, now());
+      }
+    }
+    const pullOnlyLine = pullOnly
+      .map((one) => `pull-only: ${plainText(one.seat)} (${plainText(one.why)})`)
+      .join('; ');
+    const summaryLine = plainText(restoreSummary.line) + (pullOnlyLine === '' ? '' : `; ${pullOnlyLine}`);
     const cleanedRestoreSummary: RestoreSweepSummary = {
       ...restoreSummary,
       refused_seats: restoreSummary.refused_seats.map((entry) => ({

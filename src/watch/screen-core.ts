@@ -1267,8 +1267,22 @@ function boxToRule(lines: string[], styled: string[], composer: Extract<ScreenDa
     }
     from = input;
   }
-  const rows = lines.slice(input + 1, close);
-  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styled.slice(input + 1, close))) {
+  // The pane draws rows of its own inside the box — Muse 1.4.14's completion row for the text
+  // being typed sits under the input row, between it and the closing rule. The captures name
+  // them per profile (`own_rows`), and only those are dropped: they are the pane's, not the
+  // person's text, so a box that shows exactly the typed text and its completion row still reads
+  // back as the text. Every other row stays, so a box with a row the typed text does not have is
+  // not the typed text, and the caller refuses it.
+  const own = composer.ownRows ?? [];
+  const rows: string[] = [];
+  const styledRows: (string | undefined)[] = [];
+  for (let i = input + 1; i < close; i++) {
+    const line = lines[i] ?? '';
+    if (own.some((pattern) => pattern.test(line))) continue;
+    rows.push(line);
+    styledRows.push(styled[i]);
+  }
+  if (rows.some((line) => line.trim()) && !rowsAreDim(composer, rows, styledRows)) {
     return { kind: 'unsent', from, input, rows };
   }
   const typed = (lines[input] ?? '').replace(composer.prompt, '').trim();

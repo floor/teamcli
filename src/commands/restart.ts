@@ -28,6 +28,8 @@ import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/
 import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -77,7 +79,7 @@ import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../o
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -97,10 +99,10 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --file and --session are the owner's and take no --client), and is never the owner.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --file and --session are the owner's and take no --client), and is never the owner.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -189,11 +191,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'dry-run', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'fresh', 'dry-run', 'json']);
   const clientProblem = args.error === undefined && args.rest.length === 1
     ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
-      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))
-        ? "--client restarts a seat of the one team its grant names: --file, --session and --abandon are the owner's and take no --client"
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon and --fresh are the owner's and take no --client"
         : null)
     : null;
   if (args.error || args.rest.length !== 1 || clientProblem !== null) {
@@ -202,6 +204,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   }
   const name = args.rest[0] ?? '';
   const abandon = args.flags.has('abandon');
+  // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
+  // stop may do to a pane.
+  const fresh = args.flags.has('fresh');
   const dry = args.flags.has('dry-run');
   // Collapsed notes: what plain output writes to stdout while it works (the pre-close readings,
   // the stop's own lines) ride on the document instead.
@@ -237,12 +242,19 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+  const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-  });
+  };
+  // A launched pointer names where this session was launched from, not a copy to read: a team
+  // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
+  // `up` launched from. A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     return configuration(out, json, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
   }
@@ -326,7 +338,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, json, describeCaller(caller));
   }
-  if (declared.stopped) {
+  // A stopped seat is its own team's sign-off to lift: the owner, or a seat this team's map
+  // admits as `leads` on its recorded pane, restarts it, and the run clears the mark in the same
+  // write that records the launch. The caller gate above is not that proof on its own — dev mode
+  // folds its refusal into a warning, and a client run reads past it — so the verdict itself must
+  // be `ok`, not merely unfolded.
+  if (declared.stopped && mayChange.kind !== 'ok') {
     return signedOffRefused(out, json, name);
   }
 
@@ -358,6 +375,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     state: recordedSeat,
   });
   let resume: string | undefined;
+  // Plain words for the pre-close context line when no conversation is carried: the line before
+  // the close repeats the reason this run already gave, so it never reads as a resume that
+  // quietly became a fresh start. Set where each decision is made, never inferred from the line.
+  let resumeNote: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
   // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
@@ -379,6 +400,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     else if (dry) out.stdout(`! ${said}\n`);
     else out.stderr(`team restart: ${plainText(said)}\n`);
     if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+    resumeNote = `not resuming its recorded conversation (${why})`;
   };
   // The id to resume is the one the records bind, not one the state copy must also agree with:
   // the registry record is the proof, and a state copy naming no id is a copy that predates the
@@ -395,16 +417,18 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    // The recorded launcher's own selection, read before anything is stopped: `--abandon` is the
-    // caller's fresh start, and a line that itself names a conversation — the recorded id or any
-    // other — cannot be run fresh. It is never rewritten, so the flag is refused here rather than
-    // pretending the line it would run is a fresh one.
+    // The recorded launcher's own selection, read before anything is stopped: `--abandon` and
+    // `--fresh` are the caller's fresh start, and a line that itself names a conversation — the
+    // recorded id or any other — cannot be run fresh. It is never rewritten, so the flag is
+    // refused here rather than pretending the line it would run is a fresh one.
     const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
-    if (pinned && abandon) {
+    if (pinned && (abandon || fresh)) {
       return notReadyRefused(
         out,
         json,
-        `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`,
+        abandon
+          ? `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`
+          : `${name}: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)`,
       );
     }
     if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
@@ -415,8 +439,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       const carried = resumeCarry(declared.cli, resumeCandidate.launch, resumeCandidate.id);
       if (carried.kind === 'line') {
         // The line selects the recorded id, or names none and takes it appended — never under
-        // the caller's `--abandon`, which starts fresh.
-        if (!abandon) resume = resumeCandidate.id;
+        // the caller's `--abandon` or `--fresh`, which both start a new conversation.
+        if (!abandon && !fresh) resume = resumeCandidate.id;
+        else resumeNote = abandon ? 'abandoned by the caller' : 'started fresh by the caller';
       } else if (pinned) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
@@ -427,7 +452,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           json,
           `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
         );
-      } else if (abandon) {
+      } else if (abandon || fresh) {
         // The caller's fresh start: the id the records bind is not put on the line. The line
         // names no conversation of its own here, so running it as it is starts one.
         if (carried.kind === 'refuse') noResume(carried.why);
@@ -441,6 +466,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         );
       }
     }
+  } else {
+    // Neither record binds a conversation for this seat: the launch starts a fresh one.
+    resumeNote = 'no recorded conversation';
   }
 
   // The client's grant, read once more under its lock immediately before the first effect, and its audit
@@ -480,7 +508,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
+    // The sign-off this run lifts is cleared in the same write that carries the launch: after
+    // the old pane is closed and before the launch reads the file's own words. A launch that
+    // does not reach ready puts it back: the failed run leaves the mark exactly as it was.
+    ...(declared.stopped
+      ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
+      : {}),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
     sources,
@@ -582,6 +617,10 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** Plain words for the pre-close context line when `resume` is absent: no recorded
+   *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
+   *  The line then states why the relaunch starts a fresh conversation. */
+  resumeNote?: string;
   /** The registry-bound session id this restart proves a restored pane against. Absent when no
    *  binding exists, or the CLI has no measured resume form and the state copy names no id: the
    *  pane is then never tied to the launch, and a replaced process is left as it is. */
@@ -597,6 +636,11 @@ export type PerformInput = {
    *  refusal. A swap keeping its queue record on that abort is the caller's rule (the ruling of
    *  2026-10-19). */
   declare?: () => { ok: true } | { ok: false; why: string };
+  /** Puts back the sign-off `declare` lifted when the launch this run declared does not reach
+   *  ready: the team file is rewritten in one validated write, and a failed launch leaves the
+   *  mark exactly as it was. Only a revival of a stopped seat passes it; a swap's declaration
+   *  changes the file on purpose and has nothing to put back. */
+  restore?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
 };
@@ -728,6 +772,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // losslessly. It is applied before the dry answer so the plan prints the line the launch would
   // run; the log line itself is written once the seat is down and the launch is going out.
   let resumed: string | undefined;
+  // The caller's plain words for why no conversation is carried; the drop below replaces them
+  // with its own reason, so the context line always names the decision that stood last.
+  let resumeNote = input.resumeNote;
   if (input.resume !== undefined) {
     const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
     if (carried.kind === 'line') {
@@ -741,8 +788,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         kind: 'not-ready',
         message: `${name}: its launch line does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
       };
+    } else {
+      // The line this launch would run cannot take the id: the CLI has no measured resume form,
+      // or the line sets a session of its own. The launch runs fresh, and the context line says
+      // so with the same reason, rather than reading as a resume that quietly became a start.
+      resumeNote = `not resuming its recorded conversation (${carried.why})`;
     }
-    // A CLI with no measured resume form runs fresh; the caller already said so.
   }
   // The entity model rule's word on the model the line about to run names, read before the seat
   // is stopped. Two lines can run: the declaration's own (a fresh start, and the line a resume
@@ -800,6 +851,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   if ('held' in runLock) {
     return { kind: 'run-lock', held: runLock.held };
   }
+  // A revival's sign-off comes off before the launch reads the file, and the `finally` below
+  // puts it back unless the launch reached ready: a run that fails, returns early or throws
+  // leaves the mark exactly as it was.
+  let signOffLifted = false;
+  let launchReachedReady = false;
   try {
     const freshAgents = sources.agents(session);
     if (freshAgents === null) return { kind: 'herdr' };
@@ -825,6 +881,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         planSeat.launch = declaredLaunch;
         resumed = undefined;
         continuitySession = undefined;
+        resumeNote = `its recorded conversation was dropped before the launch (${why})`;
         const said = `${name}: not resuming its recorded session (${why})`;
         if (json) notes.push(said);
         else out.stderr(`team restart: ${plainText(said)}\n`);
@@ -877,7 +934,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (rechecked.agent) {
       // Print the three pre-close facts before stopping or closing the seat's workspace. Under
       // `--json` they are collapsed notes on the document instead. A screen the profile cannot
-      // read is not claimed empty: its input box was not read.
+      // read is not claimed empty: its input box was not read. The context line quotes the line
+      // this run launches (`planSeat`'s, with the resume it carried), never the bare declaration.
       const box = rechecked.unrecognised !== undefined
         ? 'not read (the screen is not recognised)'
         : draftCopy !== undefined
@@ -885,7 +943,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(next.launch)}" in a new workspace without passing the old transcript\n`);
+      // A carried conversation is said as one: the old transcript phrase described a fresh start,
+      // and the field read it as one even when the resume was on the line. With nothing carried,
+      // the line states the reason the run already gave, so the terminal never shows a silent
+      // fresh start.
+      const context = resumed !== undefined
+        ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes the recorded conversation ${plainLine(resumed)}`
+        : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; ${context}\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
@@ -982,7 +1047,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and the launch, which reads the file's own words. A write that fails is a truthful abort:
     // the run ends non-zero and launches nothing — a swap's queue record stands and the failure
     // is reported (the ruling of 2026-10-19). The seat is already down either way, so the next
-    // `team up` starts it from the file the run actually holds.
+    // `team up` starts it from the file the run actually holds. A revival's sign-off is put back
+    // by the `finally` unless the launch reaches ready: a failed run leaves the mark as it was.
     if (input.declare) {
       const wrote = input.declare();
       if (!wrote.ok) {
@@ -992,6 +1058,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         logLine(dir, input.command, who, said, sources.now());
         return { kind: 'not-ready', message: said };
       }
+      // Only a revival passes `restore`: this run lifted a sign-off the finally must put back
+      // unless the launch below reaches ready.
+      if (input.restore !== undefined) signOffLifted = true;
     }
 
     // A handover the old conversation wrote is passed to the new one through the brief and the
@@ -1121,6 +1190,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       logLine(dir, input.command, who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
       return { kind: 'not-ready', message: `${name} did not reach a ready prompt${keptAt(draftCopy)}` };
     }
+    // The launch reached a ready prompt: the sign-off this run lifted stays off from here on,
+    // whatever the binding reads below say about the record.
+    launchReachedReady = true;
     // The unsent text goes back into the new pane's own box, its rows verified. On success the
     // copy is removed; where the paste did not read back, the copy stays and this run names it.
     if (draftText !== undefined && draftCopy !== undefined) {
@@ -1144,7 +1216,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // it proves to both records, so a send right after the restart is addressed to a real
     // conversation rather than falling to a pull. A read that proves nothing — no thread, several,
     // or an endpoint that does not answer — leaves the records as they were, and the result below
-    // says pull-only with the reason the record gives.
+    // says pull-only with the binder's own reason: none, several or unreadable.
+    let bindWhy: string | null = null;
     if (
       afterwards !== undefined
       && nativePushBindingFor(launching.cli) === 'conversation'
@@ -1171,6 +1244,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         afterwards = readState(dir).sessions[session]?.seats[name] ?? afterwards;
         logLine(dir, input.command, who, `${name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, sources.now());
       } else {
+        bindWhy = bound.why;
         logLine(dir, input.command, who, `${name}: no thread was bound from its Codex endpoint (${bound.why})`, sources.now());
       }
     }
@@ -1202,10 +1276,28 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
-      ...(record.kind === 'bound' ? {} : { pullOnly: record.why }),
+      ...(record.kind === 'bound' ? {} : { pullOnly: bindWhy ?? record.why }),
     };
   } finally {
     runLock.release();
+    // A revival that did not launch is no revival: the sign-off comes back in its own validated
+    // write, keeping whatever else the file gained while the launch ran. A write that cannot be
+    // made is said with its reason — the seat may then start without its mark, which is the one
+    // outcome this run must never leave silent.
+    if (signOffLifted && !launchReachedReady && input.restore !== undefined) {
+      let back: { ok: true } | { ok: false; why: string };
+      try {
+        back = input.restore();
+      } catch (error) {
+        back = { ok: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      const said = back.ok
+        ? `${name}: the launch did not reach ready; its sign-off was put back in the team file`
+        : `${name}: the launch did not reach ready and its sign-off could not be put back (${back.why})`;
+      if (json) notes.push(said);
+      else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+      logLine(dir, input.command, callerText, said, sources.now());
+    }
   }
 }
 
@@ -1237,9 +1329,14 @@ function modelIdWords(text: string): string[] {
   return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
 }
 
-/** The model id a launch line names with `--model`, where it names one. */
-function launchModelId(launch: string): string | null {
-  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(launch);
+/** The model id a launch line names with `--model`, where it names one. Read from the CLI's own
+ *  words, so a flag inside a trailing quoted script counts. A line this version cannot prove is
+ *  read as 0.5.10 read it — the raw text — so a model it plainly names is the id the banner is
+ *  compared with, and one only a quoted flag name appears to name is not. */
+function launchModelId(cli: string, launch: string): string | null {
+  const words = cliWordList(cli, launch);
+  const text = words === null ? launch : words.join(' ');
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(text);
   return match?.[1] ?? null;
 }
 
@@ -1261,7 +1358,7 @@ export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
   }
   const banner = bannerModel(screen);
   if (banner !== null) {
-    const expected = launchModelId(seat.launch) ?? seat.model;
+    const expected = launchModelId(seat.cli, seat.launch) ?? seat.model;
     const wanted = modelIdWords(expected);
     const got = modelIdWords(banner);
     const same = wanted.length === got.length && wanted.every((word) => got.includes(word));
@@ -1594,13 +1691,15 @@ function hostOf(input: {
     stopSession: () => false,
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -1629,6 +1728,12 @@ function hostOf(input: {
     },
     record(name, patch) {
       let replaced: string | undefined;
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. It is read only when the brief's diagnostics can
+      // use it; whether they are written is still decided under the lock, below.
+      const identity = name === seat.name && patch.pane !== undefined && input.brief !== undefined
+        ? launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null)
+        : null;
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
@@ -1666,7 +1771,8 @@ function hostOf(input: {
         // The brief's pane diagnostics, written under this same state lock and only while the
         // state still holds the claim this launch was delivered at: id, incarnation, epoch,
         // digest and stage, compared whole. A claim a recovery or a replacement delivery wrote
-        // in between is the claim that stands, and nothing here overwrites it.
+        // in between is the claim that stands, and nothing here overwrites it. The pane's
+        // process identity was read before the lock, above.
         const expected = input.brief;
         if (isTarget && patch.pane !== undefined && expected !== undefined) {
           const claim = current.briefs?.[name];
@@ -1678,7 +1784,6 @@ function hostOf(input: {
             && claim.sha256 === expected.sha256
             && claim.stage === expected.stage
           ) {
-            const identity = launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null);
             const diagnosed = { ...claim, seat_handle: id, pane: patch.pane };
             if (identity === null) delete diagnosed.pane_root_pid;
             else diagnosed.pane_root_pid = identity.shell;
@@ -1962,11 +2067,61 @@ function leadRefused(out: Io, json: boolean, callerText: string): number {
 function signedOffRefused(out: Io, json: boolean, name: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.signed-off',
-    message: `${plainLine(name)} is signed off; the owner takes the sign-off off in the file and runs team up`,
-    repair: 'the owner takes the sign-off off in the file, then runs team up',
+    message: `${plainLine(name)} is signed off; a \`leads\` seat of its own team clears it with \`team restart ${plainLine(name)}\``,
+    repair: `team restart ${name}`,
   });
   // exit: restart.signed-off
   return 1;
+}
+
+/**
+ * One team-file write a revival makes: the seat's entry edited on the text the file holds now,
+ * and the whole file validated before it replaces the one on disk. A file the schema refuses is
+ * left as it was, and a seat taken out of the file since the run read it is said, never re-added.
+ */
+function rewriteSeatEntry(
+  path: string,
+  name: string,
+  home: string,
+  edit: (text: string, name: string) => string,
+): { ok: true } | { ok: false; why: string } {
+  const where = { home, command: 'restart' };
+  let text: string;
+  try {
+    text = readTeamText(path, where);
+  } catch (error) {
+    return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
+  const written = writeTeamText(path, edit(text, name), where);
+  if (!written.ok) {
+    const problem = written.errors[0];
+    return {
+      ok: false,
+      why: problem === undefined ? 'the rewritten file is invalid' : `${problem.line === undefined ? '' : `line ${problem.line}: `}${problem.message}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
+ * which reads the file's own words: the seat's block loses `stopped: true` and keeps everything
+ * else. A failed write is the caller's abort: nothing is launched from a file the run could not
+ * rewrite.
+ */
+function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
+  return rewriteSeatEntry(path, name, home, clearStopped);
+}
+
+/**
+ * The sign-off a launch that did not reach ready puts back: the seat's block is marked
+ * `stopped: true` again — exactly as it was, without re-adding a seat that left the file and
+ * without touching another entry — and the whole file is validated before it replaces the one
+ * on disk.
+ */
+function declareStopped(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
+  return rewriteSeatEntry(path, name, home, markStopped);
 }
 
 function herdrRefused(out: Io, json: boolean): number {
