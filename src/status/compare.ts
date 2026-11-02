@@ -27,12 +27,15 @@ import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, s
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
 // tell. A pane the map doesn't hold is not compared: exactly as a seat with no record.
+// `foreground` is the same pane reading's argv0 names, where they could be read: one
+// `pane process-info` answers both maps, so a pass asks once for a pane.
 export type Live = {
   running: boolean;
   agents: HerdrAgent[];
   workspaces: HerdrWorkspace[];
   screens: Record<string, string>;
   processes?: Record<string, PaneProcesses | null>;
+  foreground?: Record<string, string[] | null>;
 };
 
 export type Row = {
