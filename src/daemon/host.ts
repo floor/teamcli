@@ -39,7 +39,7 @@ import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
 import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
 import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
-import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
@@ -292,12 +292,6 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = DAEMON_HEARTBEAT_SECONDS.release * 1000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
-/** The store's retirement pass rides the heartbeat, but at most once per this interval: the
- *  escalation pass keeps its five-second tick, and a store's history is not rewritten that often. */
-const FALLBACK_STORE_PASS_MS = 30_000;
-/** Episodes retired and lock folders judged by one retirement pass. A store with a long history
- *  drains over several passes instead of one tick holding the event loop. */
-const FALLBACK_STORE_PASS_LIMIT = 256;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -2023,8 +2017,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
-    // pass keeps no state of its own, and close stops it with this timer.
+    // pass keeps no state of its own, and close stops it with this timer. A root a chores fleet
+    // hosts is swept in that child instead, so this beat keeps only the roots the fleet leaves
+    // inline, plus any root it does not host at all: a root never handed to a child must never
+    // go unswept here. With none left, the beat does nothing at this point.
     if (closed) return;
+    const fleet = choresFleet;
+    const inlineRoots = fleet === null
+      ? sweepRoots
+      : sweepRoots.filter((entry) => {
+          const row = fleet.stateFor(entry.root);
+          return row === undefined || row.mode === 'inline';
+        });
+    if (inlineRoots.length === 0) return;
     const beatAt = now().getTime();
     const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
     if (housekeeping) {
@@ -2035,7 +2040,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     const swept = sweepFallbackEscalations({
       home,
-      roots: sweepRoots,
+      roots: inlineRoots,
       now,
       ...(housekeeping
         ? {

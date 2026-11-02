@@ -150,6 +150,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
       root: entry.route.root,
       team: entry.route.team,
       session: entry.route.session,
+      teamFile: entry.team,
     })),
   };
   let child: ChoresChild;

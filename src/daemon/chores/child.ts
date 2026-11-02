@@ -16,6 +16,7 @@
 //
 // The child leaves when its host asks it to and when its input ends — a daemon that died closes
 // the pipe, so a child never outlives the daemon that started it.
+import { createFallbackPass } from './fallback.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -48,12 +49,10 @@ export type ServeChoresChildInput = {
   stdin: NodeJS.ReadableStream;
   stdout: NodeJS.WritableStream;
   now?: () => Date;
-  /** The real chores. The default runs none: the child and its contract land first, and each
-   *  step moves one chore in here. A test injects its own to observe the budget and the notes. */
+  /** The real chores. The default is the fallback sweep this step moved here; the other chores
+   *  follow in their own steps. A test injects its own to observe the budget and the notes. */
   pass?: ChoresPass;
 };
-
-const NO_CHORES: ChoresPass = async () => [];
 
 /** A positive whole number of milliseconds, or null. */
 function readMillis(raw: unknown): number | null {
@@ -76,6 +75,9 @@ export function choresConfigProblem(raw: unknown): string | null {
     if (typeof route.root !== 'string' || route.root === '') return 'the token names a root without a folder';
     if (typeof route.team !== 'string') return 'the token names a root without a team';
     if (typeof route.session !== 'string') return 'the token names a root without a session';
+    if (route.teamFile !== undefined && (route.teamFile === null || typeof route.teamFile !== 'object' || Array.isArray(route.teamFile))) {
+      return 'the token names a malformed team file';
+    }
   }
   return null;
 }
@@ -87,7 +89,7 @@ export function choresConfigProblem(raw: unknown): string | null {
 export async function serveChoresChild(input: ServeChoresChildInput): Promise<number> {
   const { config } = input;
   const now = input.now ?? (() => new Date());
-  const pass = input.pass ?? NO_CHORES;
+  const pass = input.pass ?? createFallbackPass(config);
   const stdout = input.stdout;
   const stdin = input.stdin;
 

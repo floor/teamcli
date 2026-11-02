@@ -27,6 +27,15 @@ import {
   type RetirementReport,
 } from '../send/fallback-events.ts';
 
+/** The store's retirement pass rides the heartbeat, but at most once per this interval: the
+ *  escalation pass keeps its five-second tick, and a store's history is not rewritten that often.
+ *  The daemon's inline beat and a chores child's own pass read the same interval. */
+export const FALLBACK_STORE_PASS_MS = 30_000;
+
+/** Episodes retired and lock folders judged by one retirement pass. A store with a long history
+ *  drains over several passes instead of one tick holding the event loop. */
+export const FALLBACK_STORE_PASS_LIMIT = 256;
+
 /** A hosted checkout and the team file the daemon validated when it started. */
 export type SweepRoot = { root: string; team: TeamFile };
 

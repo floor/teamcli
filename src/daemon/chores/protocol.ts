@@ -10,9 +10,19 @@
 // Nothing here is a command line or a setting: a child is started only by the daemon's spawner
 // through a one-use token, and the daemon's own policy decides where the chores run.
 
+import type { TeamFile } from '../../file/types.ts';
+
 /** How the child was started: the roots it serves and the limits its supervisor gave it. The
  *  token file carries this; a child reads it once and serves from it. */
-export type ChoresChildRoute = { root: string; team: string; session: string };
+export type ChoresChildRoute = {
+  root: string;
+  team: string;
+  session: string;
+  /** The validated team file the daemon hosted this root with, carried so the child's chores
+   *  read the same snapshot instead of reading the file again. Absent in a hand-built token,
+   *  where the pass reads the root's team file itself. */
+  teamFile?: TeamFile;
+};
 
 export type ChoresChildConfig = {
   version: 1;
