@@ -1,7 +1,7 @@
 // Service-adapter scenes: every registration command is intercepted by the synthetic runner.
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
 import type { DaemonHealth } from '../../src/daemon/health.ts';
@@ -14,7 +14,7 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 }) as typeof process.kill);
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
-  if (command === 'git' && options?.cwd?.startsWith('/private/tmp/o3daemonstack-')) return realExec(command, args, options);
+  if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
   if (command === 'ps') return ''; // Synthetic unavailable ancestry, no process inspection.
   forbidden.push(String(command)); throw Error('no external command in the independent scene');
 }) as typeof child.execFileSync);
@@ -22,6 +22,8 @@ const spawn = spyOn(child, 'spawn').mockImplementation((() => { forbidden.push('
 const spawnSync = spyOn(child, 'spawnSync').mockImplementation((() => { forbidden.push('spawnSync'); throw Error('no manager command'); }) as typeof child.spawnSync);
 afterEach(() => { expect(forbidden.splice(0)).toEqual([]); });
 afterAll(() => { kill.mockRestore(); exec.mockRestore(); spawn.mockRestore(); spawnSync.mockRestore(); });
+const { fixtureBase } = await import('../helpers.ts');
+const fixturePrefix = join(fixtureBase('o3daemonstack-'), 'case-');
 const { runDaemon } = await import('../../src/commands/daemon.ts');
 const { darwinServiceManager } = await import('../../src/daemon/service-darwin.ts');
 const { issueOwnerGeneralGrant, admitGeneral } = await import('../../src/client/general-grant.ts');
@@ -31,7 +33,7 @@ const { intoRegistry, underRegistry } = await import('../helpers/registry-team.t
 const now = () => new Date('2026-11-02T10:00:00Z');
 const session = 'daemon-stack-independent';
 function world(refuseLoad = false) {
-  const base = mkdtempSync('/private/tmp/o3daemonstack-'), home = join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents');
+  const base = realpathSync(mkdtempSync(fixturePrefix)), home = join(base, 'home'), root = join(base, 'checkout'), dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true }); mkdirSync(home);
   child.execFileSync('git', ['init', '-q'], { cwd: root });
   const file = join(dir, 'team.yaml');

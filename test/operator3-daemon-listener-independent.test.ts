@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -13,12 +13,14 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 }) as typeof process.kill);
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
-  if (command === 'git' && options?.cwd?.startsWith('/private/tmp/o3listen-')) return realExec(command, args, options);
+  if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
   if (command === 'ps') return ''; // No real process inspection in these scenes.
   forbidden.push(String(command)); throw Error('no external command in listener scene');
 }) as typeof child.execFileSync);
 const spawn = spyOn(child, 'spawn').mockImplementation((() => { forbidden.push('spawn'); throw Error('no external launch'); }) as typeof child.spawn);
 const spawnSync = spyOn(child, 'spawnSync').mockImplementation((() => { forbidden.push('spawnSync'); throw Error('no external launch'); }) as typeof child.spawnSync);
+const { shortSocketBase } = await import('./helpers.ts');
+const fixturePrefix = join(shortSocketBase(), 'o3listen-');
 const { startMachineDaemon } = await import('../src/daemon/host.ts');
 const { probeDaemonHealth } = await import('../src/daemon/health.ts');
 const { hostedWatchAuthority } = await import('../src/daemon/watch-authority.ts');
@@ -45,7 +47,7 @@ function request(path: string, frame: unknown): Promise<any> {
   });
 }
 function fixture(stale: boolean) {
-  const base = mkdtempSync('/private/tmp/o3listen-'), home = join(base, 'h'), root = join(base, 'r'), dir = join(root, '.agents');
+  const base = realpathSync(mkdtempSync(fixturePrefix)), home = join(base, 'h'), root = join(base, 'r'), dir = join(root, '.agents');
   mkdirSync(home); mkdirSync(dir, { recursive: true }); child.execFileSync('git', ['init', '-q'], { cwd: root });
   const file = join(dir, 'team.yaml');
   const seat = (name: string, extra = '') => `  - role: worker\n    name: ${name}\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude\n${extra}`;
