@@ -280,6 +280,7 @@ describe('owner page', () => {
       'team-forget': 'TeamCLI: forget a team record',
       'team-config': "TeamCLI: change the team's record",
       'team-general-grant': 'TeamCLI: issue a general grant',
+      'development-mode': 'TeamCLI: development mode',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({

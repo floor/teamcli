@@ -60,14 +60,36 @@ function inOrder(actions: readonly string[]): string {
   return `${actions.slice(0, -1).join(', ')}, then ${actions[actions.length - 1]!}`;
 }
 
+/** The value an action's question names, when it has one: a development-mode request names the
+ *  mode it sets, read from the request's own bound words (`set <mode>`). */
+function asked(verb: readonly string[] | undefined): string | undefined {
+  return verb?.[0] === 'set' ? verb[1] : undefined;
+}
+
+/** The title line: the action's own phrase, or the name of a switch whose title is not a phrase. */
+function titleOf(action: string, what: string): string {
+  if (action === 'development-mode') return msg('card.title.development-mode');
+  return msg('card.title', { action: what });
+}
+
+/** The question line: one catalog sentence per kind, naming what the request binds. */
+function questionOf(action: string, team: string, words: readonly string[] | undefined): string {
+  if (action === 'development-mode') {
+    const mode = asked(words);
+    // A record that carries no bound words says only that there is a request to answer.
+    return mode === undefined ? msg('card.question.approval') : msg('card.question.development-mode', { mode });
+  }
+  return msg(`card.question.${action}` as MessageId, { team });
+}
+
 /** One owner-action request, as the owner reads it before answering. */
-export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by'>): ApprovalCard {
+export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'words'>): ApprovalCard {
   const words = params.actions.map((action) => msg(`card.what.${action}` as MessageId));
   if (params.actions.length === 1) {
     const action = params.actions[0]!;
     return {
-      title: msg('card.title', { action: words[0]! }),
-      question: msg(`card.question.${action}` as MessageId, { team: params.team }),
+      title: titleOf(action, words[0]!),
+      question: questionOf(action, params.team, params.words?.[action]),
       scope: msg('card.scope.asked', { asker: params.requested_by }),
     };
   }

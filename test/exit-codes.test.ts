@@ -1582,6 +1582,22 @@ scene('conformance-adapter.finished', async () => {
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
 });
 
+scene('development-mode.approval-requested', async (place) => {
+  // An injected store records the request and offers no Touch ID: synthetic signing only.
+  const store = seatOwner(place.home);
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--request'], io, { home: place.home, now: NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+    'owner-seat request',
+  );
+});
+scene('development-mode.approval-refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--approval', 'oa_nope'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'is not an owner-seat request id',
+  );
+});
 scene('development-mode.done', async (place) => {
   const io = testIo(place.root, other);
   return show(

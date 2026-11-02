@@ -1901,9 +1901,23 @@
     {
       "code": 0,
       "command": "development-mode",
+      "id": "development-mode.approval-requested",
+      "meaning": "an owner-seat request for this exact switch was recorded and sent to the owner seat; nothing was written",
+      "trigger": "team development-mode set local-fast --request"
+    },
+    {
+      "code": 0,
+      "command": "development-mode",
       "id": "development-mode.done",
       "meaning": "the machine development mode was read, shown, planned, or switched",
       "trigger": "team development-mode set local-fast --show"
+    },
+    {
+      "code": 1,
+      "command": "development-mode",
+      "id": "development-mode.approval-refused",
+      "meaning": "the owner-seat request named another switch, is unanswered, expired or already used, or the request id is not one",
+      "trigger": "team development-mode set local-fast --approval oa_nope"
     },
     {
       "code": 1,

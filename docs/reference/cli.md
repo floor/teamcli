@@ -1120,6 +1120,8 @@ Usage:
 
     team development-mode [--json]
     team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --request [--json]
+    team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 ### Who may run it
 
@@ -1146,6 +1148,8 @@ Hidden: no
 Usage:
 
     team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --request [--json]
+    team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 #### Who may run it
 
@@ -1155,11 +1159,13 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--request` | no | no | no |
 | `--show` | no | no | no |
 | `-h` | no | no | yes |
 
