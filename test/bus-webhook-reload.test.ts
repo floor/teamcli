@@ -329,9 +329,10 @@ test('a malformed registry record is reported without the text it holds', async 
   const said: string[] = [];
   const bus = await start(at, said);
   // The parser's own message quotes the text it refused; the bus must not forward it. The marker
-  // stands for anything a malformed record could carry.
+  // stands for anything a malformed record could carry, and is written unquoted so the record is
+  // invalid JSON: a valid record of the wrong shape is refused before the parser's message exists.
   const marker = 'SYNTHETIC_RELOAD_SECRET_DO_NOT_LOG';
-  writeFileSync(teamConfigRecordPath(at.home, teamIdOf(at.root)), `{"token":"${marker}"}`);
+  writeFileSync(teamConfigRecordPath(at.home, teamIdOf(at.root)), `{"token":${marker}}`);
 
   await bus.reconcileNow();
   const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
