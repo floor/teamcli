@@ -8,8 +8,10 @@ import type { Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
 import {
   noteTransport,
+  noteTransportSoon,
   type AttemptOutcome,
   type CanonicalRecipient,
+  type DeferredNote,
   type FallbackContext,
   type FallbackNote,
   type RelayReceipt,
@@ -44,6 +46,9 @@ export type FallbackWalk = {
   /** Record one attempt. The answer is the recorder's; a refusal changes nothing about the
    *  send, and it is the caller's to report. */
   note(attempt: WalkAttempt): FallbackNote;
+  /** Record one attempt without waiting on a busy episode: a send whose record is already
+   *  durable uses this, and a deferred fact is recorded by the next drain pass. */
+  noteSoon(attempt: WalkAttempt): FallbackNote | DeferredNote;
 };
 
 /** The digest of the signed record's bytes: the episode's checked value, never a key part. */
@@ -76,23 +81,26 @@ export function beginFallbackWalk(input: {
     now: input.now,
     ...(input.recipientTeam === undefined ? {} : { recipientTeam: input.recipientTeam }),
   };
+  const factOf = (attempt: WalkAttempt): TransportFact => ({
+    recipient,
+    messageId: input.messageId,
+    recordDigest,
+    route: attempt.route,
+    outcome: attempt.outcome,
+    at: attempt.at.toISOString(),
+    ms: attempt.ms,
+    liveRoutesRemain: attempt.liveRoutesRemain,
+    ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
+    ...(attempt.receipt === undefined ? {} : { receipt: attempt.receipt }),
+  });
   return {
     messageId: input.messageId,
     recordDigest,
     note(attempt: WalkAttempt): FallbackNote {
-      const fact: TransportFact = {
-        recipient,
-        messageId: input.messageId,
-        recordDigest,
-        route: attempt.route,
-        outcome: attempt.outcome,
-        at: attempt.at.toISOString(),
-        ms: attempt.ms,
-        liveRoutesRemain: attempt.liveRoutesRemain,
-        ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
-        ...(attempt.receipt === undefined ? {} : { receipt: attempt.receipt }),
-      };
-      return noteTransport(ctx, fact);
+      return noteTransport(ctx, factOf(attempt));
+    },
+    noteSoon(attempt: WalkAttempt): FallbackNote | DeferredNote {
+      return noteTransportSoon(ctx, factOf(attempt));
     },
   };
 }

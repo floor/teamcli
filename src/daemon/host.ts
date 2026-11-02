@@ -1898,6 +1898,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         logLine(`fallback sweep ${entry.root}: ${entry.why}`);
         continue;
       }
+      const notes = entry.notes;
+      if (notes !== null && (notes.drained.length > 0 || notes.refused.length > 0 || notes.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: notes recorded ${String(notes.drained.length)}, refused ${String(notes.refused.length)}, unreadable ${String(notes.unreadable.length)}`,
+        );
+      }
       const report = entry.report;
       if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
         logLine(

@@ -42,7 +42,11 @@
 //
 // A call takes a lock on the episode's canonical key (a directory under the store's `locks/`,
 // held by `withLock`), so attempts, a due escalation and a delivery cannot interleave their
-// read-modify-write. The event is emitted through an outbox intent written to the marker first:
+// read-modify-write. A caller that must not wait — the send whose record is already durable —
+// calls `noteTransportSoon`; a busy key then defers the fact whole to a note beside the record,
+// and `drainDeferredNotes` records it on a later pass under the same lock. The note carries the
+// sender tag too, so a note that is the episode's first fact creates the same marker a locked
+// call would have. The event is emitted through an outbox intent written to the marker first:
 // a crash between the intent and the append leaves the intent for the next pass, and
 // `appendEvent`'s deterministic record id makes the retry a duplicate rather than a second event.
 // A delivery arriving in that window cancels the intent: the message is not undelivered.
@@ -67,7 +71,7 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -265,6 +269,15 @@ export function attemptLedgerFileName(recipient: CanonicalRecipient, messageId: 
   return `fallback-attempts-${episodeHash(recipient, messageId)}.jsonl`;
 }
 
+/** A note deferred beside the record when the episode's key was busy: the fact a caller would
+ *  have recorded, named by its own digest so a retried fact rewrites one file, not two. */
+export function deferredNotePathOf(recipient: CanonicalRecipient, messageId: string, factId: string): string {
+  return join(recordDir(recipient.root, recipient.session, recipient.seat), `${messageId}.fallback-note-${factId}.json`);
+}
+
+/** How a deferred note names itself: the marker's own folder, and only these files. */
+const DEFERRED_NOTE_NAME = /\.fallback-note-[0-9a-f]{16}\.json$/;
+
 /** The episode's publication ledger: each event confirmed appended is recorded here with its
  *  signed record, so replay dedup outlives the event log's retention. Append-only, never rotated. */
 export function publicationLedgerFileName(recipient: CanonicalRecipient, messageId: string): string {
@@ -365,13 +378,64 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
   const problem = factProblem(fact);
   if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
   try {
-    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact));
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller)));
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
 }
 
-function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
+/** A fact written beside the record because the episode's key was busy: the send may return, and
+ *  the next `drainDeferredNotes` pass records it under the same lock, exactly once. */
+export type DeferredNote = { ok: true; state: 'deferred'; notePath: string };
+
+/**
+ * Record one transport fact without waiting on the episode's key. A free key records it exactly
+ * as `noteTransport` does and answers the recorder's own result; a key another live holder keeps
+ * writes the fact whole to a note beside the record and answers `deferred` at once, so a caller
+ * whose record is already durable — a send — never blocks its own line on a busy episode. The
+ * drain pass records the note under the same lock; the sender tag rides along so a note that is
+ * the episode's first fact creates the same marker a locked call would have fixed.
+ *
+ * A refusal that is not contention (a conflict, a ledger that cannot be written) answers exactly
+ * as `noteTransport` would; only contention defers.
+ */
+export function noteTransportSoon(ctx: FallbackContext, fact: TransportFact): FallbackNote | DeferredNote {
+  const problem = factProblem(fact);
+  if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
+  try {
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller)), 0);
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) return { ok: false, kind: 'marker', reason: errorMessage(error) };
+    // The fact is durable on disk before this returns, so nothing is lost by deferring it.
+    try {
+      return deferNote(ctx, fact);
+    } catch (writeError) {
+      return { ok: false, kind: 'marker', reason: errorMessage(writeError) };
+    }
+  }
+}
+
+/** Write the fact whole beside the record, for the next drain pass. A same-fact rewrite lands on
+ *  the same name; the file is swapped in whole, so a reader never sees half a fact. */
+function deferNote(ctx: FallbackContext, fact: TransportFact): DeferredNote {
+  const text = JSON.stringify({ format: 1, sender: logTag(ctx.caller), fact });
+  const factId = createHash('sha256').update(text).digest('hex').slice(0, 16);
+  const path = deferredNotePathOf(fact.recipient, fact.messageId, factId);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${String(process.pid)}.tmp`;
+  writeFileSync(tmp, `${text}\n`, { mode: 0o600 });
+  renameSync(tmp, path);
+  return { ok: true, state: 'deferred', notePath: path };
+}
+
+/** `dedupe` makes a replayed fact a no-op: an attempt with the same route and instant is already
+ *  in the marker, so a note whose earlier drain landed but did not unlink records nothing twice. */
+function noteLocked(
+  ctx: EscalationContext,
+  fact: TransportFact,
+  senderTag: string,
+  options: { dedupe?: boolean } = {},
+): FallbackNote {
   const path = markerPathOf(fact.recipient, fact.messageId);
   const read = markerAt(path);
   if (read.kind === 'unreadable') return { ok: false, kind: 'marker', reason: read.reason };
@@ -427,13 +491,20 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
         messageId: fact.messageId,
         recipient: fact.recipient,
         recordDigest: fact.recordDigest,
-        sender: logTag(ctx.caller),
+        sender: senderTag,
         status: 'trying',
         attempts: [],
         receipt: { kind: 'unknown' },
         updatedAt: fact.at,
       };
     }
+  }
+
+  // A replayed deferred fact: the attempt already stands, so the ledger keeps one line and no
+  // state moves. The instant is the fact's own, fixed when the send built it, so it is the same
+  // on the replay as on the call that landed it.
+  if (options.dedupe === true && marker.attempts.some((seen) => seen.route === fact.route && seen.at === fact.at)) {
+    return { ok: true, state: 'duplicate', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
   }
 
   const receipt = normalizeReceipt(fact.receipt);
@@ -588,6 +659,133 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
     dueAt: marker.dueAt ?? null,
     ...(delay.refusal !== undefined ? { policyRefusal: delay.refusal } : {}),
   };
+}
+
+/** What one drain pass did with the facts a busy episode key deferred. */
+export type DeferredNoteDrainReport = {
+  at: string;
+  /** Facts recorded this pass, with the state the recorder answered. */
+  drained: {
+    messageId: string;
+    recipient: CanonicalRecipient;
+    state: 'continued' | 'delivered' | 'duplicate' | 'all-failed';
+  }[];
+  /** Notes a refused write or an unreadable episode kept in place; the next pass retries them. */
+  refused: { path: string; reason: string }[];
+  /** Notes whose key another live holder kept: ordinary contention, left to the next pass. */
+  deferred: { messageId: string; recipient: CanonicalRecipient; path: string }[];
+  /** Files that do not read as a note; never deleted from a guess. */
+  unreadable: string[];
+  scanned: number;
+};
+
+/**
+ * Record the facts a non-blocking `noteTransportSoon` deferred, then remove their notes. Each note is
+ * processed under its episode's key lock with `waitMs: 0`: a key another live holder keeps is
+ * deferred to the next pass, so the drain never waits on a busy message either. The lock makes
+ * the landed note and the note's removal one step against a retry, and the recorder's own dedupe
+ * by `(route, at)` makes a note whose drain landed but whose removal did not record nothing twice.
+ * A marker this pass creates takes the sender tag fixed in the note, never an invented identity.
+ */
+export function drainDeferredNotes(
+  ctx: EscalationContext,
+  options: { at?: Date; limit?: number } = {},
+): DeferredNoteDrainReport {
+  const at = options.at ?? ctx.now();
+  const limit = options.limit ?? 64;
+  const report: DeferredNoteDrainReport = {
+    at: at.toISOString(),
+    drained: [],
+    refused: [],
+    deferred: [],
+    unreadable: [],
+    scanned: 0,
+  };
+  for (const found of notesUnder(ctx.root)) {
+    if (report.drained.length + report.refused.length + report.deferred.length + report.unreadable.length >= limit) break;
+    report.scanned += 1;
+    const note = found.text === null || found.text === '' ? null : deferredNoteOf(found.text);
+    if (note === null) {
+      report.unreadable.push(found.path);
+      continue;
+    }
+    const { fact } = note;
+    if (fact.recipient.root !== ctx.root) {
+      report.refused.push({ path: found.path, reason: `${found.path}: the note names another root than this pass reads` });
+      continue;
+    }
+    let step: { kind: 'landed'; state: 'continued' | 'delivered' | 'duplicate' | 'all-failed' } | { kind: 'refused'; reason: string };
+    try {
+      step = withKeyLock(
+        ctx,
+        fact.recipient,
+        fact.messageId,
+        () => {
+          const noted = noteLocked(ctx, fact, note.sender, { dedupe: true });
+          if (!noted.ok) return { kind: 'refused' as const, reason: noted.reason };
+          return { kind: 'landed' as const, state: noted.state };
+        },
+        0,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        report.deferred.push({ messageId: fact.messageId, recipient: fact.recipient, path: found.path });
+        continue;
+      }
+      report.refused.push({ path: found.path, reason: errorMessage(error) });
+      continue;
+    }
+    if (step.kind === 'refused') {
+      report.refused.push({ path: found.path, reason: step.reason });
+      continue;
+    }
+    // The fact stands in the episode now; the note's work is done. A failed removal leaves a
+    // note the next pass replays into the dedupe above, which records nothing new.
+    try {
+      unlinkSync(found.path);
+    } catch {}
+    report.drained.push({ messageId: fact.messageId, recipient: fact.recipient, state: step.state });
+  }
+  return report;
+}
+
+/** Every deferred note under a root's transport tree, sessions and seats sorted so a pass is
+ *  ordered. `text` is null when the file cannot be read at all. */
+function notesUnder(root: string): { path: string; text: string | null }[] {
+  const found: { path: string; text: string | null }[] = [];
+  const base = join(root, '.agents', 'send-drops');
+  for (const session of folderNames(base)) {
+    const sessionDir = join(base, session);
+    for (const seat of folderNames(sessionDir)) {
+      const seatDir = join(sessionDir, seat);
+      for (const name of fileNames(seatDir)) {
+        if (!DEFERRED_NOTE_NAME.test(name)) continue;
+        const path = join(seatDir, name);
+        found.push({ path, text: readNoFollow(path) });
+      }
+    }
+  }
+  return found;
+}
+
+/** A deferred note as this module wrote it: the fact and the sender tag beside it. Anything else
+ *  is not trusted, and the file is left where it stands for a person to read. */
+function deferredNoteOf(text: string): { sender: string; fact: TransportFact } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const raw = parsed as { format?: unknown; sender?: unknown; fact?: unknown };
+  if (raw.format !== 1 || typeof raw.sender !== 'string' || raw.sender === '') return null;
+  if (raw.fact === null || typeof raw.fact !== 'object') return null;
+  const fact = raw.fact as TransportFact;
+  if (fact.recipient === null || typeof fact.recipient !== 'object') return null;
+  if (fact.reason !== undefined && typeof fact.reason !== 'string') return null;
+  if (factProblem(fact) !== null) return null;
+  return { sender: raw.sender, fact };
 }
 
 /**

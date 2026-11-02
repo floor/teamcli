@@ -1579,7 +1579,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     });
     note = (attempt) => {
       if (!attempt.liveRoutesRemain) ended = true;
-      const noted = begun.note(attempt);
+      // The record is durable before the first note, so a busy episode's key never holds the
+      // sender's line: the fact is written beside the record and the next drain pass records it.
+      const noted = begun.noteSoon(attempt);
       if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
       // A direct-only caller hears the walk's ending here: the attempt that took the send, or
       // the last route's failure. The record was staged before the first attempt, whatever it was.
