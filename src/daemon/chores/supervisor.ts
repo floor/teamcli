@@ -20,12 +20,15 @@ import type { DaemonChoresState } from '../state.ts';
 import type { ChoresPolicy } from './policy.ts';
 import { tightestPolicy } from './policy.ts';
 import { spawnChoresChild, type ChoresChild, type ChoresChildEvent, type SpawnChoresInput } from './spawn.ts';
-import type { ChoresChildConfig } from './protocol.ts';
+import type { ChoresChildConfig, ChoresPresenceProof, ChoresPresenceReading } from './protocol.ts';
 
 export type ChoresRouteInput = {
   route: HostedRoute;
   team: TeamFile;
   policy: ChoresPolicy;
+  /** The team file's folder, where the seat state door and the presence spool live. The child's
+   *  presence steps read it, so it is carried in the token beside the validated team file. */
+  stateDir?: string;
 };
 
 export type ChoresFleetInput = {
@@ -47,11 +50,30 @@ export type ChoresFleetInput = {
 export type ChoresFleet = {
   /** One daemon beat: nudges each child, checks its heartbeat, starts what is due. */
   tick(at: Date): void;
+  /** Asks the child that serves this root to run one presence pass over the daemon's measured
+   *  readings. Null when no ready child serves the root right now, so the daemon runs the steps
+   *  inline for this pass instead. The answer settles when the child reports, or when it leaves
+   *  or is stopped before it does; it never rejects. */
+  presence(request: ChoresPresenceRequest): Promise<ChoresPresenceAnswer> | null;
   /** The record for one hosted root; undefined when this fleet has nothing to say about it. */
   stateFor(root: string): DaemonChoresState | undefined;
   /** Ends every child and waits, bounded, for each to leave. Idempotent. */
   stop(why: string): Promise<void>;
 };
+
+export type ChoresPresenceRequest = {
+  root: string;
+  /** The daemon's measured instant for this pass; the child reconciles and publishes at it. */
+  at: Date;
+  /** One reading per runtime source, taken by the daemon after this pass's ingest step. */
+  readings: readonly ChoresPresenceReading[];
+};
+
+/** What the child made of one presence nudge: the proof row per reading and the notes its log
+ *  should carry, or the reason it could not answer for this pass. */
+export type ChoresPresenceAnswer =
+  | { kind: 'answered'; proofs: ChoresPresenceProof[]; notes: string[] }
+  | { kind: 'unavailable'; why: string };
 
 const DEFAULT_KILL_GRACE_MS = 2_000;
 
@@ -75,6 +97,9 @@ type Group = {
   lastExit: { code: number | null; signal: NodeJS.Signals | null } | null;
   /** The last completed pass per root, keyed by canonical root. */
   lastPass: Map<string, { at: string; notes: string[] }>;
+  /** Presence nudges this child has not answered yet, keyed by their nudge id. A child that
+   *  leaves or is stopped settles them as unavailable, so the daemon's pass never waits forever. */
+  pendingPresence: Map<string, (answer: ChoresPresenceAnswer) => void>;
   why: string | null;
   stopping: boolean;
 };
@@ -115,9 +140,19 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     nextStartAtMs: 0,
     lastExit: null,
     lastPass: new Map(),
+    pendingPresence: new Map(),
     why: null,
     stopping: false,
   };
+}
+
+/** Settles every unanswered presence nudge with one reason, so a pass awaiting the child never
+ *  outlives it. Called when the child leaves, is stopped, or is replaced. */
+function settlePresence(group: Group, why: string): void {
+  if (group.pendingPresence.size === 0) return;
+  const pending = [...group.pendingPresence.values()];
+  group.pendingPresence.clear();
+  for (const settle of pending) settle({ kind: 'unavailable', why });
 }
 
 function tickGroup(input: ChoresFleetInput, group: Group, at: Date): void {
@@ -150,6 +185,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
       root: entry.route.root,
       team: entry.route.team,
       session: entry.route.session,
+      ...(entry.stateDir === undefined ? {} : { stateDir: entry.stateDir }),
       teamFile: entry.team,
     })),
   };
@@ -207,6 +243,15 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
         for (const note of pass.notes) input.log(`chores ${pass.root}: ${note}`);
       }
       return;
+    case 'presence-result': {
+      // A result whose nudge is no longer pending is a late answer for a pass the daemon already
+      // gave up on: dropped, never delivered twice.
+      const settle = group.pendingPresence.get(message.id);
+      if (settle === undefined) return;
+      group.pendingPresence.delete(message.id);
+      settle({ kind: 'answered', proofs: message.proofs, notes: message.notes });
+      return;
+    }
     case 'note':
       input.log(`chores ${rootList(group)}: ${message.text}`);
       return;
@@ -225,6 +270,9 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   group.lastBeatMs = null;
   group.rssBytes = null;
   group.busy = null;
+  // A presence pass the child had not answered dies with it: the daemon holds that seat's proof
+  // until a later pass has a child again, and never re-runs the steps behind the leaving child.
+  settlePresence(group, 'the child left before it answered the presence pass');
   if (group.stopping) return;
   group.restarts += 1;
   const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.restarts - 1));
@@ -314,9 +362,39 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
   }
 
   let stopRun: Promise<void> | null = null;
+  let presenceSeq = 0;
   return {
     tick(at: Date): void {
       for (const group of groups) tickGroup(input, group, at);
+    },
+    presence(request: ChoresPresenceRequest): Promise<ChoresPresenceAnswer> | null {
+      for (const group of groups) {
+        if (!group.routes.some((entry) => entry.route.root === request.root)) continue;
+        const child = group.child;
+        // Only a ready child that is not being stopped or replaced may take a pass: until then
+        // the daemon's own inline steps answer, exactly as they did before the isolation.
+        if (child === null || !group.ready || group.killing || group.stopping) return null;
+        const id = `${String(input.now().getTime())}-${String(group.restarts)}-${String(presenceSeq)}`;
+        presenceSeq += 1;
+        let settle!: (answer: ChoresPresenceAnswer) => void;
+        const answer = new Promise<ChoresPresenceAnswer>((resolve) => {
+          settle = resolve;
+        });
+        group.pendingPresence.set(id, settle);
+        const sent = child.send({
+          type: 'presence',
+          id,
+          root: request.root,
+          at: request.at.toISOString(),
+          readings: [...request.readings],
+        });
+        if (!sent) {
+          group.pendingPresence.delete(id);
+          return null;
+        }
+        return answer;
+      }
+      return null;
     },
     stateFor(root: string): DaemonChoresState | undefined {
       const row = inline.get(root);
@@ -333,6 +411,7 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         if (group.stopping) continue;
         group.stopping = true;
         group.why = why;
+        settlePresence(group, 'the daemon is stopping this child');
         const child = group.child;
         if (child === null) continue;
         child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);

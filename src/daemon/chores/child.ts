@@ -17,6 +17,7 @@
 // The child leaves when its host asks it to and when its input ends — a daemon that died closes
 // the pipe, so a child never outlives the daemon that started it.
 import { createFallbackPass } from './fallback.ts';
+import { createPresencePass, type ChoresPresencePass } from './presence.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -24,6 +25,8 @@ import {
   type ChoresChildConfig,
   type ChoresChildMessage,
   type ChoresChildRoute,
+  type ChoresPresenceProof,
+  type ChoresPresenceReading,
 } from './protocol.ts';
 
 /** The bounded seam one root's pass runs under: the slice budget it may spend at a stretch, and
@@ -49,9 +52,11 @@ export type ServeChoresChildInput = {
   stdin: NodeJS.ReadableStream;
   stdout: NodeJS.WritableStream;
   now?: () => Date;
-  /** The real chores. The default is the fallback sweep this step moved here; the other chores
-   *  follow in their own steps. A test injects its own to observe the budget and the notes. */
+  /** The real chores. The default is the fallback sweep this step moved here; the presence
+   *  steps are the second set. A test injects its own to observe the budget and the notes. */
   pass?: ChoresPass;
+  /** The presence steps (activity, reconcile, publisher). A test injects its own. */
+  presence?: ChoresPresencePass;
 };
 
 /** A positive whole number of milliseconds, or null. */
@@ -75,6 +80,9 @@ export function choresConfigProblem(raw: unknown): string | null {
     if (typeof route.root !== 'string' || route.root === '') return 'the token names a root without a folder';
     if (typeof route.team !== 'string') return 'the token names a root without a team';
     if (typeof route.session !== 'string') return 'the token names a root without a session';
+    if (route.stateDir !== undefined && (typeof route.stateDir !== 'string' || route.stateDir === '')) {
+      return 'the token names a root with a malformed state folder';
+    }
     if (route.teamFile !== undefined && (route.teamFile === null || typeof route.teamFile !== 'object' || Array.isArray(route.teamFile))) {
       return 'the token names a malformed team file';
     }
@@ -90,6 +98,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   const { config } = input;
   const now = input.now ?? (() => new Date());
   const pass = input.pass ?? createFallbackPass(config);
+  const presence = input.presence ?? createPresencePass(config);
   const stdout = input.stdout;
   const stdin = input.stdin;
 
@@ -101,6 +110,9 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   /** The pass in flight per root: one at a time. A stop lets each reach its next slice boundary
    *  and leave; the supervisor's kill bound owns a pass that never reaches one. */
   const running = new Map<string, Promise<void>>();
+  /** One presence pass in flight per root; a nudge that lands while one runs is dropped, exactly
+   *  as the daemon skips a route whose previous pass is still running. */
+  const presenceRuns = new Map<string, Promise<void>>();
   /** Where the next round-robin turn starts. */
   let cursor = 0;
   let afterStop: (() => void) | null = null;
@@ -154,6 +166,59 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     }
     if (!stopping) write({ type: 'pass', passes: [{ root: route.root, at, notes }] });
   })();
+
+  /** One presence nudge: runs that root's presence pass and reports it under the nudge's id. A
+   *  root with a presence pass already in flight drops the new one, exactly as the daemon skips a
+   *  route whose previous presence pass is still running. */
+  const runPresence = (message: { id: string; root: string; at: string; readings: ChoresPresenceReading[] }): void => {
+    if (stopping || presenceRuns.has(message.root)) return;
+    const at = new Date(message.at);
+    if (Number.isNaN(at.getTime())) {
+      write({
+        type: 'presence-result',
+        id: message.id,
+        root: message.root,
+        at: message.at,
+        proofs: message.readings.map((reading) => ({ seat: reading.seat, miss: 'the presence nudge names no valid instant' })),
+        notes: ['a presence nudge named no valid instant'],
+      });
+      return;
+    }
+    const route = config.routes.find((item) => item.root === message.root);
+    if (route === undefined) {
+      write({
+        type: 'presence-result',
+        id: message.id,
+        root: message.root,
+        at: message.at,
+        proofs: message.readings.map((reading) => ({ seat: reading.seat, miss: 'the chores child does not serve this root' })),
+        notes: ['a presence nudge named a root this child does not serve'],
+      });
+      return;
+    }
+    const work = (async (): Promise<void> => {
+      let proofs: ChoresPresenceProof[];
+      let notes: string[];
+      try {
+        const outcome = await presence.run(route, { at, readings: message.readings });
+        proofs = outcome.proofs;
+        notes = outcome.notes;
+      } catch (error) {
+        // One root's presence failure is that root's own: the daemon still gets a proof row per
+        // reading, and the log names the failure through the notes.
+        const why = error instanceof Error ? error.message : String(error);
+        proofs = message.readings.map((reading) => ({ seat: reading.seat, miss: `the presence pass failed: ${why}` }));
+        notes = [`the presence pass failed: ${why}`];
+      }
+      if (!stopping) {
+        write({ type: 'presence-result', id: message.id, root: message.root, at: message.at, proofs, notes });
+      }
+    })();
+    presenceRuns.set(message.root, work);
+    void work.then(() => {
+      presenceRuns.delete(message.root);
+    });
+  };
 
   /** Serves the requested passes, one slice per root in turn. It starts the next slice without
    *  awaiting the one in flight, so a pass waiting on the outside world does not hold the turn
@@ -242,6 +307,8 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       }
       if (message.type === 'tick') {
         enqueue();
+      } else if (message.type === 'presence') {
+        runPresence(message);
       } else {
         stopping = true;
         break;
@@ -268,7 +335,8 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   if (typeof destroyable.destroy === 'function') destroyable.destroy();
   // A pass that is still running saw the same stop at its next slice boundary; the supervisor's
   // kill bound owns a pass that never reaches one.
-  if (running.size > 0) await Promise.allSettled([...running.values()]);
+  const inFlight = [...running.values(), ...presenceRuns.values()];
+  if (inFlight.length > 0) await Promise.allSettled(inFlight);
   write({ type: 'stopped', why: 'the daemon asked this child to stop' });
   // exit: daemon.chores-ended
   return 0;

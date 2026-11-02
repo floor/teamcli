@@ -39,6 +39,7 @@ import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
 import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
 import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
+import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
 import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
@@ -1273,18 +1274,26 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       now,
       routes: routes.flatMap((route) => {
         const team = teams.get(route.root);
-        return team === undefined
+        const entry = routeTeams.get(route.root);
+        return team === undefined || entry === undefined
           ? []
-          : [{ route, team, policy: choresPolicyFor(team, route.root, home, now()) }];
+          : [{
+              route,
+              team,
+              policy: choresPolicyFor(team, route.root, home, now()),
+              // The loader's own handle names the team file; its folder is the state door and
+              // the presence spool the child's presence steps read, exactly as this daemon does.
+              stateDir: dirname(entry.handle),
+            }];
       }),
       log: (text) => logLine(text),
       ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
     });
   }
 
-  // The per-seat binding and canonical-position reads live in `presence/reconcile.ts`, so the
-  // daemon's live re-check, a hosted watch's answer and a child's presence pass read the same
-  // state door and apply the same rules.
+  // The per-seat binding and canonical-position reads live in `presence/reconcile.ts`, shared
+  // with the chores child, so the daemon's live re-check and a child's presence pass read the
+  // same state door and apply the same rules.
 
   /** The exact per-seat runtime answer a fresh health snapshot and a hosted watch's dispatcher
    *  both use. A seat with a source is qualified only while its cached reconciled proof still
@@ -1579,6 +1588,54 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /** The JSON-safe fields of one source reading, as the chores child receives them: the source's
+   *  own measured words, never a host verdict. */
+  const presenceStatusOf = (reading: PresenceSourceStatus): ChoresPresenceStatus => ({
+    seat: reading.seat,
+    binding: reading.binding,
+    threadId: reading.threadId,
+    channel: reading.channel,
+    stream: reading.stream,
+    baseline: reading.baseline,
+    evidenceAt: reading.evidenceAt,
+    ...(reading.stagedEventId === undefined ? {} : { stagedEventId: reading.stagedEventId }),
+    ...(reading.why === undefined ? {} : { why: reading.why }),
+    ...(reading.reason === undefined ? {} : { reason: reading.reason }),
+  });
+
+  /** Mirrors a child's proof rows into the route's cache. A seat the child did not answer for is
+   *  held rather than left with an older proof: the child owns the pass's whole answer. */
+  const applyPresenceProofs = (
+    one: (typeof presenceWork)[number],
+    proofs: readonly ChoresPresenceProof[],
+  ): void => {
+    const answered = new Set<string>();
+    for (const proof of proofs) {
+      answered.add(proof.seat);
+      if ('id' in proof) {
+        one.proofs.set(proof.seat, { id: proof.id, binding: proof.binding, epoch: since });
+        one.proofMiss.delete(proof.seat);
+      } else {
+        one.proofs.delete(proof.seat);
+        one.proofMiss.set(proof.seat, proof.miss);
+      }
+    }
+    for (const source of one.sources) {
+      if (answered.has(source.seat)) continue;
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, 'the presence pass did not answer for this seat');
+    }
+  };
+
+  /** Holds every source seat with one reason, for a pass the child could not answer: a proof
+   *  from an older pass is never kept trusted behind a child that left. */
+  const holdPresenceSeats = (one: (typeof presenceWork)[number], why: string): void => {
+    for (const source of one.sources) {
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, why);
+    }
+  };
+
   /**
    * One presence pass for one route: the ingester's bounded step, then each source's own
    * independent sample, the activity reconciler over what the step appended, the per-seat
@@ -1588,6 +1645,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
    * or broken spool therefore holds only its own route, and the beat that starts it never awaits
    * it.
+   *
+   * The daemon keeps the live half — the ingest step, each source's sample, the channel health
+   * answer and the final re-check — and sends the measured readings to the root's chores child,
+   * which runs the durable half. A root with no ready child runs both halves here.
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
@@ -1616,6 +1677,37 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // sibling source, never wait for one source's step. A seat's answer never changes the
       // route's ingest answer.
       for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
+      // The readings cross to the child exactly as this daemon sampled them. A source that cannot
+      // answer, or answers for another seat, is sent as that reason, so the child holds the seat
+      // with the same words the inline steps would have used.
+      const at = now();
+      const readings: ChoresPresenceReading[] = [];
+      for (const source of one.sources) {
+        try {
+          const reading = source.status(at);
+          readings.push(reading.seat === source.seat
+            ? { seat: source.seat, status: presenceStatusOf(reading) }
+            : { seat: source.seat, failed: 'the runtime source answered for another seat' });
+        } catch (error) {
+          readings.push({ seat: source.seat, failed: `the runtime source status failed: ${messageOf(error)}` });
+        }
+      }
+      const hosted = choresFleet === null
+        ? null
+        : choresFleet.presence({ root: one.route.root, at, readings });
+      if (hosted !== null) {
+        const answer = await hosted;
+        // A close stopped the child before it answered: the close's own record names this route
+        // pending, and no step is run behind the child that may already have advanced a cursor.
+        if (closed) return;
+        if (answer.kind === 'answered') {
+          for (const note of answer.notes) logPresenceOnce(one.route, note);
+          applyPresenceProofs(one, answer.proofs);
+        } else {
+          holdPresenceSeats(one, answer.why);
+        }
+        return;
+      }
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
