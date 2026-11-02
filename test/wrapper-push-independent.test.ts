@@ -125,11 +125,14 @@ async function statusReach(made: World, seat: string, foreground: readonly numbe
   };
   const io = testIo(made.root, { kind: 'owner' });
   await runStatus(['--file', join(made.dir, 'team.yaml')], io, sources);
-  const line = io.out.split('\n').find((candidate) => candidate.trimStart().startsWith(`${seat} `));
+  const lines = io.out.split('\n');
+  // The reach word is found under its header, not as the last column: the WAKE cell follows it.
+  const heads = (lines.find((candidate) => candidate.trimStart().startsWith('SEAT ')) ?? '').trim().split(/\s{2,}/);
+  const line = lines.find((candidate) => candidate.trimStart().startsWith(`${seat} `));
   if (line === undefined) throw new Error(`no status row for ${seat} in:\n${io.out}`);
   const trimmed = line.trimEnd();
-  const reach = trimmed.endsWith(' socket') ? 'socket' : trimmed.endsWith(' typed') ? 'typed' : null;
-  if (reach === null) throw new Error(`the ${seat} row carries no reach word: ${line}`);
+  const reach = trimmed.trim().split(/\s{2,}/)[heads.indexOf('REACH')];
+  if (reach !== 'socket' && reach !== 'typed') throw new Error(`the ${seat} row carries no reach word: ${line}`);
   return { reach, line: trimmed, out: io.out };
 }
 
@@ -196,7 +199,7 @@ test("a wrapper launch with the team file's inbound accept reads socket, and the
   const made = fixture([], { lead: line });
   placeSocket(made);
   const { status, sent } = await agree(made, 'lead', 'socket');
-  expect(status.line).toMatch(/ socket$/);
+  expect(status.reach).toBe('socket');
   expect(sent.code).toBe(0);
   expect(sent.out).toContain('lead: delivered (socket)');
 });
@@ -206,7 +209,7 @@ test("a wrapper launch with no team-file inbound word reads typed, and the send 
   const made = fixture([{ name: 'wrapped', role: 'implementer', launch: line }]);
   placeSocket(made);
   const { status, sent } = await agree(made, 'wrapped', 'typed');
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -217,7 +220,7 @@ test('a held frame keeps the reach column typed, and the send leaves the socket 
   recordHeldSocket(heldSocketPath(made.dir, 'acme', 'lead'), declaration, NOW);
   placeSocket(made);
   const { status, sent } = await agree(made, 'lead', 'typed');
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -226,7 +229,7 @@ test('a socket older than the declaration reads typed, and the send dials no soc
   generated(made, 'lead', 'accept', false);
   placeSocket(made);
   const { status, sent } = await agree(made, 'lead', 'typed');
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -235,7 +238,7 @@ test('the plain Claude seat with an accepted socket reads socket in both readers
   generated(made, 'lead', 'accept');
   placeSocket(made);
   const { status, sent } = await agree(made, 'lead', 'socket');
-  expect(status.line).toMatch(/ socket$/);
+  expect(status.reach).toBe('socket');
   expect(sent.code).toBe(0);
   expect(sent.out).toContain('lead: delivered (socket)');
 });
