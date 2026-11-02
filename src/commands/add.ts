@@ -1563,15 +1563,17 @@ function hostOf(input: {
      */
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. The identity goes in the same write as the waiting
+      // record, so the owner's later `team up` — and `team answer` — can tell a pane that is
+      // still the seat's from one that is not.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        // The process identity goes in the same write, so the owner's later `team up` — and
-        // `team answer` — can tell a pane that is still the seat's from one that is not.
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
