@@ -57,7 +57,7 @@ export function ownerSeatStep(
   command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client' | 'development-mode',
   action: OwnerAction,
   argv: readonly string[],
-  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },
+  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
   io: Io,
   sources: OwnerSeatSources,
 ): OwnerSeatStep {
@@ -86,7 +86,15 @@ export function ownerSeatStep(
   const head = headOf(root);
   const words = boundWords(argv);
   if (ask.request) {
-    const made = createOwnerActionRequest(home, { actions: [action], root, team, head, args: { [action]: words }, requestedBy: callerLabel(callerOf(io)) }, now);
+    const made = createOwnerActionRequest(home, {
+      actions: [action],
+      root,
+      team,
+      head,
+      args: { [action]: words },
+      requestedBy: callerLabel(callerOf(io)),
+      ...(ask.reason === undefined ? {} : { reason: ask.reason }),
+    }, now);
     if (!made.ok) return refused(made.why);
     // The same honest delivery `grant --request` uses: the owner seat's Touch ID signer is asked to
     // sign this request's answer, with the card as the prompt. A verified signature is the approval,
