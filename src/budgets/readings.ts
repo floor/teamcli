@@ -260,18 +260,47 @@ export function paceFrom(reading: Seen, now: number, staleAfterMs: number): numb
   return figure === 0 ? 0 : figure;
 }
 
+/** The key a reading is kept under: a screen reading is kept per seat; a check reading belongs
+ *  to no seat and is kept alone. One place, so the merge below and the write cannot disagree. */
+function readingKey(reading: Pick<Seen, 'account' | 'window' | 'seat' | 'source'>): string {
+  return reading.source === 'check'
+    ? `${reading.account}/${reading.window}`
+    : `${reading.account}/${reading.window}/${reading.seat}`;
+}
+
 /** Readings whose reset has passed are left out. One with no reset time is kept. */
 export function remember(list: readonly Seen[], now: number): Record<string, StoredReading> {
   const out: Record<string, StoredReading> = {};
   for (const reading of list) {
     if (reading.resetsAt !== null && reading.resetsAt <= now) continue;
-    // A screen reading is kept per seat; a check reading belongs to no seat and is kept alone.
-    const key = reading.source === 'check'
-      ? `${reading.account}/${reading.window}`
-      : `${reading.account}/${reading.window}/${reading.seat}`;
-    out[key] = store(reading);
+    out[readingKey(reading)] = store(reading);
   }
   return out;
+}
+
+/**
+ * This pass's readings over the state's, by key: a key the pass names is the pass's — its
+ * snapshot plus what it saw — and a key only the state holds was written while the pass ran and
+ * is kept. `remember` writes the result, so an entry past its reset still goes.
+ */
+export function overlayReadings(stored: readonly Seen[], list: readonly Seen[]): Seen[] {
+  const mine = new Set(list.map((reading) => readingKey(reading)));
+  return [...stored.filter((reading) => !mine.has(readingKey(reading))), ...list];
+}
+
+/** Whether two stored maps hold the same readings, whatever order their keys stand in. */
+function sameStored(
+  left: Record<string, StoredReading> | undefined,
+  right: Record<string, StoredReading>,
+): boolean {
+  const held = left ?? {};
+  const keys = Object.keys(held);
+  if (keys.length !== Object.keys(right).length) return false;
+  for (const key of keys) {
+    if (!Object.hasOwn(right, key)) return false;
+    if (JSON.stringify(held[key]) !== JSON.stringify(right[key])) return false;
+  }
+  return true;
 }
 
 export function recall(stored: Record<string, StoredReading> | undefined): Seen[] {
@@ -288,16 +317,28 @@ export function saveReadings(dir: string, list: readonly Seen[], now: number = D
 
 /**
  * One pass's fold, read and written under the state lock (§ 4.4): `fold` is handed the readings
- * the state holds and returns the list to keep, so a watch folding while another watch writes
+ * the state holds and returns the list to keep, so a fold that lands while another watch writes
  * folds onto what was written, never over a list it read before it. Whatever the fold returns as
  * its `value` is handed back.
+ *
+ * The fold is meant to be cheap: a caller that read slow figures computes them outside the lock
+ * and folds only their merge here (see `overlayReadings`). With `skipIdentical` the state file
+ * is not written at all when the remembered readings are the ones it already holds.
  */
-export function updateReadings<T>(dir: string, now: number, fold: (stored: Seen[]) => { readings: Seen[]; value: T }): T {
+export function updateReadings<T>(
+  dir: string,
+  now: number,
+  fold: (stored: Seen[]) => { readings: Seen[]; value: T },
+  options: { skipIdentical?: boolean } = {},
+): T {
+  let written = true;
   return updateState(dir, (state) => {
     const folded = fold(recall(state.budgets));
-    state.budgets = remember(folded.readings, now);
+    const kept = remember(folded.readings, now);
+    written = !sameStored(state.budgets, kept);
+    state.budgets = kept;
     return folded.value;
-  });
+  }, { writeWhen: () => written || options.skipIdentical !== true });
 }
 
 export function loadReadings(dir: string): Seen[] {

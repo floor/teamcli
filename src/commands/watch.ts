@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
-import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
+import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile } from '../file/load.ts';
@@ -983,15 +983,20 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // nor raises the owner line; the file's own watch still does both.
           mailbox,
         });
-        // The pass folds its figures where the state is held: two watches of the project fold one
-        // after the other, not over each other. A watch on a foreign session still folds, for its
-        // reports, and saves nothing.
+        // The pass computes on a snapshot read before the lock and returns its result outside
+        // it: a long pass never keeps another command out of the state. Only the merge of its
+        // readings is written under the lock, by key over whatever the state holds now, so a
+        // reading another writer landed while the pass ran is kept; an unchanged result skips
+        // the write. A watch on a foreign session still folds, for its reports, and saves
+        // nothing.
+        const snapshot = loadReadings(dir);
+        const computed = run(snapshot);
         const result = foreign
-          ? run(loadReadings(dir))
-          : updateReadings(dir, now, (stored) => {
-            const folded = run(stored);
-            return { readings: folded.readings, value: folded };
-          });
+          ? computed
+          : updateReadings(dir, now, (stored) => ({
+            readings: overlayReadings(stored, computed.readings),
+            value: computed,
+          }), { skipIdentical: true });
         if (!foreign && sources.home) saveMachineReadings(sources.home, result.machineReadings, now);
         // The entity's model rule, carried out without a caller: a breaching seat the queue does
         // not hold yet is queued here. Only the file's own watch queues — a foreign session
