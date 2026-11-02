@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DAEMON_LABEL, daemonLogPath, machineConfigDir } from './paths.ts';
+import { DAEMON_LABEL, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
 import type {
   ServiceInstallFailure,
   ServiceInstallResult,
@@ -64,9 +64,6 @@ function sha256(bytes: Buffer | string): string {
  *  mode is part of the copy's identity: an executable that lost its execute bit is not the same
  *  program, so a folder whose files drifted from it is refused rather than run. */
 type RuntimeFile = { relative: string; source: string; mode: number };
-
-/** The one name every runtime folder lives under, inside the machine config folder. */
-const RUNTIME_DIR = 'daemon-runtime';
 
 /** A file's mode as the copy keeps it: no group or world write, and the owner can read it. */
 function keptMode(mode: number): number {
@@ -259,7 +256,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const ownUid = (): number => (typeof process.getuid === 'function' ? process.getuid() : uid);
 
   /** Where a home's retained runtime copies live: `<home>/.config/team/daemon-runtime`. */
-  const runtimeRoot = (home: string): string => join(machineConfigDir(home), RUNTIME_DIR);
+  const runtimeRoot = (home: string): string => daemonRuntimeRoot(home);
 
   /**
    * The folder the retained copies live in, made or checked before anything is written there.
