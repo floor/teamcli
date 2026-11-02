@@ -310,4 +310,3 @@ describe('a lead clears its own team\'s stopped mark', () => {
     expect(recordText(p)).toContain('inbound: hold');
   });
 });
-
