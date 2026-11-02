@@ -1,6 +1,6 @@
 // Synthetic loopback listeners, signed drops and HOME only; no terminal or service calls.
 import { afterEach, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from '../fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +29,7 @@ afterEach(() => {
         }
       }; walk(base);
     }
-  } finally { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned); }
+  } finally { const owned = bases.splice(0); if (owned.length) discardFixtures(owned); }
 });
 const EVENT: SignedEventRecord = { payload: {
   v: 1, seq: 7, ts: '2026-11-01T00:00:00.000Z', kind: 'message.arrived',

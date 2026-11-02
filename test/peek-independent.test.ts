@@ -1,6 +1,7 @@
 // The parent imports no command or owner-store modules. Each scene starts with its own HOME.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +9,7 @@ import ts from 'typescript';
 const fixtureRoot = fileURLToPath(new URL('../../peek-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
-afterAll(() => { if (bases.length) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (bases.length) discardFixtures(bases, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 type Input = { argv?: string[]; caller?: 'owner' | 'seat' | 'foreign' | 'unplaced' | 'owner-no-tty'; dev?: boolean;
   ops?: string[]; entities?: string[]; text?: string | null; missingMethod?: boolean; missingPane?: boolean;
   missingFile?: boolean; badFile?: boolean; invalidState?: boolean };

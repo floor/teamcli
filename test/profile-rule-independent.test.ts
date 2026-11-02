@@ -1,12 +1,13 @@
 // Independent loader and command scenes. The parent imports no owner-store or command modules.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const bases: string[] = [];
-afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (bases.length > 0) discardFixtures(bases, { quiet: true }); }, 30_000);
 type Result = { home: string; accepted?: boolean; line?: number; message?: string; withoutRule?: boolean; loaded?: { name: string; profile: string; composer: boolean }[]; parsed?: { ok: boolean; errors?: { line: number; message: string }[] }; code?: number; out?: string; err?: string; overridePath?: string };
 function scene(name: string, fields: string[] = []): Result {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'independent-profile-rule-')));

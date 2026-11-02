@@ -3,6 +3,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { assertIndependentHome } from './independent-home-fixture.ts';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -37,7 +38,7 @@ const scenes = [
 const cursor = scenes[2];
 type Scene = readonly [string, string, string];
 const owned: string[] = [];
-afterEach(() => { for (const path of owned.splice(0)) execFileSync('trash', [path]); });
+afterEach(() => { for (const path of owned.splice(0)) discardFixtures([path]); });
 
 function team(cli: string, root: string, session = 'scene'): string {
   const launch = cli === 'claude-code' ? 'claude' : cli === 'antigravity' ? 'agy' : cli;
