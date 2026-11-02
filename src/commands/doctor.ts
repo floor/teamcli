@@ -28,7 +28,7 @@ import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } f
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
-import { versionVerdict, type Profile } from '../profiles/profile.ts';
+import { cliWordList, versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
 import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
@@ -582,7 +582,10 @@ function featureFindings(team: TeamFile, dir: string, session: string): Finding[
     if (features.length === 0) continue;
     const held = recorded[seat.name];
     if (!held) continue;
-    const said = featureMismatch(held.launch_line, features);
+    // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
+    // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
+    // than as carrying a pin written after a script the CLI never receives.
+    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
     findings.push({ level: 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
   }

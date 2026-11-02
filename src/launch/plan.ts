@@ -3,8 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { cliWordList, launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
-import { pinnedLine } from './features.ts';
+import { cliWordList, launchCommand, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -957,12 +956,14 @@ export function upPlan(input: UpInput): Step[] {
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
-    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
-    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
-    // before the command runs from this decision, never by searching the built command for the
-    // line, which is shell-quoted there.
+    // The rules line this launch gives `launchCommand`, and whether that call carries it: only a
+    // message-mode profile with a launch prompt carries one. Whether the built line really hands
+    // it to the CLI is read from the CLI's own decoded words — the same reader the placement
+    // proves — so a line whose shape this version cannot place reports no carry instead of
+    // writing the file on the assumption of one. `execute.ts` writes the rules file before the
+    // command runs from this decision, never by searching the built command's text, which is
+    // shell-quoted there.
     const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
@@ -974,12 +975,18 @@ export function upPlan(input: UpInput): Step[] {
       // options after it; the seat says so on the launch step rather than losing the words.
       notice = notice ? `${notice}; ${text}` : text;
     });
+    // The launch carries the line exactly when the CLI's own decoded words end with it: a
+    // message-mode CLI reads its initial prompt as its last positional word, and a line this
+    // version could not place it on names no such word.
+    const launchWords = cliWordList(profile.cli, command);
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null
+      && launchWords !== null && launchWords.at(-1) === rulesLine;
     // What the seat's record keeps as its launch line when this run records it: the same base
-    // recipe the record paths store today, with the profile's pins appended where the launch
-    // puts them. Never the expanded command — a dry run prints that and a pane runs it, and the
-    // record's line is the recipe, not the expansion. A profile that pins nothing records its
-    // base line unchanged.
-    const recordLine = pinnedLine(seat.launch, profile.features);
+    // recipe the record paths store today, with the profile's pins placed where the launch puts
+    // them — before the CLI's first delimiter, inside a proven script that runs the CLI. Never
+    // the expanded command — a dry run prints that and a pane runs it, and the record's line is
+    // the recipe, not the expansion. A profile that pins nothing records its base line unchanged.
+    const recordLine = pinnedRecordLine(profile.cli, seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather

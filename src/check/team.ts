@@ -69,7 +69,7 @@ import { rosterOf } from '../permissions/who.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { featureMismatch } from '../launch/features.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
-import { displayEffort } from '../profiles/profile.ts';
+import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
   readProjectPolicySource,
@@ -1340,7 +1340,10 @@ function featureDifferences(team: TeamFile, state: SessionState): Difference[] {
     if (features.length === 0) continue;
     const held = state.seats[seat.name];
     if (!held) continue;
-    const said = featureMismatch(held.launch_line, features);
+    // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
+    // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
+    // than as carrying a pin written after a script the CLI never receives.
+    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
     out.push({ what: `${seat.name}: ${said}`, repair: `team restart ${seat.name}` });
   }

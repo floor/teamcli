@@ -3,7 +3,7 @@ import { executePlan, type Host } from '../src/launch/execute.ts';
 import { upPlan, type Step } from '../src/launch/plan.ts';
 import { rulesLine } from '../src/launch/rules-file.ts';
 import { profileFor } from '../src/profiles/index.ts';
-import { launchCommand, shellQuote } from '../src/profiles/profile.ts';
+import { cliWordList, launchCommand, shellQuote } from '../src/profiles/profile.ts';
 
 // 0.5.9: a seat's rules are never typed into its pane. A first-message CLI that takes an initial
 // prompt at launch carries the one line that points at its rules file on its launch line; the
@@ -40,6 +40,31 @@ describe('the launch line carries the rules line', () => {
         rulesFile: { path: PATH, line: LINE } }] });
     const launch = plan.find((step) => step.do?.do === 'launch')?.do;
     expect(launch && 'command' in launch ? launch.command : '').toContain(shellQuote(LINE));
+  });
+
+  function planFor(launch: string) {
+    const plan = upPlan({ root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+      seats: [{ name: 'coder', cli: 'codex', launch, cwd: '.', label: 'coder', stopped: false, rules: 'Rules.',
+        repairLine: '`team remove coder --keep` then `team add coder`',
+        rulesFile: { path: PATH, line: LINE } }] });
+    return plan.find((step) => step.do?.do === 'launch')?.do;
+  }
+
+  test('a quoted script that runs the CLI carries the line as the CLI’s own last word', () => {
+    const launch = planFor("/bin/sh -c 'codex'");
+    const command = launch && 'command' in launch ? launch.command : '';
+    // The CLI's decoded words end with the line, inside the script it runs; the plan's carry
+    // flag follows that proof rather than the line's existence.
+    expect(cliWordList('codex', command)?.at(-1)).toBe(LINE);
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).toBe(true);
+  });
+
+  test('a line the scope cannot read reports no carry, and says where the line went', () => {
+    // Nothing refuses to launch: the line keeps 0.5.10's placement after the whole line, and
+    // the plan does not tell the file write that the CLI was given it.
+    const launch = planFor("codex 'unclosed");
+    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).not.toBe(true);
+    expect(launch && 'notice' in launch ? launch.notice : '').toContain('its rules line is after the line, where the CLI may not read it');
   });
 });
 

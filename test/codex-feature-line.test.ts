@@ -2,7 +2,8 @@
 // The CLI reads the last value for a repeated config key, so the reader does too; a bare `--`
 // ends option parsing; words for names the profile does not pin are the line's own and never a gap.
 import { describe, expect, test } from 'bun:test';
-import { featureGaps, featureMismatch, featureSettings, pinnedLine, pinnedWords } from '../src/launch/features.ts';
+import { featureGaps, featureMismatch, featureSettings, pinnedWords } from '../src/launch/features.ts';
+import { pinnedRecordLine } from '../src/profiles/profile.ts';
 
 describe('featureSettings reads -c and --config words', () => {
   test('the last word for a name wins, in either order', () => {
@@ -25,21 +26,37 @@ describe('featureSettings reads -c and --config words', () => {
   });
 });
 
-describe('pinnedWords and pinnedLine', () => {
+describe('pinnedWords and the recorded recipe', () => {
   test('one pair becomes one -c word pair', () => {
     expect(pinnedWords(['x=false', 'y=true'])).toEqual(['-c', 'features.x=false', '-c', 'features.y=true']);
   });
 
   test('the pins ride after the line as written, and an empty set leaves the line alone', () => {
-    expect(pinnedLine('codex -m gpt-6.1-sol', ['x=false'])).toBe('codex -m gpt-6.1-sol -c features.x=false');
-    expect(pinnedLine('codex -m gpt-6.1-sol', [])).toBe('codex -m gpt-6.1-sol');
+    expect(pinnedRecordLine('codex', 'codex -m gpt-6.1-sol', ['x=false'])).toBe('codex -m gpt-6.1-sol -c features.x=false');
+    expect(pinnedRecordLine('codex', 'codex -m gpt-6.1-sol', [])).toBe('codex -m gpt-6.1-sol');
   });
 
   test('a positional delimiter takes the pins before it, in every spelling', () => {
     for (const delimiter of ['--', "'--'", '"--"']) {
-      expect(pinnedLine(`codex -m gpt-6.1-sol ${delimiter} 'a prompt'`, ['x=false'])).toBe(
+      expect(pinnedRecordLine('codex', `codex -m gpt-6.1-sol ${delimiter} 'a prompt'`, ['x=false'])).toBe(
         `codex -m gpt-6.1-sol -c features.x=false ${delimiter} 'a prompt'`,
       );
+    }
+  });
+
+  test("a quoted script's own delimiter is the CLI's: the pins go inside, before it", () => {
+    // The outer shell sees one quoted word, so the old reader wrote the pin after the closing
+    // quote — where the CLI never receives it — while the launch put its own options inside.
+    for (const line of [
+      "/bin/sh -c 'codex -m gpt-6.1-sol -- a prompt'",
+      '/bin/sh -c "codex -m gpt-6.1-sol -- a prompt"',
+    ]) {
+      const record = pinnedRecordLine('codex', line, ['x=false']);
+      expect(record).toBe(line.replace(' -m gpt-6.1-sol', ' -m gpt-6.1-sol -c features.x=false'));
+      // The recorded pin is one the CLI reads, so the reader finds no gap.
+      expect(featureGaps(record, ['x=false'])).toEqual([]);
+      // The words after the delimiter keep their place and are not options.
+      expect(featureSettings(record).get('x')).toBe(false);
     }
   });
 });
@@ -62,6 +79,19 @@ describe('featureGaps compares only the profile pins', () => {
     for (const delimiter of ['--', "'--'", '"--"']) {
       expect(featureGaps(`codex ${delimiter} -c features.x=false`, ['x=false'])).toEqual(['x=false']);
     }
+  });
+
+  test('a pin inside a quoted script is the CLI’s; one written after the script is not', () => {
+    expect(featureGaps("/bin/sh -c 'codex -c features.x=false'", ['x=false'])).toEqual([]);
+    expect(featureGaps('/bin/sh -c "codex -c features.x=false"', ['x=false'])).toEqual([]);
+    expect(featureGaps("/bin/sh -c 'codex' -c features.x=false", ['x=false'])).toEqual(['x=false']);
+  });
+
+  test('a line the scope cannot decode carries no proven pin, and its report says so', () => {
+    expect(featureGaps("codex 'unclosed", ['x=false'])).toEqual(['x=false']);
+    expect(featureMismatch("codex 'unclosed", ['x=false'])).toBe(
+      'its recorded launch line cannot be read; the profile pins features.x=false on every launch',
+    );
   });
 });
 

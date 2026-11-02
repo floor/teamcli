@@ -17,6 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { readBackOf } from '../src/commands/restart.ts';
 import type { Seat } from '../src/file/types.ts';
 import { shellWords } from '../src/launch/shell-words.ts';
+import { rulesLine } from '../src/launch/rules-file.ts';
 import { setsSettings } from '../src/launch/cli-hook.ts';
 import { launchModelOf } from '../src/launch/model-guard.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -173,6 +174,47 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     expect(argv).not.toContain('never');
     expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
   });
+});
+
+// The CLI's own `--` sits inside the script, where the outer shell's word scan never sees it.
+// Every word the launch adds is for the CLI: the options belong before that delimiter and the
+// rules line — positional — after it, so no launch flag, pin or inbox word becomes prompt text.
+describe("a delimiter inside a quoted script is the CLI's, not the outer shell's", () => {
+  const RULES_LINE = rulesLine('/synthetic/rules/lead.md', '5e1d0a9c4b2f');
+  const QUOTE_FORMS = [
+    { kind: 'single', quote: "'" },
+    { kind: 'double', quote: '"' },
+  ] as const;
+
+  test('a rules line reaches a quoted script as the CLI’s last word', () => {
+    const command = launchCommand(codex, '/bin/sh -c "codex --sandbox read-only"', 'Rules.', undefined, undefined, undefined, undefined, RULES_LINE);
+    const argv = cliArgv(command, { binary: 'codex' });
+    // Not a word after the closing quote for the shell: the CLI itself received it, last.
+    expect(argv.at(-1)).toBe(RULES_LINE);
+    expect(argv).toContain('--sandbox');
+    expect(argv.indexOf(RULES_LINE)).toBe(argv.length - 1);
+  });
+
+  for (const { kind, quote } of QUOTE_FORMS) {
+    test(`a ${kind}-quoted script keeps its own --, with the options before it and the rules after`, () => {
+      const line = `/bin/sh -c ${quote}codex -- prompt${quote}`;
+      const command = launchCommand(codex, line, 'Rules.', undefined, undefined, undefined, undefined, RULES_LINE);
+      const argv = cliArgv(command, { binary: 'codex' });
+      const at = argv.indexOf('--');
+      expect(at).toBeGreaterThan(0);
+      // The line's own prompt keeps its place, and the rules line follows it as the last word.
+      expect(argv.slice(at)).toEqual(['--', 'prompt', RULES_LINE]);
+      const options = argv.slice(0, at);
+      expect(options).toContain('--no-alt-screen');
+      expect(options).toContain('-c');
+      expect(options).toContain('features.mcp_oauth_refresh_coordination=false');
+      expect(options).toContain('-a');
+      expect(options).toContain('never');
+      expect(options).toContain('-s');
+      expect(options).toContain('danger-full-access');
+      expect(options).not.toContain('prompt');
+    });
+  }
 });
 
 describe('a line whose shape this version cannot prove keeps 0.5.10 placement, with one warning', () => {

@@ -5,7 +5,11 @@
 // words so the CLI's own last-wins config rule makes them the effective values. This module reads
 // a launch line back for those words, so `team doctor` and `team check` can name a running seat
 // whose RECORDED line (the base recipe in team's own state, never a process's command line) does
-// not carry the pin.
+// not carry the pin. Both the launch placement and this reader read the CLI's own decoded words:
+// a pin inside a quoted script that runs the CLI is one the CLI reads, and a pin after that
+// script's closing quote is not. A line neither can decode is read as carrying no pin and says
+// so, rather than as carrying one no CLI was shown to receive.
+import { decodedWordsOf } from './cli-scope.ts';
 
 /** The words a launch line carries for one pinned feature set: `-c features.<name>=<value>`,
  *  one pair per entry. The profile refuses any pair that is not `name=true|false`, so these
@@ -14,64 +18,29 @@ export function pinnedWords(features: readonly string[]): string[] {
   return features.flatMap((pair) => ['-c', `features.${pair}`]);
 }
 
-/** The words a shell reads on a launch line, each with the offset it starts at. A quoted run, an
- *  escaped character and a bare run join into one word, as the shell joins them. */
-const WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
-
-/** The word as the program receives it: quotes removed and their escapes resolved. */
-function unquote(word: string): string {
-  return (word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? [])
-    .map((part) => {
-      if (part.startsWith("'")) return part.slice(1, -1);
-      if (part.startsWith('"')) return part.slice(1, -1).replace(/\\(.)/g, '$1');
-      if (part.startsWith('\\')) return part.slice(1);
-      return part;
-    })
-    .join('');
-}
-
-/** A launch line split at its first positional delimiter, as the shell will parse it: `head`
- *  ends before the `--` word, `tail` begins at it and is empty when the line names none. The
- *  delimiter is the argv word, so `--`, `'--'` and `"--"` all split the line. */
-export function splitAtDelimiter(line: string): { head: string; tail: string } {
-  for (const match of line.matchAll(WORD)) {
-    if (unquote(match[0]) === '--') {
-      const at = match.index;
-      return { head: line.slice(0, at), tail: line.slice(at) };
-    }
-  }
-  return { head: line, tail: '' };
-}
-
-/** A base recipe with the profile's pins inserted, as the launch record stores it. The pins ride
- *  after every option word the seat's line carries and before its first positional delimiter,
- *  which is where the launch puts them, so a repeated config key resolves to the pin: measured
- *  on codex-cli 0.161.0 in a scratch CODEX_HOME, a duplicated `-c` for one key took the last
- *  value in both orders. A line with a `--` keeps its positional words after the delimiter. */
-export function pinnedLine(line: string, features: readonly string[]): string {
-  const words = pinnedWords(features);
-  if (words.length === 0) return line;
-  const { head, tail } = splitAtDelimiter(line);
-  const pinned = [head.trimEnd(), ...words].filter((word) => word !== '').join(' ');
-  return tail === '' ? pinned : `${pinned} ${tail}`;
+/** The CLI's decoded words for a recorded line: the caller's own reading when it has one (the
+ *  launch scope, `cliWordList`), else the same reader applied to the line on its own. Null when
+ *  the line cannot be decoded — a line no shell scope proves carries no readable pin. */
+function decodedFor(line: string, words: readonly string[] | null | undefined): readonly string[] | null {
+  return words === undefined ? decodedWordsOf(line) : words;
 }
 
 /** One feature name's effective value on a launch line, read the way the CLI reads its own
  *  words. Only `-c`/`--config` pairs are read — the spelling the profile pins and the one the
- *  seat's own config words already use — with the last pair for a name winning, so a pin
- *  appended after the line's own words is the value found. A bare `--` ends option parsing,
- *  as it does for the CLI: a word after it is positional, and a config-shaped prompt word
- *  names no feature. */
-export function featureSettings(line: string): Map<string, boolean> {
-  // Every word is read as the shell will hand it over: a quoted `--` is the delimiter word, and
-  // a quoted `-c` and its value name a feature the same way bare ones do.
-  const words = [...line.matchAll(WORD)].map((match) => unquote(match[0]));
+ *  seat's own config words already use — with the last pair for a name winning. A bare `--`
+ *  ends option parsing, as it does for the CLI: a word after it is positional, and a
+ *  config-shaped prompt word names no feature. `words` is the line already decoded by the
+ *  launch scope; when it is omitted the line is decoded here, and an unreadable line names no
+ *  feature at all. */
+export function featureSettings(line: string, words?: readonly string[] | null): Map<string, boolean> {
+  const decoded = decodedFor(line, words);
   const settings = new Map<string, boolean>();
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i]!;
+  if (decoded === null) return settings;
+  for (let i = 0; i < decoded.length; i++) {
+    const word = decoded[i]!;
     if (word === '--') break;
     const inline = /^--config=(.*)$/.exec(word);
-    const value = word === '-c' || word === '--config' ? words[i + 1] : inline?.[1];
+    const value = word === '-c' || word === '--config' ? decoded[i + 1] : inline?.[1];
     if (value === undefined) continue;
     if (word === '-c' || word === '--config') i++;
     const pair = /^features\.([A-Za-z0-9_]+)=(true|false)$/.exec(value.trim());
@@ -82,9 +51,14 @@ export function featureSettings(line: string): Map<string, boolean> {
 
 /** The profile's pinned pairs a recorded launch line does not set: absent from it, or set to the
  *  other value. Empty when every pin is effectively on the line. A feature name the line sets on
- *  its own, outside this list, is the file's own word and not this reading's to refuse. */
-export function featureGaps(line: string, required: readonly string[]): string[] {
-  const settings = featureSettings(line);
+ *  its own, outside this list, is the file's own word and not this reading's to refuse. A line
+ *  this reader cannot decode carries no proven pin, so every required pair is reported: the
+ *  report says the line cannot be read instead of guessing it carries what was written after a
+ *  script the CLI never received. */
+export function featureGaps(line: string, required: readonly string[], words?: readonly string[] | null): string[] {
+  const decoded = decodedFor(line, words);
+  if (decoded === null) return [...required];
+  const settings = featureSettings(line, decoded);
   const gaps: string[] = [];
   for (const pair of required) {
     const at = pair.lastIndexOf('=');
@@ -98,14 +72,19 @@ export function featureGaps(line: string, required: readonly string[]): string[]
 /** The sentence naming a seat whose recorded line misses its profile's pins, or null when the
  *  line carries them all. `undefined` is a seat whose record holds no launch line at all: that
  *  is unknown, not wrong, and said so — the record itself cannot be repaired, only the relaunch
- *  that writes one. The profile list is empty for a CLI that pins no features: nothing is said. */
-export function featureMismatch(line: string | undefined, features: readonly string[]): string | null {
+ *  that writes one. A line that cannot be decoded says so in its own words: it is not reported
+ *  as carrying pins the CLI was never shown to read. The profile list is empty for a CLI that
+ *  pins no features: nothing is said. */
+export function featureMismatch(line: string | undefined, features: readonly string[], words?: readonly string[] | null): string | null {
   if (features.length === 0) return null;
   // Named as the launch line spells them: the profile list holds `name=value`, the word on the
   // line is `features.name=value`, and this sentence is about the line.
   const said = (pairs: readonly string[]): string => pairs.map((pair) => `features.${pair}`).join(', ');
   if (line === undefined) return `its recorded launch line is unknown; the profile pins ${said(features)} on every launch`;
-  const gaps = featureGaps(line, features);
+  if (decodedFor(line, words) === null) {
+    return `its recorded launch line cannot be read; the profile pins ${said(features)} on every launch`;
+  }
+  const gaps = featureGaps(line, features, words);
   if (gaps.length === 0) return null;
   return `its recorded launch line does not pin ${said(gaps)}; the profile pins ${said(features)} on every launch`;
 }
