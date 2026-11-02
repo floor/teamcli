@@ -1,10 +1,9 @@
-// Urania's independent scenes (writer-04): the FLO-1195 reader's unknown-value and
-// unknown-field rules, and old records reading as before. Helpers copied from waits.test.ts
+// Independent scenes for the message-record reader: the unknown-value and unknown-field
+// rules, and old records reading as before. Helpers copied from waits.test.ts
 // (its world/plant builders); the original describe block is replaced by the three scenes
-// below. Pins today's behaviour: an unknown message_kind value is ignored, never refused;
-// an unknown signed field is refused as unsupported; a record with neither field reads as
-// before. At 476d644af and after, an unknown kind VALUE is served as a plain message (the
-// kind dropped from the projection), never a wait and never refused.
+// below. Pins today's behaviour: an unknown signed field is refused as unsupported; a record
+// with neither field reads as before. At 476d644af and after, an unknown kind VALUE is served
+// as a plain message (the kind dropped from the projection), never a wait and never refused.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
