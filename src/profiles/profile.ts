@@ -895,6 +895,13 @@ export function assignmentWordName(word: string): string | null {
   return match ? match[1]! : null;
 }
 
+/** Whether an env word is exactly one shell word. A substitution or a quoted value may hold
+ *  spaces inside its own word; unquoted whitespace makes two words, and a vendor word that
+ *  splits would put the second one where the launch line's program is read. */
+function oneShellWord(text: string): boolean {
+  return shellWords(text)?.length === 1;
+}
+
 /** What a move to another vendor of the same CLI needs from the profile: the vendor's env words
  *  with their placeholders filled, every assignment name any vendor of the CLI supplies (a word
  *  with one of those names belongs to the vendor the line was written for), the CLI's model flag
@@ -974,7 +981,7 @@ export function launchWithVendorWords(profile: Profile, command: string, move: V
     };
   }
   for (const word of move.words) {
-    if (assignmentWordName(word) === null || !takesAppendedWord(word)) {
+    if (assignmentWordName(word) === null || !oneShellWord(word) || !takesAppendedWord(word)) {
       return { ok: false, why: "the profile's vendor words are not one assignment word each; refused rather than guessing" };
     }
   }
@@ -2148,6 +2155,9 @@ function vendorsOf(entry: YamlEntry): VendorBlock[] {
       const filled = word.replaceAll('{model}', 'an-id').replaceAll('{credential}', 'an-item');
       if (assignmentWordName(filled) === null) {
         fail(item.line, `vendor "${name}" has an env word that sets no variable: "${word}"`);
+      }
+      if (!oneShellWord(filled)) {
+        fail(item.line, `vendor "${name}" has an env word that is not one shell word once its placeholders fill: "${word}"`);
       }
     }
     const modelsNode = required(fields, 'models', item.line).value;

@@ -140,6 +140,21 @@ describe('a vendor target', () => {
     expect(vendorTargetOf(null, 'zai')).toBeNull();
   });
 
+  // A vendor env word is exactly one shell word. An unquoted space makes two: the rewrite joins
+  // the words with single spaces, so the second one would land where the CLI's program is read.
+  test('a vendor word that would split into two words is refused, never joined into the line', () => {
+    const split = {
+      ...profile,
+      vendors: profile.vendors.map((vendor) =>
+        vendor.name === 'deepseek' ? { ...vendor, env: ['SYNTHETIC_VAR=one extra'] } : vendor,
+      ),
+    };
+    const plan = planVendorSwap(split, seat(DEEPSEEK_LAUNCH), 'deepseek', 'deepseek-flash', present);
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.why).toContain('one assignment word');
+  });
+
   test('the plan is a recipe for the same CLI, with no donor model and no modelFrom', () => {
     const plan = planVendorSwap(profile, seat('claude --model claude-opus-5-5'), 'zai', 'glm-5.3', present);
     expect(plan.ok).toBe(true);
