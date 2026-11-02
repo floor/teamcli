@@ -165,7 +165,7 @@ describe('unread work in team check', () => {
     seed(at, 'lead', ID_A, 11);
     const { code, out } = check(at);
     expect(out).toContain(`difference: lead: a message from owner has been unread for 11 min (id ${ID_A})`);
-    expect(out).toContain('  repair: the seat\'s next turn reads it (team drops --read --seat lead)');
+    expect(out).toContain('  repair: nothing gives lead a turn while it is idle; team drops --read --seat lead reads it now, or a person or a restart must give it a turn');
     expect(code).toBe(1);
   });
 

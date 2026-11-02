@@ -176,7 +176,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toContain('queued, no event adapter');
     // The socket is not this path's channel: it is never tried, and the live listener at the
     // pane's pid hears nothing.
@@ -200,7 +200,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed).toEqual([]);
     expect(host.pane.enters).toBe(0);
@@ -218,7 +218,7 @@ describe('team send: a typed send with no socket at all', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed).toEqual([]);

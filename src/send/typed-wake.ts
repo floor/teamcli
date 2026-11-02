@@ -1,14 +1,15 @@
-// The one typed wake this build allows. A profile that declares `typed_wake: screen` lets a send
-// type one trigger line into a composer two reads showed as the empty idle prompt; Enter is
-// pressed only while the box still holds exactly that line, and the send is delivered only when
-// the profile's own working screen shows. Nothing else is typed: no draft is moved, cleared or
-// pasted, and a wake that cannot deliver leaves the message where it already is, in the bus
-// inbox. Every other messaging path still refuses to type (src/send/no-pane-messaging.ts), and
-// this module is the single exemption the scan in test/no-pane-messaging.test.ts names.
+// The typed wake: one line, one guarded Enter, one acknowledgement. A profile that declares
+// `typed_wake: screen` lets a send type one trigger line into a composer two reads showed as the
+// empty idle prompt; Enter is pressed only while the box still holds exactly that line, and the
+// send is delivered only when the profile's own working screen shows. Nothing else is typed: no
+// draft is moved, cleared or pasted, and a wake that cannot deliver leaves the message where it
+// already is, in the bus inbox. Every other messaging path still refuses to type
+// (src/send/no-pane-messaging.ts), and this module is the single exemption the scan in
+// test/no-pane-messaging.test.ts names.
 //
-// The screens are the CLI's own captured frames (`test/fixtures/muse/`): `idle` is the empty
-// box between its two rules, `unsent` is the box holding the line, and the profile's `working`
-// rule (Muse's `◇ … esc to interrupt` row) is the acknowledgement.
+// The screens are the CLI's own captured frames (`test/fixtures/muse/` and
+// `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
+// line, and the profile's `working` rule is the acknowledgement.
 import { paneRead, pressEnter, typeText } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -56,6 +57,10 @@ export function herdrTypedWakeHost(session: string): TypedWakeHost {
 export type TypedWakeResult = {
   /** True only when the profile's working screen showed after an Enter this wake pressed. */
   delivered: boolean;
+  /** True when this wake put at least one key into the pane (the line, or an Enter). A caller
+   *  that keeps a one-attempt reservation releases it either way, but records this so a later
+   *  report can say a wake was typed and none was confirmed. */
+  typed: boolean;
   /** How many Enters were pressed. */
   tries: number;
   reason: string;
@@ -114,15 +119,15 @@ export async function deliverTypedWake(
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
   const first = seenOf(cli, host.read(pane));
   if (first !== 'idle') {
-    return { delivered: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
+    return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
   }
   await host.wait(settleMs);
   const second = seenOf(cli, host.read(pane));
   if (second !== 'idle') {
-    return { delivered: false, tries: 0, reason: `the second read showed ${second}, not an empty idle prompt; nothing was typed` };
+    return { delivered: false, typed: false, tries: 0, reason: `the second read showed ${second}, not an empty idle prompt; nothing was typed` };
   }
   if (!host.type(pane, line)) {
-    return { delivered: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
+    return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
   }
   await host.wait(enterSettleMs);
   let tries = 0;
@@ -131,6 +136,7 @@ export async function deliverTypedWake(
     if (screen === null) {
       return {
         delivered: false,
+        typed: true,
         tries,
         reason: tries === 0
           ? 'the screen could not be read after the line was typed; no Enter was pressed'
@@ -140,14 +146,15 @@ export async function deliverTypedWake(
     const kind = readScreen(cli, screen).kind;
     if (kind === 'working') {
       if (tries === 0) {
-        return { delivered: false, tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
+        return { delivered: false, typed: true, tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
       }
-      return { delivered: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     if (!boxHoldsText(cli, line, screen)) {
       const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
       return {
         delivered: false,
+        typed: true,
         tries,
         reason: tries === 0
           ? `${why} after the line was typed; no Enter was pressed`
@@ -155,14 +162,14 @@ export async function deliverTypedWake(
       };
     }
     if (tries >= MAX_WAKE_ENTERS) {
-      return { delivered: false, tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
+      return { delivered: false, typed: true, tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
     }
     if (!host.enter(pane)) {
-      return { delivered: false, tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
+      return { delivered: false, typed: true, tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
     if (await pollWorking(host, pane, cli, pollMs, verifyMs)) {
-      return { delivered: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     screen = host.read(pane);
   }

@@ -184,6 +184,14 @@ export interface Profile {
    *  two reads, and `delivered` only when the profile's own working screen shows — see
    *  src/send/typed-wake.ts. */
   typedWake: TypedWake | null;
+  /** Whether the watch's unread pass may type the same wake a send types, when a message has
+   *  gone unread past its window. On by default exactly where the profile declares
+   *  `typed_wake`; a profile may turn it off (`watch_wake: off`), and may not turn it on
+   *  without one. A seat turns it off for itself in the team file. */
+  watchWake: boolean;
+  /** How many typed wake attempts one message gets from the watch's unread pass, the first at
+   *  the window and each later one after a backoff. A bound, never a loop. */
+  watchWakeTries: number;
   /** How an idle seat of this CLI can be told it has a message, as the profile's own
    *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
    *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
@@ -269,6 +277,13 @@ export type TypedWake = 'screen';
 
 /** The typed wakes a profile may declare: a closed set, never a guess. */
 export const TYPED_WAKES = ['screen'] as const;
+
+/** The most typed wake attempts the watch's unread pass gives one message: a bound, so a
+ *  wake that never lands is a few tries and a report, never a loop. */
+export const MAX_WATCH_WAKE_TRIES = 10;
+
+/** The attempts one message gets when a profile names no `watch_wake_tries`. */
+export const DEFAULT_WATCH_WAKE_TRIES = 3;
 
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
@@ -1298,9 +1313,10 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
 // Every side's optional keys: `settings` (the settings edit), `session_cli`/`public_only`
-// (the delivery CLI a session runs and the public-only declaration the send path proves) and
-// `features` (the pinned feature set the launch and the recorded line carry).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+// (the delivery CLI a session runs and the public-only declaration the send path proves),
+// `features` (the pinned feature set the launch and the recorded line carry) and the watch
+// retry (`watch_wake`, `watch_wake_tries`).
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1423,6 +1439,25 @@ function typedWakeOf(entry: YamlEntry): TypedWake {
     fail(entry.line, `"typed_wake" must be one of: ${TYPED_WAKES.join(', ')}`);
   }
   return value as TypedWake;
+}
+
+/** The value of `watch_wake`: `on` or `off`, never a guess. Only a profile that declares a
+ *  `typed_wake` may turn it on: the watch retry is the same typed wake. */
+function watchWakeOf(entry: YamlEntry): boolean {
+  const value = text(entry, 'watch_wake');
+  if (value !== 'on' && value !== 'off') fail(entry.line, '"watch_wake" must be on or off');
+  return value === 'on';
+}
+
+/** The value of `watch_wake_tries`: a whole number of attempts, from 1 to
+ *  `MAX_WATCH_WAKE_TRIES`. */
+function watchWakeTriesOf(entry: YamlEntry): number {
+  const node = entry.value;
+  if (node.kind !== 'scalar' || typeof node.value !== 'number' || !Number.isInteger(node.value)
+    || node.value < 1 || node.value > MAX_WATCH_WAKE_TRIES) {
+    fail(entry.line, `"watch_wake_tries" must be a whole number from 1 to ${String(MAX_WATCH_WAKE_TRIES)}`);
+  }
+  return node.value;
 }
 
 /** The value of `herdr_status`: `reliable` (the default when the key is absent) or
@@ -1675,6 +1710,21 @@ export function typedWakeKey(text: string): TypedWake | null {
   return entry === undefined ? null : typedWakeOf(entry);
 }
 
+/** The `watch_wake` a profile snippet names, by the loader's own rule: for tests. A word outside
+ *  the two throws; an absent key reads as null, as an absent optional key does. The rule that
+ *  `on` needs a `typed_wake` is the loader's, read with the whole profile. */
+export function watchWakeKey(text: string): boolean | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'watch_wake');
+  return entry === undefined ? null : watchWakeOf(entry);
+}
+
+/** The `watch_wake_tries` a profile snippet names, by the loader's own rule: for tests. A value
+ *  outside the bound throws; an absent key reads as null, as an absent optional key does. */
+export function watchWakeTriesKey(text: string): number | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'watch_wake_tries');
+  return entry === undefined ? null : watchWakeTriesOf(entry);
+}
+
 /** The `input` block a profile snippet names, by the loader's own rule: for tests. A key outside
  *  the closed sets, or a `mid_turn` with no `clear_working`, throws; an absent block reads as
  *  null, as an absent optional key does. */
@@ -1747,6 +1797,8 @@ function launchOf(root: YamlNode): Shipped {
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
   const settingsEntry = optional(entries, 'settings');
   const typedWakeEntry = optional(entries, 'typed_wake');
+  const watchWakeEntry = optional(entries, 'watch_wake');
+  const watchWakeTriesEntry = optional(entries, 'watch_wake_tries');
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
@@ -1777,6 +1829,15 @@ function launchOf(root: YamlNode): Shipped {
     fail(credentialsEntry.line, '"credentials" names a store no vendor uses: declare "vendors" too');
   }
   const rules = rulesOf(required(entries, 'rules', root.line).value);
+  const typedWake = typedWakeEntry ? typedWakeOf(typedWakeEntry) : null;
+  const watchWake = watchWakeEntry ? watchWakeOf(watchWakeEntry) : typedWake !== null;
+  if (watchWakeEntry !== undefined && watchWake && typedWake === null) {
+    fail(watchWakeEntry.line, '"watch_wake: on" needs "typed_wake": the watch retries the same wake a send types');
+  }
+  if (watchWakeTriesEntry !== undefined && !watchWake) {
+    fail(watchWakeTriesEntry.line, '"watch_wake_tries" needs "watch_wake: on"');
+  }
+  const watchWakeTries = watchWakeTriesEntry ? watchWakeTriesOf(watchWakeTriesEntry) : DEFAULT_WATCH_WAKE_TRIES;
   return {
     profile: {
       cli,
@@ -1807,7 +1868,9 @@ function launchOf(root: YamlNode): Shipped {
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
       settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
-      typedWake: typedWakeEntry ? typedWakeOf(typedWakeEntry) : null,
+      typedWake,
+      watchWake,
+      watchWakeTries,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),

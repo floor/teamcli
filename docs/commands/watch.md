@@ -6,9 +6,10 @@ whose end holds. A temporary seat is left as it is: the owner removes it.
 
 A report is never typed into a seat. It goes to `.agents/team.log` and to the desktop
 notification; the operator reads the log. The watch types no line into a seat at all in this
-build: the ring, a pause notice, a retry for a message a send left waiting, and the wake of a seat
-whose message has gone unread each stop before the pane, and what they would have announced stays
-where the seat reads it itself — the drop folder, or the bus inbox. An automatic work
+build, except the unread wake for a profile that declares the typed wake (below): the ring, a
+pause notice and a retry for a message a send left waiting each stop before the pane, and what
+they would have announced stays where the seat reads it itself — the drop folder, or the bus
+inbox. An automatic work
 request is not typed either: the dispatcher's lines below say what it did instead. Every pass reads one shared idle snapshot and asks the direct send
 route to deliver the work prompt; `watch.nudge`, when the file sets it, is the body, and when the
 file omits it the body is the fixed line `Team watch: reports are waiting in .agents/team.log`.
@@ -400,21 +401,33 @@ runs, and types nothing.
 
 A delivery that found no busy box is watched the same way. A message still without a signed
 receipt `watch.unread_after` after it landed — ten minutes by default — gets one wake: the same
-`team drops --read` line a retry builds, under the retry's rules (a readable idle prompt, status
-`idle` or `done`, the seat lock taken, never a human's pane), but this build types none of it:
-the wake stops before the pane. One wake serves every message due for that seat, and a message a
-retry owns is not woken twice: the retry's marker is the claim. A wake is reserved on disk before
-it is attempted, and the reservation is the attempt's whole claim: no later pass wakes the same
-message again, and an attempt the pane turned away keeps its reservation rather than giving it
-back. At twice `watch.unread_after` a message
+`team drops --read` line a retry builds, under the retry's rules (a readable idle prompt, the seat
+lock taken, never a human's pane). A seat whose profile declares the typed wake has that wake
+typed for it by the one module that types, `src/send/typed-wake.ts`, with the send's own
+guarantees: two reads that must show an empty idle prompt, Enter only into a box that reads back
+as exactly the line, and delivery only when the working screen shows. A seat whose profile has no
+typed wake takes the drop-file leg, which this build stops before the pane: nothing is typed. On
+the typed leg a profile whose terminal-host status is unreliable is not gated on that status —
+the wake's own two reads are the truth — and `watch_wake: off` on the seat's record or profile
+keeps the drop-file leg for that seat. The retry is bounded by `watch_wake_tries` (three by
+default, at most ten): a refused or unconfirmed attempt gives its wake reservation back — it
+never spends the message's one wake — and waits five seconds, then double, up to a minute,
+before the next, and at the bound the pass stops trying and the report speaks. One wake serves
+every message due for that seat, and a message a retry owns is not woken twice: the retry's
+marker is the claim. A wake is reserved on disk before it is attempted, and the reservation is
+the attempt's whole claim: no later pass wakes the same message again; a definite not-delivered
+outcome (`held` or `not-submitted`), an unconfirmed typed attempt, and any delivery that wrote
+nothing to the pane give the reservation back so a later pass may wake, and only an attempt that
+wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. At twice `watch.unread_after` a message
 still unread is reported once: a signed Runtime mailbox record for its sender under
 `.agents/messages/`, and a signed send-drop for the team's lead under
 `.agents/send-drops/<session>/<lead>` that `team drops --read` serves — never by typing into a
 pane — after a report reservation of its own, so a crash between a report and its marker neither
 drops it nor writes it twice, and a record or drop already there is left byte for byte. The
-words keep the wake states apart: an attempted wake
-says it was reserved at that instant and its outcome is unconfirmed, and one never attempted says
-no wake line was typed.
+words keep the wake states apart: a standing reserved wake says `a wake was attempted at <at> and
+its outcome is unconfirmed`, one never attempted says no wake line was typed, one whose typed
+attempts never landed says how many were tried and that none was confirmed, and one that was sent
+says when.
 `--no-nudge` skips the wake but still writes the report.
 
 The report's sender mailbox is resolved through the signed record's agent id and the agent and

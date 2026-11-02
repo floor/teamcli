@@ -439,7 +439,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
     ...briefs.differences,
-    ...unreadDifferences(team, state, root, sources.home, session, inForce.unreadAfter, sources.now()),
+    ...unreadDifferences(team, state, live, root, dir, sources.home, session, sources.sockets ?? defaultSocketsDirs(), inForce.unreadAfter, sources.now()),
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
@@ -1069,9 +1069,12 @@ function generalBriefDifferences(
 function unreadDifferences(
   team: TeamFile,
   state: SessionState,
+  live: Live,
   root: string,
+  dir: string,
   home: string | undefined,
   session: string,
+  sockets: string | readonly string[],
   windowSeconds: number,
   now: Date,
 ): Difference[] {
@@ -1106,10 +1109,34 @@ function unreadDifferences(
       who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
     }
     const more = unread.length > 1 ? `; ${String(unread.length - 1)} more unread` : '';
-    const watcher = state.seats[seat.name]?.watcher;
+    // The class the seat's own launch left, read exactly as the socket reading and a send read
+    // it, so the repair cannot promise a wake the seat does not have. Only a seat nothing can
+    // wake while it is idle needs the turn said out loud: a wakeable seat's silence is a stuck
+    // wake, not a class with no route.
+    const recorded = state.seats[seat.name];
+    const listed = live.agents.find((candidate) => candidate.name === seat.name);
+    const delivery = seatDeliveryClass({
+      dir,
+      root,
+      session,
+      seat: seat.name,
+      declared: seat,
+      ...(recorded === undefined ? {} : { state: recorded }),
+      home,
+      processes: listed === undefined ? null : live.processes?.[listed.pane] ?? null,
+      sockets,
+    });
+    const watcher = recorded?.watcher;
+    const readNow = `team drops --read --seat ${seat.name} reads it now`;
     const repair = watcher === undefined || watcher === 'none'
-      ? `team drops --read --seat ${seat.name} reads it; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
-      : `the seat's next turn reads it (team drops --read --seat ${seat.name})`;
+      ? `${readNow}; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
+      : wakeableWhileIdle(delivery.class)
+        ? `a wake route stands for ${seat.name} and the message is still unread; ${readNow}`
+        : delivery.evidence.watchWake
+          ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake, and the watch's typed retry has not delivered this message; ${readNow}, or a person or a restart must give it a turn`
+          : delivery.evidence.typedWake
+            ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake into an empty composer; ${readNow}, or a person or a restart must give it a turn`
+            : `nothing gives ${seat.name} a turn while it is idle; ${readNow}, or a person or a restart must give it a turn`;
     out.push({
       what: `${seat.name}: ${who} has been unread for ${String(minutes)} min${more} (id ${oldest.id})`,
       repair,
@@ -1736,12 +1763,12 @@ function socketSkippedDeliveries(
       sockets,
     });
     // A socket that is nowhere is the ordinary state of the seat's class, whatever its gate
-    // would say: absence wins, and the note names the class without changing the exit.
+    // would say: absence wins, and the note names the class without changing the exit. The
+    // sentence after the class is the class's own (`deliveryWords`), so a note and a send's
+    // console line can never promise different things about who gives the seat a turn.
     if (leg.address === null || leg.address.kind !== 'path') {
-      const waits = delivery.class === 'pull-on-turn'
-        ? 'it reads them at its next turn'
-        : 'nothing wakes it while idle';
-      notes.push(`${seat.name}: no cross-session socket is live, so sends go to its drop folder; its delivery class is ${delivery.class}, and ${waits}`);
+      const waits = delivery.words.replace(/^queued; /, '');
+      notes.push(`${seat.name}: no cross-session socket is live, so sends go to its drop folder; its delivery class is ${delivery.class} — ${waits}`);
       continue;
     }
     if (leg.gate !== null) {

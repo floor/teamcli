@@ -11,7 +11,7 @@ process_names:
 # captures.
 tested:
   from: '2026.10.01'
-  to: '2026.10.19'
+  to: '2026.10.22'
 unattended:
   - --force
   - --sandbox
@@ -21,6 +21,15 @@ rules:
 # The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
 # turn; this CLI has no event adapter that reaches it while idle.
 delivery: pull-on-turn
+# The typed wake, granted 2026-11-02 on captures of this build: a send may type one trigger line
+# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
+# still holds exactly that line, and calls itself delivered only when the `working` screen
+# appears. `test/fixtures/cursor/2026.10.22/` holds the three screens the wake reads back, taken
+# in a scratch session: `idle.txt` (the `→ Plan, search, build anything` box), `unsent.txt`
+# (a draft in the box, never typed over) and `working.txt` (the `Working` row under the prompt).
+# Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
+# See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - status

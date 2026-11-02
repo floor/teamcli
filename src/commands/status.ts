@@ -36,6 +36,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -71,7 +72,7 @@ import { realSources as realProjectSources, type ProjectSources } from './projec
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live } from '../status/compare.ts';
-import { seatWakeOf, wakeCell, type SeatWake } from '../status/wake.ts';
+import { seatWakeReadingOf, wakeAge, wakeCell, type SeatWake, type SeatWakeReading } from '../status/wake.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
@@ -737,12 +738,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The compact table's wakeability reading, one read per row it shows. The expanded table gets
   // the same fact from `seatRegistryRows` (`wake: true` above), so the two can never disagree;
   // this path runs only where that table is not built.
-  const compactWake = all || json
+  const compactReadings = all || json
     ? undefined
-    : new Map<string, SeatWake>(visibleRows.map((row): [string, SeatWake] => {
+    : new Map<string, SeatWakeReading>(visibleRows.map((row): [string, SeatWakeReading] => {
       const declared = team.seats.find((one) => one.name === row.name);
       const recorded = state.seats[row.name];
-      return [row.name, seatWakeOf({
+      return [row.name, seatWakeReadingOf({
         dir,
         root,
         session,
@@ -753,6 +754,29 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         now,
       })];
     }));
+  const compactWake = compactReadings === undefined
+    ? undefined
+    : new Map<string, SeatWake>([...compactReadings].map(([name, reading]): [string, SeatWake] => [name, reading.wake]));
+
+  // A row whose seat cannot be woken while it is idle and whose oldest drop has waited past the
+  // window the watch's unread pass uses: the cell's `!` marks the class, and this line says what
+  // the class means in the class's own words (`deliveryWords`), so the table and a send's console
+  // line cannot promise different things. The window is the watch's, paced exactly as the check
+  // paces the same reading. A note only: `status` never fails the gate for it — `check` does.
+  if (compactReadings !== undefined) {
+    const pace = watchPaceOf({ team, root, home: sources.home, standing, now });
+    const windowSeconds = watchInForceWithPace(standing, team, pace).unreadAfter;
+    for (const [name, reading] of compactReadings) {
+      if (reading.wake.wakeable) continue;
+      const declared = team.seats.find((one) => one.name === name);
+      if (declared?.human === true) continue;
+      const age = reading.wake.oldest_unread_seconds;
+      if (age === null || age < windowSeconds) continue;
+      const waits = reading.words.replace(/^queued; /, '');
+      const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
+      comparison.notes.push(`${name}: its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
+    }
+  }
 
   if (json) {
     writeJson(io, 'team.status', {

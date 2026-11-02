@@ -20,7 +20,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -164,10 +164,13 @@ and the walk ends rather than typing into a pane the inbox was chosen over.
 Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
 with the receiving seat's delivery class in plain words: \`woken through its event
 adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
-runtime that holds the message between turns, \`queued; <seat> reads it at its next turn
-(pull-only)\` for a seat that reads its inbox when it takes a turn, and \`queued; <seat>
-has no way to be woken while idle\` for a person or a launch with no route at all. A
-delivered line needs no class: the delivery itself is the answer.
+runtime that holds the message between turns, \`queued; <seat> reads it at its next turn,
+and nothing here gives it one (pull-only)\` for a seat that reads its inbox when it takes a
+turn, and \`queued; nothing wakes <seat> while it is idle; a person or a restart must give
+it a turn\` for a launch with no route at all. A profile that declares a typed wake says so
+in the same sentence, and a wake this run tried says what it saw: a wake that ran and did not
+deliver names its reason, and one the run never reached says it did not run. A delivered line
+needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, or herdr reported the
@@ -538,30 +541,25 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
  *  reading still counts, and what a typed wake would read: the seat's CLI and whether its pane
  *  is a human's. That adapter route is fired by the bus's announcement of the record, never by
  *  the send itself, so a wake through it is the bus's to make, not the send's to claim. */
-type ClassRead = { cls: DeliveryClass; webhookOnly: boolean; cli: string; human: boolean };
+type ClassRead = { cls: DeliveryClass; webhookOnly: boolean; cli: string; human: boolean; watchWake: boolean };
 
 /** The words for a class read at send time. A webhook-only push is a message queued for the
  *  bus's delivery routine, never a wake this send made: the send writes the record and returns,
  *  and whether the adapter posted it is the bus's own reading to report. Every other reading
- *  keeps its class's own words. */
-function classWords(read: ClassRead, seat: string): string {
-  if (read.cls === 'push' && read.webhookOnly) return WEBHOOK_QUEUED_WORDS;
-  return deliveryWords(read.cls, seat);
-}
-
-/** The class's words, with the typed-wake exception: a profile that declares a typed wake is not
- *  a seat with no way to be woken: a send can type one line into an empty composer it saw twice
- *  (src/send/typed-wake.ts). Typing is not an event adapter, so the class — and every dispatch
- *  gate that reads it — stays `none`; only the class's "no way to be woken" sentence would now
- *  be untrue. The words say what happens next instead: the message waits in the bus inbox for
- *  the seat's next turn. A human's pane is never typed, so its words stay as they were. Used
+ *  keeps its class's own words, with the profile's typed wake and this run's wake outcome told
+ *  in the same sentence: a profile that declares a typed wake is not a seat with no way to be
+ *  woken, and a wake that ran and did not deliver must not leave the class's "reads it at its
+ *  next turn" standing alone. A human's pane is never typed, so its words say only that. Used
  *  both for the class read before the walk and for every class lowered after a leg is disproved,
- *  so a fallback that ends in the bus inbox keeps saying the seat reads it there. */
-function classWordsFor(read: ClassRead, seat: string): string {
-  if (read.cls === 'none' && !read.human && (profileFor(read.cli)?.typedWake ?? null) !== null) {
-    return deliveryWords('pull-on-turn', seat);
-  }
-  return classWords(read, seat);
+ *  so a fallback that ends in the bus inbox keeps saying how the seat is left. */
+function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
+  if (read.cls === 'push' && read.webhookOnly) return WEBHOOK_QUEUED_WORDS;
+  return deliveryWords(read.cls, seat, {
+    ...(read.human ? { human: true } : {}),
+    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
+    ...(read.watchWake ? { watchWake: true } : {}),
+    ...(wake === undefined ? {} : { wake }),
+  });
 }
 
 /** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
@@ -574,9 +572,9 @@ function deliveryWordsOf(input: {
   root: string;
   session: string;
   seat: string;
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   home?: string;
-}): string {
+}, wake?: WakeOutcome): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
   const read = seatDeliveryClass({
     dir: input.dir,
@@ -587,14 +585,16 @@ function deliveryWordsOf(input: {
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
   });
-  return classWordsFor(
+  return classWords(
     {
       cls: read.class,
       webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket,
       cli: state?.cli ?? input.declared?.cli ?? '',
       human: read.evidence.human === true,
+      watchWake: read.evidence.watchWake,
     },
     input.seat,
+    wake,
   );
 }
 
@@ -1509,6 +1509,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // recorded first, so the history line the drop leg writes (or the refusal) names what the pane
   // was spared.
   const failures: string[] = [];
+  // What this run's typed wake did, once the walk knows: the words a fallback prints must not
+  // promise a wake that ran and did not deliver, nor leave out one the run never reached. Absent
+  // until the typed leg is reached (or ruled out), which is the truth for a send that ended
+  // before it.
+  let wakeOutcome: WakeOutcome | undefined;
   // Fill in one planned leg's state. A leg is marked once: the first ending that reaches it is
   // the one the report keeps. A leg that is never marked stays `not-reached`.
   const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
@@ -1519,6 +1524,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   };
   if (!human) {
     for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
+    // A profile that declares a typed wake but whose order leaves the typed leg out: the wake
+    // cannot run, and the words a fallback prints say that rather than implying one was tried.
+    if (typedWake !== null && !walkingTyped) {
+      wakeOutcome = { attempted: false, reason: 'the delivery order leaves the typed leg out' };
+    }
   }
   if (human) {
     for (const leg of order) {
@@ -1608,7 +1618,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // lowering keeps every route not yet disproved, and the class is re-read with only those.
   const walkLost: { socket?: boolean; endpoint?: boolean } = {};
   const lowerDelivery = (): void => {
-    report.deliveryWords = classWordsFor(classWithout(to, host.home, walkLost, declared), to.seat);
+    report.deliveryWords = classWords(classWithout(to, host.home, walkLost, declared), to.seat, wakeOutcome);
   };
   for (const [at, leg] of walk.entries()) {
     if (leg === 'channel') {
@@ -2165,7 +2175,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // A typed wake is the order's fallback, not its only route: an ambiguous pane is one this
       // wake will not type into, and the send goes on to the leg behind it (the drop inbox).
       if (found.kind === 'refused' && typedWake !== null && at + 1 < walk.length) {
-        const why = `${to.seat}: herdr lists more than one agent of this name; nothing was typed`;
+        const why = `${to.seat}: the session lists more than one agent with this name; nothing was typed`;
+        wakeOutcome = { attempted: false, reason: 'the session lists more than one agent with this name' };
         failures.push(`typed: ${why}`);
         markLeg('typed', 'skipped', why);
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
@@ -2178,6 +2189,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       if (at + 1 < walk.length) {
         failures.push(`typed: ${found.reason}`);
+        wakeOutcome = { attempted: false, reason: found.reason };
         markLeg('typed', 'skipped', found.reason);
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: found.reason }));
         continue;
@@ -2192,6 +2204,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       const why = 'the seat is back at its shell; nothing was typed';
       if (typedWake !== null && at + 1 < walk.length) {
         failures.push(`typed: ${why}`);
+        wakeOutcome = { attempted: false, reason: 'the seat is back at its shell' };
         markLeg('typed', 'skipped', why);
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
@@ -2211,6 +2224,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       if (trigger === null) {
         const why = `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was typed`;
         failures.push(`typed: ${why}`);
+        wakeOutcome = { attempted: false, reason: 'the trigger would exceed the measured line' };
         markLeg('typed', 'skipped', why);
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
@@ -2221,6 +2235,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
       }
+      wakeOutcome = { attempted: true, reason: wake.reason };
       failures.push(`typed: ${wake.reason}`);
       markLeg('typed', 'attempted', wake.reason);
       note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: wake.reason }));
@@ -4416,7 +4431,7 @@ async function deliverClientRecord(
       // words keep the typed-wake exception: a profile that declares a typed wake reads the
       // message at its next turn, not "no way to be woken".
       if (attempt.socketUnusable === true) {
-        report.deliveryWords = classWordsFor(classWithoutSocket(aim, host.home), aim.seat);
+        report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat);
       }
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
@@ -5007,7 +5022,7 @@ function classWithout(
   /** The receiving team file's row for the seat, when the caller has it: the launch line, human
    *  word, inbound word and webhook row the class was first read with. Without it the walk's own
    *  reading of the seat stands in, exactly as the first read did. */
-  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>,
+  declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>,
 ): ClassRead {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
@@ -5047,6 +5062,7 @@ function classWithout(
     // CLI and the pane's kind even after the walk disproved a leg.
     cli: record?.cli ?? declaredRow?.cli ?? to.cli,
     human: read.evidence.human === true,
+    watchWake: read.evidence.watchWake,
   };
 }
 
@@ -5068,7 +5084,7 @@ function staleSocketReason(to: Aim, path: string, home: string | undefined): str
   // applies here too: this sentence is read while the typed leg is still ahead of the walk, so a
   // profile that declares a typed wake says the seat reads the message at its next turn rather
   // than claiming it has no way to be woken.
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWordsFor(classWithoutSocket(to, home), to.seat)}`;
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${classWords(classWithoutSocket(to, home), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the

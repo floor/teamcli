@@ -46,6 +46,7 @@ import {
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
+import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
@@ -64,6 +65,11 @@ export type RetrySources = {
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
+   *  through which the watch's unread pass types, and only for a seat whose profile declares
+   *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
+   *  own writer refuses in every real binding. */
+  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {

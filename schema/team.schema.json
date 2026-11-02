@@ -629,6 +629,13 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "watch_wake": {
+            "enum": [
+              "on",
+              "off"
+            ],
+            "$comment": "the watch's typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake"
+          },
           "public_only": {
             "type": "boolean",
             "$comment": "the seat's briefs go to a service outside this machine: the team's rules are never prepended, and a send reads the body against the machine's private lists and falls through on a match; a hosted CLI's profile is public-only on its own, and a seat can only add the guard"

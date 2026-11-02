@@ -181,6 +181,16 @@
       "enum": ["screen"],
       "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
     },
+    "watch_wake": {
+      "enum": ["on", "off"],
+      "description": "optional: whether the watch's unread pass may type the same wake a send types when a message has gone unread past its window; on by default exactly where typed_wake is declared, and it cannot be turned on without one"
+    },
+    "watch_wake_tries": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "optional: how many typed wake attempts one message gets from the watch's unread pass, the first at the window and each later after a backoff; default 3; refused unless watch_wake is on"
+    },
     "mcp_inbox": {
       "type": "object",
       "additionalProperties": false,

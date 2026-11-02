@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
-import { profileFor, typedWakeKey } from '../src/profiles/index.ts';
+import { DEFAULT_WATCH_WAKE_TRIES, profileFor, typedWakeKey, watchWakeKey, watchWakeTriesKey } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
@@ -66,7 +66,7 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('two idle reads, one line, one Enter: the working screen is the delivery', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
@@ -83,21 +83,21 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('a working screen on the second read stops the wake before any key', async () => {
     const pane = wakeFake((read) => (read === 0 ? IDLE : WORKING));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the second read showed working, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the second read showed working, not an empty idle prompt; nothing was typed' });
     expect(pane.typed).toEqual([]);
   });
 
   test('a pane that cannot be read is refused with nothing typed', async () => {
     const pane = wakeFake(() => null);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the first read showed unreadable, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unreadable, not an empty idle prompt; nothing was typed' });
     expect(pane.typed).toEqual([]);
   });
 
   test('a box that reads back other text gets no Enter', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : holding('the owner was typing')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(0);
   });
@@ -105,14 +105,14 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('a box that reads empty after the line was typed gets no Enter', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : IDLE));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
+    expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
     expect(pane.enters).toBe(0);
   });
 
   test('a line that stays in the box gets at most three guarded Enters and is not delivered', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 3, reason: 'the line stayed in the box through 3 Enters and no working screen showed' });
+    expect(out).toEqual({ delivered: false, typed: true, tries: 3, reason: 'the line stayed in the box through 3 Enters and no working screen showed' });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(3);
   });
@@ -120,7 +120,7 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('a box that clears without a working screen is not a delivery', async () => {
     const pane = wakeFake((_read, enters) => (enters > 0 ? IDLE : _read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 1, reason: 'the screen read idle and no working screen showed' });
+    expect(out).toEqual({ delivered: false, typed: true, tries: 1, reason: 'the screen read idle and no working screen showed' });
     expect(pane.enters).toBe(1);
   });
 
@@ -129,6 +129,7 @@ describe('the typed wake: one line into an empty idle box', () => {
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(out).toEqual({
       delivered: false,
+      typed: true,
       tries: 0,
       reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed',
     });
@@ -138,26 +139,54 @@ describe('the typed wake: one line into an empty idle box', () => {
   test('a pane that does not take the line stops the wake with nothing pressed', async () => {
     const pane = wakeFake(() => IDLE, { typeOk: false });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' });
     expect(pane.enters).toBe(0);
   });
 
   test('a pane that does not take the Enter gets no further Enter', async () => {
     const pane = wakeFake((read) => (read < 2 ? IDLE : holding(LINE)), { enterOk: false });
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, tries: 0, reason: 'the pane did not take the Enter; no further Enter was pressed' });
+    expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the pane did not take the Enter; no further Enter was pressed' });
     expect(pane.enters).toBe(1);
   });
 });
 
 describe('the typed wake is a profile word', () => {
-  test('the word is closed and only Muse declares it', () => {
+  test('the word is closed, and only Muse and Cursor declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
     expect(typedWakeKey('cli: muse')).toBeNull();
     expect(() => typedWakeKey('typed_wake: typing')).toThrow(/typed_wake/);
     expect(profileFor('muse')?.typedWake).toBe('screen');
-    for (const cli of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'jules']) {
+    expect(profileFor('cursor')?.typedWake).toBe('screen');
+    for (const cli of ['claude-code', 'codex', 'antigravity', 'grok', 'gemini', 'jules']) {
       expect(profileFor(cli)?.typedWake, cli).toBeNull();
+    }
+  });
+
+  test('the watch retry is on exactly where the typed wake is declared, with the default bound', () => {
+    // On with the typed wake, off without one: the retry is the same wake, so a profile with no
+    // wake to retry never claims one.
+    expect(profileFor('muse')?.watchWake).toBe(true);
+    expect(profileFor('cursor')?.watchWake).toBe(true);
+    for (const cli of ['claude-code', 'codex', 'antigravity', 'grok', 'gemini', 'jules']) {
+      expect(profileFor(cli)?.watchWake, cli).toBe(false);
+    }
+    // The bound is the loader's default unless a profile names one, and the shipped ones name none.
+    expect(DEFAULT_WATCH_WAKE_TRIES).toBe(3);
+    expect(profileFor('muse')?.watchWakeTries).toBe(3);
+    expect(profileFor('cursor')?.watchWakeTries).toBe(3);
+  });
+
+  test('the watch keys are read by the loader’s own rules', () => {
+    expect(watchWakeKey('watch_wake: on')).toBe(true);
+    expect(watchWakeKey('watch_wake: off')).toBe(false);
+    expect(watchWakeKey('cli: muse')).toBeNull();
+    expect(() => watchWakeKey('watch_wake: maybe')).toThrow(/watch_wake/);
+    expect(watchWakeTriesKey('watch_wake_tries: 4')).toBe(4);
+    expect(watchWakeTriesKey('watch_wake_tries: 10')).toBe(10);
+    expect(watchWakeTriesKey('cli: muse')).toBeNull();
+    for (const bad of ['0', '11', '1.5', '"3"', 'three']) {
+      expect(() => watchWakeTriesKey(`watch_wake_tries: ${bad}`)).toThrow(/watch_wake_tries/);
     }
   });
 });
@@ -214,7 +243,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; muse reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
     expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);

@@ -98,18 +98,51 @@ export function declaredDeliveryClass(cli: string): DeliveryClass {
  *  claiming a wake it did not make. */
 export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus takes it';
 
+/** What a typed wake did, when the run made one. `attempted` is false for a wake the run did
+ *  not reach — a pane it refused to type into, a trigger over the line, an order that leaves the
+ *  typed leg out — and true once the wake itself ran, delivered or not. `reason` is the wake's
+ *  own word for what it saw. */
+export type WakeOutcome = { attempted: boolean; reason?: string };
+
+/** The facts a class's sentence needs beyond the class itself: a person's pane is never typed, a
+ *  CLI whose profile declares `typed_wake: screen` can take one line at send time, and a wake
+ *  this run made says what it saw. */
+export type DeliveryWordsContext = {
+  human?: boolean;
+  /** The seat's profile declares a typed wake (src/send/typed-wake.ts). */
+  typedWake?: boolean;
+  /** The watch may type its retry for this seat once a message passes its unread window. */
+  watchWake?: boolean;
+  /** The typed wake this run made. */
+  wake?: WakeOutcome;
+};
+
 /** The class in plain words, for a console line after the leg's own word. Never a bare
- *  "unconfirmed": each sentence says what happens to the message next. */
-export function deliveryWords(cls: DeliveryClass, seat: string): string {
+ *  "unconfirmed": each sentence says what happens to the message next, including the one fact a
+ *  class alone cannot say — whether anything gives the seat a turn. A typed wake's own outcome is
+ *  the run's, never inferred from the profile: a wake that ran and did not deliver says so, and
+ *  one the run never reached says that instead. */
+export function deliveryWords(cls: DeliveryClass, seat: string, context: DeliveryWordsContext = {}): string {
+  const { human = false, typedWake = false, watchWake = false, wake } = context;
+  const wakeLine = wake === undefined
+    ? ''
+    : wake.attempted
+      ? `the typed wake failed (${wake.reason ?? 'no reason was recorded'})`
+      : `the typed wake did not run (${wake.reason ?? 'no reason was recorded'})`;
+  const lead = (rest: string): string => (wakeLine === '' ? `queued; ${rest}` : `queued; ${wakeLine}; ${rest}`);
   switch (cls) {
     case 'push':
       return 'woken through its event adapter';
     case 'between-turns':
       return 'woken through its runtime queue';
     case 'pull-on-turn':
-      return `queued; ${seat} reads it at its next turn (pull-only)`;
+      return lead(`${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
     case 'none':
-      return `queued; ${seat} has no way to be woken while idle`;
+      if (human) return lead(`${seat} has no way to be woken while idle`);
+      if (!typedWake) return lead(`nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
+      return lead(watchWake
+        ? `nothing wakes ${seat} while it is idle except a send-time typed wake and the watch's typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn`
+        : `nothing wakes ${seat} while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn`);
   }
 }
 
@@ -137,6 +170,13 @@ export type DeliveryEvidence = {
   /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
+  /** The CLI's profile declares `typed_wake: screen`: a send may type one line into a composer
+   *  it saw empty twice (src/send/typed-wake.ts, the rule's one exemption). It is not an event
+   *  adapter, so it never changes the class — only what the words and a repair may promise. */
+  typedWake: boolean;
+  /** The watch may type that same wake for this seat once a message passes its unread window:
+   *  `typedWake`, and neither the profile nor the seat's own word turns the retry off. */
+  watchWake: boolean;
   /** Whether the seat's webhook adapter can post right now: its two files read, and the secret
    *  file is the owner's own 0600 file. False when the seat configures none or cannot deliver. */
   webhook: boolean;
@@ -165,7 +205,7 @@ export type SeatDeliveryInput = {
   /** The seat's row in the team file, when the caller has one: its `cli`, its launch line, its
    *  `human` word, its `inbound` word — the team's own opt-out the send admits by — and its
    *  `webhook` row when it configures an adapter. A temporary seat has none. */
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   /** The seat's runtime record, when the seat is launched. Its `launch_line` is what the
    *  launch actually ran, its `watcher` is what the launch actually installed, and its `id` and
    *  `agent_session` are the two facts a conversation binding is compared by. */
@@ -297,10 +337,18 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     ...(webhook ? { webhook: true } : {}),
   };
   const cls = effectiveDeliveryClass(facts);
+  const profile = profileFor(cli);
+  const typedWake = !human && (profile?.typedWake ?? null) !== null;
+  // The seat's own word wins over its profile's; the retry needs a typed wake either way.
+  const watchWake = typedWake && (input.declared?.watchWake ?? profile?.watchWake === true);
   return {
     seat: input.seat,
     class: cls,
-    words: deliveryWords(cls, input.seat),
+    words: deliveryWords(cls, input.seat, {
+      ...(human ? { human: true } : {}),
+      ...(typedWake ? { typedWake: true } : {}),
+      ...(watchWake ? { watchWake: true } : {}),
+    }),
     evidence: {
       cli,
       declared: declaredClass,
@@ -312,6 +360,8 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       endpointRecorded,
       endpoint,
       human,
+      typedWake,
+      watchWake,
       webhook,
       webhookReason,
     },

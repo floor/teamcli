@@ -236,6 +236,15 @@ refuses to spend a wake and a dispatch pass on a seat whose class is `pull-on-tu
 the table shows that before a message sits unread. `--json` carries the same reading on each row
 as `seat_wake`.
 
+A seat the reading marks unwakeable whose oldest unread drop has waited past the window the
+watch's unread pass uses is one more `note:` of the plain table:
+`<seat>: its oldest unread drop has waited <age>, past the <n>s unread window; <its delivery class
+in the send's own words>`. The window is the watch's own, paced as the check paces it, and the
+words are the class's, so the table, a send's console line and the check cannot promise different
+things. It is a note only: `status` never fails for it — `check` does. The expanded `--all` table
+and the `--json` rows carry the same reading as each row's WAKE cell and `seat_wake`, and draw no
+note.
+
 ## Example
 
 ```yaml file=.agents/team.yaml

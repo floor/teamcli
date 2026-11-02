@@ -160,6 +160,15 @@ export type Seat = {
    */
   human?: true;
   /**
+   * The seat's own word on the watch's typed wake retry, when the file writes one: `on` lets
+   * the watch type the same wake a send types once a message has gone unread past its window;
+   * `off` keeps the seat on the drop-file leg alone. Absent, the seat's CLI profile decides
+   * (on exactly where it declares `typed_wake`). A field of the built seat like every other,
+   * so it is part of the seat's digest and omitted when the file omits the key — every file
+   * that writes none keeps the digest it had.
+   */
+  watchWake?: boolean;
+  /**
    * The seat's own word on cross-session socket frames, when the file writes one: `accept`
    * authorizes the socket leg, `hold` and `refuse` never let it dial. The launch must always
    * declare `crossSessionInbound: accept` itself — what the receiving CLI needs to take the

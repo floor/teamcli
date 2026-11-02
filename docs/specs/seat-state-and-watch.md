@@ -265,8 +265,9 @@ held-send retry and the unread wake.
   `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. The wake
   writes its `<id>.wake` reservation before the line is typed and holds it through the
   attempt: a crash after the reservation never types a second line, a definite not-delivered
-  outcome (`held`, `not-submitted`) gives the reservation back so a later pass may wake, and an
-  uncertain one (`unreachable`) keeps it, spent. At twice the window a message still unread is
+  outcome (`held`, `not-submitted`, or a delivery whose bindings refused before any key was
+  written) gives the reservation back so a later pass may wake, and an uncertain one
+  (`unreachable`) that wrote to the pane keeps it, spent. At twice the window a message still unread is
   reported once to its sender as a signed Runtime mailbox record and to the team's lead as one
   signed drop for the pass, listing every message due in it — never by typing into a pane —
   after a `<id>.reported` reservation for each message; the sender's record is published
@@ -282,7 +283,7 @@ held-send retry and the unread wake.
   line. A signed client-origin record carries `from_client` and no agent id by construction; it
   is reported to the receiving team's lead alone, no sender mailbox resolution is attempted for
   it, and no missing-metadata reason is named. The report's words say whether a wake line was
-  sent, was reserved with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the
+  sent, was attempted with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the
   wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the

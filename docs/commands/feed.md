@@ -204,7 +204,7 @@ the signed receipt a running watch records as one more line, `delivered (read)`:
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn (pull-only)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"

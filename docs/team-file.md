@@ -243,8 +243,9 @@ and `remove` treat the idle table as free where they would otherwise wait on a w
 give. Status, check and the watch read the seat's state from the same screen: its idle table is
 idle, a running turn is working, and only a screen the profile cannot read is unknown.
 
-The Cursor profile is tested with CLI 2026.10.01 to 2026.10.19 (`cursor-agent`). The 2026.10.19
-capture is its ready screen, and its dialog and working shapes are those captured at 2026.10.16.
+The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22
+captures are its ready, unsent and working screens; its dialog shapes are those captured at
+2026.10.16.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor
@@ -455,6 +456,13 @@ retry there and no nudge: a held send's marker is given up on with the reason, a
 waits in the drop file. `team send --wait` to such a seat writes the record on the `drop` leg with
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
+
+`watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
+retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse and
+Cursor today) and the key is omitted; `on` on a profile with no typed wake is refused, because
+there is no wake to retry, and a word other than the two is refused under the seat. `off` keeps
+the drop-file wake for that seat — the send-time typed wake is unaffected. The key is part of the
+seat's digest, and a record that writes none keeps every digest it had.
 
 `public_only` is optional on a seat: `public_only: true` says its briefs go to a service outside
 this machine. The team's rules are never prepended to its briefs, and a send reads the whole body

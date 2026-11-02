@@ -33,8 +33,8 @@ rules:
 # adapter, so no event leg wakes an idle seat; a message waits in its bus inbox, and the typed
 # wake below is the one fallback that can reach the box itself.
 delivery: none
-# The one exception to the no-pane-messaging rule (2026-10-31), granted for this profile alone
-# and narrowly: a send may type one trigger line into a composer two reads showed as the empty
+# The typed-wake exception to the no-pane-messaging rule (2026-10-31), granted per profile and
+# narrowly: a send may type one trigger line into a composer two reads showed as the empty
 # idle prompt, presses Enter only while the box still holds exactly that line, and calls itself
 # delivered only when the `working` screen above appears. Nothing else is typed, no draft is
 # moved or cleared, and a wake that cannot deliver leaves the message in the bus inbox. The

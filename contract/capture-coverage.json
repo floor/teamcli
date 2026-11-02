@@ -229,17 +229,17 @@
     },
     "cursor": {
       "idle": {
-        "real": 14,
+        "real": 15,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 6,
+        "real": 7,
         "constructed": 5,
         "undocumented": 0
       },
       "unsent": {
-        "real": 26,
+        "real": 27,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1395,7 +1395,7 @@
     "cursor": {
       "tested": {
         "from": "2026.10.01",
-        "to": "2026.10.19"
+        "to": "2026.10.22"
       },
       "byVersion": {
         "2026.10.01": {
@@ -1668,17 +1668,17 @@
         },
         "2026.10.22": {
           "idle": {
-            "real": 0,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
           "working": {
-            "real": 0,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
           "unsent": {
-            "real": 1,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
@@ -2255,7 +2255,6 @@
       "confirmation": "reason not stated"
     },
     "cursor": {
-      "idle": "reason not stated",
       "working": "reason not stated",
       "unsent": "reason not stated",
       "permission": "reason not stated",
@@ -3617,9 +3616,27 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.22/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.22/rules-unsent-reviewer-agent.txt",
       "cli": "cursor",
       "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/unsent.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/working.txt",
+      "cli": "cursor",
+      "kind": "working",
       "provenance": "capture"
     },
     {

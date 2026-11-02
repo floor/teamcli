@@ -299,7 +299,7 @@ test('a seat with no socket is a note naming its class, and the exit stays clear
   generated(made, 'lead', 'accept');
   const { status, sent } = await agree(made, 'lead', names, 'typed');
   const checked = check(made, names);
-  expect(checked.out).toContain('note: lead: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn');
+  expect(checked.out).toContain('note: lead: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — lead reads it at its next turn, and nothing here gives it one (pull-only)');
   expect(checked.out).not.toContain(SKIP);
   expect(checked.code).toBe(0);
   expect(status.reach).toBe('typed');
@@ -393,7 +393,7 @@ test('missing consent with no socket at all is a note, not a difference', async 
   settle(made, names);
   const { status, sent } = await agree(made, 'wrapped', names, 'typed');
   const checked = check(made, names);
-  expect(checked.out).toContain('note: wrapped: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn');
+  expect(checked.out).toContain('note: wrapped: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — wrapped reads it at its next turn, and nothing here gives it one (pull-only)');
   expect(checked.out).not.toContain('wrapped: sends go to its drop folder');
   expect(checked.code).toBe(0);
   expect(status.reach).toBe('typed');

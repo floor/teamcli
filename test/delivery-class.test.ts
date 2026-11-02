@@ -98,8 +98,28 @@ describe('the plain words', () => {
   test('each class says what happens next, never a bare unconfirmed', () => {
     expect(deliveryWords('push', 'helper')).toBe('woken through its event adapter');
     expect(deliveryWords('between-turns', 'helper')).toBe('woken through its runtime queue');
-    expect(deliveryWords('pull-on-turn', 'helper')).toBe('queued; helper reads it at its next turn (pull-only)');
-    expect(deliveryWords('none', 'helper')).toBe('queued; helper has no way to be woken while idle');
+    expect(deliveryWords('pull-on-turn', 'helper')).toBe('queued; helper reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(deliveryWords('none', 'helper')).toBe('queued; nothing wakes helper while it is idle; a person or a restart must give it a turn');
+    // A person's pane is never typed into; a profile that declares the typed wake says the one
+    // way an idle seat can still be reached.
+    expect(deliveryWords('none', 'helper', { human: true })).toBe('queued; helper has no way to be woken while idle');
+    expect(deliveryWords('none', 'helper', { typedWake: true })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
+    // The watch's typed retry is a wake of its own name: a profile that turns it on says so, and
+    // one that turns it off keeps the send-time sentence exactly.
+    expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: true })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
+    expect(deliveryWords('none', 'helper', { typedWake: true, watchWake: false })).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
+    // A watch retry without the typed wake it retries is not a route, and is never said.
+    expect(deliveryWords('none', 'helper', { watchWake: true })).toBe('queued; nothing wakes helper while it is idle; a person or a restart must give it a turn');
+  });
+
+  test('a wake this run made says what it saw, and one it never reached says that instead', () => {
+    const pull = 'helper reads it at its next turn, and nothing here gives it one (pull-only)';
+    expect(deliveryWords('pull-on-turn', 'helper', { wake: { attempted: true, reason: 'the second read showed working, not an empty idle prompt; nothing was typed' } }))
+      .toBe(`queued; the typed wake failed (the second read showed working, not an empty idle prompt; nothing was typed); ${pull}`);
+    expect(deliveryWords('pull-on-turn', 'helper', { wake: { attempted: false, reason: 'the session lists more than one agent with this name' } }))
+      .toBe(`queued; the typed wake did not run (the session lists more than one agent with this name); ${pull}`);
+    // No attempt at all keeps the sentence it always had: nothing claims a wake the run did not make.
+    expect(deliveryWords('pull-on-turn', 'helper')).toBe(`queued; ${pull}`);
   });
 });
 
@@ -116,7 +136,7 @@ describe('a seat read from its records', () => {
 
   const read = (input: {
     seat?: string;
-    declared?: { cli: string; launch: string; human?: true; inbound?: 'accept' | 'hold' | 'refuse' };
+    declared?: { cli: string; launch: string; human?: true; watchWake?: boolean; inbound?: 'accept' | 'hold' | 'refuse' };
     state?: Parameters<typeof seatDeliveryClass>[0]['state'];
     home?: string;
     processes?: Parameters<typeof seatDeliveryClass>[0]['processes'];
@@ -168,7 +188,7 @@ describe('a seat read from its records', () => {
     });
     expect(`${read_.class} ${read_.evidence.watcher} ${read_.evidence.watcherFrom}`)
       .toBe('pull-on-turn hook recorded');
-    expect(read_.words).toBe('queued; helper reads it at its next turn (pull-only)');
+    expect(read_.words).toBe('queued; helper reads it at its next turn, and nothing here gives it one (pull-only)');
     expect(read_.evidence.declared).toBe('push');
   });
 
@@ -387,7 +407,7 @@ describe('a seat read from its records', () => {
     expect(noThread.evidence.endpoint).toBe(false);
     expect(noThread.evidence.conversation).toBe(false);
     expect(noThread.class).toBe('pull-on-turn');
-    expect(noThread.words).toBe('queued; helper reads it at its next turn (pull-only)');
+    expect(noThread.words).toBe('queued; helper reads it at its next turn, and nothing here gives it one (pull-only)');
     const rebound = read({
       declared: { cli: 'codex', launch: 'codex' },
       state: {
@@ -473,7 +493,17 @@ describe('a seat read from its records', () => {
       state: { cli: 'muse', watcher: 'none' },
     });
     expect(muse.class).toBe('none');
-    expect(muse.words).toBe('queued; helper has no way to be woken while idle');
+    // Muse declares the typed wake, and its profile turns the watch's retry on with it.
+    expect(muse.evidence.typedWake).toBe(true);
+    expect(muse.evidence.watchWake).toBe(true);
+    expect(muse.words).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
+    // The seat's own word wins over its profile's: `watch_wake: off` keeps the send-time sentence.
+    const off = read({
+      declared: { cli: 'muse', launch: 'muse --yolo', watchWake: false },
+      state: { cli: 'muse', watcher: 'none' },
+    });
+    expect(off.evidence.watchWake).toBe(false);
+    expect(off.words).toBe('queued; nothing wakes helper while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn');
     const human = read({
       declared: { cli: 'claude-code', launch: 'claude', human: true },
       state: { cli: 'claude-code', watcher: 'hook' },

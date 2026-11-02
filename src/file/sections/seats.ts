@@ -2,7 +2,7 @@ import { isAbsolute } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
-import { displayEffort } from '../../profiles/profile.ts';
+import { displayEffort, profileFor } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
 import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
@@ -97,6 +97,10 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        watch_wake: {
+          enum: ['on', 'off'],
+          $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
+        },
         public_only: { type: 'boolean', $comment: 'the seat\'s briefs go to a service outside this machine: the team\'s rules are never prepended, and a send reads the body against the machine\'s private lists and falls through on a match; a hosted CLI\'s profile is public-only on its own, and a seat can only add the guard' },
         inbound: {
           enum: [...INBOUND_WORDS],
@@ -156,7 +160,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -228,6 +232,18 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's own word on the watch's typed wake retry. A field of the built seat like
+    // `human`, omitted when the file writes none — every file that writes none keeps the digest
+    // it had, and a written word is part of the digest the owner approves. `on` needs a profile
+    // that declares a typed wake: there is no other wake for the watch to type, so the word
+    // would be a setting that could never run.
+    const watchWakeField = fields.get('watch_wake');
+    const watchWakeWord = check.oneOf(fields.get('watch_wake'), `${at}: watch_wake`, ['on', 'off']);
+    let watchWake = watchWakeWord === undefined ? undefined : watchWakeWord === 'on';
+    if (watchWake === true && (cli === undefined || profileFor(cli)?.typedWake == null)) {
+      check.fail(watchWakeField?.value.line ?? line, `${at}: watch_wake "on" needs a CLI profile that declares typed_wake, and "${String(cli)}" declares none`);
+      watchWake = undefined;
+    }
     // The seat's briefs go to a service outside this machine. A field of the built seat like
     // `human`, omitted when the file marks none — every file that marks no seat keeps the digest
     // it had. A written `false` reads as absent, so a team file can only add the guard a hosted
@@ -300,6 +316,8 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file writes no watch_wake word, for the same reason.
+        ...(watchWake !== undefined ? { watchWake } : {}),
         // Omitted when the file marks no public-only seat, for the same reason.
         ...(publicOnly ? { publicOnly: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
