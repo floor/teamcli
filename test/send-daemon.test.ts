@@ -626,8 +626,22 @@ describe('per-seat FIFO queue and concurrent sends', () => {
 
     blocked = false;
     unblock!();
-    expect((await Promise.all(pending)).every((code) => code === 0)).toBe(true);
-  });
+    // Measured alone, starting the thirty-three sends takes ~2.35 s (each call's synchronous
+    // admission before its first await). Bound the gather below the test's own timeout, and
+    // give the gather a rejection handler: a slow host then fails this scene with the expect
+    // below, never with an assertion firing after bun has already timed the test out.
+    const gathered = Promise.all(pending).then(
+      (codes) => codes.every((code) => code === 0),
+      () => false,
+    );
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const bounded = new Promise<'timeout'>((resolve) => {
+      deadline = setTimeout(() => resolve('timeout'), 25_000);
+    });
+    const outcome = await Promise.race([gathered, bounded]);
+    clearTimeout(deadline);
+    expect(outcome).toBe(true);
+  }, 30_000);
 });
 
 describe('working seat retry and seat-lock coexistence', () => {
