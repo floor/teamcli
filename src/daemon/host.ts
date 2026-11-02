@@ -1284,10 +1284,30 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               // The loader's own handle names the team file; its folder is the state door and
               // the presence spool the child's presence steps read, exactly as this daemon does.
               stateDir: dirname(entry.handle),
+              // A watched route runs its watch in the child that serves it: the child is then the
+              // process that holds the epoch and performs the sends, and this daemon keeps the
+              // record, the diagnostic's request file and the status row. The presence flag says
+              // whether this daemon measures the route's seats and relays them with each beat.
+              // A route whose policy is inline never reaches a child, so its watch stays here.
+              ...(input.watchHosting === true
+                ? {
+                    watch: {
+                      teamFile: entry.handle,
+                      presence: presenceWork.some((one) => one.route.root === route.root),
+                    },
+                  }
+                : {}),
             }];
       }),
       log: (text) => logLine(text),
       ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
+      // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
+      // child's frame names the root; this daemon's own beat machinery decides which other
+      // routes the beat renews, exactly as it does for a pass on its own loop.
+      watchPulse: (root, at) => {
+        const route = routes.find((candidate) => candidate.root === root);
+        if (route !== undefined) hostedBeat.midPass(route);
+      },
     });
   }
 
@@ -1407,6 +1427,20 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // socket and a tracker team's idle reading stays explicitly unknown.
       const brokerWork = features.broker === 'on' ? input.brokerWork?.(route) : undefined;
       const extras: HostedWatchExtras = brokerWork === undefined ? {} : { brokerWork };
+      // A route whose watch this daemon asked a chores child to host answers with the child's
+      // remote handle: its state mirrors the child's frames, its tick carries this beat over the
+      // pipe, and its fault is the diagnostic's one entry. The daemon then builds no second
+      // watch for the route, and no second epoch for it exists. The presence closure is read on
+      // every beat the fleet sends, and only when the token told the child to install one.
+      const remote = choresFleet === null
+        ? null
+        : choresFleet.watchFor(route.root, () => (presence === undefined
+            ? null
+            : route.seats.map((seat) => ({ seat, healthy: seatQualified(presence, seat, now()) }))));
+      if (remote !== null) {
+        hostedWatches.push({ status, watch: remote });
+        continue;
+      }
       const build = input.hostedWatch?.(route, log, extras)
         ?? hostedWatchAuthority({
           route,

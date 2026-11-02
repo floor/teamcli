@@ -22,6 +22,8 @@ if (read.kind === 'refused') {
   process.exitCode = 2;
 } else {
   // The child leaves with 0 when its host ends its input; serveChoresChild has cleared its
-  // timers and closed the input by then, so the process ends on its own.
-  await serveChoresChild({ config: read.config, stdin: process.stdin, stdout: process.stdout });
+  // timers and closed the input by then, so the process ends on its own. A terminate signal is
+  // the supervisor's own stop: the same path ends each hosted watch at its seam and releases
+  // the authority it holds before the process leaves.
+  await serveChoresChild({ config: read.config, stdin: process.stdin, stdout: process.stdout, signals: true });
 }

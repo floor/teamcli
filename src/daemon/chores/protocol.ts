@@ -11,7 +11,18 @@
 // through a one-use token, and the daemon's own policy decides where the chores run.
 
 import type { TeamFile } from '../../file/types.ts';
+import type { HostedWatchState } from '../../watch/hosted.ts';
 import type { PresenceSourceStatus } from '../presence/health.ts';
+
+/** The route's hosted watch, when the child was started to carry one. The path is the team file
+ *  the daemon itself loaded: the watch's binding is that file's identity, so it crosses the token
+ *  exactly as the daemon resolved it and is never re-derived from the child's working directory. */
+export type ChoresWatchRoute = {
+  teamFile: string;
+  /** Whether the daemon relays per-seat presence health with every beat. False leaves the
+   *  watch's presence answer unknown, exactly as a daemon without presence hosting does. */
+  presence: boolean;
+};
 
 /** How the child was started: the roots it serves and the limits its supervisor gave it. The
  *  token file carries this; a child reads it once and serves from it. */
@@ -26,7 +37,14 @@ export type ChoresChildRoute = {
    *  read the same snapshot instead of reading the file again. Absent in a hand-built token,
    *  where the pass reads the root's team file itself. */
   teamFile?: TeamFile;
+  /** The hosted watch this child carries for the root. Absent: the root's watch stays on the
+   *  daemon's own loop, exactly as before the isolation. */
+  watch?: ChoresWatchRoute;
 };
+
+/** One declared seat's presence health as the daemon measured it at the beat it carries. The
+ *  child answers its watch's dispatcher from the latest snapshot; no proof or badge crosses. */
+export type ChoresWatchSeatHealth = { seat: string; healthy: boolean };
 
 /** One seat's runtime reading as the daemon measured it, or the reason it could not be taken.
  *  The child reconciles it against the canonical projection; the daemon keeps the source, its
@@ -65,10 +83,16 @@ export type ChoresChildConfig = {
 /** Host to child. A `tick` is a liveness nudge and the daemon's own beat instant; a due pass is
  *  the child's decision, so a late nudge never runs one twice. A `presence` nudge carries the
  *  daemon's measured source readings for one root after that root's ingest step resolved: the
- *  child then runs the activity, reconcile and publish steps the daemon used to run inline. */
+ *  child then runs the activity, reconcile and publish steps the daemon used to run inline.
+ *  A `watch-beat` is the daemon's watch beat for one root: it renews that route's authority and
+ *  settles its due waits, and it carries the presence health the daemon measured for the route
+ *  on this beat (null when it hosts no presence for the root). A `watch-fault` asks the child to
+ *  end that route's run at its own seam, exactly as the daemon's own diagnostic would. */
 export type ChoresHostMessage =
   | { type: 'tick'; id: string; at: string }
   | { type: 'presence'; id: string; root: string; at: string; readings: ChoresPresenceReading[] }
+  | { type: 'watch-beat'; root: string; at: string; presence: ChoresWatchSeatHealth[] | null }
+  | { type: 'watch-fault'; root: string; why: string }
   | { type: 'stop'; why: string };
 
 /** What one root's pass did: its own clock and the notes a reader should see. `notes` are plain
@@ -79,12 +103,19 @@ export type ChoresRootPass = { root: string; at: string; notes: string[] };
 /** Child to host. `heartbeat` is sent every beat whether or not a pass is running; `rssBytes` is
  *  the child's own resident size at that instant, so the daemon's record and `team daemon status`
  *  can report what one child costs. `pass` reports finished per-root work; `note` is a diagnostic
- *  line the host writes to its own log. */
+ *  line the host writes to its own log. `watch-state` mirrors one hosted watch's whole state
+ *  after a beat or a fault, so the daemon's own record carries what the child proved rather than
+ *  a guess; `watch-pulse` is one cross-route beat a hosted pass carried to the others; and
+ *  `watch-fault-result` answers a diagnostic once its run has left its seam (`left`) or the
+ *  child had no run to end (`refused`). */
 export type ChoresChildMessage =
   | { type: 'ready'; pid: number; at: string }
   | { type: 'heartbeat'; at: string; rssBytes: number; busy: string | null }
   | { type: 'pass'; passes: ChoresRootPass[] }
   | { type: 'presence-result'; id: string; root: string; at: string; proofs: ChoresPresenceProof[]; notes: string[] }
+  | { type: 'watch-state'; root: string; state: HostedWatchState }
+  | { type: 'watch-pulse'; root: string; at: string }
+  | { type: 'watch-fault-result'; root: string; outcome: 'left' | 'refused'; why: string }
   | { type: 'note'; text: string }
   | { type: 'stopped'; why: string };
 
@@ -136,6 +167,51 @@ function readPresenceStatus(raw: unknown): ChoresPresenceStatus | null {
   };
 }
 
+/** Reads one seat-health row the daemon relayed, or null for one this contract does not carry. */
+function readSeatHealth(raw: unknown): ChoresWatchSeatHealth | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.seat !== 'string' || entry.seat === '') return null;
+  if (typeof entry.healthy !== 'boolean') return null;
+  return { seat: entry.seat, healthy: entry.healthy };
+}
+
+const WATCH_PHASES = new Set<string>(['starting', 'running', 'standby', 'stopping', 'stopped', 'failed']);
+
+/** Reads one hosted watch's state as the child reported it, or null for a frame a reader must
+ *  not trust. Every field is checked: the daemon's record and its fault diagnostic both act on
+ *  what this returns. */
+export function readWatchState(raw: unknown): HostedWatchState | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['routeId', 'root', 'team', 'session', 'startedAt'] as const) {
+    if (typeof entry[key] !== 'string' || entry[key] === '') return null;
+  }
+  if (typeof entry.phase !== 'string' || !WATCH_PHASES.has(entry.phase)) return null;
+  if (!(entry.lastCycleAt === null || (typeof entry.lastCycleAt === 'string' && entry.lastCycleAt !== ''))) return null;
+  if (!(entry.lastCycleOutcome === null || entry.lastCycleOutcome === 'pass' || entry.lastCycleOutcome === 'failed')) return null;
+  if (!Number.isInteger(entry.cycles) || (entry.cycles as number) < 0) return null;
+  if (!Number.isInteger(entry.failures) || (entry.failures as number) < 0) return null;
+  if (entry.effects !== 'blocked' && entry.effects !== 'open') return null;
+  if (typeof entry.required !== 'boolean') return null;
+  if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  return {
+    routeId: entry.routeId as string,
+    root: entry.root as string,
+    team: entry.team as string,
+    session: entry.session as string,
+    phase: entry.phase as HostedWatchState['phase'],
+    startedAt: entry.startedAt as string,
+    lastCycleAt: entry.lastCycleAt as string | null,
+    lastCycleOutcome: entry.lastCycleOutcome as HostedWatchState['lastCycleOutcome'],
+    cycles: entry.cycles as number,
+    failures: entry.failures as number,
+    effects: entry.effects as HostedWatchState['effects'],
+    required: entry.required,
+    why: entry.why as string | null,
+  };
+}
+
 /** Reads a host frame the child understands, or null for one it must not act on. */
 export function readHostMessage(raw: Record<string, unknown>): ChoresHostMessage | null {
   if (raw.type === 'tick' && typeof raw.id === 'string' && raw.id !== '' && typeof raw.at === 'string' && raw.at !== '') {
@@ -158,6 +234,24 @@ export function readHostMessage(raw: Record<string, unknown>): ChoresHostMessage
       readings.push({ seat: entry.seat, status });
     }
     return { type: 'presence', id: raw.id, root: raw.root, at: raw.at, readings };
+  }
+  if (raw.type === 'watch-beat' && typeof raw.root === 'string' && raw.root !== ''
+    && typeof raw.at === 'string' && raw.at !== ''
+    && (raw.presence === null || Array.isArray(raw.presence))) {
+    let presence: ChoresWatchSeatHealth[] | null = null;
+    if (Array.isArray(raw.presence)) {
+      presence = [];
+      for (const item of raw.presence) {
+        const seat = readSeatHealth(item);
+        if (seat === null) return null;
+        presence.push(seat);
+      }
+    }
+    return { type: 'watch-beat', root: raw.root, at: raw.at, presence };
+  }
+  if (raw.type === 'watch-fault' && typeof raw.root === 'string' && raw.root !== ''
+    && typeof raw.why === 'string' && raw.why !== '') {
+    return { type: 'watch-fault', root: raw.root, why: raw.why };
   }
   if (raw.type === 'stop' && typeof raw.why === 'string') return { type: 'stop', why: raw.why };
   return null;
@@ -210,6 +304,21 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
       }
       return { type: 'presence-result', id: raw.id, root: raw.root, at: raw.at, proofs, notes: raw.notes as string[] };
     }
+    case 'watch-state': {
+      if (typeof raw.root !== 'string' || raw.root === '') return null;
+      const state = readWatchState(raw.state);
+      if (state === null || state.root !== raw.root) return null;
+      return { type: 'watch-state', root: raw.root, state };
+    }
+    case 'watch-pulse':
+      if (typeof raw.root !== 'string' || raw.root === '') return null;
+      if (typeof raw.at !== 'string' || raw.at === '') return null;
+      return { type: 'watch-pulse', root: raw.root, at: raw.at };
+    case 'watch-fault-result':
+      if (typeof raw.root !== 'string' || raw.root === '') return null;
+      if (raw.outcome !== 'left' && raw.outcome !== 'refused') return null;
+      if (typeof raw.why !== 'string' || raw.why === '') return null;
+      return { type: 'watch-fault-result', root: raw.root, outcome: raw.outcome, why: raw.why };
     case 'note':
       return typeof raw.text === 'string' ? { type: 'note', text: raw.text } : null;
     case 'stopped':

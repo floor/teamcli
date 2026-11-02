@@ -39,6 +39,7 @@ import {
   type ChoresFleet,
   type ChoresRouteInput,
 } from '../src/daemon/chores/supervisor.ts';
+import type { ChoresWatchInput } from '../src/daemon/chores/watch.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
 import type { PresenceSourceStatus } from '../src/daemon/presence/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
@@ -821,6 +822,126 @@ describe('the fleet presence nudge', () => {
     expect(spawned).toBe(0);
     expect(inlineFleet.presence({ root: inline.root, at: new Date(NOW), readings })).toBeNull();
   });
+
+  test('a watched route has a remote handle: its beats cross the pipe and its frames are the record', async () => {
+    const made = world();
+    const fake = fakeChild(4590);
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [{
+        ...routeInput(made.root, policy()),
+        watch: { teamFile: join(made.root, '.agents', 'team.yaml'), presence: true },
+      }],
+      log: () => {},
+      factory: () => fake.child,
+    });
+    // The handle exists before any child has started, so the daemon never builds a second watch
+    // for the route even briefly; the child's readiness gates the beats, not the handle.
+    expect(fleet.watchFor(made.root, () => null)).not.toBeNull();
+    fleet.tick(new Date(NOW));
+    const health = [{ seat: 'crew-lead', healthy: true }];
+    const watch = fleet.watchFor(made.root, () => health);
+    expect(watch).not.toBeNull();
+    // No frame has arrived: the record is the synthetic starting state, never a guess at a run.
+    expect(watch?.state()).toMatchObject({
+      phase: 'starting',
+      required: true,
+      effects: 'blocked',
+      cycles: 0,
+      failures: 0,
+    });
+    // A child that has not reported gets no beat: its run's authority is not renewed behind the
+    // supervisor's own decision.
+    watch!.tick(new Date(NOW));
+    expect(fake.sends.some((message) => message.type === 'watch-beat')).toBe(false);
+
+    fake.emit({ type: 'ready', pid: 4590, at: AT });
+    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null });
+    watch!.tick(new Date(NOW));
+    expect(fake.sends.filter((message) => message.type === 'watch-beat')).toEqual([
+      { type: 'watch-beat', root: made.root, at: new Date(NOW).toISOString(), presence: health },
+    ]);
+
+    const state = {
+      routeId: '0123456789abcdef0123456789abcdef',
+      root: made.root,
+      team: 'acme',
+      session: 'acme-dev',
+      phase: 'running' as const,
+      startedAt: AT,
+      lastCycleAt: new Date(NOW).toISOString(),
+      lastCycleOutcome: 'pass' as const,
+      cycles: 3,
+      failures: 0,
+      effects: 'open' as const,
+      required: true,
+      why: null,
+    };
+    fake.emit({ type: 'watch-state', root: made.root, state });
+    // The daemon mirrors the frame exactly: it computes no second state of its own.
+    expect(watch!.state()).toEqual(state);
+
+    const outcomes: string[] = [];
+    const fault = (why: string): boolean => watch!.fault(
+      why,
+      (recorded) => outcomes.push(`left ${recorded}`),
+      (refused) => outcomes.push(`refused ${refused}`),
+    );
+    expect(fault('the test faults the run')).toBe(true);
+    expect(fake.sends.filter((message) => message.type === 'watch-fault')).toEqual([
+      { type: 'watch-fault', root: made.root, why: 'the test faults the run' },
+    ]);
+    fake.emit({ type: 'watch-fault-result', root: made.root, outcome: 'left', why: 'exited at its seam' });
+    expect(outcomes).toEqual(['left exited at its seam']);
+
+    // A child that leaves answers a fault that was waiting for it, and the record resets to the
+    // synthetic starting state: no run is proved behind the exit. The exit is settled through
+    // the child's own exit promise, so the scene waits for that turn instead of assuming it.
+    expect(fault('the test faults the run again')).toBe(true);
+    fake.leave(null, 'SIGTERM');
+    await waitUntil(() => outcomes.length === 2);
+    expect(outcomes.at(-1)).toBe('refused the chores child left before the fault reached the watch');
+    await waitUntil(() => watch!.state().phase === 'starting');
+    expect(watch!.state()).toMatchObject({ phase: 'starting', effects: 'blocked', cycles: 0 });
+  });
+
+  test('a route that names no watch gets no remote handle and never a frame', () => {
+    const made = world();
+    const fake = fakeChild(4595);
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      log: () => {},
+      factory: () => fake.child,
+    });
+    fleet.tick(new Date(NOW));
+    fake.emit({ type: 'ready', pid: 4595, at: AT });
+    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null });
+    expect(fleet.watchFor(made.root, () => null)).toBeNull();
+    // A frame for a root this child does not host a watch for changes nothing.
+    fake.emit({ type: 'watch-state', root: made.root, state: {
+      routeId: '0123456789abcdef0123456789abcdef',
+      root: made.root,
+      team: 'acme',
+      session: 'acme-dev',
+      phase: 'running',
+      startedAt: AT,
+      lastCycleAt: null,
+      lastCycleOutcome: null,
+      cycles: 1,
+      failures: 0,
+      effects: 'blocked',
+      required: true,
+      why: null,
+    } });
+    expect(fleet.watchFor(made.root, () => null)).toBeNull();
+  });
 });
 
 describe('the presence frames', () => {
@@ -1170,6 +1291,98 @@ describe('a real child', () => {
       await child.exited;
     }
   }, 30_000);
+
+  test('a watched route drives a hosted watch here, and a stop ends it before the child leaves', async () => {
+    const made = world();
+    const second = join(made.base, 'other');
+    const lines: ChoresChildMessage[] = [];
+    const stdout = {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as ChoresChildMessage);
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    const beats: { root: string; at: string; presence: readonly { seat: string; healthy: boolean }[] | null }[] = [];
+    const faults: { root: string; why: string }[] = [];
+    let built: ChoresWatchInput | null = null;
+    let releaseStop: (() => void) | null = null;
+    const held = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    let stopAsked = false;
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 250,
+        since: AT,
+        routes: [
+          {
+            root: made.root,
+            team: 'acme',
+            session: 'acme-dev',
+            watch: { teamFile: join(made.root, '.agents', 'team.yaml'), presence: true },
+          },
+          { root: second, team: 'acme', session: 'acme-dev' },
+        ],
+      },
+      stdin,
+      stdout,
+      pass: async () => [],
+      presence: { async run() { return { proofs: [], notes: [] }; } },
+      watchFactory: (input) => {
+        built = input;
+        // The production module hosts only the routes that name a watch; this seam keeps that
+        // rule so a beat for an unwatched root is observably ignored rather than recorded.
+        const hosted = new Set(input.routes.filter((route) => route.watch !== undefined).map((route) => route.root));
+        return {
+          beat(root, at, presence) {
+            if (!hosted.has(root)) return;
+            beats.push({ root, at: at.toISOString(), presence });
+          },
+          fault(root, why) {
+            if (!hosted.has(root)) return;
+            faults.push({ root, why });
+          },
+          async stop(why) {
+            stopAsked = why === 'the daemon asked this child to stop';
+            await held;
+          },
+        };
+      },
+    });
+    try {
+      stdin.write(`${JSON.stringify({ type: 'watch-beat', root: made.root, at: AT, presence: [{ seat: 'crew-lead', healthy: true }] })}\n`);
+      stdin.write(`${JSON.stringify({ type: 'watch-fault', root: made.root, why: 'the test faults the run' })}\n`);
+      await waitUntil(() => beats.length === 1 && faults.length === 1);
+      expect(beats[0]).toEqual({ root: made.root, at: AT, presence: [{ seat: 'crew-lead', healthy: true }] });
+      expect(faults[0]).toEqual({ root: made.root, why: 'the test faults the run' });
+      // A beat for a root this child hosts no watch for reaches no host, and is not an error.
+      stdin.write(`${JSON.stringify({ type: 'watch-beat', root: second, at: AT, presence: null })}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(beats).toHaveLength(1);
+
+      stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+      await waitUntil(() => stopAsked, 2000);
+      // The child neither writes its last frame nor leaves while the watch is still ending at
+      // its own seam: the epoch is released before the process is gone.
+      let settled = false;
+      void served.then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(settled).toBe(false);
+      expect(lines.some((message) => message.type === 'stopped')).toBe(false);
+    } finally {
+      releaseStop!();
+    }
+    expect(await served).toBe(0);
+    expect(lines.some((message) => message.type === 'stopped')).toBe(true);
+    // The whole route set crossed the seam; the production module skips the route with no watch.
+    expect(built!.routes).toHaveLength(2);
+  }, 10_000);
 });
 
 describe('under the machine daemon', () => {
@@ -1304,6 +1517,89 @@ describe('under the machine daemon', () => {
         started.daemon.close().then(() => true),
         new Promise<boolean>((resolve) => {
           const timer = setTimeout(() => resolve(false), 10_000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+
+  test('a watched root\'s watch runs in its child, and the daemon mirrors the child\'s frames', async () => {
+    const made = world();
+    const fake = fakeChild(4730);
+    // The fake answers a stop by leaving, so the daemon's close is not held by the kill bound.
+    const child: ChoresChild = {
+      ...fake.child,
+      kill(why: string) {
+        fake.child.kill(why);
+        fake.leave();
+      },
+    };
+    let inlineBuilt = 0;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 100,
+      choresHosting: true,
+      watchHosting: true,
+      hostedWatch: () => {
+        inlineBuilt += 1;
+        return { run: async () => 0 };
+      },
+      choresFactory: () => child,
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The handle is the child's from the first status row: the daemon builds no inline watch.
+      expect(inlineBuilt).toBe(0);
+      expect(started.daemon.roots[0]?.watch).toMatchObject({ phase: 'starting', required: true, effects: 'blocked' });
+      // The child is subscribed when the fleet's first beat starts it; only then can a frame
+      // reach the daemon, so the scene waits for that beat before answering as the child.
+      await waitUntil(() => fake.sends.some((message) => message.type === 'tick'), 5000);
+      // The daemon judges a heartbeat against its own real clock, so these frames carry real
+      // instants; only the watch state below is framed on the scene's fixed instant.
+      fake.emit({ type: 'ready', pid: 4730, at: new Date().toISOString() });
+      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+      await waitUntil(() => fake.sends.some((message) => message.type === 'watch-beat'), 5000);
+      const beat = fake.sends.find((message) => message.type === 'watch-beat');
+      if (beat?.type !== 'watch-beat') throw new Error('no watch beat crossed the pipe');
+      // This daemon hosts no presence for the route, so the child is told the reading is unknown.
+      expect(beat).toMatchObject({ root: made.root, presence: null });
+
+      // The child's frame is the record the daemon publishes: no second state is computed here.
+      const state = {
+        routeId: '0123456789abcdef0123456789abcdef',
+        root: made.root,
+        team: 'acme',
+        session: 'acme-dev',
+        phase: 'running' as const,
+        startedAt: AT,
+        lastCycleAt: AT,
+        lastCycleOutcome: 'pass' as const,
+        cycles: 3,
+        failures: 0,
+        effects: 'blocked' as const,
+        required: true,
+        why: null,
+      };
+      fake.emit({ type: 'watch-state', root: made.root, state });
+      await waitUntil(() => {
+        const read = readDaemonState(made.home);
+        return read.kind === 'ok' && read.state.roots[0]?.watch?.cycles === 3;
+      }, 5000);
+      const read = readDaemonState(made.home);
+      expect(read.kind).toBe('ok');
+      if (read.kind === 'ok') expect(read.state.roots[0]?.watch).toMatchObject(state);
+      expect(inlineBuilt).toBe(0);
+    } finally {
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
           timer.unref();
         }),
       ]);

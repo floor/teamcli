@@ -20,15 +20,20 @@ import { workPushResultOf, type WorkPush, type WorkPushRequest, type WorkPushRes
  *  the epoch it captured when it acquired the watch. */
 export type WatchDirectContext = { root: string; session: string; capturedEpoch: string };
 
+/** Where one direct send's own io writes. A host in the daemon writes to its log; the default
+ *  writes to this process's standard streams. */
+export type WatchDirectIoFactory = (root: string, onStderr: (text: string) => void) => Io;
+
 /**
  * Sends one work push through the ordinary send command's admission, delivery order and route
  * rules, walking only the direct wake legs. `host` is the transport/test seam and carries no
- * identity of its own; the caller is built here, from the verifier's verdict alone.
- */
+ * identity of its own; the caller is built here, from the verifier's verdict alone. `io` is where
+ * the run's own lines go: a host whose standard output carries protocol frames must pass one. */
 export async function sendWatchDirect(
   context: WatchDirectContext,
   request: WorkPushRequest,
   host: SendHost = realHost,
+  io: WatchDirectIoFactory = watchDirectIo,
 ): Promise<WorkPushResult> {
   const first = verify(context);
   if (!first.ok) return { ok: false, refused: first.why };
@@ -45,7 +50,7 @@ export async function sendWatchDirect(
   // No guard is handed in: the send composes the principal's own recheck itself, from the watch
   // it carries, before every direct transport. This entry never relies on a caller remembering
   // to wire the check — it hands over the principal and lets the seam do it.
-  const run = await sendDirect(watchDirectIo(context.root, (text) => said.push(text)), host, {
+  const run = await sendDirect(io(context.root, (text) => said.push(text)), host, {
     seat: request.seat,
     pane: request.pane,
     cli: request.cli,
@@ -105,4 +110,22 @@ function watchDirectIo(root: string, onStderr: (text: string) => void): Io {
     stdoutIsTTY: Boolean(process.stdout.isTTY),
     stderrIsTTY: Boolean(process.stderr.isTTY),
   };
+}
+
+/** The same io for a host whose own standard streams are not a terminal or a log: every line is
+ *  handed to the host's log, and the stderr callback still collects what the run said. A chores
+ *  child's standard output carries its protocol frames, so the default io would corrupt one. */
+export function loggedWatchDirectIo(log: (text: string) => void): WatchDirectIoFactory {
+  return (root, onStderr) => ({
+    stdout: (text) => void log(text),
+    stderr: (text) => {
+      onStderr(text);
+      void log(text);
+    },
+    cwd: root,
+    env: process.env,
+    stdinIsTTY: false,
+    stdoutIsTTY: false,
+    stderrIsTTY: false,
+  });
 }

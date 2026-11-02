@@ -15,12 +15,14 @@
 // limits are the tightest of its roots', and the child serves the roots round-robin, a slice per
 // turn, so one root's backlog delays another root's chores by a slice.
 import type { TeamFile } from '../../file/types.ts';
-import type { HostedRoute } from '../routes.ts';
+import type { HostedWatchState } from '../../watch/hosted.ts';
+import { routeId, type HostedRoute } from '../routes.ts';
 import type { DaemonChoresState } from '../state.ts';
+import type { HostedWatch } from '../watch.ts';
 import type { ChoresPolicy } from './policy.ts';
 import { tightestPolicy } from './policy.ts';
 import { spawnChoresChild, type ChoresChild, type ChoresChildEvent, type SpawnChoresInput } from './spawn.ts';
-import type { ChoresChildConfig, ChoresPresenceProof, ChoresPresenceReading } from './protocol.ts';
+import type { ChoresChildConfig, ChoresPresenceProof, ChoresPresenceReading, ChoresWatchSeatHealth } from './protocol.ts';
 
 export type ChoresRouteInput = {
   route: HostedRoute;
@@ -29,6 +31,10 @@ export type ChoresRouteInput = {
   /** The team file's folder, where the seat state door and the presence spool live. The child's
    *  presence steps read it, so it is carried in the token beside the validated team file. */
   stateDir?: string;
+  /** The route's hosted watch, when this daemon hosts one: the team file the watch is bound to,
+   *  and whether the daemon relays per-seat presence health with every beat. Absent, the route's
+   *  watch stays on the daemon's own loop. */
+  watch?: { teamFile: string; presence: boolean };
 };
 
 export type ChoresFleetInput = {
@@ -45,6 +51,10 @@ export type ChoresFleetInput = {
   factory?: (input: SpawnChoresInput) => ChoresChild;
   /** How long a terminated child gets before it is forced. */
   killGraceMs?: number;
+  /** One route's hosted watch reached a seat seam and a daemon beat is due. The daemon's own
+   *  beat machinery decides which other routes that beat renews; this hook only carries the
+   *  fact across the pipe. */
+  watchPulse?: (root: string, at: Date) => void;
 };
 
 export type ChoresFleet = {
@@ -57,6 +67,13 @@ export type ChoresFleet = {
   presence(request: ChoresPresenceRequest): Promise<ChoresPresenceAnswer> | null;
   /** The record for one hosted root; undefined when this fleet has nothing to say about it. */
   stateFor(root: string): DaemonChoresState | undefined;
+  /**
+   * The daemon's handle on one route's watch where that watch runs in a child. Null when this
+   * fleet does not carry that route's watch (inline, or the route names none), so the daemon
+   * builds its own host exactly as before. `presence` is read on every beat the fleet sends:
+   * the caller answers the route's declared seats, or null when it hosts no presence for it.
+   */
+  watchFor(root: string, presence: () => readonly ChoresWatchSeatHealth[] | null): HostedWatch | null;
   /** Ends every child and waits, bounded, for each to leave. Idempotent. */
   stop(why: string): Promise<void>;
 };
@@ -100,6 +117,14 @@ type Group = {
   /** Presence nudges this child has not answered yet, keyed by their nudge id. A child that
    *  leaves or is stopped settles them as unavailable, so the daemon's pass never waits forever. */
   pendingPresence: Map<string, (answer: ChoresPresenceAnswer) => void>;
+  /** The last watch state each watched root's child reported, keyed by canonical root. The
+   *  daemon's record mirrors it; a root the child has not reported yet has no entry, and its
+   *  reader sees the synthetic starting state instead. */
+  watchState: Map<string, HostedWatchState>;
+  /** Fault diagnostics this child accepted but has not answered yet, keyed by canonical root.
+   *  `left` is the writer's answer once the run leaves its seam; `refused` answers a child that
+   *  had no run to end, and an unexpected exit answers every one still waiting. */
+  watchFaults: Map<string, { left: (recorded: string) => void; refused?: (why: string) => void }>;
   why: string | null;
   stopping: boolean;
 };
@@ -141,6 +166,8 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     lastExit: null,
     lastPass: new Map(),
     pendingPresence: new Map(),
+    watchState: new Map(),
+    watchFaults: new Map(),
     why: null,
     stopping: false,
   };
@@ -153,6 +180,45 @@ function settlePresence(group: Group, why: string): void {
   const pending = [...group.pendingPresence.values()];
   group.pendingPresence.clear();
   for (const settle of pending) settle({ kind: 'unavailable', why });
+}
+
+/** Answers every accepted watch fault still waiting on this child. Called when an unexpected
+ *  exit takes the run with it: no seam remains for the fault to reach. */
+function settleWatchFaults(group: Group, why: string): void {
+  if (group.watchFaults.size === 0) return;
+  const pending = [...group.watchFaults.values()];
+  group.watchFaults.clear();
+  for (const entry of pending) entry.refused?.(why);
+}
+
+/** Replaces every watched root's mirrored state with the synthetic record for "no run has
+ *  reported on this child": starting before work, stopped once the child is asked to end. The
+ *  record closes effects and carries the host's own reason; a reader must never see a live run
+ *  behind a child that is not there. */
+function resetWatchMirror(
+  input: ChoresFleetInput,
+  group: Group,
+  phase: 'starting' | 'stopped',
+  why: string | null,
+): void {
+  for (const entry of group.routes) {
+    if (entry.watch === undefined) continue;
+    group.watchState.set(entry.route.root, {
+      routeId: routeId(entry.route),
+      root: entry.route.root,
+      team: entry.route.team,
+      session: entry.route.session,
+      phase,
+      startedAt: group.startedAtMs === 0 ? input.since : new Date(group.startedAtMs).toISOString(),
+      lastCycleAt: null,
+      lastCycleOutcome: null,
+      cycles: 0,
+      failures: 0,
+      effects: 'blocked',
+      required: true,
+      why,
+    });
+  }
 }
 
 function tickGroup(input: ChoresFleetInput, group: Group, at: Date): void {
@@ -187,6 +253,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
       session: entry.route.session,
       ...(entry.stateDir === undefined ? {} : { stateDir: entry.stateDir }),
       teamFile: entry.team,
+      ...(entry.watch === undefined ? {} : { watch: entry.watch }),
     })),
   };
   let child: ChoresChild;
@@ -212,6 +279,9 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.lastExit = null;
   group.startedOnce = true;
   group.why = null;
+  // A replacement starts with no proved run: every watched root reads starting, effects closed,
+  // until the new child reports its own first state.
+  resetWatchMirror(input, group, 'starting', null);
   group.unsubscribe = child.subscribe((event) => onChildEvent(input, group, child, event));
   void child.exited.then(() => onChildExit(input, group, child));
 }
@@ -252,6 +322,23 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       settle({ kind: 'answered', proofs: message.proofs, notes: message.notes });
       return;
     }
+    case 'watch-state':
+      // A root this group does not serve is dropped: the mirror is the group's own record.
+      if (!group.routes.some((entry) => entry.route.root === message.root)) return;
+      group.watchState.set(message.root, message.state);
+      return;
+    case 'watch-pulse':
+      input.watchPulse?.(message.root, new Date(message.at));
+      return;
+    case 'watch-fault-result': {
+      // A result with no accepted fault waiting is a late answer: dropped, never written twice.
+      const waiting = group.watchFaults.get(message.root);
+      if (waiting === undefined) return;
+      group.watchFaults.delete(message.root);
+      if (message.outcome === 'left') waiting.left(message.why);
+      else waiting.refused?.(message.why);
+      return;
+    }
     case 'note':
       input.log(`chores ${rootList(group)}: ${message.text}`);
       return;
@@ -273,6 +360,16 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   // A presence pass the child had not answered dies with it: the daemon holds that seat's proof
   // until a later pass has a child again, and never re-runs the steps behind the leaving child.
   settlePresence(group, 'the child left before it answered the presence pass');
+  // A fault accepted for a run this exit took with it has no seam left: the writer is answered
+  // now. A deliberate stop leaves its faults for the daemon's close, which answers them as not
+  // reached, exactly as it does for a watch that never reached its seam.
+  if (!group.stopping) settleWatchFaults(group, 'the chores child left before the fault reached the watch');
+  resetWatchMirror(
+    input,
+    group,
+    group.stopping ? 'stopped' : 'starting',
+    group.stopping ? group.why : 'the chores child left; a replacement starts on a later beat',
+  );
   if (group.stopping) return;
   group.restarts += 1;
   const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.restarts - 1));
@@ -403,6 +500,66 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         if (group.routes.some((entry) => entry.route.root === root)) return groupRow(input, group, root);
       }
       return undefined;
+    },
+    watchFor(root: string, presence: () => readonly ChoresWatchSeatHealth[] | null): HostedWatch | null {
+      const group = groups.find((candidate) => candidate.routes.some((entry) => entry.route.root === root));
+      const entry = group?.routes.find((candidate) => candidate.route.root === root);
+      if (group === undefined || entry === undefined || entry.watch === undefined) return null;
+      const route = entry.route;
+      const watchConfig = entry.watch;
+      // No child has reported on this root yet: no run is proved, so effects are closed and the
+      // phase is starting. This is the same shape every reset writes, never a guess at a run.
+      const synthetic = (): HostedWatchState => ({
+        routeId: routeId(route),
+        root: route.root,
+        team: route.team,
+        session: route.session,
+        phase: 'starting',
+        startedAt: group.startedAtMs === 0 ? input.since : new Date(group.startedAtMs).toISOString(),
+        lastCycleAt: null,
+        lastCycleOutcome: null,
+        cycles: 0,
+        failures: 0,
+        effects: 'blocked',
+        required: true,
+        why: null,
+      });
+      return {
+        route,
+        state: () => group.watchState.get(root) ?? synthetic(),
+        tick: (at: Date): void => {
+          // A child that is not ready, is being replaced or is stopping gets no beat: its run's
+          // authority is not renewed behind a supervisor decision.
+          const child = group.child;
+          if (child === null || !group.ready || group.killing || group.stopping) return;
+          const health = watchConfig.presence ? presence() : null;
+          child.send({
+            type: 'watch-beat',
+            root,
+            at: at.toISOString(),
+            presence: health === null ? null : [...health],
+          });
+        },
+        fault: (why: string, left: (recorded: string) => void, refused?: (why: string) => void): boolean => {
+          const child = group.child;
+          if (child === null || !group.ready || group.killing || group.stopping) return false;
+          // The host's own refusals, read from what the child last reported: a standby or a
+          // stopped host has no run to end. One accepted fault at a time, so a second request
+          // can never replace the first writer's answer.
+          const mirror = group.watchState.get(root);
+          if (mirror !== undefined && (!mirror.required || mirror.phase === 'standby' || mirror.phase === 'stopped')) {
+            return false;
+          }
+          if (group.watchFaults.has(root)) return false;
+          if (!child.send({ type: 'watch-fault', root, why })) return false;
+          group.watchFaults.set(root, refused === undefined ? { left } : { left, refused });
+          return true;
+        },
+        // The fleet's own stop ends the child that owns this run; this handle has no run of its
+        // own, so its stop is the fleet's to make and the record follows the child's exit.
+        stop: (): Promise<void> => Promise.resolve(),
+        done: Promise.resolve(),
+      };
     },
     stop(why: string): Promise<void> {
       if (stopRun !== null) return stopRun;

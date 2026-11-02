@@ -18,6 +18,8 @@
 // the pipe, so a child never outlives the daemon that started it.
 import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
+import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
+import type { WatchSources } from '../../commands/watch.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -57,6 +59,16 @@ export type ServeChoresChildInput = {
   pass?: ChoresPass;
   /** The presence steps (activity, reconcile, publisher). A test injects its own. */
   presence?: ChoresPresencePass;
+  /** Builds the hosted watches a token's routes name. The default loads the production module
+   *  only when a route carries a watch; a test injects its own to observe the frames. */
+  watchFactory?: (input: ChoresWatchInput) => ChoresWatch;
+  /** Test seam: the read sources the injected or real watches run over. */
+  watchBase?: WatchSources;
+  /** Ends the child on a terminate signal through the same stop path as a host frame, so the
+   *  watches release their authority before the process leaves. The supervisor still forces a
+   *  child that does not leave within its kill grace. The program entry sets this; a test does
+   *  not, because a test process must not install handlers it cannot take back. */
+  signals?: boolean;
 };
 
 /** A positive whole number of milliseconds, or null. */
@@ -85,6 +97,18 @@ export function choresConfigProblem(raw: unknown): string | null {
     }
     if (route.teamFile !== undefined && (route.teamFile === null || typeof route.teamFile !== 'object' || Array.isArray(route.teamFile))) {
       return 'the token names a malformed team file';
+    }
+    if (route.watch !== undefined) {
+      if (route.watch === null || typeof route.watch !== 'object' || Array.isArray(route.watch)) {
+        return 'the token names a malformed watch';
+      }
+      const watch = route.watch as Record<string, unknown>;
+      if (typeof watch.teamFile !== 'string' || watch.teamFile === '') {
+        return 'the token names a watch without a team file';
+      }
+      if (typeof watch.presence !== 'boolean') {
+        return 'the token names a watch without a presence flag';
+      }
     }
   }
   return null;
@@ -275,6 +299,22 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
 
   write({ type: 'ready', pid: process.pid, at: now().toISOString() });
   heartbeat();
+  // The hosted watches this token asked for. The production module loads only when a route
+  // carries one, so a child started before the watch isolation carries the chores alone. Every
+  // state, pulse and fault answer crosses the same newline-framed pipe as the chores messages.
+  let watch: ChoresWatch | null = null;
+  if (config.routes.some((route) => route.watch !== undefined)) {
+    const make = input.watchFactory ?? (await import('./watch.ts')).createChoresWatch;
+    watch = make({
+      routes: config.routes,
+      log: (text) => write({ type: 'note', text }),
+      report: (root, state) => write({ type: 'watch-state', root, state }),
+      pulse: (root, at) => write({ type: 'watch-pulse', root, at: at.toISOString() }),
+      faultResult: (root, outcome, why) => write({ type: 'watch-fault-result', root, outcome, why }),
+      now,
+      ...(input.watchBase === undefined ? {} : { base: input.watchBase }),
+    });
+  }
   const beatTimer = setInterval(heartbeat, config.beatMs);
   beatTimer.unref();
   const passTimer = setInterval(enqueue, config.beatMs);
@@ -309,6 +349,10 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         enqueue();
       } else if (message.type === 'presence') {
         runPresence(message);
+      } else if (message.type === 'watch-beat') {
+        watch?.beat(message.root, new Date(message.at), message.presence);
+      } else if (message.type === 'watch-fault') {
+        watch?.fault(message.root, message.why);
       } else {
         stopping = true;
         break;
@@ -326,6 +370,13 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   };
   stdin.on('end', finish);
   stdin.on('close', finish);
+  // A terminate signal takes the same path as a host stop: every watch ends at its seam and
+  // releases the epoch it holds before this process leaves. The supervisor's kill grace owns a
+  // stop that does not finish; it signals exactly once and forces after the grace.
+  if (input.signals === true) {
+    process.once('SIGTERM', finish);
+    process.once('SIGINT', finish);
+  }
 
   await stopped;
 
@@ -334,9 +385,15 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   const destroyable = stdin as unknown as { destroy?: () => void };
   if (typeof destroyable.destroy === 'function') destroyable.destroy();
   // A pass that is still running saw the same stop at its next slice boundary; the supervisor's
-  // kill bound owns a pass that never reaches one.
+  // kill bound owns a pass that never reaches one. The watches stop beside them: each one ends
+  // its run at the loop's own seam and releases the epoch it holds, so a stopping child leaves
+  // no authority standing behind it.
+  const stoppingWatch = watch === null
+    ? Promise.resolve()
+    : watch.stop('the daemon asked this child to stop');
   const inFlight = [...running.values(), ...presenceRuns.values()];
   if (inFlight.length > 0) await Promise.allSettled(inFlight);
+  await stoppingWatch;
   write({ type: 'stopped', why: 'the daemon asked this child to stop' });
   // exit: daemon.chores-ended
   return 0;

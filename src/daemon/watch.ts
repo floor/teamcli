@@ -56,8 +56,12 @@ export type HostedWatch = HostedWatchHandle & {
    * pulse that failed terminally, or the gap between a fault and its restart). `left` is called
    * with the reason the record carries once that exit has been recorded; it never runs for a
    * deliberate stop, because stop owns that exit.
+   *
+   * `refused` is for a host that cannot answer synchronously — one whose run lives behind an
+   * IPC hop. Such a host accepts the fault and may report a later refusal through it; a host
+   * that can decide at once refuses by returning false and never calls it.
    */
-  fault(why: string, left?: (recorded: string) => void): boolean;
+  fault(why: string, left?: (recorded: string) => void, refused?: (why: string) => void): boolean;
 };
 
 /** What a hosted route may do outbound right now. */
