@@ -2,12 +2,14 @@
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CallerSources } from '../src/caller.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
-import { runMcpServe, type ServeOptions } from '../src/mcp/serve.ts';
+import { restartSelf, runMcpServe, type ServeOptions } from '../src/mcp/serve.ts';
 import { receiptPath, listenerPath } from '../src/mcp/inbox.ts';
 import { registerInbox } from '../src/mcp/register.ts';
 import { launchCommand, profileFor, shellQuote } from '../src/profiles/profile.ts';
@@ -272,4 +274,17 @@ test('marking its own seat stopped between check and read revokes a live server 
   expect(JSON.stringify(out.replies[0])).toContain(t.id);
   expect(readFileSync(join(t.dir, 'team.state.json'))).toEqual(state);
   expect({ isError: out.replies[1]?.result?.isError === true, receipted: existsSync(receiptPath(t.drop, t.id)), leaked: JSON.stringify(out.replies[1]).includes(t.body) }).toEqual({ isError: true, receipted: false, leaked: false });
+});
+
+for (const code of [0, 7, null]) test(`a restart keeps its parent until the fake child exits and then reports ${String(code)}`, () => {
+  const child = new EventEmitter() as ChildProcess;
+  const exits: number[] = [], said: string[] = [];
+  let unrefs = 0;
+  child.unref = () => { unrefs++; };
+  restartSelf({ spawnChild: (() => child) as never, exit: result => { exits.push(result); }, say: line => { said.push(line); } });
+  expect(exits).toEqual([]);
+  child.emit('spawn');
+  expect(exits).toEqual([]); expect(unrefs).toBe(0);
+  child.emit('exit', code, code === null ? 'SIGTERM' : null);
+  expect(exits).toEqual([code ?? 1]); expect(said).toEqual([]);
 });
