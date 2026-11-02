@@ -14,10 +14,11 @@
 
 import { createHash, randomBytes, randomInt, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
+import { findTeam } from '../registry/teams.ts';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
@@ -814,8 +815,9 @@ export function pendingGrantPrompt(home: string, requestId: string, now: Date = 
 
 export const GRANT_CHOICES = ['once', 'always', 'deny'] as const;
 
-/** `team grant --deny <id>`: spends a pending request without writing anything. Anyone may deny;
- *  it only narrows. */
+/** `team grant --deny <id>`: spends a pending request without writing anything. The caller is
+ *  admitted before this runs: the owner at a terminal, or an owner-signer's always rule covering
+ *  the request's team folder (src/client/owner-action-step.ts). */
 export function denyPendingGrant(home: string, requestId: string, now: Date = new Date()): { ok: true; audit: string | null } | { ok: false; why: string } {
   if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return { ok: false, why: `"${requestId}" is not a grant request id` };
   const folder = grantRequestsFolder(home);
@@ -1009,7 +1011,9 @@ export function issueGrantUnderCharter(
   return { ok: true, grant: written.grant, path: written.path, audit: audited.path };
 }
 
-/** Removes one rule. Anyone may: it only narrows. A removed rule stops matching at once. */
+/** Removes one rule. The caller is admitted before this runs: the owner at a terminal, or an
+ *  owner-signer's always rule covering the team folder the rule names
+ *  (src/client/owner-action-step.ts). A removed rule stops matching at once. */
 export function revokeApprovalRule(home: string, ruleId: string): { ok: true } | { ok: false; why: string } {
   if (!GRANT_RULE_ID_PATTERN.test(ruleId)) return { ok: false, why: `"${ruleId}" is not an approval rule id` };
   try {
@@ -1018,4 +1022,65 @@ export function revokeApprovalRule(home: string, ruleId: string): { ok: true } |
     return { ok: false, why: `no approval rule ${ruleId}` };
   }
   return { ok: true };
+}
+
+// ---- the folder a record changes ------------------------------------------------------------
+
+/**
+ * The folder `team grant --deny` changes: the canonical parent of the team root a pending
+ * request names, exactly the scope an owner-seat `always` rule carries. Null when the request
+ * does not verify under the owner key or names no one team in the registry, so a caller outside
+ * the owner's terminal cannot show that a rule covers it.
+ */
+export function pendingGrantFolders(home: string, requestId: string): string[] | null {
+  if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return null;
+  const key = ownerKey(home);
+  if (key === null) return null;
+  const record = readPending(home, requestId, key);
+  if (typeof record === 'string') return null;
+  const p = record.params;
+  if (p.up !== undefined && p.up !== null) return [canonicalFolder(p.up.root)];
+  return teamFolders(home, [p.team ?? p.entity]);
+}
+
+/**
+ * The folders `team grant --revoke-approval` changes: one per team the rule names, each the
+ * canonical parent of that team's root. Null when the rule does not verify under the owner key
+ * or names a team the registry does not hold exactly once.
+ */
+export function approvalRuleFolders(home: string, ruleId: string): string[] | null {
+  if (!GRANT_RULE_ID_PATTERN.test(ruleId)) return null;
+  const rule = listApprovalRules(home).rules.find((one) => one.rule_id === ruleId);
+  if (rule === undefined) return null;
+  return teamFolders(home, rule.teams);
+}
+
+function teamFolders(home: string, names: readonly string[]): string[] | null {
+  const folders: string[] = [];
+  for (const name of names) {
+    const team = findTeam(home, name);
+    if (team === null) return null;
+    folders.push(canonicalFolder(team.root));
+  }
+  return folders.length === 0 ? null : folders;
+}
+
+/** The parent of a canonical root, the folder an owner-seat rule is scoped to. Kept here rather
+ *  than imported from owner-action.ts, which imports this module. */
+function canonicalFolder(path: string): string {
+  try {
+    return dirname(realpathSync(path));
+  } catch {
+    return dirname(path);
+  }
+}
+
+/** The canonical form of a folder already named as a rule's scope (the folder a team-create or
+ *  owner-action record covers). An unresolvable path stays as written, as `canonicalRoot` does. */
+export function canonicalScope(scope: string): string {
+  try {
+    return realpathSync(scope);
+  } catch {
+    return scope;
+  }
 }

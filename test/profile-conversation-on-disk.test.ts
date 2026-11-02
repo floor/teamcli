@@ -30,6 +30,13 @@ test('the resume is taken off a Claude Code line, and only there', () => {
   expect(withoutResume('claude-code', 'claude -r abc-1 --model m')).toBe('claude --model m');
   expect(withoutResume('claude-code', 'claude --model m')).toBeNull();
   expect(withoutResume('codex', 'codex resume abc')).toBeNull();
+  // A resume inside a trailing quoted script is followed by the closing quote: it is stripped
+  // there, and the quotes stay. The shell's own -c is not a resume, and a line with none is null.
+  expect(withoutResume('claude-code', '/bin/sh -c "claude --model m --resume abc-1"'))
+    .toBe('/bin/sh -c "claude --model m"');
+  expect(withoutResume('claude-code', 'zsh -lc "claude --resume abc-1 --model m"'))
+    .toBe('zsh -lc "claude --model m"');
+  expect(withoutResume('claude-code', '/bin/sh -c "claude --model m"')).toBeNull();
 });
 
 test('the refusal is read from the screen', () => {

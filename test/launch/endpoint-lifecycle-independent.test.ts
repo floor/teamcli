@@ -4,7 +4,7 @@
 // Command-level scenes drive the shipped `down` and `remove` with injected measurements;
 // launch-level scenes drive `ensureCodexEndpoint` and `launchCodexEndpoint` the same way. No
 // process is read, started or signalled.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +35,25 @@ const ENDPOINT = {
 const EPOCH = `watch_${'b'.repeat(32)}`;
 const WATCH_STARTED = '2026-10-15T11:29:50Z';
 const WATCH_START_MS = Date.parse(WATCH_STARTED);
+
+// Every pid here is synthetic, so no scene may signal a real process. The scenes inject
+// `terminate`; this guard makes that mechanical: any call the stub sees other than a liveness
+// probe of this very process is recorded and fails the scene at afterEach.
+const realKill = process.kill;
+const killCalls: { pid: number; signal: string | number | undefined }[] = [];
+beforeAll(() => {
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (signal === 0 && pid === process.pid) return true;
+    killCalls.push({ pid, signal });
+    throw new Error(`a scene called process.kill(${String(pid)}, ${String(signal)}); no real signal may leave a test`);
+  }) as typeof process.kill;
+});
+afterEach(() => {
+  expect(killCalls.splice(0)).toEqual([]);
+});
+afterAll(() => {
+  process.kill = realKill;
+});
 // This install's own CLI entry, as the watch proof resolves it: the proof compares the real path of
 // the entry word against the script this process loaded and the entry beside the watch module, so a
 // scene that means "this team's watch" must name a path that resolves to this worktree's entry.

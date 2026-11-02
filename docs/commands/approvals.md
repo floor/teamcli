@@ -17,11 +17,13 @@ Each `<id>` is `tc_…` for a team-create rule or `oa_…` for an owner-action r
 
 ## Who may run it
 
-Anyone may list. Revoking is the owner's, from a terminal outside herdr, or an owner-seat answer
-for that revoke: `--request` records every id as one request and the owner answers on the owner
-page; `--approval` runs it once. A signed always rule for `team-revoke-approval` covering this
-folder admits the revoke with no request. A run with no terminal and no such answer is refused:
-`team approvals: only the owner runs this, from a terminal outside herdr`.
+Anyone may list. Revoking is the owner's, from a terminal outside the terminal host, or an
+owner-seat answer for that revoke: `--request` records every id as one request and the owner
+answers on the owner page; `--approval` runs it once. A signed always rule for
+`team-revoke-approval` covering the folder of every rule named admits the revoke with no request.
+The rule covers the rules' folders, not the caller's; a rule whose file does not verify has no
+folder that can be checked, so it admits nothing. A run with no terminal and no such answer is
+refused: `team approvals: only the owner runs this, from a terminal outside the terminal host`.
 
 ## Output and exit codes
 
@@ -45,11 +47,11 @@ Usage: team approvals list [--json]
 
 Lists the owner seat's always rules — team-create (tc_…) and owner-action (oa_…) — or removes
 every id in the one command. Listing reads the owner's folder and changes nothing. Revoking is
-the owner's, from a terminal outside herdr, or an owner-seat answer for that revoke: --request
-records every id as one request and --approval <request-id> runs it once the owner has answered
-on the owner page. One card and one Touch ID cover the whole list. A signed always rule for
-team-revoke-approval covering this folder admits the revoke with no request. A bad id revokes
-nothing.
+the owner's, from a terminal outside the terminal host, or an owner-seat answer for that revoke:
+--request records every id as one request and --approval <request-id> runs it once the owner has
+answered on the owner page. One card and one Touch ID cover the whole list. A signed always rule
+for team-revoke-approval covering the folder of every rule named admits the revoke with no
+request. A bad id revokes nothing.
 
 Exits 0 when the rules are listed, the rules are revoked, or a request is recorded, 1 when the
 revoke is refused, 2 when the invocation can't be read.

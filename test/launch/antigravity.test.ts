@@ -200,7 +200,7 @@ describe('Antigravity launch and captured screens', () => {
     expect(commandOf('zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
     expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions`);
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions"`);
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({

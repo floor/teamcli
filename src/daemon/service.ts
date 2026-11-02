@@ -169,6 +169,35 @@ export type ServiceUninstallResult =
   | { ok: true; unitPath: string; removed: boolean }
   | { ok: false; why: string; detail: string | null };
 
+/**
+ * What a restart of the installed unit left behind:
+ *
+ * - `not-installed`: no unit file is installed, so there was nothing to stop or start; nothing
+ *   was touched and the command says which command installs one.
+ * - `refused`: the manager stopped the job it held and then refused to start the installed unit
+ *   again, after the same bounded, growing retries an install gives a load; no daemon is running.
+ *
+ * A load the manager accepted is registration, not proof that a program runs, so the success
+ * carries the same kind of undo an install does: the command calls it only after the restarted
+ * daemon fails its health probe, and it stops that job and offers the installed unit again.
+ */
+export type ServiceRestartFailure = {
+  ok: false;
+  reason: 'not-installed' | 'refused';
+  why: string;
+  detail: string | null;
+};
+
+export type ServiceRestartSuccess = {
+  ok: true;
+  unitPath: string;
+  /** Stops the daemon this restart started and loads the installed unit again: an undo only
+   *  ever answers a health probe that did not, never a successful restart. */
+  undo: () => ServiceRestartResult;
+};
+
+export type ServiceRestartResult = ServiceRestartSuccess | ServiceRestartFailure;
+
 export type ServiceManager = {
   readonly kind: 'system-service-manager';
   unitPath(home: string): string;
@@ -196,6 +225,14 @@ export type ServiceManager = {
    */
   install(home: string, program: ServiceProgram): ServiceInstallResult;
   uninstall(home: string): ServiceUninstallResult;
+  /**
+   * Stops the daemon the manager holds under the installed unit and loads that same unit again.
+   * Nothing is written: the definition, its roots and its opt-ins are the last install's, so a
+   * restart never changes which checkouts are hosted. A machine with no unit answers
+   * `not-installed` and is not touched; a load the manager still refuses after the bounded,
+   * growing retries answers `refused` with no daemon running.
+   */
+  restart(home: string): ServiceRestartResult;
 };
 
 export type ServiceManagerOptions = {
