@@ -27,6 +27,7 @@ import type {
   ServiceManagerOptions,
   ServicePlan,
   ServiceProgram,
+  ServiceRestartResult,
   ServiceRunResult,
   ServiceRunner,
   ServiceUnitRecord,
@@ -826,6 +827,52 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         }
       }
       return { ok: true, unitPath: path, removed };
+    },
+
+    restart(home): ServiceRestartResult {
+      const path = unitPath(home);
+      // There is no daemon to restart without the unit: nothing is stopped, and the command
+      // names the install that writes one.
+      if (!existsSync(path)) {
+        return {
+          ok: false,
+          reason: 'not-installed',
+          why: 'no user service unit is installed, so there is no daemon to restart',
+          detail: null,
+        };
+      }
+      // A load of a unit under a label the manager already holds is refused while that job is
+      // loaded, so the held job is stopped first and the installed unit is offered with the
+      // install's own bounded, growing patience: a refusal while the stop is still finishing is
+      // not a verdict on the unit.
+      const offer = (): ServiceRunResult => {
+        run('launchctl', ['bootout', service]);
+        return loadWithRetry(path);
+      };
+      // The command calls this only after the restarted daemon did not answer: the job it just
+      // started is stopped and the installed unit offered again, so a restart that left nothing
+      // answering is reported with the daemon an install last left running, if it starts.
+      const undo = (): ServiceRestartResult => {
+        const again = offer();
+        return again.status === 0
+          ? { ok: true, unitPath: path, undo }
+          : {
+            ok: false,
+            reason: 'refused',
+            why: 'the installed daemon could not be started again after a restart that did not answer',
+            detail: loadDetail(again),
+          };
+      };
+      const loaded = offer();
+      if (loaded.status !== 0) {
+        return {
+          ok: false,
+          reason: 'refused',
+          why: 'the system\'s service manager refused to start the installed daemon again',
+          detail: loadDetail(loaded),
+        };
+      }
+      return { ok: true, unitPath: path, undo };
     },
   };
 }

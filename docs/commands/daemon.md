@@ -5,7 +5,8 @@ it answers its own protocol on the one machine socket and, in this build, also h
 checkout's existing send and bus endpoints in the same process, so no second or third daemon
 process runs for a second checkout. `run` is the foreground process the system's service manager
 starts; `install` writes and registers the user service unit that starts it at login and restarts
-it after a failure; `uninstall` removes that unit; `status` is the one-line health reading;
+it after a failure; `restart` stops the daemon that unit runs and starts that same unit again,
+writing nothing; `uninstall` removes that unit; `status` is the one-line health reading;
 `fault-watch` asks a running daemon to end one hosted watch's run as a counted fault, so the
 recovery path can be seen on a real daemon.
 
@@ -17,6 +18,7 @@ machine with no broker handler never falls back to a per-clone broker.
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon restart [--dry-run] [--json]
     team daemon uninstall [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
@@ -109,6 +111,20 @@ is still on disk, where it is kept; the `--json` refusal carries the same comman
 `repair`. `--dry-run` prints what it would do, including those steps, and writes nothing:
 `… would install …; nothing was written`.
 
+`restart` stops the daemon the service manager holds under the installed unit and loads that same
+unit again. It writes nothing: the definition, its checkouts and its opt-ins are the last install's,
+so a restart never changes which checkouts are hosted. It prints `team daemon: restarted; the
+system's service manager runs the installed unit again`, and only after the restarted daemon
+answers the same health reading an install confirms, within the same bounded wait. A restarted
+daemon that does not answer is undone: the job this restart started is stopped and the installed
+unit is offered again — that same unit, nothing rewritten — and the restart is reported as undone
+only after the daemon it started answers. When the manager refuses to load the installed unit
+again, or the daemon started again does not answer either, the command says no daemon is running
+and names the command that starts one; it exits 1 either way. A machine with no installed unit is
+refused with `no user service unit is installed, so there is no daemon to restart` and nothing is
+stopped or started; the repair names `team daemon install`. `--dry-run` prints the plan and the
+steps and stops or starts nothing.
+
 `uninstall` removes the unit. A machine that never carried one is not an error:
 `team daemon: not installed; nothing to remove`, exit 0; a removed unit prints
 `team daemon: uninstalled; the system's service manager no longer starts it`.
@@ -135,8 +151,8 @@ the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
 | `--route` | a 32-character route id | the one hosted route to fault; belongs to `fault-watch`, where it is required |
-| `--dry-run` | — | print the install or fault plan and write nothing; belongs to `install` and `fault-watch` |
-| `--json` | — | one JSON document instead of the line; belongs to `status`, `install`, `uninstall` and `fault-watch` |
+| `--dry-run` | — | print the install, restart or fault plan and write, stop or start nothing; belongs to `install`, `restart` and `fault-watch` |
+| `--json` | — | one JSON document instead of the line; belongs to `status`, `install`, `restart`, `uninstall` and `fault-watch` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## What it reads and writes
@@ -145,9 +161,9 @@ Under the machine folder `~/.config/team`: the daemon's state record
 `daemon.state.json` (pid, uid, start time, launcher, version and packaged commit, heartbeat,
 hosted features and stuck requests), the local socket `daemon.sock` (mode 0600 in a 0700 folder),
 the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
-remove the user service unit the platform adapter owns; no command prints that path as prose
-except under `--json` and in the refusal of an install that leaves no daemon running, which names
-where a kept unit is. Each hosted checkout's team file is read to find its send and bus
+remove the user service unit the platform adapter owns; `restart` reads that unit and writes
+nothing; no command prints that path as prose except under `--json` and in the refusal of an
+install that leaves no daemon running, which names where a kept unit is. Each hosted checkout's team file is read to find its send and bus
 endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
@@ -168,11 +184,19 @@ request's nonce. A request still pending when the daemon closes is answered `not
 | --- | --- |
 | `status` | anyone; it reads the machine's daemon record and no team file |
 | `run` | the owner, or the start the system's service manager makes with `--started-by service-manager`, admitted only from the manager's own record of the job; a seat or a pane never starts the machine daemon |
-| `install`, `uninstall` | the owner alone |
-| `fault-watch` | the same admission as `install` and `uninstall`: the owner, or the dev-mode admission for a placed lead; it signals no process and grants nothing |
+| `install`, `restart` | a verified general grant whose ops name `daemon`, the owner, or the dev-mode admission for a placed lead; neither command needs a terminal |
+| `uninstall` | the owner, or the dev-mode admission for a placed lead |
+| `fault-watch` | the same admission as `uninstall`: the owner, or the dev-mode admission for a placed lead; it signals no process and grants nothing |
 
-A caller who is not the owner is refused with `only the owner installs or removes the machine
-daemon; this call is <placement>` (`daemon.not-owner`). The service-manager start is the one
+A general grant admits `install` and `restart` with no owner seat and no terminal. The grant and
+its client key are named on the command line with `--general <file>` and `--key <file>`; the
+dispatcher's door verifies the grant's chain, its key and the `daemon` op once, and the command
+verifies them again, so a grant whose chain, key or ops no longer verify `daemon` is refused
+(`daemon.grant-refused`) instead of falling back to the caller. The grant and the key admit the
+run and are never written into the unit.
+
+A caller who is not the owner and holds no such grant is refused with `only the owner installs or
+removes the machine daemon; this call is <placement>` (`daemon.not-owner`). The service-manager start is the one
 no-terminal start admitted; every other no-terminal caller is refused (`daemon.run-not-owner`), and
 a start that names `service-manager` without the manager's record to back it is refused under
 `daemon.service-managed.unit`, `.pid` or `.program`.
@@ -187,11 +211,14 @@ a start that names `service-manager` without the manager's record to back it is 
 | `install --dry-run` | the plan, the steps a refresh takes, and `nothing was written` | 0 |
 | `install` writes and registers the unit, and the daemon it started answers the health reading | `team daemon: installed for <n> checkout(s); …` | 0 |
 | `install` refused after a refresh: the service manager would not start the new unit, or its daemon never answered the health reading | `team daemon: <reason>`, naming whether the previous daemon was put back and confirmed answering or no daemon is running; a failure leaving none running adds the owner-runs rerun command and where a kept unit is | 1 |
+| `restart --dry-run` | the plan, the steps a restart takes, and `nothing is written` | 0 |
+| `restart` stops the installed unit's daemon and starts that same unit again, and the daemon it started answers the health reading | `team daemon: restarted; the system's service manager runs the installed unit again` | 0 |
+| `restart` refused: no installed unit, the manager would not start the installed unit again, the restarted daemon never answered and was stopped again, or the daemon started again did not answer either | `team daemon: <reason>`, naming the install command that starts a daemon when none is running | 1 |
 | `uninstall` removes the unit, or finds none | `uninstalled; …` or `not installed; nothing to remove` | 0 |
 | `fault-watch` faults the one named route's hosted run | `faulted the hosted watch for <folder> (route <id>); …` | 0 |
 | `fault-watch --dry-run` | the plan and `nothing was written` | 0 |
 | `fault-watch` refused: not the owner, no running daemon, a route id or watch that does not match, a watch that cannot be faulted, a request already waiting, or the daemon's own `refused` or `not reached` answer | `team daemon: <reason>` | 1 |
-| refused: not the owner, a run the admission refuses, a service-manager start its record does not admit, no service manager adapter, a failed install or uninstall, another start holding the lock, a failed start | `team daemon: <reason>` | 1 |
+| refused: not the owner, a general grant that does not verify for `daemon`, a run the admission refuses, a service-manager start its record does not admit, no service manager adapter, a failed install or uninstall, another start holding the lock, a failed start | `team daemon: <reason>` | 1 |
 | the invocation can't be read, or a named root can't be read | `team daemon: <problem>`, with the usage for an invocation error | 2 |
 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,
@@ -202,13 +229,20 @@ checkout, and an install that changes the version or the packaged commit is a ne
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
 `installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
-plain dry run prints, so a script sees the same stop, retry and rollback plan. A refusal under
-`--json` prints the `team.error` document with its `daemon.*` id — `daemon.install-failed` for a
+plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
+prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run
+also carries `steps`. A refusal under `--json` prints the `team.error` document with its
+`daemon.*` id — `daemon.install-failed` for a
 failed install with no earlier unit, `daemon.install-rolled-back` when the previous unit was put
 back and its daemon answered the health reading, and `daemon.install-rollback-failed` when no
-daemon is running. A rollback whose daemon the manager accepted but that never answers counts as
-no daemon running, not as a restored one. The two that leave no daemon running set `repair` to
-the owner-runs sentence naming that rerun — `the owner runs` followed by the exact
+daemon is running; a restart answers `daemon.not-installed`, `daemon.restart-failed`,
+`daemon.restart-rolled-back` or `daemon.restart-rollback-failed`, and an unverified grant
+`daemon.grant-refused`. A rollback whose daemon the manager accepted but that never answers counts as
+no daemon running, not as a restored one. The two install rows that leave no daemon running set
+`repair` to the owner-runs sentence naming that rerun — `the owner runs` followed by the exact
 `team daemon install --root <folder> …` command, carrying the roots and opt-ins the failed
 install recorded; `daemon.install-rolled-back` leaves `repair` null because a daemon is running
-again.
+again. `daemon.not-installed`, `daemon.restart-failed` and `daemon.restart-rollback-failed` set
+`repair` to `run team daemon install --root <folder> with each checkout to host` — a restart
+reads no roots of its own to repeat — and `daemon.restart-rolled-back` leaves `repair` null
+because a daemon is running again.

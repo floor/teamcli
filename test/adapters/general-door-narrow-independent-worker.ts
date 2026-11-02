@@ -93,6 +93,7 @@ if (input.mode === 'daemon') {
         unit: () => thisProcessUnitRecord(join(base, 'synthetic-unit')),
         install: () => { serviceInstalls++; return { ok: true, unitPath: join(base, 'synthetic-unit') }; },
         uninstall: () => ({ ok: true, unitPath: join(base, 'synthetic-unit'), removed: false }),
+        restart: () => ({ ok: false, reason: 'refused', why: 'this synthetic manager cannot restart the installed daemon', detail: null }),
       },
     });
   }
