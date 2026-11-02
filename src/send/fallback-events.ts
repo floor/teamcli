@@ -67,8 +67,8 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { lstatSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
@@ -1321,11 +1321,54 @@ function writeMarker(path: string, marker: FallbackMarker): { ok: true } | { ok:
   }
 }
 
+/**
+ * A marker file's stamp and the read it produced. The daemon's sweep walks every hosted root on
+ * each heartbeat, and most of what it finds is settled: an unchanged file is worth one stat, not a
+ * read and a parse. The stamp is the file's own modification time and size, so even an in-place
+ * write of the same length is caught. The cached copy only pre-filters — an episode that looks due
+ * is re-read under its key lock inside `escalateOne` — so a stale stamp can never mint an event;
+ * losing the stamp to a clock too coarse to move would cost at most that one re-read.
+ */
+type CachedMarkerRead = { mtimeMs: number; size: number; read: MarkerRead };
+
+const markerReads = { read: 0, reused: 0 };
+const markerCache = new Map<string, CachedMarkerRead>();
+
+/** What this process's passes have read afresh, answered from a stamp, and how many stamps they
+ *  hold now. A per-process diagnostic: the cache is memory, never a file. */
+export function markerCacheStats(): { read: number; reused: number; cached: number } {
+  return { read: markerReads.read, reused: markerReads.reused, cached: markerCache.size };
+}
+
+function markerAtCached(path: string): MarkerRead {
+  let stamp: { mtimeMs: number; size: number } | null = null;
+  try {
+    const stat = lstatSync(path);
+    // A symlink is never cached: `readNoFollow` refuses it, and a fresh read keeps saying so.
+    if (stat.isFile()) stamp = { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    stamp = null;
+  }
+  if (stamp !== null) {
+    const cached = markerCache.get(path);
+    if (cached !== undefined && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size) {
+      markerReads.reused += 1;
+      return cached.read;
+    }
+  }
+  const read = markerAt(path);
+  markerReads.read += 1;
+  if (stamp === null) markerCache.delete(path);
+  else markerCache.set(path, { ...stamp, read });
+  return read;
+}
+
 /** All markers under a root's transport tree, sessions and seats sorted so a pass is ordered. A
  *  marker that cannot be trusted is returned as its path, never rewritten from a guess. */
 function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
   const base = join(root, '.agents', 'send-drops');
+  const seen = new Set<string>();
   for (const session of folderNames(base)) {
     const sessionDir = join(base, session);
     for (const seat of folderNames(sessionDir)) {
@@ -1333,11 +1376,18 @@ function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: Fallba
       for (const name of fileNames(seatDir)) {
         if (!name.endsWith('.fallback.json')) continue;
         const path = join(seatDir, name);
-        const read = markerAt(path);
+        seen.add(path);
+        const read = markerAtCached(path);
         if (read.kind === 'ok') found.push({ kind: 'ok', path, marker: read.marker });
         else if (read.kind === 'unreadable') found.push({ kind: 'unreadable', path });
       }
     }
+  }
+  // A marker that vanished from this root leaves the cache with it, so a long-lived daemon holds
+  // stamps for the tree it just walked and nothing older.
+  const prefix = `${base}${sep}`;
+  for (const path of markerCache.keys()) {
+    if (path.startsWith(prefix) && !seen.has(path)) markerCache.delete(path);
   }
   return found;
 }
