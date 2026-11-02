@@ -15,6 +15,7 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -551,6 +552,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...modelRule.notes,
     ...socketSkipped.notes,
     ...unknownStatusNotes(team, state, live),
+    // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
+    // status` prints: the fallback is a reading worth acting on, never a silent state.
+    ...unmanagedEndpointNotes(team.seats, state),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
