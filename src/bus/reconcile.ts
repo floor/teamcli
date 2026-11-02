@@ -19,7 +19,7 @@
 // unchanged, and so is the parsed history. Correctness does not move: every record is still
 // raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
 // receipt that arrives in a later pass than its record still carries that record's sender.
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   configChangedRecordId,
@@ -38,14 +38,16 @@ import { markOrphanedSeats } from '../registry/sync.ts';
 import { HISTORY_KEPT, readHistory, type HistoryEntry } from '../send/history.ts';
 import { readPending } from '../send/pending.ts';
 import { readState } from '../state.ts';
-import {
-  MESSAGE_DOMAIN,
-  messageKeyState,
-  RECEIPT_DOMAIN,
-  verifyDomain,
-  type Json,
-} from '../store/keys.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
+import {
+  checkedDropRecord,
+  checkedMailboxReceipt,
+  checkedMailboxRecord,
+  dropFolderIsReal,
+  mailboxFolderIsReal,
+  RECORD_NAME,
+} from './arrival.ts';
 import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
@@ -83,6 +85,10 @@ export type ReconcileOptions = {
    *  it closes, so a closing bus writes no event after `close` resolves; every cursor the pass
    *  did not advance past a record leaves that record for the next pass, in another process. */
   signal?: AbortSignal;
+  /** One refusal, once: the pass saw a record it will not raise and says where and why. The
+   *  reason is a fixed sentence about the file's kind or signature, never its content. The bus
+   *  prints it; a caller that does not listen leaves it out. */
+  onRefused?: (refusal: { where: string; reason: string }) => void;
 };
 
 export type ReconcileResult =
@@ -119,7 +125,12 @@ export type ReconcileStats = {
   yields: number;
 };
 
-type DropEntry = { kind: 'drop'; from?: string; ts?: string; thread?: string; at: string };
+/** One drop record the pass has read. A verified entry carries the arrival built from the
+ *  signed fields, so a refused record can never contribute to an event; a refusal is cached by
+ *  the same stat stamp as a verification, so an unchanged refused record is not read again. */
+type DropEntry =
+  | { kind: 'drop'; verified: true; event: EventAppendInput }
+  | { kind: 'drop'; verified: false };
 type ReceiptEntry = { kind: 'receipt'; receipt: 'delivered' | 'read' | 'replied'; id: string; at: string };
 type MessageEntry = {
   kind: 'message';
@@ -174,6 +185,9 @@ export type ReconcileState = {
   /** Appends this pass deferred on a held event lock; empty after the async driver retries them
    *  or gives up, and reset at the start of every pass. */
   deferred: DeferredAppend[];
+  /** The refusals this state has already reported, by the path that was refused. A refusal is
+   *  reported once, not on every pass that meets the unchanged record again. */
+  refused: Set<string>;
   stats: ReconcileStats;
 };
 
@@ -185,11 +199,11 @@ export function createReconcileState(): ReconcileState {
     log: null,
     history: null,
     deferred: [],
+    refused: new Set(),
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
 
-const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 /** The share of the event loop one async pass takes between turns. */
 export const DEFAULT_RECONCILE_SLICE_MS = 8;
 /** How long the async driver keeps retrying a deferred append while the event lock is held: the
@@ -206,41 +220,27 @@ function isRealDir(path: string): boolean {
   }
 }
 
-function parseDropSender(raw: string): { from?: string; ts?: string; thread?: string } {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const payload =
-        parsed.payload !== null && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
-          ? (parsed.payload as Record<string, unknown>)
-          : parsed;
-      const from = typeof payload.from === 'string' && payload.from !== '' ? payload.from : undefined;
-      const ts =
-        typeof payload.ts === 'string' && payload.ts !== ''
-          ? payload.ts
-          : typeof payload.at === 'string' && payload.at !== ''
-            ? payload.at
-            : undefined;
-      const thread = typeof payload.thread === 'string' && payload.thread !== '' ? payload.thread : undefined;
-      return {
-        ...(from !== undefined ? { from } : {}),
-        ...(ts !== undefined ? { ts } : {}),
-        ...(thread !== undefined ? { thread } : {}),
-      };
-    } catch {
-      // fall through to header parsing
-    }
+/** Whether the path itself is a symbolic link, read without following it. */
+function isLinkAt(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
   }
-  const firstLine = raw.split('\n', 1)[0] ?? '';
-  if (firstLine.startsWith('from the owner')) {
-    return { from: 'owner' };
-  }
-  const match = /^from (?:the file's seat |seat )?([A-Za-z0-9._-]+)/.exec(firstLine);
-  if (match?.[1] !== undefined) {
-    return { from: match[1] };
-  }
-  return {};
+}
+
+/** Says why once: a record the pass will not raise is reported the first time its path is
+ *  refused, and an unchanged record refused again is the same answer, already said. */
+function refuseRecord(
+  options: ReconcileOptions,
+  state: ReconcileState,
+  path: string,
+  where: string,
+  reason: string,
+): void {
+  if (state.refused.has(path)) return;
+  state.refused.add(path);
+  options.onRefused?.({ where, reason });
 }
 
 /** The names a record's bookkeeping takes beside it in a drop folder; none of them is a message
@@ -492,6 +492,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
     return false;
   };
 
+  // The key and the checkout every signed record is checked against: the drop tree, the
+  // mailbox tree and the bus's nudge all read records under one rule.
+  const scope = { root, session };
+  const keyState = messageKeyState(home);
+
   // 1. Scan `.agents/send-drops/<session>/<seat>` for drop files, `.pending` markers, and receipts.
   const sessionDropsDir = join(root, '.agents', 'send-drops', session);
   const dropSeatNames = listDir(state, sessionDropsDir, visited);
@@ -501,6 +506,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       if (!RECORD_NAME.test(seat)) continue;
       const seatDir = join(sessionDropsDir, seat);
       if (!isRealDir(seatDir)) continue;
+      // A linked folder above the seat's — the session's, its parent — could lead into another
+      // checkout, and no record it holds is this checkout's to raise. Nothing in it is read.
+      if (!dropFolderIsReal(root, session, seat)) {
+        refuseRecord(options, state, `folder\0${seatDir}`, `${seat} (drop folder)`, "the folder is not this checkout's");
+        continue;
+      }
       visited.add(seatDir);
 
       const files = listDir(state, seatDir, visited) ?? [];
@@ -512,62 +523,87 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         if (file.startsWith('.')) continue;
         if (isSideFile(file)) continue;
         const fullPath = join(seatDir, file);
-        const fresh = fileStampOf(fullPath);
-        if (fresh === null) continue;
         const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
         if (!RECORD_NAME.test(id)) continue;
-
-        let entry = cachedEntry(state, seatDir, file, fresh.stamp);
-        if (entry === null || entry.kind !== 'drop') {
-          let raw = '';
-          try {
-            raw = readFileSync(fullPath, 'utf8');
-          } catch {
-            continue;
+        const fresh = fileStampOf(fullPath);
+        if (fresh === null) {
+          // A linked leaf is not a record: its bytes could be anywhere, and the pass never
+          // follows a link. It is named once; nothing is read.
+          if (isLinkAt(fullPath)) {
+            refuseRecord(options, state, `link\0${fullPath}`, `${seat}/${id}`, 'the record is a symbolic link');
           }
-          stats.filesRead += 1;
-          entry = { kind: 'drop', at: fresh.mtimeIso, ...parseDropSender(raw) };
-          storeEntry(state, seatDir, file, fresh.stamp, entry);
-        } else {
-          stats.filesReused += 1;
+        } else if (keyState.kind === 'key') {
+          // The record is read through the same verified read the bus's nudge uses: its
+          // signature covers the fields the arrival carries, and it must be addressed to this
+          // seat, session and checkout. Without the key nothing signed can verify, and the
+          // record is left for a pass that has one.
+          let entry = cachedEntry(state, seatDir, file, fresh.stamp);
+          if (entry === null || entry.kind !== 'drop') {
+            const checked = checkedDropRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+            stats.filesRead += 1;
+            if (checked.ok) {
+              entry = { kind: 'drop', verified: true, event: checked.event };
+            } else {
+              entry = { kind: 'drop', verified: false };
+              if (!checked.missing) {
+                refuseRecord(options, state, `record\0${fullPath}`, `${seat}/${id}`, checked.reason);
+              }
+            }
+            storeEntry(state, seatDir, file, fresh.stamp, entry);
+          } else {
+            stats.filesReused += 1;
+          }
+          if (entry.kind === 'drop' && entry.verified) {
+            if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
+            raise(entry.event);
+          }
         }
-        if (entry.from !== undefined) sendersById.set(id, entry.from);
-
-        raise({
-          ts: entry.ts ?? entry.at,
-          kind: 'message.arrived',
-          session,
-          record_id: id,
-          to: seat,
-          ...(entry.from !== undefined ? { from: entry.from } : {}),
-          ...(entry.thread !== undefined ? { thread: entry.thread } : {}),
-        });
         yield;
       }
 
-      // Check `.pending` held drops in the seat's drop folder.
+      // Check `.pending` held drops in the seat's drop folder. The marker is a convenience and
+      // never the message: the arrival it asks for names a record, and is raised only once that
+      // record is on disk and verifies. A marker whose record is gone, or refused, raises
+      // nothing — a held event included, since its sender would come from the same marker.
       for (const pending of readPending(seatDir)) {
-        sendersById.set(pending.id, pending.from);
-        raise({
-          ts: pending.ts,
-          kind: 'message.arrived',
-          session,
-          record_id: pending.id,
-          from: pending.from,
-          to: pending.to,
-        });
-        if (pending.leg !== 'mcp-inbox') {
-          const heldAgeMs = nowMs - Date.parse(pending.ts);
-          if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
-            raise({
-              ts: pending.ts,
-              kind: 'message.held',
-              session,
-              record_id: `${pending.id}:held`,
-              from: pending.from,
-              to: pending.to,
-            });
+        let arrival: EventAppendInput | null = null;
+        let refusal: string | null = null;
+        if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
+          for (const name of [pending.id, `${pending.id}.json`]) {
+            const checked = checkedDropRecord(
+              join(seatDir, name),
+              { session, seat, record_id: pending.id },
+              scope,
+              keyState.key,
+            );
+            if (checked.ok) {
+              arrival = checked.event;
+              break;
+            }
+            if (!checked.missing) {
+              refusal = checked.reason;
+              break;
+            }
           }
+        }
+        if (arrival !== null) {
+          if (arrival.from !== undefined) sendersById.set(pending.id, arrival.from);
+          raise(arrival);
+          if (pending.leg !== 'mcp-inbox') {
+            const heldAgeMs = nowMs - Date.parse(pending.ts);
+            if (!Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs) {
+              raise({
+                ts: pending.ts,
+                kind: 'message.held',
+                session,
+                record_id: `${pending.id}:held`,
+                ...(arrival.from !== undefined ? { from: arrival.from } : {}),
+                to: arrival.to,
+              });
+            }
+          }
+        } else if (refusal !== null) {
+          refuseRecord(options, state, `pending\0${join(seatDir, pending.id)}`, `${seat}/${pending.id}`, refusal);
         }
         yield;
       }
@@ -608,7 +644,6 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
   // 2. Scan signed `.agents/messages/<seat>` records and `.read.json` receipts.
   const messagesDir = join(root, '.agents', 'messages');
-  const keyState = messageKeyState(home);
   const signedSeatNames = listDir(state, messagesDir, visited);
   if (signedSeatNames !== null && keyState.kind === 'key') {
     const keyPrint = keyPrintOf(keyState);
@@ -617,6 +652,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       if (!RECORD_NAME.test(seat)) continue;
       const seatDir = join(messagesDir, seat);
       if (!isRealDir(seatDir)) continue;
+      // The same folder rule as the drop tree: a linked ancestor could lead into another
+      // checkout, and its records are not this checkout's to raise.
+      if (!mailboxFolderIsReal(root, seat)) {
+        refuseRecord(options, state, `mailbox\0${seatDir}`, `${seat} (mailbox folder)`, "the folder is not this checkout's");
+        continue;
+      }
       visited.add(seatDir);
       const files = listDir(state, seatDir, visited) ?? [];
       const messageSenders = new Map<string, string>();
@@ -630,35 +671,24 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         if (fresh === null) continue;
         let entry = cachedEntry(state, seatDir, file, fresh.stamp);
         if (entry === null || entry.kind !== 'message' || entry.keyPrint !== keyPrint) {
+          // A mailbox record from a previous build carries the older minimal payload; the
+          // checked read keeps the envelope, signature and addressing rule those records answer
+          // to, and refuses a linked file or a folder another checkout owns.
           let next: MessageEntry = { kind: 'message', keyPrint, verified: false, at: nowIso, ownerDigest: false };
-          try {
-            const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
-            const payload = parsed.payload as Record<string, unknown> | undefined;
-            const sig = parsed.signature;
-            if (payload && typeof sig === 'string') {
-              stats.verifies += 1;
-              if (
-                payload.kind === 'message' &&
-                payload.id === id &&
-                payload.to === seat &&
-                payload.session === session &&
-                verifyDomain(MESSAGE_DOMAIN, payload as unknown as Json, sig, keyState.key)
-              ) {
-                const from = typeof payload.from === 'string' ? payload.from : undefined;
-                const at = typeof payload.at === 'string' ? payload.at : nowIso;
-                next = {
-                  kind: 'message',
-                  keyPrint,
-                  verified: true,
-                  at,
-                  ownerDigest: isOwnerDigestRecord(id, from),
-                  ...(from !== undefined ? { from } : {}),
-                };
-              }
-            }
-          } catch {
-            // An unreadable record stayed unraised before; the cached verdict keeps it that way
-            // until its bytes change.
+          const checked = checkedMailboxRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          stats.verifies += 1;
+          if (checked.ok) {
+            const from = checked.from;
+            next = {
+              kind: 'message',
+              keyPrint,
+              verified: true,
+              at: checked.at ?? nowIso,
+              ownerDigest: isOwnerDigestRecord(id, from),
+              ...(from !== undefined ? { from } : {}),
+            };
+          } else if (!checked.missing) {
+            refuseRecord(options, state, `mailbox-record\0${fullPath}`, `${seat}/${id}`, checked.reason);
           }
           entry = next;
           stats.filesRead += 1;
@@ -694,30 +724,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let entry = cachedEntry(state, seatDir, file, fresh.stamp);
         if (entry === null || entry.kind !== 'signed-receipt' || entry.keyPrint !== keyPrint) {
           let next: SignedReceiptEntry = { kind: 'signed-receipt', keyPrint, verified: false, id, at: nowIso };
-          try {
-            const parsed = JSON.parse(readFileSync(fullPath, 'utf8')) as Record<string, unknown>;
-            const payload = parsed.payload as Record<string, unknown> | undefined;
-            const sig = parsed.signature;
-            if (payload && typeof sig === 'string') {
-              stats.verifies += 1;
-              if (
-                payload.kind === 'receipt' &&
-                payload.id === id &&
-                payload.to === seat &&
-                payload.session === session &&
-                verifyDomain(RECEIPT_DOMAIN, payload as unknown as Json, sig, keyState.key)
-              ) {
-                next = {
-                  kind: 'signed-receipt',
-                  keyPrint,
-                  verified: true,
-                  id,
-                  at: typeof payload.at === 'string' ? payload.at : nowIso,
-                };
-              }
-            }
-          } catch {
-            // Same rule as a signed message: an unreadable record raises nothing.
+          const checked = checkedMailboxReceipt(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          stats.verifies += 1;
+          if (checked.ok) {
+            next = { kind: 'signed-receipt', keyPrint, verified: true, id, at: checked.at ?? nowIso };
+          } else if (!checked.missing) {
+            refuseRecord(options, state, `mailbox-receipt\0${fullPath}`, `${seat}/${id}:read`, checked.reason);
           }
           entry = next;
           stats.filesRead += 1;

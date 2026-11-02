@@ -12,6 +12,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { appendEvent, readEvents, type EventAppendInput, type SignedEventRecord } from '../src/bus/log.ts';
 import { publishToBus, startBus, type BusHandle } from '../src/bus/server.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
 const deliveryPath = new URL('../src/bus/webhook.ts', import.meta.url);
 const routePath = new URL('../src/send/webhook.ts', import.meta.url);
@@ -82,6 +83,16 @@ function drop(w: World, id: string) {
   const dir = join(w.dir, 'send-drops', 'hooks', 'routine'); fs.mkdirSync(dir, { recursive: true });
   const path = join(dir, id); fs.writeFileSync(path, JSON.stringify({ from: 'lead', ts: NOW.toISOString(), thread: id, body: 'synthetic webhook body' })); return path;
 }
+/** The signed record a send stages; a published arrival is held to it. */
+function sealedDrop(w: World, id: string) {
+  const dir = join(w.dir, 'send-drops', 'hooks', 'routine'); fs.mkdirSync(dir, { recursive: true });
+  const payload: RecordPayload = {
+    kind: 'message', id, to: 'routine', to_id: null, root: w.root, session: 'hooks',
+    at: NOW.toISOString(), body: 'synthetic webhook body', from: 'lead', from_id: null,
+    rule: 'fixture', thread: id,
+  };
+  const path = join(dir, id); fs.writeFileSync(path, JSON.stringify(signRecord(payload, w.home), null, 2)); return path;
+}
 function input(id: string, kind: EventAppendInput['kind'] = 'message.arrived'): EventAppendInput {
   return { kind, ts: NOW.toISOString(), session: 'hooks', record_id: id, from: 'lead', to: 'routine' };
 }
@@ -133,7 +144,7 @@ for (const key of ['url_file', 'secret_file']) {
 }
 test('the actual bus posts each accepted published arrival once, with the secret only in its header', async () => {
   const w = world(); const held = receiver(); use(w, held.url); await configure(w); await bus(w);
-  const path = drop(w, 'published-one'); const before = fs.readFileSync(path, 'utf8');
+  const path = sealedDrop(w, 'published-one'); const before = fs.readFileSync(path, 'utf8');
   const first = await publishToBus(w.root, input('published-one')); expect(first.kind).toBe('published');
   await until(() => held.posts.length === 1);
   expect(held.posts[0]!.method).toBe('POST'); expect(held.posts[0]!.authorization).toBe('Bearer ' + w.secret);
@@ -145,9 +156,9 @@ test('the actual bus posts each accepted published arrival once, with the secret
   await new Promise(resolve => setTimeout(resolve, 50)); expect(held.posts).toHaveLength(1);
 });
 test('startup and later reconciliation each post an unseen arrival once', async () => {
-  const w = world(); const held = receiver(); use(w, held.url); await configure(w); drop(w, 'startup-one'); drop(w, 'startup-two');
+  const w = world(); const held = receiver(); use(w, held.url); await configure(w); sealedDrop(w, 'startup-one'); sealedDrop(w, 'startup-two');
   const owned = await bus(w); await until(() => held.posts.length === 2);
-  expect(await owned.reconcileNow()).toEqual([]); drop(w, 'later-one'); await owned.reconcileNow();
+  expect(await owned.reconcileNow()).toEqual([]); sealedDrop(w, 'later-one'); await owned.reconcileNow();
   await until(() => held.posts.length === 3); expect(await owned.reconcileNow()).toEqual([]);
   await new Promise(resolve => setTimeout(resolve, 30));
   expect(held.posts.map(post => JSON.parse(post.body).event.payload.record_id).sort()).toEqual(['later-one', 'startup-one', 'startup-two']);
@@ -252,6 +263,7 @@ for (const file of ['url', 'secret'] as const) {
     execFileSync('python3', ['-c', 'import os,sys; os.mkfifo(sys.argv[1], 0o600)', fifo]);
     w.webhook[file === 'url' ? 'urlFile' : 'secretFile'] = fifo;
     await configure(w);
+    sealedDrop(w, 'fifo-probe');
     const began = performance.now();
     const child = spawnSync(process.execPath, [fileURLToPath(new URL('./webhook-fifo-independent-worker.ts', import.meta.url)), JSON.stringify({ root: w.root, home: w.home, webhook: w.webhook })], {
       env: { ...process.env, HOME: w.home }, encoding: 'utf8', timeout: 4000,
@@ -264,7 +276,7 @@ for (const file of ['url', 'secret'] as const) {
 }
 test('fan-out returns while a real webhook response is pending', async () => {
   const w = world(); const held = receiver(() => new Promise<Response>(resolve => releases.push(() => resolve(new Response('done', { status: 202 })))));
-  use(w, held.url); await configure(w); await bus(w); let ticks = 0;
+  use(w, held.url); await configure(w); await bus(w); sealedDrop(w, 'pending-response'); let ticks = 0;
   const timer = setInterval(() => { ticks += 1; }, 5); const began = performance.now();
   try {
     const result = await publishToBus(w.root, input('pending-response'), { deadlineMs: 500 });
@@ -275,6 +287,7 @@ test('fan-out returns while a real webhook response is pending', async () => {
 test('a refused adapter whose reporter throws cannot throw through publish', async () => {
   const w = world(); fs.writeFileSync(w.webhook.secretFile, ''); await configure(w);
   await bus(w, () => { throw new Error('synthetic reporter failure'); });
+  sealedDrop(w, 'reporter-refusal');
   expect((await publishToBus(w.root, input('reporter-refusal'))).kind).toBe('published');
 });
 test('send dry-run names the actual webhook route and leaves no drop or pane effect', async () => {
