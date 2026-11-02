@@ -1,8 +1,11 @@
-// Independent scenes for the bus-nudge fix (writer-04, FLO lane fix/send-bus-nudge b6f1d18bb).
-// Written against the fix's claims, not the builder's tests: a raw publish of message.arrived
-// is held to the signed drop record it names; a seat.* event never reaches an adapter; a bus
-// that is down or silent never fails a send and the record is delivered when the bus can take
-// it; a valid send reaches a local webhook inside five seconds.
+// Independent scenes for the bus-nudge fix and the reconcile pass's verified read
+// (writer-04, private lane, d6ce0bcef on b6f1d18bb). Written against the fix's claims, not the
+// builder's tests: a raw publish of message.arrived is held to the signed drop record it names;
+// the reconcile pass puts every drop record through the same checked read — a linked record,
+// a linked folder, an unsigned record, or one addressed to another seat, session or checkout
+// raises nothing and is named once — and the mailbox messages and read receipts answer to the
+// same envelope; a seat.* event never reaches an adapter; a bus that is down or silent never
+// fails a send and the record is delivered when the bus can take it.
 // Fixtures only: a synthetic checkout and home under short /tmp paths (the socket name limit),
 // a bus this file starts and closes, a loopback HTTP receiver. No live session, pane or CLI.
 import { afterEach, expect, test } from 'bun:test';
@@ -11,10 +14,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { join } from 'node:path';
 import { busSocket, publishToBus, startBus, type BusHandle } from '../src/bus/server.ts';
 import { readEvents, type EventAppendInput } from '../src/bus/log.ts';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { readSealedRecord, recordAuthOfSealed } from '../src/send/record.ts';
-import { messageKeyState } from '../src/store/keys.ts';
+import { readSealedRecord, recordAuthOfSealed, signRecord, type RecordPayload } from '../src/send/record.ts';
+import { markPending } from '../src/send/pending.ts';
+import { messageKeyOf, messageKeyState, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'acme';
@@ -22,6 +28,7 @@ const SECRET = 'writer04-synthetic-secret-value';
 const NOW = new Date('2026-11-02T12:00:00.000Z');
 
 type Place = { base: string; root: string; home: string; dir: string; urlFile: string; secretFile: string };
+type Refusal = { where: string; reason: string };
 const places: Place[] = [];
 const buses: BusHandle[] = [];
 const servers: { stop(closeActiveConnections?: boolean): void }[] = [];
@@ -90,6 +97,9 @@ function place(): Place {
   writeFileSync(urlFile, 'http://127.0.0.1:1/not-listening\n');
   writeFileSync(secretFile, SECRET + '\n', { mode: 0o600 });
   const made: Place = { base, root, home, dir, urlFile, secretFile };
+  // The checkout's message key, as any world that ever signed a message holds it: a pass with
+  // no key verifies nothing and refuses nothing, which is not the world under test.
+  messageKeyOf(home);
   writeFileSync(join(dir, 'team.yaml'), teamText(made));
   const seats = Object.fromEntries(['lead', 'helper', 'iris'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
   writeFileSync(join(dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, workspaces: {}, worktrees: {} } } })}\n`);
@@ -156,6 +166,56 @@ async function send(place: Place, seat: string, body: string): Promise<string> {
 
 function dropPath(place: Place, seat: string, id: string): string {
   return join(place.dir, 'send-drops', SESSION, seat, id);
+}
+
+/** One drop record's payload, addressed the way a send to this seat would address it. */
+function dropPayload(at: Place, seat: string, id: string, overrides: Partial<RecordPayload> = {}): RecordPayload {
+  return {
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: at.root,
+    session: SESSION,
+    at: NOW.toISOString(),
+    body: `from lead — admitted by: lead\n\nhello ${id}`,
+    from: 'lead',
+    from_id: null,
+    rule: 'a writer04 scene',
+    thread: id,
+    ...overrides,
+  };
+}
+
+function signedBytes(at: Place, payload: RecordPayload): string {
+  return `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`;
+}
+
+/** One hand-signed record planted in a seat's drop folder: no send, no history line, nothing
+ *  but the pass's own checked read can raise it. */
+function signedDrop(at: Place, seat: string, id: string, overrides: Partial<RecordPayload> = {}): void {
+  mkdirSync(join(at.dir, 'send-drops', SESSION, seat), { recursive: true });
+  writeFileSync(dropPath(at, seat, id), signedBytes(at, dropPayload(at, seat, id, overrides)));
+}
+
+/** One reconcile pass over a fixture world, collecting refusals when asked. */
+function pass(
+  at: Place,
+  options: { state?: ReturnType<typeof createReconcileState>; refusals?: Refusal[] } = {},
+): ReturnType<typeof reconcilePass> {
+  return reconcilePass({
+    project: 'acme',
+    root: at.root,
+    session: SESSION,
+    home: at.home,
+    now: NOW,
+    ...(options.state !== undefined ? { state: options.state } : {}),
+    ...(options.refusals !== undefined ? { onRefused: (refusal: Refusal) => { options.refusals!.push(refusal); } } : {}),
+  });
+}
+
+function payloadOf(record: { payload: unknown }): Record<string, unknown> {
+  return record.payload as Record<string, unknown>;
 }
 
 function arrival(id: string, seat: string, overrides: Partial<EventAppendInput> = {}): EventAppendInput {
@@ -226,31 +286,32 @@ test('a raw publish claiming another seat record, or another session, posts noth
   expect(logIds(at).filter((id) => id === helpers)).toHaveLength(1);
 });
 
-test('a raw publish naming a linked record is refused; the reconcile pass posts it — FINDING', async () => {
+test('a linked record is refused by the publish and by the reconcile pass', async () => {
   const at = place(); const held = receiver();
   writeFileSync(at.urlFile, held.url + '\n');
-  // The send runs with no bus, so nothing is posted while the record is a real file.
-  const id = await send(at, 'iris', 'to be linked');
-  const path = dropPath(at, 'iris', id);
+  const lines: string[] = [];
+  // A hand-signed record, no send: nothing but the drop scan could raise it.
+  signedDrop(at, 'iris', 'linked-pass-rec', { at: '2026-11-02T11:00:00.000Z' });
+  const path = dropPath(at, 'iris', 'linked-pass-rec');
   const elsewhere = join(at.base, 'elsewhere-copy');
   writeFileSync(elsewhere, readFileSync(path));
   rmSync(path);
   symlinkSync(elsewhere, path);
-  // FINDING (pre-existing, unchanged by this fix): the startup reconcile reads the drop folder
-  // with a plain file read — no linked-file refusal, unlike verifiedArrival — so it posts the
-  // symlinked record's arrival to the webhook. Asserted here to document the observed
-  // behavior; whether the safety net should refuse links the way the verified path does is
-  // the coordinator's call.
-  await bus(at);
-  await until(() => held.posts.length === 1);
-  expect((JSON.parse(held.posts[0]!.body) as { event: { payload: { record_id?: string } } }).event.payload.record_id).toBe(id);
-  // The verified path still refuses the linked record: one post (reconcile's), never a second.
-  const linked = await publishToBus(at.root, arrival(id, 'iris'));
+  // The startup pass refuses the link: nothing appended, nothing posted, one line on stderr.
+  const started = await startBus({ root: at.root, team: teamOf(at), home: at.home, stderr: (line) => lines.push(line), reconcileIntervalMs: 0 });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') throw new Error('the bus did not start');
+  buses.push(started.handle);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(held.posts).toHaveLength(0);
+  expect(logIds(at)).not.toContain('linked-pass-rec');
+  expect(lines.join('\n')).toContain('iris/linked-pass-rec was not raised: the record is a symbolic link');
+  // The verified path refuses the linked record and the traversal-shaped name too.
+  const linked = await publishToBus(at.root, arrival('linked-pass-rec', 'iris'));
   expect(linked.kind).toBe('refused');
   const escape = await publishToBus(at.root, arrival('..%2Fescape', 'iris'));
   expect(escape.kind).toBe('refused');
-  expect(held.posts).toHaveLength(1);
-  expect(logIds(at).filter((one) => one === id)).toHaveLength(1);
+  expect(held.posts).toHaveLength(0);
 }, 10_000);
 
 test('a raw publish the bus accepts carries the record fields, never the caller ones', async () => {
@@ -333,3 +394,229 @@ test('a valid send reaches the local webhook inside five seconds, secret only in
   // The bus reads the record; it never rewrites it.
   expect(readSealedRecord(dropPath(at, 'iris', id)).ok).toBe(true);
 });
+
+test('an unsigned drop record raises nothing; its refusal is said once and never re-read', () => {
+  const at = place();
+  mkdirSync(join(at.dir, 'send-drops', SESSION, 'iris'), { recursive: true });
+  writeFileSync(dropPath(at, 'iris', 'unsigned-pass'), JSON.stringify({ from: 'lead', body: 'not sealed' }));
+  const refusals: Refusal[] = [];
+  const state = createReconcileState();
+  const first = pass(at, { state, refusals });
+  expect(first.ok).toBe(true);
+  expect(refusals).toEqual([{ where: 'iris/unsigned-pass', reason: 'the record is not a signed record' }]);
+  expect(logIds(at)).not.toContain('unsigned-pass');
+  const second = pass(at, { state, refusals });
+  expect(second.ok).toBe(true);
+  // Once: the unchanged refusal is not reported again, and the file is not even read.
+  expect(refusals).toHaveLength(1);
+  expect(state.stats.filesRead).toBe(0);
+});
+
+test('a signed record addressed to another seat, session or checkout is refused; the right one is raised', () => {
+  const at = place();
+  const elsewhereRoot = join(at.base, 'other-checkout');
+  mkdirSync(elsewhereRoot, { recursive: true });
+  signedDrop(at, 'iris', 'right-rec');
+  signedDrop(at, 'iris', 'wrong-seat-rec', { to: 'helper' });
+  signedDrop(at, 'iris', 'wrong-session-rec', { session: 'some-other-session' });
+  signedDrop(at, 'iris', 'wrong-root-rec', { root: elsewhereRoot });
+  const refusals: Refusal[] = [];
+  const result = pass(at, { refusals });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.reason);
+  expect(result.raised.map((record) => payloadOf(record).record_id)).toEqual(['right-rec']);
+  expect(refusals).toEqual([
+    { where: 'iris/wrong-root-rec', reason: 'the signed record belongs to another checkout' },
+    { where: 'iris/wrong-seat-rec', reason: 'the signed record is addressed to another seat or session' },
+    { where: 'iris/wrong-session-rec', reason: 'the signed record is addressed to another seat or session' },
+  ]);
+  for (const id of ['wrong-seat-rec', 'wrong-session-rec', 'wrong-root-rec']) {
+    expect(logIds(at)).not.toContain(id);
+  }
+});
+
+test('a drop tree reached through a link is not this checkout to raise from, however valid its records', () => {
+  const at = place();
+  // A valid record for iris, signed for THIS checkout, living in another tree.
+  const other = join(at.base, 'other-tree', 'acme', 'iris');
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(other, 'via-folder-link'), signedBytes(at, dropPayload(at, 'iris', 'via-folder-link')));
+  // The checkout's whole send-drops tree is a link into that other tree.
+  symlinkSync(join(at.base, 'other-tree'), join(at.dir, 'send-drops'));
+  const refusals: Refusal[] = [];
+  const state = createReconcileState();
+  const result = pass(at, { state, refusals });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.reason);
+  // The folder is named once and nothing inside it is read.
+  expect(refusals).toEqual([{ where: 'iris (drop folder)', reason: "the folder is not this checkout's" }]);
+  expect(state.stats.filesRead).toBe(0);
+  expect(result.raised).toHaveLength(0);
+  expect(logIds(at)).not.toContain('via-folder-link');
+});
+
+test('a pending marker whose record is a link raises neither arrival nor held, until the record is real', () => {
+  const at = place();
+  signedDrop(at, 'iris', 'pending-linked');
+  const path = dropPath(at, 'iris', 'pending-linked');
+  const bytes = readFileSync(path);
+  const elsewhere = join(at.base, 'copy-pending');
+  writeFileSync(elsewhere, bytes);
+  markPending(join(at.dir, 'send-drops', SESSION, 'iris'), {
+    id: 'pending-linked', from: 'lead', to: 'iris', body: 'held body',
+    ts: '2026-11-02T10:00:00.000Z', tries: 0, leg: 'drop',
+  });
+  rmSync(path);
+  symlinkSync(elsewhere, path);
+  const refusals: Refusal[] = [];
+  const state = createReconcileState();
+  const first = pass(at, { state, refusals });
+  expect(first.ok).toBe(true);
+  if (!first.ok) throw new Error(first.reason);
+  expect(first.raised).toHaveLength(0);
+  expect(logIds(at)).not.toContain('pending-linked');
+  expect(logIds(at)).not.toContain('pending-linked:held');
+  // Both the scan and the marker name it, each with its own reason.
+  expect(refusals).toEqual([
+    { where: 'iris/pending-linked', reason: 'the record is a symbolic link' },
+    { where: 'iris/pending-linked', reason: 'a symbolic link was found and not followed' },
+  ]);
+  // The record restored: the next pass raises the arrival and, past the threshold, the held event.
+  rmSync(path);
+  writeFileSync(path, bytes);
+  const second = pass(at, { state, refusals });
+  expect(second.ok).toBe(true);
+  if (!second.ok) throw new Error(second.reason);
+  const ids = second.raised.map((record) => payloadOf(record).record_id);
+  expect(ids).toContain('pending-linked');
+  expect(ids).toContain('pending-linked:held');
+  expect(refusals).toHaveLength(2);
+});
+
+test('mailbox messages answer to the envelope: the valid one is raised from its signed fields', () => {
+  const at = place();
+  plantMessage(at.home, at.root, 'iris', 'mb-ok', {
+    kind: 'message', id: 'mb-ok', from: 'lead', to: 'iris', root: at.root, session: SESSION,
+    at: '2026-11-02T11:30:00.000Z', body: 'mailbox body',
+  });
+  // Signed by nobody.
+  plantMessage(at.home, at.root, 'iris', 'mb-bad', {
+    kind: 'message', id: 'mb-bad', from: 'lead', to: 'iris', root: at.root, session: SESSION,
+    at: '2026-11-02T11:31:00.000Z', body: 'bad signature',
+  }, 'not-a-signature');
+  // Validly signed, but another checkout's record.
+  plantMessage(at.home, at.root, 'iris', 'mb-elsewhere', {
+    kind: 'message', id: 'mb-elsewhere', from: 'lead', to: 'iris', root: join(at.base, 'elsewhere-root'), session: SESSION,
+    at: '2026-11-02T11:32:00.000Z', body: 'another checkout',
+  });
+  // The sealed bytes are this checkout's own; the path to them is a link.
+  plantMessage(at.home, at.root, 'iris', 'mb-link', {
+    kind: 'message', id: 'mb-link', from: 'lead', to: 'iris', root: at.root, session: SESSION,
+    at: '2026-11-02T11:33:00.000Z', body: 'linked mailbox record',
+  });
+  const realPath = join(at.dir, 'messages', 'iris', 'mb-link.json');
+  const staged = join(at.base, 'mb-link-copy.json');
+  writeFileSync(staged, readFileSync(realPath));
+  rmSync(realPath);
+  symlinkSync(staged, realPath);
+  const refusals: Refusal[] = [];
+  const result = pass(at, { refusals });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.reason);
+  // The valid record is raised, with the time and sender its signature covered.
+  expect(result.raised.map((record) => `${payloadOf(record).kind}:${payloadOf(record).record_id}`)).toEqual(['message.arrived:mb-ok']);
+  expect(payloadOf(result.raised[0]!).ts).toBe('2026-11-02T11:30:00.000Z');
+  expect(payloadOf(result.raised[0]!).from).toBe('lead');
+  expect(refusals).toEqual([
+    { where: 'iris/mb-bad', reason: "the record is not signed with this checkout's message key" },
+    { where: 'iris/mb-elsewhere', reason: 'the signed record belongs to another checkout' },
+  ]);
+  // The linked record raises nothing; in the mailbox tree it is not named, unlike the drop tree.
+  expect(logIds(at)).not.toContain('mb-link');
+  expect(refusals.map((refusal) => refusal.where)).not.toContain('iris/mb-link');
+});
+
+test('mailbox read receipts answer to the same envelope', () => {
+  const at = place();
+  plantMessage(at.home, at.root, 'iris', 'mb-ok', {
+    kind: 'message', id: 'mb-ok', from: 'lead', to: 'iris', root: at.root, session: SESSION,
+    at: '2026-11-02T11:30:00.000Z', body: 'mailbox body',
+  });
+  const receiptPayload = {
+    kind: 'receipt' as const, id: 'mb-ok', to: 'iris', root: at.root, session: SESSION,
+    at: '2026-11-02T11:40:00.000Z',
+  };
+  const goodSig = signDomain(RECEIPT_DOMAIN, receiptPayload, messageKeyOf(at.home));
+  // A valid receipt: raised as a read.
+  writeFileSync(receiptFile(at.root, 'iris', 'mb-ok'), JSON.stringify({ payload: receiptPayload, signature: goodSig }));
+  // A signature that covers another payload: refused.
+  const otherPayload = { ...receiptPayload, id: 'mb-bad' };
+  writeFileSync(receiptFile(at.root, 'iris', 'mb-bad'), JSON.stringify({ payload: otherPayload, signature: goodSig }));
+  // A linked receipt: valid bytes, reached through a link.
+  const linkedPayload = { ...receiptPayload, id: 'mb-link' };
+  const linkedSig = signDomain(RECEIPT_DOMAIN, linkedPayload, messageKeyOf(at.home));
+  const stagedReceipt = join(at.base, 'mb-receipt-copy.json');
+  writeFileSync(stagedReceipt, JSON.stringify({ payload: linkedPayload, signature: linkedSig }));
+  symlinkSync(stagedReceipt, receiptFile(at.root, 'iris', 'mb-link'));
+  const refusals: Refusal[] = [];
+  const result = pass(at, { refusals });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.reason);
+  const raisedIds = result.raised.map((record) => payloadOf(record).record_id);
+  expect(raisedIds).toContain('mb-ok');
+  expect(raisedIds).toContain('mb-ok:read');
+  expect(raisedIds).not.toContain('mb-bad:read');
+  expect(raisedIds).not.toContain('mb-link:read');
+  expect(refusals).toEqual([
+    { where: 'iris/mb-bad:read', reason: "the receipt is not signed with this checkout's message key" },
+  ]);
+});
+
+test('a record with unsigned fields beside the envelope raises nothing: verified fields or none', () => {
+  const at = place();
+  // The envelope is valid, but the file carries impostor fields the signature does not cover.
+  const payload = dropPayload(at, 'iris', 'signed-only', { at: '2026-11-02T11:20:00.000Z', from: 'true-sender' });
+  const sealed = JSON.parse(signedBytes(at, payload)) as Record<string, unknown>;
+  const file = { ...sealed, from: 'impostor-sender', at: '2030-01-01T00:00:00.000Z' };
+  mkdirSync(join(at.dir, 'send-drops', SESSION, 'iris'), { recursive: true });
+  writeFileSync(dropPath(at, 'iris', 'signed-only'), `${JSON.stringify(file, null, 2)}\n`);
+  const refusals: Refusal[] = [];
+  const result = pass(at, { refusals });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.reason);
+  // The envelope rule refuses the whole record: no arrival, so no field the signature did not
+  // cover can reach an event. What a verified record does carry is the signed fields alone.
+  expect(result.raised).toHaveLength(0);
+  expect(logIds(at)).not.toContain('signed-only');
+  expect(refusals).toEqual([{ where: 'iris/signed-only', reason: 'the record is not a signed record' }]);
+  // The same record without the impostor bytes is raised, with the signed time and sender.
+  writeFileSync(dropPath(at, 'iris', 'signed-only'), signedBytes(at, payload));
+  const second = pass(at);
+  expect(second.ok).toBe(true);
+  if (!second.ok) throw new Error(second.reason);
+  const raisedOne = second.raised.find((record) => payloadOf(record).record_id === 'signed-only');
+  expect(raisedOne).toBeDefined();
+  if (raisedOne === undefined) throw new Error('the pass raised no arrival for signed-only');
+  expect(payloadOf(raisedOne).from).toBe('true-sender');
+  expect(payloadOf(raisedOne).ts).toBe('2026-11-02T11:20:00.000Z');
+  expect(JSON.stringify(payloadOf(raisedOne))).not.toContain('impostor');
+});
+
+test('the bus says each refused record once on stderr, and posts none of them', async () => {
+  const at = place(); const held = receiver();
+  writeFileSync(at.urlFile, held.url + '\n');
+  const lines: string[] = [];
+  mkdirSync(join(at.dir, 'send-drops', SESSION, 'iris'), { recursive: true });
+  writeFileSync(dropPath(at, 'iris', 'unsigned-pass'), JSON.stringify({ from: 'lead', body: 'not sealed' }));
+  signedDrop(at, 'iris', 'wrong-seat-rec', { to: 'helper' });
+  const started = await startBus({ root: at.root, team: teamOf(at), home: at.home, stderr: (line) => lines.push(line), reconcileIntervalMs: 0 });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') throw new Error('the bus did not start');
+  buses.push(started.handle);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(held.posts).toHaveLength(0);
+  const said = lines.filter((line) => line.includes('was not raised'));
+  expect(said).toHaveLength(2);
+  expect(said.join('\n')).toContain('iris/unsigned-pass was not raised: the record is not a signed record');
+  expect(said.join('\n')).toContain('iris/wrong-seat-rec was not raised: the signed record is addressed to another seat or session');
+}, 10_000);
