@@ -36,7 +36,7 @@ function keyPath(home: string): string {
   return join(keyFolder(home), 'key.json');
 }
 
-function generationPath(root: string, home: string): string {
+export function generationPath(root: string, home: string): string {
   return join(generationsFolder(home), `${rootHash(root)}.json`);
 }
 
