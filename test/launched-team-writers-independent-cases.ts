@@ -63,22 +63,24 @@ function stopInRegistry(w: World): void {
   expect(writeTeamText(w.file, markStopped(current.text, 'worker'), { home: w.home, command: 'remove' })).toEqual({ ok: true, target: 'registry' });
   expect(readFileSync(w.file, 'utf8')).toBe(w.yaml);
 }
-for (const json of [false, true]) test(`a launched-pane restart sees the registry-only stop (${json ? 'JSON' : 'plain'})`, async () => underRegistry(async () => {
+for (const json of [false, true]) test(`the own lead may dry-run revival of the registry-only stop (${json ? 'JSON' : 'plain'})`, async () => underRegistry(async () => {
   const w = world(), f = fake(w); stopInRegistry(w); const io = seatIo(w);
+  const before = readFileSync(w.record);
   expect(launchedTeamFile(io, w.home)).toBe(w.file);
   const code = await runRestart(['worker', '--dry-run', ...(json ? ['--json'] : [])], io, f.sources);
-  expect(code, io.out + io.err).toBe(1);
-  if (json) expect(JSON.parse(io.out).error.id).toBe('restart.signed-off');
-  else expect(io.err).toContain('worker is signed off');
+  expect(code, io.out + io.err).toBe(0);
+  if (json) expect(JSON.parse(io.out).status).toBe('dry-run');
+  else expect(io.out).toContain('worker');
+  expect(io.err).not.toContain('worker is signed off'); expect(readFileSync(w.record)).toEqual(before);
   expect(f.effects).toEqual([]); expect(readFileSync(w.file, 'utf8')).toBe(w.yaml);
 }));
 
-test('actual remove --keep writes the record, and a subsequent pane restart refuses the stopped seat', async () => underRegistry(async () => {
+test('actual remove --keep writes the record, and the own lead may dry-run its revival', async () => underRegistry(async () => {
   const w = world(), f = fake(w), remove = seatIo(w);
   expect(await runRemove(['worker', '--keep'], remove, f.sources), remove.out + remove.err).toBe(0);
   expect(storedTeam(w.root, w.home)?.text).toContain('stopped: true'); expect(readFileSync(w.file, 'utf8')).toBe(w.yaml);
-  const io = seatIo(w); expect(await runRestart(['worker', '--dry-run', '--json'], io, f.sources), io.out + io.err).toBe(1);
-  expect(JSON.parse(io.out).error.id).toBe('restart.signed-off'); expect(f.effects).toEqual([]);
+  const before = readFileSync(w.record), io = seatIo(w); expect(await runRestart(['worker', '--dry-run', '--json'], io, f.sources), io.out + io.err).toBe(0);
+  expect(JSON.parse(io.out).status).toBe('dry-run'); expect(f.effects).toEqual([]); expect(readFileSync(w.record)).toEqual(before);
 }));
 
 for (const snapshot of [false, true]) test(`explicit --file retains its ${snapshot ? 'snapshot' : 'conventional'} file over a stopped registry`, async () => underRegistry(async () => {
@@ -91,11 +93,32 @@ for (const snapshot of [false, true]) test(`explicit --file retains its ${snapsh
   expect(readFileSync(w.record)).toEqual(before); expect(readFileSync(w.file, 'utf8')).toBe(w.yaml); expect(f.effects).toEqual([]);
 }));
 
-test('an alternate launched snapshot is still that file, independent of the checkout registry', async () => underRegistry(async () => {
+test('the own lead may dry-run revival from the alternate launched snapshot without changing it', async () => underRegistry(async () => {
   const w = world(), f = fake(w), alternate = join(w.dir, 'snapshot.yaml'); writeFileSync(alternate, markStopped(w.yaml, 'worker'));
   updateState(w.dir, state => { state.sessions['launch-session']!.launched_file = alternate; }); noteLaunchedPane(w.home, alternate, 'caller-pane', 'launch-session');
   const io = seatIo(w); expect(launchedTeamFile(io, w.home)).toBe(alternate);
-  expect(await runRestart(['worker', '--dry-run'], io, f.sources), io.out + io.err).toBe(1); expect(io.err).toContain('signed off'); expect(f.effects).toEqual([]);
+  expect(await runRestart(['worker', '--dry-run'], io, f.sources), io.out + io.err).toBe(0); expect(io.err).not.toContain('signed off'); expect(f.effects).toEqual([]); expect(readFileSync(alternate, 'utf8')).toBe(markStopped(w.yaml, 'worker'));
+}));
+
+test('a placed worker cannot revive the registry-signed-off seat', async () => underRegistry(async () => {
+  const w = world(), f = fake(w); stopInRegistry(w);
+  updateState(w.dir, state => { state.sessions['launch-session']!.seats.worker = { stage: 'ready', pane: 'worker-pane', workspace: 'worker-workspace' }; });
+  noteLaunchedPane(w.home, w.file, 'worker-pane', 'launch-session');
+  const before = readFileSync(w.record), io = testIo(w.lobby, { kind: 'seat', name: 'worker', pane: 'worker-pane', session: 'launch-session' });
+  expect(await runRestart(['worker', '--dry-run'], io, f.sources), io.out + io.err).toBe(1);
+  expect(io.out + io.err).toContain('only the owner or `leads`'); expect(readFileSync(w.record)).toEqual(before); expect(f.effects).toEqual([]);
+}));
+
+test('a lead proven in another team and session cannot revive this signed-off seat', async () => underRegistry(async () => {
+  const w = world(), other = world(), f = fake(w); stopInRegistry(w);
+  const text = other.yaml.replace('project: launched-fixture', 'project: other-fixture').replace('session: launch-session', 'session: other-team-session');
+  expect(writeTeamText(other.file, text, { home: other.home, command: 'synthetic foreign team setup' }).ok).toBe(true);
+  const foreign = readTeamConfig(other.root, { home: other.home, source: 'registry' }); expect(foreign.ok).toBe(true);
+  if (!foreign.ok) throw new Error('foreign lead fixture must be valid');
+  expect(foreign.team.orchestrator).toBe('captain'); expect(foreign.team.session).toBe('other-team-session');
+  const before = readFileSync(w.record), io = testIo(w.root, { kind: 'seat', name: 'captain', pane: 'foreign-lead-pane', session: 'other-team-session' });
+  expect(await runRestart(['worker', '--dry-run'], io, f.sources), io.out + io.err).toBe(1);
+  expect(io.out + io.err).toContain('only the owner or `leads`'); expect(readFileSync(w.record)).toEqual(before); expect(f.effects).toEqual([]);
 }));
 
 test('the file source setting keeps the launch pointer on its existing file', async () => underRegistry(async () => {
