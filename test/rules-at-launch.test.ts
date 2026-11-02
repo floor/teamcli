@@ -63,9 +63,12 @@ describe('the launch line carries the rules line', () => {
   });
 
   test('a line the scope cannot read reports no carry, and says where the line went', () => {
-    // Nothing refuses to launch: the line keeps 0.5.10's placement after the whole line, and
-    // the plan does not tell the file write that the CLI was given it.
+    // The control: an unclosed quote leaves a suffix with no delimiter, no backslash and no
+    // ANSI-C opening, so it plainly cannot spell the delimiter and keeps 0.5.10's placement
+    // after the whole line; the plan does not tell the file write that the CLI was given it.
     const launch = planFor("codex 'unclosed");
+    const command = launch && 'command' in launch ? launch.command : '';
+    expect(command).toContain("codex 'unclosed");
     expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).not.toBe(true);
     expect(launch && 'notice' in launch ? launch.notice : '').toContain('its rules line is after the line, where the CLI may not read it');
   });
@@ -105,8 +108,10 @@ describe('the launch line carries the rules line', () => {
   });
 
   // An unreadable line that names, or may name, the delimiter can never take the appended words
-  // safely: they would land after it. Those launches refuse; one that cannot name it keeps the
-  // old placement with its notice, as the scene above shows.
+  // safely: they would land after it. Those launches refuse. The refusal is conservative — a
+  // `--` anywhere in the unread text (in any quoting), a backslash or an ANSI-C opening all
+  // refuse — and only a suffix that plainly cannot spell a delimiter keeps the old placement
+  // with its notice, as the unclosed control above shows.
   test('a line that names the delimiter before the part it cannot read refuses the launch', () => {
     const steps = planOf("codex -- $'a\\nb'");
     expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
@@ -126,11 +131,26 @@ describe('the launch line carries the rules line', () => {
     expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
     expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
   });
-  test('an unread word that cannot be the delimiter keeps the old placement, with its notice', () => {
-    const launch = planFor("codex $'a\\nb'");
-    const command = launch && 'command' in launch ? launch.command : '';
-    expect(command).toContain("$'a\\nb'");
-    expect(launch && 'rulesCarried' in launch ? launch.rulesCarried : undefined).toBe(false);
+  // builder-3's last counterexample: the unread part is one word, and the delimiter after it
+  // is quoted, so a scan for a bare whitespace-delimited `--` misses it. Once a line is
+  // unreadable the refusal is conservative: a `--` anywhere in the unread text refuses,
+  // whichever quotes hold it.
+  test("a quoted delimiter after an unread part refuses the launch", () => {
+    const steps = planOf("codex $'p\\x72ompt' '--' prompt");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  test('the same delimiter in double quotes refuses too', () => {
+    const steps = planOf("codex $'p\\x72ompt' \"--\" prompt");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
+  });
+  test('an unread part holding a backslash refuses even with no delimiter in sight', () => {
+    // A backslash or an ANSI-C opening can spell the delimiter, so neither keeps the fallback:
+    // only a suffix that plainly cannot spell one launches with the notice.
+    const steps = planOf("codex $'a\\nb'");
+    expect(steps.find((step) => step.do?.do === 'launch')).toBeUndefined();
+    expect(steps.find((step) => step.do?.do === 'refuse')).toBeDefined();
   });
 });
 

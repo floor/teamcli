@@ -383,10 +383,14 @@ function placementOf(binary: string, command: string): Placement {
  * Whether a launch line that cannot be read whole may hand its CLI a `--` this tool cannot place
  * words before. Words appended to such a line stand after it, where a plain line's program reads
  * them; if the line names the delimiter before the part this reader cannot see, or the
- * unreadable part could name one (an ANSI-C word's escape can spell `--`, and a word after a
- * NUL byte is not read here), the added options would be prompt text instead. The caller refuses
- * such a launch; a line whose unreadable part cannot name a standalone word — an unclosed quote
- * takes the rest of the line into one word — keeps 0.5.10's placement with its notice.
+ * unreadable part could name one, the added options would be prompt text instead. The caller
+ * refuses such a launch.
+ *
+ * The test on the unread suffix is deliberately conservative and does not parse it: a `--`
+ * anywhere in the raw text (in any quoting, not only as a bare word), a backslash, or an ANSI-C
+ * opening all refuse, because each can spell a delimiter under some shell. Only a suffix that
+ * plainly cannot — an unclosed quote takes the rest of the line into one word — keeps 0.5.10's
+ * placement with its notice.
  */
 export function lineDelimiterRisk(command: string): boolean {
   const line = command.trimEnd();
@@ -394,33 +398,7 @@ export function lineDelimiterRisk(command: string): boolean {
   if (!('unreadable' in read)) return false;
   if (read.words.some((word) => word.text === '--')) return true;
   const rest = line.slice(read.at);
-  // A delimiter word among the words this reader never reached.
-  if (/(?:^|\s)--(?=\s|$)/.test(rest)) return true;
-  return ansiWordCouldBeDelimiter(/^\S+/.exec(rest)?.[0] ?? '');
-}
-
-/** One ANSI-C escape, or one literal character: `\nnn`, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, `\cX`,
- *  and any other backslash pair, each stand for one character. */
-const ANSI_ITEM = /\\[0-7]{1,3}|\\x[0-9A-Fa-f]{1,2}|\\u[0-9A-Fa-f]{1,4}|\\U[0-9A-Fa-f]{1,8}|\\c[\s\S]|\\[\s\S]|[\s\S]/g;
-
-/** Whether an ANSI-C word this reader did not decode could be the CLI's delimiter itself. Its
- *  escapes stand for one character each, any of which may be a hyphen; literal characters are
- *  fixed. So the word can be `--` when every literal character is a hyphen and it has exactly
- *  two characters once its escapes are read — or more, cut short where a shell reads a NUL
- *  escape as the end of the argument. */
-function ansiWordCouldBeDelimiter(word: string): boolean {
-  const open = word.indexOf("$'");
-  if (open < 0) return false;
-  const prefix = word.slice(0, open);
-  if (!/^-*$/.test(prefix)) return false;
-  const close = word.indexOf("'", open + 2);
-  if (close < 0) return false;
-  const items = word.slice(open + 2, close).match(ANSI_ITEM) ?? [];
-  const needed = 2 - prefix.length;
-  if (needed < 0 || items.length < needed) return false;
-  if (items.slice(0, needed).some((item) => item !== '-' && !item.startsWith('\\'))) return false;
-  if (items.length === needed) return true;
-  return /^\\(?:0{1,3}|x00|u0000|U00000000|c@)$/i.test(items[needed] ?? '');
+  return rest.includes('--') || rest.includes('\\') || rest.includes("$'");
 }
 
 /** The script one nested shell runs, when that script runs the CLI: the outer body's source is

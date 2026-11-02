@@ -317,9 +317,10 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * this version cannot prove keeps 0.5.10's placement, the options after the
  * line, and says so through `warn`. Two lines are refused rather than launched
  * with the profile's words where the CLI does not read them: one this reader
- * cannot read to its end that names, or may name, the CLI's delimiter
- * (`lineDelimiterRisk`), because every word written after it would be prompt
- * text; and one whose rules line cannot be placed inside it once its options
+ * cannot read to its end whose unread part holds a `--` in any quoting, a
+ * backslash or an ANSI-C opening — anything that can spell the CLI's
+ * delimiter (`lineDelimiterRisk`) — because every word written after it would
+ * be prompt text; and one whose rules line cannot be placed inside it once its options
  * have been. Every other line keeps the old placement with its notice.
  */
 export function launchCommandOrRefusal(

@@ -14,8 +14,9 @@
 // a NUL, `y` in zsh (78 00 79); and `\0`, a short `\u00` and `\8` differ the same way. Even the
 // escapes the two shells read alike are not read here: one rule covers every such word, so a
 // line holding one is unreadable at the `ansi` reason, and nothing built on it may guess — a
-// launch keeps 0.5.10's placement instead, unless the word could itself be the CLI's delimiter,
-// which the caller refuses (`lineDelimiterRisk` in `cli-scope.ts`). A NUL byte is unreadable at
+// launch refuses it (`lineDelimiterRisk` in `cli-scope.ts`), as it refuses any unread suffix
+// holding a `--`, a backslash or an ANSI-C opening; only a suffix that plainly cannot spell the
+// CLI's delimiter keeps 0.5.10's placement. A NUL byte is unreadable at
 // the `nul` reason: no shell can hand one to a program in a word. A line with an unclosed quote
 // or a trailing backslash is unreadable at the `unclosed` reason: no shell can run it.
 
