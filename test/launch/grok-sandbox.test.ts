@@ -188,6 +188,52 @@ describe('writing the file', () => {
     expect(text).toContain('read_write = [');
   });
 
+  for (const header of ['[profiles.team-seat-acme] # keep this table comment', '[ profiles . "team-seat-acme" ]']) {
+    test(`a valid table header in another spelling is updated, never duplicated: ${header}`, () => {
+      const { sandbox } = world();
+      writeFileSync(sandbox.file, `${header}\nextends = "old"\nread_write = ["/old"]\ncustom = "kept"\n`);
+      expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+      const text = readFileSync(sandbox.file, 'utf8');
+      const parsed = Bun.TOML.parse(text) as { profiles: Record<string, any> };
+      // A second table header would make the whole file unparseable ("Cannot redefine table");
+      // the parsed file is the proof only one profile table stands.
+      expect(Object.keys(parsed.profiles)).toEqual(['team-seat-acme']);
+      expect(parsed.profiles['team-seat-acme']?.read_write).toEqual([...sandbox.readWrite]);
+      expect(parsed.profiles['team-seat-acme']?.custom).toBe('kept');
+      expect(parsed.profiles['team-seat-acme']?.extends).toBe('workspace');
+    });
+  }
+
+  test('a file that does not parse is left byte for byte and the launch hears why', () => {
+    const { sandbox } = world();
+    const broken = '[profiles.team-seat-acme\nextends = "workspace"\n';
+    writeFileSync(sandbox.file, broken);
+    const written = writeGrokSandbox(sandbox);
+    expect(written.ok).toBe(false);
+    if (!written.ok) expect(written.why).toContain('not valid TOML');
+    expect(readFileSync(sandbox.file, 'utf8')).toBe(broken);
+  });
+
+  test('a file whose profiles table is inline is not extended into an unparseable file', () => {
+    const { sandbox } = world();
+    const before = 'profiles = { other = { extends = "workspace" } }\n';
+    writeFileSync(sandbox.file, before);
+    const written = writeGrokSandbox(sandbox);
+    // Appending `[profiles.team-seat-acme]` would be "Cannot extend inline table 'profiles'".
+    expect(written.ok).toBe(false);
+    expect(readFileSync(sandbox.file, 'utf8')).toBe(before);
+  });
+
+  test('a profile defined as an inline value under [profiles] is reported, not overwritten', () => {
+    const { sandbox } = world();
+    const before = '[profiles]\nteam-seat-acme = { extends = "workspace" }\n';
+    writeFileSync(sandbox.file, before);
+    const written = writeGrokSandbox(sandbox);
+    expect(written.ok).toBe(false);
+    if (!written.ok) expect(written.why).toContain('profiles.team-seat-acme');
+    expect(readFileSync(sandbox.file, 'utf8')).toBe(before);
+  });
+
   test('a file that already holds the profile is not written again', () => {
     const { sandbox } = world();
     expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
@@ -254,6 +300,17 @@ describe('taking the flag off a line whose profile was not written', () => {
       .toBe('grok --sandbox team-seat-other --rules R');
     expect(withoutGrokSandbox('grok --sandbox team-seat-acme-2 --rules R', 'team-seat-acme'))
       .toBe('grok --sandbox team-seat-acme-2 --rules R');
+  });
+
+  test('a prompt quoting the same words keeps them, and only the real pair is removed', () => {
+    // The option this run appended is an argv pair. The same text inside a quoted prompt is one
+    // argument, and removing characters from it would rewrite what the CLI is asked to do.
+    const single = `grok -p 'preserve --sandbox team-seat-acme in this quoted prompt' --sandbox team-seat-acme`;
+    expect(withoutGrokSandbox(single, 'team-seat-acme'))
+      .toBe(`grok -p 'preserve --sandbox team-seat-acme in this quoted prompt'`);
+    const double = 'grok -p "preserve --sandbox team-seat-acme here" --sandbox=team-seat-acme';
+    expect(withoutGrokSandbox(double, 'team-seat-acme'))
+      .toBe('grok -p "preserve --sandbox team-seat-acme here"');
   });
 });
 
