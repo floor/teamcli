@@ -75,6 +75,16 @@ describe('the managed Codex endpoint intent', () => {
     expect(launch.do).not.toHaveProperty('codexEndpoint');
   });
 
+  test('a collision on a line this version cannot prove is still a collision, as 0.5.10 read it', () => {
+    // The line's quoting never closes, so its words cannot be proved: 0.5.10's own
+    // `/(^|\s)--remote(=|\s|$)/` read the collision from the raw text, and the plan keeps that
+    // answer rather than probing past a flag the line plainly names.
+    const launch = launchOp(upPlan(input({}, { launch: 'codex --remote "unterminated' })));
+    expect(launch.do).not.toHaveProperty('codexEndpoint');
+    const daemon = launchOp(upPlan(input({}, { launch: 'codex --no-daemon "unterminated' })));
+    expect(daemon.do).not.toHaveProperty('codexEndpoint');
+  });
+
   test('a wrapper’s endpoint is not ours to bind', () => {
     const launch = launchOp(upPlan(input({}, { launch: './tools/codex-wrapper --fast' })));
     expect(launch.do).not.toHaveProperty('codexEndpoint');
