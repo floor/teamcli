@@ -97,9 +97,48 @@ function askers(params: Pick<OwnerActionParams, 'requested_by' | 'requesters'>):
   return (params.requesters ?? [params.requested_by]).map(plainAsker);
 }
 
-/** The reason as one short clause: whitespace folded, cut at a word boundary, `…` when cut. */
+/** Terminal escape sequences and any other control character a caller types: never on a card. */
+const ESCAPE_SEQUENCE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]+/g;
+
+/** A word that names a place on the machine: it carries a separator, a home marker or a drive. */
+function pathLike(word: string): boolean {
+  return word.includes('/') || word.includes('\\') || word.startsWith('~') || /^[A-Za-z]:$/.test(word);
+}
+
+/**
+ * A path-like word reduced to the last thing it names: `/synthetic/private/project` → `project`,
+ * `~/Code/x` → `x`, `C:\x\y` → `y`. A word that is only separators or a drive (`/`, `~`, `C:`)
+ * names nothing and is dropped. Surrounding punctuation goes with the path.
+ */
+function lastSegment(word: string): string | undefined {
+  const parts = word
+    .replace(/^~[\\/]?/, '')
+    .split(/[\\/]+/)
+    .filter((part) => part !== '' && part !== '.' && part !== '..' && !/^[A-Za-z]:$/.test(part));
+  const last = parts[parts.length - 1];
+  if (last === undefined) return undefined;
+  const named = last.replace(/^[^\p{L}\p{N}_]+/u, '').replace(/[^\p{L}\p{N}_]+$/u, '');
+  return named === '' ? undefined : named;
+}
+
+/**
+ * The reason as one short clause: escape sequences and control characters (a line break among
+ * them) are stripped, whitespace is folded, every path is cut to the last thing it names with a
+ * word that is only a path dropped, and the clause is cut at a word boundary within REASON_MAX,
+ * `…` when cut. A caller's reason cannot put a machine path, a control sequence or a line of its
+ * own on the card.
+ */
 function shortReason(reason: string): string {
-  const why = reason.replace(/\s+/g, ' ').trim();
+  const why = reason
+    .replace(ESCAPE_SEQUENCE, '')
+    .replace(CONTROL_CHARS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word) => (pathLike(word) ? lastSegment(word) : word))
+    .filter((word): word is string => word !== undefined && word !== '')
+    .join(' ');
   if (why.length <= REASON_MAX) return why;
   const at = why.lastIndexOf(' ', REASON_MAX);
   return `${why.slice(0, at > 0 ? at : REASON_MAX).replace(/[,;:.\s]+$/, '')}…`;
