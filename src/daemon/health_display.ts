@@ -4,7 +4,8 @@
 // the system's service manager, a manual start, `team up` — never a platform's name; the socket
 // path and the process uid stay in the health module, because they are plumbing, not a reading.
 import type { DaemonHealth, DaemonProbe } from './health.ts';
-import type { DaemonFeatures, DaemonRootState, DaemonStuckRequest } from './state.ts';
+import type { DaemonChoresState, DaemonFeatures, DaemonRootState, DaemonStuckRequest } from './state.ts';
+import { formatRelativeTime } from '../output/text.ts';
 import type { Difference } from '../status/compare.ts';
 
 /**
@@ -90,6 +91,7 @@ function daemonLine(health: DaemonHealth): string {
     ? `machine daemon: running (${pid}), ${startedPhrase(health.startedBy)}`
     : `machine daemon: running since ${health.since} (${pid}), ${startedPhrase(health.startedBy)}`;
   const parts: string[] = rootsPhrase(health.roots, health.probe.at);
+  parts.push(...choresPhrase(health.roots, health.probe.at));
   if (health.probe.state === 'unanswered') {
     parts.push(`it did not answer the health probe (${health.probe.reason}), so it may be hung`);
   } else if (health.probe.state === 'refused') {
@@ -187,6 +189,61 @@ export function firstPassPhrases(roots: DaemonRootState[]): string[] {
 /** Digits grouped in threes: the same text on every machine, whichever locale it runs in. */
 function groupedCount(count: number): string {
   return String(count).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The chores rows as one clause, appended to the daemon line whenever any checkout recorded one.
+ * A route without a row says nothing: a daemon started without the chores seam has nothing to
+ * report. When every recorded route runs inline the clause says the rollback once, and otherwise
+ * it counts the roots whose chores run in children and names each route that is not simply
+ * working, with the record's own reason. A late root also names the chore its child last
+ * finished and the child's own marker-cache reading — files read afresh, stamps reused, stamps
+ * held — which is the evidence for why a sweep is busy: a night of re-reads shows as reads, and
+ * a starved chore reads as a late chore, never as a dead endpoint.
+ */
+export function choresPhrase(roots: DaemonRootState[], at: string): string[] {
+  const rows = roots.flatMap((root) => (root.chores === undefined ? [] : [{ root: root.root, chores: root.chores }]));
+  if (rows.length === 0) return [];
+  const hosted = rows.filter((row) => row.chores.mode !== 'inline');
+  const inline = rows.length - hosted.length;
+  if (hosted.length === 0) return [inline === 1 ? 'chores inline' : 'chores inline on every root'];
+  const counts = new Map<DaemonChoresState['state'], number>();
+  for (const row of hosted) counts.set(row.chores.state, (counts.get(row.chores.state) ?? 0) + 1);
+  const order: DaemonChoresState['state'][] = ['ok', 'starting', 'late', 'restarting', 'stopped'];
+  const states = order.flatMap((state) => {
+    const count = counts.get(state) ?? 0;
+    return count === 0 ? [] : [`${String(count)} ${state}`];
+  });
+  const rootsWord = `root${hosted.length === 1 ? '' : 's'}`;
+  let clause = `chores ${String(hosted.length)} ${rootsWord} in children (${states.join(', ')}`;
+  if (inline > 0) clause += `, ${String(inline)} inline`;
+  clause += ')';
+  const trouble = hosted.filter(
+    (row) => row.chores.state === 'late' || row.chores.state === 'restarting' || row.chores.state === 'stopped',
+  );
+  if (trouble.length > 0) {
+    const named = trouble.map((row) => {
+      const details = [row.chores.why === null || row.chores.why === '' ? 'no reason recorded' : row.chores.why];
+      const last = row.chores.lastChore;
+      if (last !== null) details.push(`last ${last.name}${choreAge(last.at, at)}`);
+      const cache = row.chores.markerCache;
+      if (row.chores.state === 'late' && cache !== null) {
+        details.push(
+          `marker cache ${String(cache.read)} read, ${String(cache.reused)} reused, ${String(cache.cached)} held`,
+        );
+      }
+      return `${row.root}: ${row.chores.state} (${details.join('; ')})`;
+    });
+    clause += `; ${named.join('; ')}`;
+  }
+  return [clause];
+}
+
+/** ` 12s ago` when both instants order, empty when either does not. */
+function choreAge(choreAt: string, at: string): string {
+  const now = new Date(at);
+  if (Number.isNaN(now.getTime()) || Number.isNaN(new Date(choreAt).getTime())) return '';
+  return ` ${formatRelativeTime(choreAt, now)}`;
 }
 
 /** How long an endpoint has been failing, measured against this reading's own instant. Empty

@@ -22,7 +22,13 @@ import type { HostedWatch } from '../watch.ts';
 import type { ChoresPolicy } from './policy.ts';
 import { tightestPolicy } from './policy.ts';
 import { spawnChoresChild, type ChoresChild, type ChoresChildEvent, type SpawnChoresInput } from './spawn.ts';
-import type { ChoresChildConfig, ChoresPresenceProof, ChoresPresenceReading, ChoresWatchSeatHealth } from './protocol.ts';
+import type {
+  ChoresChildConfig,
+  ChoresMarkerCache,
+  ChoresPresenceProof,
+  ChoresPresenceReading,
+  ChoresWatchSeatHealth,
+} from './protocol.ts';
 
 export type ChoresRouteInput = {
   route: HostedRoute;
@@ -121,6 +127,15 @@ type Group = {
    *  daemon's record mirrors it; a root the child has not reported yet has no entry, and its
    *  reader sees the synthetic starting state instead. */
   watchState: Map<string, HostedWatchState>;
+  /** The last chore each root's child finished, by the name that root's own frame carried. A
+   *  replacement child starts with none: a cold process has run nothing for the root yet. */
+  lastChore: Map<string, { name: string; at: string; ms: number | null }>;
+  /** The last presence pass each root's child answered, and what it proved. Presence work is a
+   *  chore too: the row says when the child last answered one and whether every seat proved. */
+  presence: Map<string, { at: string; ms: number | null; proved: number; missed: number }>;
+  /** The child's own marker-cache reading from its latest heartbeat. One cache serves every root
+   *  a shared child carries, so each of that child's rows reports the same reading. */
+  markerCache: ChoresMarkerCache | null;
   /** Fault diagnostics this child accepted but has not answered yet, keyed by canonical root.
    *  `left` is the writer's answer once the run leaves its seam; `refused` answers a child that
    *  had no run to end, and an unexpected exit answers every one still waiting. */
@@ -167,6 +182,9 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     lastPass: new Map(),
     pendingPresence: new Map(),
     watchState: new Map(),
+    lastChore: new Map(),
+    presence: new Map(),
+    markerCache: null,
     watchFaults: new Map(),
     why: null,
     stopping: false,
@@ -280,8 +298,12 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.startedOnce = true;
   group.why = null;
   // A replacement starts with no proved run: every watched root reads starting, effects closed,
-  // until the new child reports its own first state.
+  // until the new child reports its own first state. Its chore row starts empty for the same
+  // reason: this process has run nothing for the root and holds no marker stamps yet.
   resetWatchMirror(input, group, 'starting', null);
+  group.lastChore.clear();
+  group.presence.clear();
+  group.markerCache = null;
   group.unsubscribe = child.subscribe((event) => onChildEvent(input, group, child, event));
   void child.exited.then(() => onChildExit(input, group, child));
 }
@@ -306,19 +328,33 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = input.now().getTime();
       group.rssBytes = message.rssBytes;
       group.busy = message.busy;
+      group.markerCache = message.markerCache;
       return;
     case 'pass':
       for (const pass of message.passes) {
         group.lastPass.set(pass.root, { at: pass.at, notes: pass.notes });
+        // A frame that names no chore leaves the row's own name alone rather than inventing one.
+        if (pass.chore !== null) {
+          group.lastChore.set(pass.root, { name: pass.chore, at: pass.at, ms: pass.ms });
+        }
         for (const note of pass.notes) input.log(`chores ${pass.root}: ${note}`);
       }
       return;
     case 'presence-result': {
       // A result whose nudge is no longer pending is a late answer for a pass the daemon already
-      // gave up on: dropped, never delivered twice.
+      // gave up on: dropped, never delivered twice. It never reaches the row either, so the row
+      // only ever says what an accepted pass proved.
       const settle = group.pendingPresence.get(message.id);
       if (settle === undefined) return;
       group.pendingPresence.delete(message.id);
+      const proved = message.proofs.filter((proof) => 'id' in proof).length;
+      group.presence.set(message.root, {
+        at: message.at,
+        ms: message.ms,
+        proved,
+        missed: message.proofs.length - proved,
+      });
+      group.lastChore.set(message.root, { name: 'presence', at: message.at, ms: message.ms });
       settle({ kind: 'answered', proofs: message.proofs, notes: message.notes });
       return;
     }
@@ -357,6 +393,11 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   group.lastBeatMs = null;
   group.rssBytes = null;
   group.busy = null;
+  // The dead child's chore row leaves with it: its cache was that process's memory, and the
+  // next row is about a replacement, not about work the replacement has not done.
+  group.lastChore.clear();
+  group.presence.clear();
+  group.markerCache = null;
   // A presence pass the child had not answered dies with it: the daemon holds that seat's proof
   // until a later pass has a child again, and never re-runs the steps behind the leaving child.
   settlePresence(group, 'the child left before it answered the presence pass');
@@ -415,6 +456,9 @@ function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonCh
     missed,
     lastPassAt: pass?.at ?? null,
     lastPass: pass?.notes ?? null,
+    lastChore: group.lastChore.get(root) ?? null,
+    presence: group.presence.get(root) ?? null,
+    markerCache: group.markerCache,
     nextStartAt: group.child === null && !group.stopping && group.startedOnce
       ? new Date(group.nextStartAtMs).toISOString()
       : null,
@@ -440,6 +484,9 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         missed: 0,
         lastPassAt: null,
         lastPass: null,
+        lastChore: null,
+        presence: null,
+        markerCache: null,
         nextStartAt: null,
         why: null,
       });

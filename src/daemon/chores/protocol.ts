@@ -95,24 +95,56 @@ export type ChoresHostMessage =
   | { type: 'watch-fault'; root: string; why: string }
   | { type: 'stop'; why: string };
 
-/** What one root's pass did: its own clock and the notes a reader should see. `notes` are plain
- *  lines (counts, a deferred lock, a fingerprint this pass could not read), never structured
- *  effects: the steps that append or publish carry their own messages. */
-export type ChoresRootPass = { root: string; at: string; notes: string[] };
+/** What one root's pass did: its own clock, the chore it ran and how long that took, and the
+ *  notes a reader should see. `notes` are plain lines (counts, a deferred lock, a fingerprint
+ *  this pass could not read), never structured effects: the steps that append or publish carry
+ *  their own messages. `chore` and `ms` are display evidence for the status row; absent on a
+ *  frame that carries neither, which is not a reason to drop it. */
+export type ChoresRootPass = {
+  root: string;
+  at: string;
+  notes: string[];
+  chore: string | null;
+  ms: number | null;
+};
+
+/** The child's own marker-cache reading at one heartbeat: how many marker files it read afresh,
+ *  how many it answered from a stamp, and how many stamps it holds now. The cache is a stat
+ *  prefilter in the child's memory and never decides an outcome; the counts are display
+ *  evidence for why a sweep is busy. */
+export type ChoresMarkerCache = { read: number; reused: number; cached: number };
 
 /** Child to host. `heartbeat` is sent every beat whether or not a pass is running; `rssBytes` is
  *  the child's own resident size at that instant, so the daemon's record and `team daemon status`
- *  can report what one child costs. `pass` reports finished per-root work; `note` is a diagnostic
- *  line the host writes to its own log. `watch-state` mirrors one hosted watch's whole state
- *  after a beat or a fault, so the daemon's own record carries what the child proved rather than
- *  a guess; `watch-pulse` is one cross-route beat a hosted pass carried to the others; and
+ *  can report what one child costs, and `markerCache` is the sweep's own stat-cache reading at
+ *  the same instant, so a reader can see why a sweep is busy. `pass` reports finished per-root
+ *  work; `note` is a diagnostic line the host writes to its own log. `watch-state` mirrors one
+ *  hosted watch's whole state after a beat or a fault, so the daemon's own record carries what
+ *  the child proved rather than a guess; `watch-pulse` is one cross-route beat a hosted pass
+ *  carried to the others; and
  *  `watch-fault-result` answers a diagnostic once its run has left its seam (`left`) or the
  *  child had no run to end (`refused`). */
 export type ChoresChildMessage =
   | { type: 'ready'; pid: number; at: string }
-  | { type: 'heartbeat'; at: string; rssBytes: number; busy: string | null }
+  | {
+      type: 'heartbeat';
+      at: string;
+      rssBytes: number;
+      busy: string | null;
+      /** The child's own marker cache at this beat; null when its frame carried none. */
+      markerCache: ChoresMarkerCache | null;
+    }
   | { type: 'pass'; passes: ChoresRootPass[] }
-  | { type: 'presence-result'; id: string; root: string; at: string; proofs: ChoresPresenceProof[]; notes: string[] }
+  | {
+      type: 'presence-result';
+      id: string;
+      root: string;
+      at: string;
+      proofs: ChoresPresenceProof[];
+      notes: string[];
+      /** How long the presence pass took; null when the frame carried no duration. */
+      ms: number | null;
+    }
   | { type: 'watch-state'; root: string; state: HostedWatchState }
   | { type: 'watch-pulse'; root: string; at: string }
   | { type: 'watch-fault-result'; root: string; outcome: 'left' | 'refused'; why: string }
@@ -174,6 +206,22 @@ function readSeatHealth(raw: unknown): ChoresWatchSeatHealth | null {
   if (typeof entry.seat !== 'string' || entry.seat === '') return null;
   if (typeof entry.healthy !== 'boolean') return null;
   return { seat: entry.seat, healthy: entry.healthy };
+}
+
+/** Reads one marker-cache reading a child reported, or null for one a reader must not trust.
+ *  Every count is a whole number that cannot be negative: the row is display evidence, and a
+ *  malformed reading is dropped rather than shown as a guess. */
+function readMarkerCache(raw: unknown): ChoresMarkerCache | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['read', 'reused', 'cached'] as const) {
+    if (!Number.isInteger(entry[key]) || (entry[key] as number) < 0) return null;
+  }
+  return {
+    read: entry.read as number,
+    reused: entry.reused as number,
+    cached: entry.cached as number,
+  };
 }
 
 const WATCH_PHASES = new Set<string>(['starting', 'running', 'standby', 'stopping', 'stopped', 'failed']);
@@ -268,7 +316,20 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
       if (typeof raw.at !== 'string' || raw.at === '') return null;
       if (typeof raw.rssBytes !== 'number' || !Number.isFinite(raw.rssBytes) || raw.rssBytes < 0) return null;
       if (!(raw.busy === null || typeof raw.busy === 'string')) return null;
-      return { type: 'heartbeat', at: raw.at, rssBytes: raw.rssBytes, busy: raw.busy as string | null };
+      // A frame that carries a cache reading must carry a sound one; a frame without the field
+      // is an older child's beat, and its silence is not a malformed reading.
+      let markerCache: ChoresMarkerCache | null = null;
+      if (raw.markerCache !== undefined && raw.markerCache !== null) {
+        markerCache = readMarkerCache(raw.markerCache);
+        if (markerCache === null) return null;
+      }
+      return {
+        type: 'heartbeat',
+        at: raw.at,
+        rssBytes: raw.rssBytes,
+        busy: raw.busy as string | null,
+        markerCache,
+      };
     }
     case 'pass': {
       if (!Array.isArray(raw.passes)) return null;
@@ -279,7 +340,17 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
         if (typeof entry.root !== 'string' || entry.root === '') return null;
         if (typeof entry.at !== 'string' || entry.at === '') return null;
         if (!Array.isArray(entry.notes) || entry.notes.some((note) => typeof note !== 'string')) return null;
-        passes.push({ root: entry.root, at: entry.at, notes: entry.notes as string[] });
+        let chore: string | null = null;
+        if (entry.chore !== undefined && entry.chore !== null) {
+          if (typeof entry.chore !== 'string' || entry.chore === '') return null;
+          chore = entry.chore;
+        }
+        let ms: number | null = null;
+        if (entry.ms !== undefined && entry.ms !== null) {
+          if (typeof entry.ms !== 'number' || !Number.isFinite(entry.ms) || entry.ms < 0) return null;
+          ms = entry.ms;
+        }
+        passes.push({ root: entry.root, at: entry.at, notes: entry.notes as string[], chore, ms });
       }
       return { type: 'pass', passes };
     }
@@ -302,7 +373,20 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
           return null;
         }
       }
-      return { type: 'presence-result', id: raw.id, root: raw.root, at: raw.at, proofs, notes: raw.notes as string[] };
+      let ms: number | null = null;
+      if (raw.ms !== undefined && raw.ms !== null) {
+        if (typeof raw.ms !== 'number' || !Number.isFinite(raw.ms) || raw.ms < 0) return null;
+        ms = raw.ms;
+      }
+      return {
+        type: 'presence-result',
+        id: raw.id,
+        root: raw.root,
+        at: raw.at,
+        proofs,
+        notes: raw.notes as string[],
+        ms,
+      };
     }
     case 'watch-state': {
       if (typeof raw.root !== 'string' || raw.root === '') return null;

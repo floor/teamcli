@@ -43,9 +43,9 @@ import type { ChoresWatchInput } from '../src/daemon/chores/watch.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
 import type { PresenceSourceStatus } from '../src/daemon/presence/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { machineConfigDir, daemonLogPath } from '../src/daemon/paths.ts';
+import { machineConfigDir, daemonLogPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { routeOf } from '../src/daemon/routes.ts';
-import { readDaemonState, type DaemonChoresState, type DaemonState } from '../src/daemon/state.ts';
+import { readDaemonState, writeDaemonState, type DaemonChoresState, type DaemonState } from '../src/daemon/state.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
@@ -175,11 +175,11 @@ const SHARED_FIXTURE_CHILD = [
   '  } catch {}',
   '};',
   'const now = () => new Date().toISOString();',
-  'const beat = () => write({ type: "heartbeat", at: now(), rssBytes: process.memoryUsage().rss, busy: blocked ? "blocked" : null });',
+  'const beat = () => write({ type: "heartbeat", at: now(), rssBytes: process.memoryUsage().rss, busy: blocked ? "blocked" : null, markerCache: { read: 7, reused: 4, cached: 3 } });',
   'write({ type: "ready", pid: process.pid, at: now() });',
   'beat();',
   'const timer = setInterval(beat, beatMs);',
-  'const passFor = (route) => write({ type: "pass", passes: [{ root: route.root, at: now(), notes: [] }] });',
+  'const passFor = (route) => write({ type: "pass", passes: [{ root: route.root, at: now(), notes: [], chore: "fallback", ms: 5 }] });',
   'const runSlice = async (route) => {',
   '  if (!blocked && blockMs > 0) {',
   '    blocked = true;',
@@ -538,7 +538,7 @@ describe('the chores fleet', () => {
 
     const rss = 48 * 1024 * 1024;
     made2[0]!.emit({ type: 'ready', pid: 4100, at: AT });
-    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
     expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', rssBytes: rss, heartbeatAt: AT, pid: 4100 });
     // The sibling child is judged on its own heartbeats, never on this one's.
     expect(fleet.stateFor(second)).toMatchObject({ state: 'starting', rssBytes: null });
@@ -574,7 +574,7 @@ describe('the chores fleet', () => {
     tickAt(0);
     expect(made2).toHaveLength(1);
     made2[0]!.emit({ type: 'ready', pid: 4200, at: AT });
-    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
 
     // One overdue beat is late, not missed; the second ends the child, and only once.
     tickAt(1000);
@@ -605,7 +605,7 @@ describe('the chores fleet', () => {
 
     // A second failure waits twice as long; a third is held at the policy's cap.
     made2[1]!.emit({ type: 'ready', pid: 4201, at: new Date(NOW + 4500).toISOString() });
-    made2[1]!.emit({ type: 'heartbeat', at: new Date(NOW + 4500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+    made2[1]!.emit({ type: 'heartbeat', at: new Date(NOW + 4500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
     tickAt(5500);
     tickAt(6500);
     tickAt(7500);
@@ -616,7 +616,7 @@ describe('the chores fleet', () => {
     tickAt(9500);
     expect(made2).toHaveLength(3);
     made2[2]!.emit({ type: 'ready', pid: 4202, at: new Date(NOW + 9500).toISOString() });
-    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 9500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 9500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
     tickAt(10_500);
     tickAt(11_500);
     tickAt(12_500);
@@ -658,6 +658,9 @@ describe('the chores fleet', () => {
       missed: 0,
       lastPassAt: null,
       lastPass: null,
+      lastChore: null,
+      presence: null,
+      markerCache: null,
       nextStartAt: null,
       why: null,
     });
@@ -689,6 +692,70 @@ describe('the chores fleet', () => {
     expect(inputs[0]!.config.sliceMs).toBe(500);
     expect(fleet.stateFor(made.root)).toMatchObject({ mode: 'shared', state: 'starting', pid: 4400 });
     expect(fleet.stateFor(second)).toMatchObject({ mode: 'shared', state: 'starting', pid: 4400 });
+  });
+
+  test('the record keeps a sound chores row, drops a malformed one and reads an older row as no detail', () => {
+    const made = world();
+    const row = (over: Partial<DaemonChoresState> = {}): DaemonChoresState => ({
+      mode: 'per-root',
+      state: 'ok',
+      pid: 4400,
+      startedAt: AT,
+      heartbeatAt: AT,
+      rssBytes: 48 * 1024 * 1024,
+      busy: null,
+      restarts: 1,
+      missed: 0,
+      lastPassAt: AT,
+      lastPass: ['fallback sweep: escalated 0, refused 0, unreadable 0'],
+      lastChore: { name: 'fallback', at: AT, ms: 1200 },
+      presence: { at: AT, ms: 40, proved: 1, missed: 1 },
+      markerCache: { read: 7, reused: 4, cached: 3 },
+      nextStartAt: null,
+      why: null,
+      ...over,
+    });
+    const record = (chores: DaemonChoresState): DaemonState => ({
+      format: 1,
+      pid: process.pid,
+      uid: typeof process.getuid === 'function' ? process.getuid() : -1,
+      since: AT,
+      startedBy: 'manual',
+      version: 'test',
+      heartbeatAt: AT,
+      socket: daemonSocketPath(made.home),
+      features: { broker: 'absent' },
+      stuck: [],
+      roots: [{ root: made.root, team: 'acme', send: 'serving', bus: 'serving', why: null, chores }],
+    });
+    writeDaemonState(made.home, record(row()));
+    const read = readDaemonState(made.home);
+    expect(read.kind).toBe('ok');
+    if (read.kind === 'ok') expect(read.state.roots[0]?.chores).toEqual(row());
+    // A row whose chore, presence answer or cache is present but malformed is display data this
+    // build cannot read: the row is left out, and the rest of the record is not.
+    const broken: DaemonChoresState[] = [
+      row({ lastChore: { name: '', at: AT, ms: null } }),
+      row({ presence: { at: AT, ms: -1, proved: 0, missed: 0 } }),
+      row({ markerCache: { read: 1, reused: -1, cached: 0 } }),
+    ];
+    for (const chores of broken) {
+      writeDaemonState(made.home, record(chores));
+      const again = readDaemonState(made.home);
+      expect(again.kind).toBe('ok');
+      if (again.kind === 'ok') expect(again.state.roots[0]?.chores).toBeUndefined();
+    }
+    // A row written before these fields existed reads them as none, never as a guess.
+    const older = { ...row() } as Partial<DaemonChoresState>;
+    delete older.lastChore;
+    delete older.presence;
+    delete older.markerCache;
+    writeDaemonState(made.home, record(older as DaemonChoresState));
+    const legacy = readDaemonState(made.home);
+    expect(legacy.kind).toBe('ok');
+    if (legacy.kind === 'ok') {
+      expect(legacy.state.roots[0]?.chores).toMatchObject({ lastChore: null, presence: null, markerCache: null });
+    }
   });
 });
 
@@ -748,11 +815,84 @@ describe('the fleet presence nudge', () => {
       at: frame.at,
       proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
       notes: ['the activity step failed: from the child'],
+      ms: null,
     });
     await expect(answer!).resolves.toEqual({
       kind: 'answered',
       proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
       notes: ['the activity step failed: from the child'],
+    });
+  });
+
+  test('the row names the chore, the cache and the presence answer, and a replacement starts cold', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [{ ...routeInput(made.root, policy()), stateDir: join(made.root, '.agents') }],
+      log: () => {},
+      factory: () => {
+        const fake = fakeChild(4565 + made2.length);
+        made2.push(fake);
+        return fake.child;
+      },
+    });
+    fleet.tick(new Date(clock.at));
+    const first = made2[0]!;
+    first.emit({ type: 'ready', pid: 4565, at: AT });
+    // The child's own heartbeat carries the cache its process fills; the row repeats it and has
+    // run nothing for the root yet.
+    first.emit({
+      type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: 'chores',
+      markerCache: { read: 5, reused: 3, cached: 2 },
+    });
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      markerCache: { read: 5, reused: 3, cached: 2 },
+      lastChore: null,
+      presence: null,
+    });
+    // A pass frame's own name and duration become that root's last chore.
+    first.emit({ type: 'pass', passes: [{ root: made.root, at: AT, notes: [], chore: 'fallback', ms: 700 }] });
+    expect(fleet.stateFor(made.root)?.lastChore).toEqual({ name: 'fallback', at: AT, ms: 700 });
+    // An accepted presence answer is its own chore, with the seats it proved and missed.
+    const answer = fleet.presence({ root: made.root, at: new Date(clock.at), readings });
+    if (answer === null) throw new Error('the ready child was not nudged');
+    const nudge = first.sends.find((message) => message.type === 'presence');
+    if (nudge?.type !== 'presence') throw new Error('the child was never nudged');
+    first.emit({
+      type: 'presence-result',
+      id: nudge.id,
+      root: made.root,
+      at: nudge.at,
+      proofs: [
+        { seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' },
+        { seat: 'other', miss: 'the runtime source has staged no event yet' },
+      ],
+      notes: [],
+      ms: 40,
+    });
+    await expect(answer).resolves.toMatchObject({ kind: 'answered' });
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      lastChore: { name: 'presence', at: nudge.at, ms: 40 },
+      presence: { at: nudge.at, ms: 40, proved: 1, missed: 1 },
+    });
+    // The replacement starts cold: nothing the dead process ran or cached is claimed for it.
+    first.leave(null, 'SIGTERM');
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({ lastChore: null, presence: null, markerCache: null });
+    clock.at = NOW + 1000;
+    fleet.tick(new Date(clock.at));
+    expect(made2).toHaveLength(2);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'starting',
+      lastChore: null,
+      presence: null,
+      markerCache: null,
     });
   });
 
@@ -859,7 +999,7 @@ describe('the fleet presence nudge', () => {
     expect(fake.sends.some((message) => message.type === 'watch-beat')).toBe(false);
 
     fake.emit({ type: 'ready', pid: 4590, at: AT });
-    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null });
+    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
     watch!.tick(new Date(NOW));
     expect(fake.sends.filter((message) => message.type === 'watch-beat')).toEqual([
       { type: 'watch-beat', root: made.root, at: new Date(NOW).toISOString(), presence: health },
@@ -922,7 +1062,7 @@ describe('the fleet presence nudge', () => {
     });
     fleet.tick(new Date(NOW));
     fake.emit({ type: 'ready', pid: 4595, at: AT });
-    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null });
+    fake.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
     expect(fleet.watchFor(made.root, () => null)).toBeNull();
     // A frame for a root this child does not host a watch for changes nothing.
     fake.emit({ type: 'watch-state', root: made.root, state: {
@@ -984,6 +1124,7 @@ describe('the presence frames', () => {
     })).toEqual({
       type: 'presence-result', id: 'p1', root: '/repo', at: AT, proofs,
       notes: ['the activity step failed: spool'],
+      ms: null,
     });
     // A row with neither a proof nor a reason is not a result this protocol carries.
     expect(readChildMessage({
@@ -1119,6 +1260,7 @@ describe('the chores child loop', () => {
         at: AT,
         proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-00000001', binding: 'prs_0123456789ab' }],
         notes: [],
+        ms: expect.any(Number),
       });
     } finally {
       stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
@@ -1219,6 +1361,7 @@ describe('the chores child loop', () => {
         at: 'yesterday',
         proofs: [{ seat: 'crew-lead', miss: 'the presence nudge names no valid instant' }],
         notes: ['a presence nudge named no valid instant'],
+        ms: null,
       });
       expect(results).toContainEqual({
         type: 'presence-result',
@@ -1227,6 +1370,76 @@ describe('the chores child loop', () => {
         at: AT,
         proofs: [{ seat: 'crew-lead', miss: 'the chores child does not serve this root' }],
         notes: ['a presence nudge named a root this child does not serve'],
+        ms: null,
+      });
+    } finally {
+      stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+    }
+    expect(await served).toBe(0);
+  }, 10_000);
+
+  test('the frames carry the chore, its own duration and the cache its process filled', async () => {
+    const made = world();
+    const lines: ChoresChildMessage[] = [];
+    const stdout = {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as ChoresChildMessage);
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    // The child's clock is the test's, so the durations it reports are the ones this scene set.
+    let clock = NOW;
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 50,
+        sliceMs: 250,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev' }],
+      },
+      stdin,
+      stdout,
+      now: () => new Date(clock),
+      markerCacheStats: () => ({ read: 9, reused: 4, cached: 5 }),
+      pass: async () => {
+        clock += 750;
+        return ['the pass ran'];
+      },
+      presence: {
+        async run() {
+          clock += 30;
+          return {
+            proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
+            notes: [],
+          };
+        },
+      },
+    });
+    try {
+      await waitUntil(() => lines.some((message) => message.type === 'pass'));
+      expect(lines.find((message) => message.type === 'heartbeat')).toMatchObject({
+        type: 'heartbeat',
+        markerCache: { read: 9, reused: 4, cached: 5 },
+      });
+      const pass = lines.find((message) => message.type === 'pass');
+      expect(pass?.type === 'pass' ? pass.passes[0] : null).toMatchObject({
+        root: made.root,
+        notes: ['the pass ran'],
+        chore: 'fallback',
+        ms: 750,
+      });
+      stdin.write(`${JSON.stringify({
+        type: 'presence', id: 'p1', root: made.root, at: AT,
+        readings: [{ seat: 'crew-lead', failed: 'the runtime source has staged no event yet' }],
+      })}\n`);
+      await waitUntil(() => lines.some((message) => message.type === 'presence-result'));
+      expect(lines.find((message) => message.type === 'presence-result')).toMatchObject({
+        type: 'presence-result',
+        id: 'p1',
+        at: AT,
+        ms: 30,
       });
     } finally {
       stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
@@ -1284,6 +1497,7 @@ describe('a real child', () => {
         at: AT,
         proofs: [{ seat: 'crew-lead', miss: 'the chores child has no state folder for this root' }],
         notes: ['the presence pass has no state folder for this root'],
+        ms: expect.any(Number),
       });
     } finally {
       unsubscribe();
@@ -1478,7 +1692,7 @@ describe('under the machine daemon', () => {
       await waitUntil(() => inlineCalls > 0, 5000);
       await waitUntil(() => fake.sends.some((message) => message.type === 'tick'), 5000);
       fake.emit({ type: 'ready', pid: 4700, at: new Date().toISOString() });
-      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
       await waitUntil(() => fake.sends.some((message) => message.type === 'presence'), 5000);
       const frame = [...fake.sends].reverse().find((message) => message.type === 'presence');
       if (frame?.type !== 'presence') throw new Error('the child was never nudged');
@@ -1504,6 +1718,7 @@ describe('under the machine daemon', () => {
         at: frame.at,
         proofs: [{ seat: 'crew-lead', miss: 'the canonical presence projection has not applied the runtime event' }],
         notes: ['the activity step failed: from the child'],
+        ms: 12,
       });
       await waitUntil(() => {
         try {
@@ -1512,6 +1727,10 @@ describe('under the machine daemon', () => {
           return false;
         }
       }, 5000);
+      // The accepted answer reaches the record as this root's last chore and presence reading.
+      await waitUntil(() => rowFor(made.home, made.root)?.presence !== null, 5000);
+      expect(rowFor(made.home, made.root)?.presence).toEqual({ at: frame.at, ms: 12, proved: 0, missed: 1 });
+      expect(rowFor(made.home, made.root)?.lastChore).toEqual({ name: 'presence', at: frame.at, ms: 12 });
     } finally {
       const closed = await Promise.race([
         started.daemon.close().then(() => true),
@@ -1563,7 +1782,7 @@ describe('under the machine daemon', () => {
       // The daemon judges a heartbeat against its own real clock, so these frames carry real
       // instants; only the watch state below is framed on the scene's fixed instant.
       fake.emit({ type: 'ready', pid: 4730, at: new Date().toISOString() });
-      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
       await waitUntil(() => fake.sends.some((message) => message.type === 'watch-beat'), 5000);
       const beat = fake.sends.find((message) => message.type === 'watch-beat');
       if (beat?.type !== 'watch-beat') throw new Error('no watch beat crossed the pipe');
@@ -1714,6 +1933,12 @@ describe('under the machine daemon', () => {
       // one slice, never the sibling's wait.
       await waitUntil(() => rowFor(first.home, second)?.lastPassAt !== null, 3000);
       expect(rowFor(first.home, second)?.state).toBe('ok');
+      // The child's own names and numbers ride its frames into the record: the chore it ran and
+      // how long it took, and the marker cache its process filled.
+      expect(rowFor(first.home, second)?.lastChore?.name).toBe('fallback');
+      expect(rowFor(first.home, second)?.lastChore?.ms).toBe(5);
+      await waitUntil(() => rowFor(first.home, second)?.markerCache !== null, 5000);
+      expect(rowFor(first.home, second)?.markerCache).toEqual({ read: 7, reused: 4, cached: 3 });
       // The machine socket answers from its own loop, inside a timer bound.
       const answered = await Promise.race([
         daemonHealth(first.home, { timeoutMs: 500 }).then((health) => health.probe.state === 'answered'),
@@ -1777,7 +2002,13 @@ describe('the child carries the team file the daemon validated', () => {
     expect(pass).toBeDefined();
     if (pass?.type !== 'pass') throw new Error('the child reported no pass');
     expect(pass.passes).toEqual([
-      { root: made.root, at: AT, notes: ['fallback sweep: escalated 1, refused 0, unreadable 0'] },
+      {
+        root: made.root,
+        at: AT,
+        notes: ['fallback sweep: escalated 1, refused 0, unreadable 0'],
+        chore: 'fallback',
+        ms: expect.any(Number),
+      },
     ]);
     expect(markerNow(recipient, 'm-due-1')?.escalatedAt).toBe(AT);
 

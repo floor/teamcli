@@ -147,6 +147,17 @@ export type DaemonChoresState = {
   /** The last completed pass's own clock, and the notes it carried. */
   lastPassAt: string | null;
   lastPass: string[] | null;
+  /** The last chore this root's child finished: the name its own frame carried, the instant it
+   *  reported, and how long it took. Null until the child reports one and after a replacement
+   *  starts, because a cold process has run nothing for the root yet. */
+  lastChore: { name: string; at: string; ms: number | null } | null;
+  /** The last presence pass this root's child answered: when, how long it took, and how many
+   *  declared seats it proved or missed. Null when no accepted pass has been answered. */
+  presence: { at: string; ms: number | null; proved: number; missed: number } | null;
+  /** The child's own marker-cache reading at its latest heartbeat: files read afresh, stamps
+   *  reused, and stamps held now. A shared child keeps one cache, so its roots' rows carry the
+   *  same reading. Null when the child has not reported one. */
+  markerCache: { read: number; reused: number; cached: number } | null;
   /** While `state` says `restarting`, when the next start is due. */
   nextStartAt: string | null;
   why: string | null;
@@ -363,6 +374,62 @@ function presenceOf(raw: unknown): DaemonRootState['presence'] | null {
   return { state: 'pending', why: entry.why };
 }
 
+/** A field a chores row must not carry in a form this reader cannot trust. */
+const INVALID_CHORES_FIELD = Symbol('invalid chores field');
+
+/**
+ * One chores row's last-chore reading, or null when the record predates the field. A present
+ * field with a name, an instant and a whole non-negative duration is read whole; anything else
+ * makes the row unreadable rather than shown as a guess.
+ */
+function choreOf(raw: unknown): DaemonChoresState['lastChore'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.name !== 'string' || entry.name === '') return INVALID_CHORES_FIELD;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  return { name: entry.name, at: entry.at, ms: entry.ms as number | null };
+}
+
+/** One chores row's last presence answer, or null when the record predates the field. The seat
+ *  counts are whole numbers, and a row that claims more proved than were declared is unreadable. */
+function chorePresenceOf(raw: unknown): DaemonChoresState['presence'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  if (!Number.isInteger(entry.proved) || (entry.proved as number) < 0) return INVALID_CHORES_FIELD;
+  if (!Number.isInteger(entry.missed) || (entry.missed as number) < 0) return INVALID_CHORES_FIELD;
+  return {
+    at: entry.at,
+    ms: entry.ms as number | null,
+    proved: entry.proved as number,
+    missed: entry.missed as number,
+  };
+}
+
+/** One chores row's marker-cache reading, or null when the child has not reported one. Every
+ *  count is a whole number that cannot be negative; a present malformed reading drops the row. */
+function choreCacheOf(raw: unknown): DaemonChoresState['markerCache'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['read', 'reused', 'cached'] as const) {
+    if (!Number.isInteger(entry[key]) || (entry[key] as number) < 0) return INVALID_CHORES_FIELD;
+  }
+  return {
+    read: entry.read as number,
+    reused: entry.reused as number,
+    cached: entry.cached as number,
+  };
+}
+
 /**
  * A chores record is display data, not a hosting fact: a malformed one is left out rather than
  * making the whole daemon record unreadable, and an absent one means the route was not started
@@ -388,6 +455,14 @@ function choresOf(raw: unknown): DaemonChoresState | null {
     return null;
   }
   if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  // The step-5 readings are absent from a record written before them, which reads as "none
+  // reported"; a present field in a form this reader cannot trust drops the row.
+  const lastChore = choreOf(entry.lastChore);
+  const presence = chorePresenceOf(entry.presence);
+  const markerCache = choreCacheOf(entry.markerCache);
+  if (lastChore === INVALID_CHORES_FIELD || presence === INVALID_CHORES_FIELD || markerCache === INVALID_CHORES_FIELD) {
+    return null;
+  }
   return {
     mode: entry.mode as DaemonChoresState['mode'],
     state: entry.state as DaemonChoresState['state'],
@@ -400,6 +475,9 @@ function choresOf(raw: unknown): DaemonChoresState | null {
     missed: entry.missed as number,
     lastPassAt: entry.lastPassAt as string | null,
     lastPass: entry.lastPass === null ? null : (entry.lastPass as string[]),
+    lastChore,
+    presence,
+    markerCache,
     nextStartAt: entry.nextStartAt as string | null,
     why: entry.why as string | null,
   };

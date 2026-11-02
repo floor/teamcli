@@ -16,6 +16,7 @@
 //
 // The child leaves when its host asks it to and when its input ends — a daemon that died closes
 // the pipe, so a child never outlives the daemon that started it.
+import { markerCacheStats } from '../../send/fallback-events.ts';
 import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
@@ -27,6 +28,7 @@ import {
   type ChoresChildConfig,
   type ChoresChildMessage,
   type ChoresChildRoute,
+  type ChoresMarkerCache,
   type ChoresPresenceProof,
   type ChoresPresenceReading,
 } from './protocol.ts';
@@ -64,12 +66,20 @@ export type ServeChoresChildInput = {
   watchFactory?: (input: ChoresWatchInput) => ChoresWatch;
   /** Test seam: the read sources the injected or real watches run over. */
   watchBase?: WatchSources;
+  /** The marker cache whose counts ride the heartbeat. The default is this process's own, which
+   *  is the cache the fallback sweep fills; a test injects a quiet reading so its scene never
+   *  depends on another test's files. */
+  markerCacheStats?: () => ChoresMarkerCache;
   /** Ends the child on a terminate signal through the same stop path as a host frame, so the
    *  watches release their authority before the process leaves. The supervisor still forces a
    *  child that does not leave within its kill grace. The program entry sets this; a test does
    *  not, because a test process must not install handlers it cannot take back. */
   signals?: boolean;
 };
+
+/** The chore the child's pass runs. The one implementation is the fallback sweep (`fallback.ts`);
+ *  a test that injects a pass stands in for it, and the row still names what the child ran. */
+const PASS_CHORE = 'fallback';
 
 /** A positive whole number of milliseconds, or null. */
 function readMillis(raw: unknown): number | null {
@@ -179,6 +189,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   /** One root's slice: runs its pass, then reports it under that root alone, so a slow sibling
    *  never delays the report another root has already finished. */
   const runOne = (route: ChoresChildRoute, at: string): Promise<void> => (async (): Promise<void> => {
+    const startedAt = now().getTime();
     let notes: string[];
     try {
       notes = await pass({ route, at: new Date(at), slices });
@@ -188,7 +199,11 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       const why = error instanceof Error ? error.message : String(error);
       notes = [`the pass failed: ${why}`];
     }
-    if (!stopping) write({ type: 'pass', passes: [{ root: route.root, at, notes }] });
+    // The row's own reading of this pass: what ran and how long it took on this child's clock.
+    const ms = Math.max(0, now().getTime() - startedAt);
+    if (!stopping) {
+      write({ type: 'pass', passes: [{ root: route.root, at, notes, chore: PASS_CHORE, ms }] });
+    }
   })();
 
   /** One presence nudge: runs that root's presence pass and reports it under the nudge's id. A
@@ -205,6 +220,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         at: message.at,
         proofs: message.readings.map((reading) => ({ seat: reading.seat, miss: 'the presence nudge names no valid instant' })),
         notes: ['a presence nudge named no valid instant'],
+        ms: null,
       });
       return;
     }
@@ -217,10 +233,12 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         at: message.at,
         proofs: message.readings.map((reading) => ({ seat: reading.seat, miss: 'the chores child does not serve this root' })),
         notes: ['a presence nudge named a root this child does not serve'],
+        ms: null,
       });
       return;
     }
     const work = (async (): Promise<void> => {
+      const startedAt = now().getTime();
       let proofs: ChoresPresenceProof[];
       let notes: string[];
       try {
@@ -234,8 +252,9 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         proofs = message.readings.map((reading) => ({ seat: reading.seat, miss: `the presence pass failed: ${why}` }));
         notes = [`the presence pass failed: ${why}`];
       }
+      const ms = Math.max(0, now().getTime() - startedAt);
       if (!stopping) {
-        write({ type: 'presence-result', id: message.id, root: message.root, at: message.at, proofs, notes });
+        write({ type: 'presence-result', id: message.id, root: message.root, at: message.at, proofs, notes, ms });
       }
     })();
     presenceRuns.set(message.root, work);
@@ -294,6 +313,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       at: now().toISOString(),
       rssBytes: memory.rss,
       busy: running.size > 0 ? 'chores' : null,
+      markerCache: (input.markerCacheStats ?? markerCacheStats)(),
     });
   };
 

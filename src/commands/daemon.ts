@@ -36,7 +36,7 @@ import {
   writeFaultRequest,
 } from '../daemon/fault.ts';
 import { daemonHealth } from '../daemon/health.ts';
-import { failureAge, firstPassPhrases } from '../daemon/health_display.ts';
+import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
@@ -473,12 +473,12 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
   });
   if (failed.length > 0) {
     parts.push(`${String(failed.length)} endpoint${failed.length === 1 ? '' : 's'} failed (${failed.join(', ')})`);
-    return parts;
+    return [...parts, ...choresPhrase(roots, at)];
   }
   if (notHosted > 0) {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
-  return parts;
+  return [...parts, ...choresPhrase(roots, at)];
 }
 
 /**
