@@ -123,7 +123,7 @@ test('a real bus announces the Codex drop once to its synthetic webhook', async 
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   const posts: Array<{ url: string; body: unknown }> = [];
   const fetcher = (async (url: unknown, init?: RequestInit) => {
-    posts.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return new Response('', { status: 204 });
+    posts.push({ url: String(url), body: JSON.parse(String(init?.body)) }); return new Response(null, { status: 204 });
   }) as typeof fetch;
   const result = await startBus({ root: at.root, home: at.home, team: loaded.team, stderr: () => {},
     reconcileIntervalMs: 3_600_000, deliver: makeWebhookDelivery({ team: loaded.team, fetch: fetcher }) });
