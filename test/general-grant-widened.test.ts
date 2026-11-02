@@ -95,6 +95,26 @@ test('no dispatcher route is unmeasured: each has a release row or is declared u
   );
 });
 
+const NEEDS_RELEASE_TAGS = 'this test needs the release tags (git fetch --tags)';
+
+/** The reason the release walk cannot measure this clone, or null when it can. The release
+ *  table's own tags are the yardstick: a clone that fetched no tags, or only some, would
+ *  otherwise read as "no release ships the op", and the walk would pass without measuring
+ *  anything. A plain refusal names the missing tags, never a silent pass. */
+function tagSetProblem(tags: readonly string[]): string | null {
+  if (tags.length === 0) return NEEDS_RELEASE_TAGS;
+  const missing = OP_RELEASE_GROUPS.map((row) => row.tag).filter((tag) => !tags.includes(tag));
+  return missing.length === 0 ? null : `${NEEDS_RELEASE_TAGS}; it reads no ${missing.join(', ')}`;
+}
+
+test('a tag set the release walk cannot use fails loudly, never passes empty', () => {
+  expect(tagSetProblem([])).toBe(NEEDS_RELEASE_TAGS);
+  const tableTags = OP_RELEASE_GROUPS.map((row) => row.tag);
+  expect(tagSetProblem(tableTags)).toBeNull();
+  // A partial set is caught too: the table names releases whose tags must be readable here.
+  expect(tagSetProblem(tableTags.slice(1))).toContain(NEEDS_RELEASE_TAGS);
+});
+
 test('an op declared unshipped is a route at no release tag', () => {
   // The declaration can rot in the one way the equality above cannot see: the op ships in a
   // release while its row and this list are both left untouched, so the null entry and the
@@ -104,10 +124,16 @@ test('an op declared unshipped is a route at no release tag', () => {
   // table is read the way the table above was measured (every non-rc tag yields one, 11 at
   // v0.1.0 through 68 at v0.5.10), so a tag this reader cannot parse fails here too.
   const repo = join(import.meta.dir, '..');
-  const tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' })
+  let listed = '';
+  try {
+    listed = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' });
+  } catch {
+    // No git, or no repository here: the guard below names what the walk needs.
+  }
+  const tags = listed
     .split('\n')
     .filter((tag) => tag !== '' && !tag.includes('-rc.'));
-  expect(tags.length).toBeGreaterThan(0);
+  expect(tagSetProblem(tags)).toBeNull();
   for (const tag of tags) {
     const source = execFileSync('git', ['show', `${tag}:src/cli.ts`], { cwd: repo, encoding: 'utf8' });
     const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
