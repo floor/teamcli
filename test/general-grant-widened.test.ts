@@ -6,6 +6,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { commands } from '../src/cli.ts';
 import {
   GENERAL_GRANT_DOMAIN,
   GENERAL_OPS,
@@ -16,6 +17,7 @@ import {
   widenedGrantNote,
   widenedGrantNotes,
   wildcardGrantsWidened,
+  type GeneralOp,
   type GrantOp,
 } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
@@ -25,6 +27,10 @@ import { fixtureBase } from './helpers.ts';
 const NOW = new Date('2026-11-01T20:00:00Z');
 // A grant outlives every date this file signs at, so only the signing time decides the note.
 const EXPIRES = new Date('2027-01-01T00:00:00Z');
+// Ops whose route the dispatcher has but no release row measures yet. A release that first
+// ships one adds its row and takes the op out of this list; a route that is neither measured
+// nor named here fails the check below, so a new op cannot slip past unmeasured.
+const UNRELEASED_OPS: readonly string[] = ['peek'];
 
 const homes: string[] = [];
 afterAll(() => {
@@ -68,6 +74,24 @@ test('the release table measures every op at most once, and every release date r
     if (first === null) expect(rows.length).toBe(0);
     else expect(first.tag).toBe(rows[0]?.tag ?? 'none');
   }
+});
+
+test('no dispatcher route is unmeasured: each has a release row or is declared unshipped', () => {
+  // A route added without a measured release would otherwise pass the check above: an op with
+  // no row is consistent with the table. This is the check that fails instead. The routes are
+  // the dispatcher's own table, and every one of them is an op of the general door.
+  const routes = Object.keys(commands);
+  for (const name of routes) expect(GENERAL_OPS as readonly string[]).toContain(name);
+  const unmeasured = routes.filter(
+    (name) => OP_FIRST_SHIPPED[name as GeneralOp] === null && !UNRELEASED_OPS.includes(name),
+  );
+  expect(unmeasured).toEqual([]);
+  // The declaration cannot rot: it is exactly the ops with no measured row, so a release that
+  // ships one makes this fail until the row is added and the op leaves the list, and a name
+  // that is no op fails here too.
+  expect([...UNRELEASED_OPS].sort()).toEqual(
+    GENERAL_OPS.filter((op) => OP_FIRST_SHIPPED[op] === null).sort(),
+  );
 });
 
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
