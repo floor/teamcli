@@ -1066,6 +1066,14 @@ function devModeWarning(line: string, standing: Standing, placement: string): bo
   return line === notInForce(standing);
 }
 
+/** The notice a run says when the team has no approval record. It is a fact, never a refusal:
+ *  the file is what a run acts on, and a run admits without a record in every mode. Its
+ *  destination is the inventory's — the "Team change" workflow's step "apply over the file's
+ *  digest", the owner's step over the digest — so the notice names that step, which is where a
+ *  record is required. */
+const NO_APPROVAL_NOTICE =
+  'the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one';
+
 /** The run's refusals, each sentence once, in the order the run reached them: the same cause can
  *  arrive from two readers (the gate and `doctor` both read the approval). */
 function uniqueRefusals(refusals: readonly UpRefusal[]): UpRefusal[] {
@@ -1503,10 +1511,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
+  // No record at all is neither: it is the ordinary file, refused in no mode — a refusal pushed
+  // only when dev mode was on was the inverse of what its id said. Dev mode keeps the notice.
   const approvalSource = loaded.source === 'registry' ? 'registry' as const : 'team-file' as const;
-  if (standing.kind === 'none') {
-    if (dev.on) refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
-  } else if (standing.kind !== 'verified') {
+  const noApprovalNotice = dev.on && standing.kind === 'none' ? NO_APPROVAL_NOTICE : null;
+  if (standing.kind !== 'none' && standing.kind !== 'verified') {
     refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
   }
   // The budget readings the gate refuses on are the live file's own: a standing that is not
@@ -2055,7 +2064,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         .map((seat) => ({ seat, ...deliveryClassOf(seat) }))
         .filter(({ cls }) => !wakeableWhileIdle(cls))
         .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
-  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  const warnings: string[] = [
+    ...(folded ? [folded] : []),
+    ...(gateApproval === null ? [] : [gateApproval]),
+    ...(noApprovalNotice === null ? [] : [noApprovalNotice]),
+  ];
   // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry) {
