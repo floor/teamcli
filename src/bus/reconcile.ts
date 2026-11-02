@@ -266,6 +266,11 @@ const SIDE_SUFFIXES: readonly string[] = [
   '.held.json',
   '.wake',
   '.reported',
+  // The mark a send leaves beside a record it posted to the seat's webhook adapter itself: a
+  // note that the wake happened, never a record some seat was sent. Its claim, while the post
+  // is in flight, is the same kind of note.
+  '.posted',
+  '.posting',
   '.channel-push.json',
   '.closed.json',
   '.fallback.json',

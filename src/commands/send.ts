@@ -7,6 +7,7 @@ import { deliver as relayDeliver, stage as relayStage } from '../../packages/rel
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { nudgeBus } from '../bus/server.ts';
+import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
@@ -505,6 +506,11 @@ type Report = {
    *  ends without a delivery appends it, so `sent (unconfirmed)` never stands as the whole answer
    *  to whether the seat will read the message. Absent on paths that never read the class. */
   deliveryWords?: string;
+  /** What the send's own webhook post ended as, when the receiving seat configures an adapter and
+   *  the send wrote a fresh record: set right after that record is signed, and read by the
+   *  summary line. Absent when nothing was posted — no adapter, a route that names nothing usable,
+   *  or an id whose record was already there — and the class words then stand as before. */
+  webhookPost?: SenderPostOutcome;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
@@ -594,9 +600,23 @@ function deliveryWordsOf(input: {
 
 /** A console summary with the receiving seat's delivery class appended when the run read one: a
  *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
- *  whether the seat ever reads the message. */
+ *  whether the seat ever reads the message. The send's own webhook post is the last clause: a
+ *  delivered or fate-unknown one replaces the class's queued-for-the-bus words, which its own
+ *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
+ *  will fire later), and a failed one says so beside them — the claim is released, and the record
+ *  stays where the bus and the seat's pull read it. */
 function withDelivery(summary: string, report: Report): string {
-  return report.deliveryWords === undefined ? summary : `${summary}; ${report.deliveryWords}`;
+  const words: string[] = [];
+  const post = report.webhookPost;
+  const posted = post?.kind === 'posted' ? post : null;
+  const settled = posted !== null || post?.kind === 'unknown';
+  if (report.deliveryWords !== undefined && !(settled && report.deliveryWords === WEBHOOK_QUEUED_WORDS)) {
+    words.push(report.deliveryWords);
+  }
+  if (posted !== null) words.push(`webhook delivered (${String(posted.ms)} ms)`);
+  else if (post?.kind === 'failed') words.push(`webhook not delivered: ${post.reason}`);
+  else if (post?.kind === 'unknown') words.push(`webhook delivery unknown: ${post.reason}`);
+  return words.length === 0 ? summary : `${summary}; ${words.join('; ')}`;
 }
 
 /** Where one send goes: the registry's answer for the spec, or the declared seat of the
@@ -1544,7 +1564,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         reason: "the sender's own walk wakes the seat; the serving channel runs another install",
       });
     }
-    stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now);
+    stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now, report);
     if (!stagedWalk.ok) return;
     const begun = beginFallbackWalk({
       caller,
@@ -1868,7 +1888,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // it waits on the thread, so it skips the handoff and continues the walk.
       if (callerNative && !wait) {
         const fallback = fallbackAfterNative(walk, at);
-        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host);
+        const off = await handOff(team.project, root, from, to, record, admission, fallback, dropDir, host, report);
         if (off.kind === 'refused') {
           await ensureEpisode();
           markLeg('native', 'refused', off.why);
@@ -2515,14 +2535,61 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
 type RecordWritten = { ok: true; path: string; existing?: true; record: string } | { ok: false; reason: string };
 
 /**
+ * Posts the arrival to the receiving seat's own webhook adapter, when the receiving team's file
+ * declares one for that seat: the send's own wake, taken right after the record is signed and
+ * before the bus is told of it. The post holds the record's claim, so a bus pass that reaches the
+ * record at the same moment posts nothing; a 2xx ends the claim as the `posted` mark the bus
+ * skips, and a poster that cannot prove the request never left leaves the claim in `sent` so no
+ * one posts the record again. Any doubt — a team file that does not read, no row, a seat with no
+ * adapter — is no post, and the bus and the seat's pull stand exactly as they did. Never throws
+ * and never fails the send.
+ */
+async function postArrivalNow(
+  dropDir: string,
+  payload: RecordPayload,
+  message: SignedRecord,
+  home: string,
+  now: () => Date,
+): Promise<SenderPostOutcome> {
+  try {
+    const loaded = readTeamConfig(payload.root, { home });
+    if (!loaded.ok) return { kind: 'none' };
+    const seat = loaded.team.seats.find((one) => one.name === payload.to);
+    if (seat === undefined || seat.webhook === undefined) return { kind: 'none' };
+    return await postArrivalWebhook({
+      seat: payload.to,
+      webhook: seat.webhook,
+      root: payload.root,
+      session: payload.session,
+      id: payload.id,
+      from: payload.from,
+      ...(payload.thread === undefined ? {} : { thread: payload.thread }),
+      message,
+      dropDir,
+      home,
+      now,
+    });
+  } catch {
+    return { kind: 'none' };
+  }
+}
+
+/**
  * Writes the signed record under the leg's own lock, before the leg's transport action. Every
  * ending that says "nothing was sent" happens above this call, and every leg that takes the send
  * has the record on disk first. The write is the relay package's (`stage`), with the record's
  * bytes as this build signs them. A name already held by a regular file is left untouched by the
  * relay and judged here by `ensureRecord`, so a duplicate id is this message's record exactly as
  * before: a walk that falls from the socket to the typed leg writes one record, not two.
+ *
+ * The fresh record is also posted by this send itself, to the receiving seat's webhook adapter
+ * when its team file declares one, before the bus is told of the arrival. The order is what makes
+ * one wake: the post takes the record's claim and decides who posts, a 2xx ends the claim as the
+ * mark the bus skips, and only then is the arrival announced. A failed post releases the claim, so
+ * the bus and the seat's pull still carry the fallback; a post whose fate is unknown leaves the
+ * claim in `sent`, so the record is reported rather than posted a second time.
  */
-async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
@@ -2539,6 +2606,8 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
     if (!held.ok) return { ok: false, reason: held.reason };
     return { ok: true, path: held.path, existing: true, record };
   }
+  const posted = await postArrivalNow(dropDir, payload, signed, home, now);
+  if (posted.kind !== 'none') report.webhookPost = posted;
   await announceArrival(payload);
   return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
 }
@@ -2577,6 +2646,7 @@ async function handOff(
   fallback: readonly PendingNativeFallbackLeg[],
   dropDir: string,
   host: SendHost,
+  report: Report,
 ): Promise<HandOff> {
   if (!admission.ok) return { kind: 'refused', why: 'the send was not admitted' };
   const body = payload.body;
@@ -2627,6 +2697,7 @@ async function handOff(
     { ...payload, id, body: stamped, thread, at: host.now().toISOString() },
     host.home,
     host.now,
+    report,
   );
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
@@ -3330,7 +3401,7 @@ async function deliverDropped(
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!queuedWrite.ok) {
       setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3382,7 +3453,7 @@ async function deliverDropped(
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!written.ok) {
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
@@ -3497,7 +3568,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!queuedWrite.ok) {
       setLegState(report, 'typed', 'refused', `the record could not be written (${queuedWrite.reason})`);
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3527,7 +3598,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!written.ok) {
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -3672,7 +3743,7 @@ async function deliverTypedWakeSeat(
     } catch {
       return { delivered: false, reason: 'the record could not be written; nothing was typed' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!written.ok) {
       return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
@@ -3757,7 +3828,7 @@ async function deliverInbox(
       note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!queuedWrite.ok) {
       setLegState(report, 'mcp-inbox', 'refused', `the record could not be written (${queuedWrite.reason})`);
       note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3783,7 +3854,7 @@ async function deliverInbox(
       note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!written.ok) {
       note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
@@ -3839,7 +3910,7 @@ async function stageChannelRecord(
   } catch {
     return 'the record could not be written';
   }
-  const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+  const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
   if (!written.ok) return `the record could not be written (${written.reason})`;
   report.sent = payload.id;
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body: payload.body, id: payload.id, thread: payload.thread };
@@ -3918,7 +3989,7 @@ async function deliverComposeSeat(
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
     if (!written.ok) {
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -4767,7 +4838,7 @@ async function deliverSocketFrame(
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
   const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
-  const written = await writeSendRecord(copy.dir, payload, host.home, host.now);
+  const written = await writeSendRecord(copy.dir, payload, host.home, host.now, report);
   if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };
   // One frame on the socket, through the relay's socket route. The caller's own dial is handed in,
   // so an injected host's transport is the transport this attempt uses. A recorded address whose

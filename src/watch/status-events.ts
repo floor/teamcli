@@ -532,6 +532,11 @@ export function seatHasAssignedWorkOnDisk(
           || name.endsWith('.pending')
           || name.endsWith('.delivered')
           || name.endsWith('.closed.json')
+          // The mark a send leaves beside a record it posted to the seat's webhook adapter: the
+          // wake already happened, and the name is no unacked message. Its claim, while the post
+          // is in flight, is the same kind of note.
+          || name.endsWith('.posted')
+          || name.endsWith('.posting')
           || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
           || (briefId !== undefined && name === briefId)
           || supersededBriefs.has(name)
