@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { renderSignature } from '../src/file/signature.ts';
+import { KEY_PREFIXES, findSecrets, maskSecretsLine } from '../src/file/secrets.ts';
+import { defaultFs } from '../src/lobby/gate.ts';
+import { parseYaml } from '../src/yaml.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 
@@ -582,6 +585,184 @@ describe('secrets', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+  test('a framed key in an ordinary value is refused', () => {
+    // A channel name wrapped in backticks: framing punctuation is a boundary, so the token is
+    // a key, and the value is no path the exemption could cover.
+    const framed = `\`ghp_${'a'.repeat(16)}\``;
+    const text = `${minimal}tools:\n  chat: { kind: slack, channel: ${JSON.stringify(framed)} }\n`;
+    expect(errors(text)).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
+  });
+  test('a real directory named like a token is a location only in a path field', () => {
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, 'sk-learn-experiments-2026');
+    mkdirSync(dir);
+    const inChannel = `${minimal}tools:\n  chat: { kind: slack, channel: ${JSON.stringify(dir)} }\n`;
+    const inLobby = `${minimal}lobby: ${JSON.stringify(dir)}\n`;
+    try {
+      // Free text is not a path field: the token keeps its shape wherever the value sits.
+      expect(errors(inChannel)).toEqual(['16: a value shaped like a key or token: a team file never holds a credential']);
+      // The schema's own folder field is a location: a whole value that resolves to this user's
+      // real directory is neither refused nor warned about.
+      expect(valid(inLobby).warnings).toEqual([notice]);
+      // Without the directory the same field holds a credential-shaped component and refuses.
+      rmSync(dir, { recursive: true, force: true });
+      expect(errors(inLobby)).toEqual(['15: a value shaped like a key or token: a team file never holds a credential']);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a launch line gets no location exemption, even for a real key-named directory', () => {
+    // A launch line is a command, never a path field: a key-named directory it names is a token
+    // the command can reconstruct, so the file is refused while the directory is still on disk.
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, `sk-${randomBytes(12).toString('hex')}`);
+    mkdirSync(dir);
+    const text = change(
+      minimal,
+      'launch: claude --model claude-opus-5-5',
+      `launch: AUTH_TOKEN=$(basename ${dir} ) claude --model claude-opus-5-5`,
+    );
+    try {
+      expect(errors(text)).toEqual(['14: a value shaped like a key or token: a team file never holds a credential']);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a key-named intermediate symbolic link is refused in a path field', () => {
+    // The whole value is one absolute path and its final component is a real directory, but the
+    // raw path crosses a symbolic link named like a token: a location is only a location when no
+    // component of the path is a link.
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const real = join(base, 'real');
+    const link = join(base, `sk-${randomBytes(12).toString('hex')}`);
+    mkdirSync(join(real, 'child'), { recursive: true });
+    symlinkSync(real, link);
+    try {
+      const judged = findSecrets(parseYaml(`workspace:\n  path: ${JSON.stringify(join(link, 'child'))}\n`));
+      expect(judged.refused.map((problem) => problem.message)).toEqual([
+        'a value shaped like a key or token: a team file never holds a credential',
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a key-named path field with other words is refused', () => {
+    // The exemption is for one path and nothing else: a path field whose value carries any other
+    // word is free text with a path in it.
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, 'sk-learn-experiments-2026');
+    mkdirSync(dir);
+    try {
+      const judged = findSecrets(parseYaml(`lobby: ${JSON.stringify(`check ${dir}`)}\n`));
+      expect(judged.refused.map((problem) => problem.message)).toEqual([
+        'a value shaped like a key or token: a team file never holds a credential',
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a key-named location this user does not own is refused', () => {
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, 'sk-learn-experiments-2026');
+    mkdirSync(dir);
+    const mine = process.getuid?.() ?? 0;
+    const fs = {
+      ...defaultFs,
+      lstat: (path: string) => path === dir
+        ? { isDirectory: () => true, isSymbolicLink: () => false, isFile: () => false, mode: 0o700, uid: mine + 1, dev: 0, ino: 0 }
+        : defaultFs.lstat(path),
+    };
+    try {
+      const judged = findSecrets(parseYaml(`lobby: ${JSON.stringify(dir)}\n`), fs);
+      expect(judged.refused.map((problem) => problem.message)).toEqual([
+        'a value shaped like a key or token: a team file never holds a credential',
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('the watch queue folder is a path field too', () => {
+    // queue_dir names a directory in the schema: a whole absolute value that is this user's real
+    // directory is a location, exactly as a lobby folder is.
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const dir = join(base, 'sk-learn-experiments-2026');
+    mkdirSync(dir);
+    const text = `${minimal}watch:\n  queue_dir: ${JSON.stringify(dir)}\n`;
+    try {
+      expect(valid(text).warnings).toEqual([notice]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  test('a key-named symbolic link as the whole path value is refused', () => {
+    const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'team-secrets-')));
+    const real = join(base, 'real');
+    const link = join(base, `sk-${randomBytes(12).toString('hex')}`);
+    mkdirSync(real);
+    symlinkSync(real, link);
+    try {
+      const judged = findSecrets(parseYaml(`lobby: ${JSON.stringify(link)}\n`));
+      expect(judged.refused.map((problem) => problem.message)).toEqual([
+        'a value shaped like a key or token: a team file never holds a credential',
+      ]);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a key framed by punctuation is still a key', () => {
+  // The team-file check finds a credential by the same token shape the screen masker masks: a
+  // known prefix is a token wherever a non-token character precedes it, so a backtick, a bracket
+  // or a colon frames rather than hides. One value per framing, every prefix.
+  const body = 'abcdefghijklmnop';
+  const toolValue = (value: string) => `${minimal}tools:\n  chat:\n    kind: slack\n    channel: ${value}\n`;
+  const framed: Array<{ where: string; value: (token: string) => string }> = [
+    { where: 'a backtick', value: (token) => `\`${token}\`` },
+    { where: 'a parenthesis', value: (token) => `(${token})` },
+    { where: 'a bracket', value: (token) => `[${token}]` },
+    { where: 'a brace', value: (token) => `{${token}}` },
+    { where: 'double quotes', value: (token) => `"${token}"` },
+    { where: 'single quotes', value: (token) => `'${token}'` },
+    { where: 'a colon', value: (token) => `:${token}` },
+    { where: 'an equals sign', value: (token) => `=${token}` },
+    { where: 'a comma', value: (token) => `,${token}` },
+    { where: 'a line start and end', value: (token) => token },
+  ];
+  for (const prefix of KEY_PREFIXES) {
+    const token = `${prefix}${body}`;
+    for (const { where, value } of framed) {
+      test(`${prefix} framed by ${where} is refused`, () => {
+        const found = errors(toolValue(JSON.stringify(value(token))));
+        expect(found.join('\n')).toMatch(/shaped like a key or token/);
+        // The same value is masked on a screen: one judgement, two readers, no drift.
+        expect(maskSecretsLine(value(token))).not.toContain(token);
+      });
+    }
+  }
+
+  test('a prefix inside a longer word, and one with a short body, are not refused', () => {
+    const accepted: string[] = [];
+    for (const prefix of KEY_PREFIXES) {
+      accepted.push(`x${prefix}${body}`);
+      accepted.push(`${prefix}${body.slice(0, 15)}`);
+    }
+    for (const value of accepted) {
+      expect({ value, found: errors(toolValue(JSON.stringify(value))) }).toEqual({ value, found: [] });
+    }
+    expect(errors(toolValue('"risk-assessment-strategy-document"'))).toEqual([]);
+  });
+
+  test('userinfo is refused in every URL, with or without a password', () => {
+    for (const url of [
+      'postgres://admin@db.example/acme',
+      'https://alice@example.test/page',
+      'https://alice:hunter2@example.test/repo.git',
+    ]) {
+      expect(errors(toolValue(JSON.stringify(url))).join('\n')).toMatch(/URL with credentials/);
+    }
+    expect(errors(toolValue('"https://db.example/acme"'))).toEqual([]);
   });
 });
 
