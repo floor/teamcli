@@ -38,3 +38,9 @@ export function daemonLogPath(home: string = homedir()): string {
 export function daemonLockPath(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon.lock');
 }
+
+/** One chores child's one-use token: the configuration it serves from. The child unlinks it as it
+ *  starts, so one token starts one child. */
+export function choresInheritPath(home: string, nonce: string): string {
+  return join(machineConfigDir(home), `chores.inherit.${nonce}.json`);
+}

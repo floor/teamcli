@@ -5286,6 +5286,31 @@ scene('daemon.uninstalled', async (place) => {
   return show(ran, 'team daemon: uninstalled');
 });
 scene('daemon.usage', async (place) => show(await daemonRan(place, ['watch']), 'unknown subcommand'));
+scene('daemon.chores-refused', async (place) =>
+  show(await daemonRan(place, ['chores', '--inherited', 'not-a-token']), 'the token name is not one this daemon writes'));
+// The child entry is its own program: it serves nothing without a readable token, and it says so
+// from a process of its own.
+scene('team.chores-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/chores/entry.ts', import.meta.url));
+  let ran: Ran;
+  try {
+    execFileSync(process.execPath, [entry, '--inherited', 'not-a-token'], {
+      cwd: place.root,
+      env: { ...process.env, HOME: place.home },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    ran = { code: 0, out: '', err: '' };
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: unknown };
+    ran = {
+      code: failed.status ?? -1,
+      out: '',
+      err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+    };
+  }
+  return show(ran, 'the token name is not one this daemon writes');
+});
 scene('daemon.fault-usage', async (place) =>
   show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));
 scene('daemon.fault-root', async (place) =>
@@ -7809,7 +7834,10 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
 const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-replacement-ended', 'team.mcp-serve-restart-failed',
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
-  'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
+  'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable',
+  // The chores child's normal exit is reached only by the child itself, after its host ended its
+  // input; a scene in this process cannot end its own standard input.
+  'daemon.chores-ended']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));

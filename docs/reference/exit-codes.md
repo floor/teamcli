@@ -248,6 +248,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.usage` | `config` | 2 | a get, set, unset or edit invocation is not one of its forms, or the path does not parse | `team config set watch` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
+| `daemon.chores-ended` | `daemon` | 0 | the chores child served until its host ended its input, and left without error | `team daemon chores --inherited <token>` |
 | `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
 | `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
 | `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
@@ -282,6 +283,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.service-managed.unit` | `daemon` | 1 | no unit file of this daemon's own can be read: another label, another owner, a group- or world-writable file, or no readable unit on this platform | `team daemon run --started-by service-manager` |
 | `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
 | `daemon.uninstall-failed` | `daemon` | 1 | the system's service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.chores-refused` | `daemon` | 2 | a chores child was started without a readable one-use token, so it refused to run any work | `team daemon chores --inherited <token>` |
 | `daemon.fault-root` | `daemon` | 2 | a checkout named on fault-watch cannot be read, so no request was written | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-usage` | `daemon` | 2 | the invocation cannot be read, or the route id is not one a hosted watch records | `team daemon fault-watch --route nope` |
 | `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
@@ -825,6 +827,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
+| `team.chores-entry-refused` | `team` | 2 | the machine daemon's chores child was started without a readable one-use token, so it served nothing | `the daemon starts its chores child entry` |
 | `team.general-usage` | `team` | 2 | --general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes) | `team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |

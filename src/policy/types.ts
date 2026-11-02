@@ -129,6 +129,10 @@ export const ENFORCED_POLICY_NAMES = [
   'daemon.fallback-backlog-above',
   'daemon.fallback-backlog-limit',
   'daemon.heartbeat',
+  'daemon.chores',
+  'daemon.chores-slice-ms',
+  'daemon.chores-missed-beats',
+  'daemon.chores-backoff-cap-ms',
   'watch-rhythm',
   'grant-emission',
   'owner-signers',
@@ -205,6 +209,21 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'daemon-heartbeat-seconds': 'daemon.heartbeat',
   heartbeat_seconds: 'daemon.heartbeat',
   'heartbeat-seconds': 'daemon.heartbeat',
+  daemon_chores: 'daemon.chores',
+  'daemon-chores': 'daemon.chores',
+  chores: 'daemon.chores',
+  daemon_chores_slice_ms: 'daemon.chores-slice-ms',
+  'daemon-chores-slice-ms': 'daemon.chores-slice-ms',
+  chores_slice_ms: 'daemon.chores-slice-ms',
+  'chores-slice-ms': 'daemon.chores-slice-ms',
+  daemon_chores_missed_beats: 'daemon.chores-missed-beats',
+  'daemon-chores-missed-beats': 'daemon.chores-missed-beats',
+  chores_missed_beats: 'daemon.chores-missed-beats',
+  'chores-missed-beats': 'daemon.chores-missed-beats',
+  daemon_chores_backoff_cap_ms: 'daemon.chores-backoff-cap-ms',
+  'daemon-chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
+  chores_backoff_cap_ms: 'daemon.chores-backoff-cap-ms',
+  'chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -763,8 +782,60 @@ function heartbeatSecondsProblem(name: string, raw: unknown): string | null {
   return `policy "${name}" needs a whole number of seconds from ${String(DAEMON_HEARTBEAT_SECONDS.min)} to ${String(DAEMON_HEARTBEAT_SECONDS.max)}, such as 5`;
 }
 
+/**
+ * The machine daemon's chore isolation: where the heavy per-root chores run, and the limits that
+ * bound one child. `shared`, the default, runs one child for every root whose word is `shared`
+ * and gives each root its own FIFO and one slice per turn, so one root's backlog can delay
+ * another root's chores by a slice but never its socket; `per-root` gives every hosted root its
+ * own supervised child, for a root whose work should never share a process; `inline` runs them
+ * on the daemon's own loop exactly as before the isolation, which is the rollback. The limits
+ * default to the values the isolation landed with.
+ */
+export const DAEMON_CHORES_MODES = ['inline', 'shared', 'per-root'] as const;
+export type DaemonChoresMode = (typeof DAEMON_CHORES_MODES)[number];
+export const DAEMON_CHORES_DEFAULTS = {
+  mode: 'shared' as DaemonChoresMode,
+  sliceMs: 2000,
+  missedBeats: 2,
+  backoffCapMs: 30_000,
+} as const;
+
 const BACKLOG_ABOVE_RANGE: BacklogRange = { min: 1, max: 1_000_000, release: DAEMON_BACKLOG_DEFAULTS.above };
 const BACKLOG_LIMIT_RANGE: BacklogRange = { min: 1, max: 10_000, release: DAEMON_BACKLOG_DEFAULTS.limit };
+
+/** How a chores mode ranks for inheritance: a lower level may choose less isolation, never more. */
+const CHORE_MODE_RANK: Readonly<Record<DaemonChoresMode, number>> = { inline: 0, shared: 1, 'per-root': 2 };
+
+function parseChoreMode(raw: unknown): DaemonChoresMode | null {
+  return raw === 'inline' || raw === 'shared' || raw === 'per-root' ? raw : null;
+}
+
+function choreModeProblem(name: string, raw: unknown): string | null {
+  if (parseChoreMode(raw) !== null) return null;
+  return `policy "${name}" needs one of inline, shared or per-root`;
+}
+
+/** Whole beats from 1 to 60: how many missed child heartbeats end the child and restart it. */
+function parseMissedBeats(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 60 ? n : null;
+}
+
+/** Whole milliseconds from 1000 to 600000: the cap on a chores child's restart backoff. */
+function parseBackoffCapMs(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1_000 && n <= 600_000 ? n : null;
+}
+
+function missedBeatsProblem(name: string, raw: unknown): string | null {
+  if (parseMissedBeats(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of beats from 1 to 60`;
+}
+
+function backoffCapProblem(name: string, raw: unknown): string | null {
+  if (parseBackoffCapMs(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 1000 to 600000, such as 30000`;
+}
 
 /**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
@@ -1262,6 +1333,70 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseHeartbeatSeconds,
     valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
     // A shorter or equal beat is tighter, the same direction as every interval policy.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // Where the machine daemon runs the heavy per-root chores — the fallback sweep and retirement,
+  // the reconcile scans, the presence history step and publisher, and the hosted watch's reads.
+  // `shared`, the release default, runs one child for every root whose word is `shared`: each
+  // root has its own FIFO of passes and the child serves them round-robin, one slice per turn,
+  // so a root's backlog delays another root's chores by a slice and never the daemon's socket.
+  // `per-root` gives every hosted root its own supervised child, for a root whose work must not
+  // share a process at all, and `inline` runs the work on the daemon's own loop exactly as
+  // before the isolation, which is the rollback. A lower level may choose less isolation, never
+  // more: inline is within shared, and shared is within per-root. The daemon reads it for each
+  // hosted root; a chain that cannot be read keeps the release default, because the chores never
+  // stop the endpoint. A hosted route with no isolation seam (a plain `team bus`, a test
+  // harness) stays inline.
+  'daemon.chores': {
+    name: 'daemon.chores',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.mode,
+    gateLifting: false,
+    parseValue: parseChoreMode,
+    valueProblem: (raw: unknown) => choreModeProblem('daemon.chores', raw),
+    isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],
+  },
+  // How long one slice of a chores child's pass may run before it yields: whole milliseconds,
+  // 2000 when nothing declares it, and a shorter slice is the tighter one (the child answers its
+  // heartbeat sooner). The child reads this together with the per-root sweep cadence.
+  'daemon.chores-slice-ms': {
+    name: 'daemon.chores-slice-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.sliceMs,
+    gateLifting: false,
+    parseValue: parseReadMillis,
+    valueProblem: (raw: unknown) => readMillisProblem('daemon.chores-slice-ms', raw),
+    // A shorter or equal slice is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // How many child heartbeats the supervisor may miss before it ends the child and restarts it:
+  // whole beats from 1 to 60, 2 when nothing declares it, and a smaller count is the tighter one
+  // (a stuck child is replaced sooner). The beat is the daemon's own heartbeat interval.
+  'daemon.chores-missed-beats': {
+    name: 'daemon.chores-missed-beats',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.missedBeats,
+    gateLifting: false,
+    parseValue: parseMissedBeats,
+    valueProblem: (raw: unknown) => missedBeatsProblem('daemon.chores-missed-beats', raw),
+    // A smaller miss allowance is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest wait before a replaced chores child is started again: whole milliseconds from
+  // 1000 to 600000, 30000 when nothing declares it. The wait doubles from one failure to the
+  // next and never passes this cap; a smaller cap is the tighter one (recovery is tried sooner).
+  'daemon.chores-backoff-cap-ms': {
+    name: 'daemon.chores-backoff-cap-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_CHORES_DEFAULTS.backoffCapMs,
+    gateLifting: false,
+    parseValue: parseBackoffCapMs,
+    valueProblem: (raw: unknown) => backoffCapProblem('daemon.chores-backoff-cap-ms', raw),
+    // A smaller cap is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The watch's own pace: how often a pass sweeps and how long its six waits run. One value

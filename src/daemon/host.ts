@@ -36,6 +36,9 @@ import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
+import { choresPolicyFor } from './chores/policy.ts';
+import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
+import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
 import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
@@ -265,6 +268,17 @@ export type StartMachineDaemonInput = {
    * is skipped, and the sweep never cold-starts a team.
    */
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  /**
+   * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
+   * default, like the other hosting seams: a daemon started without it runs exactly the inline
+   * path, and a test harness that never opted in behaves as it always did. The mode per route is
+   * `daemon.chores` (`per-root`, `shared` or `inline`), so this seam only asks whether the daemon
+   * may use children at all; a route whose policy says `inline` keeps the inline path either way.
+   */
+  choresHosting?: boolean;
+  /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
+   *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
+  choresFactory?: (input: SpawnChoresInput) => ChoresChild;
 };
 
 export type StartMachineDaemonResult =
@@ -521,6 +535,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    *  how far the scan has got, so a bus that serves while its first pass runs says so. */
   const passRefreshers: (() => void)[] = [];
   const routes: HostedRoute[] = [];
+  /** The validated team file per accepted route, by canonical root: the chores policy chain and
+   *  the child's own config are read from what the daemon accepted, never from a re-read that
+   *  could name another team. */
+  const teams = new Map<string, TeamFile>();
+  /** The supervised chores children, built after the roots loop; null until then and whenever
+   *  the daemon was not started with the isolation seam. The state writer reads it every time,
+   *  so a beat's record carries what each child said on this beat. */
+  let choresFleet: ChoresFleet | null = null;
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
    *  from its root again the way every writer resolves it. `handle` is the path the loader
@@ -706,6 +728,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed && !afterClose) return;
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
+    // Each route's chores record is this beat's reading, never a stored word: the supervisor
+    // reports what its child last said, and a route the fleet does not know keeps no field.
+    if (choresFleet !== null) {
+      for (const status of roots) {
+        const chores = choresFleet.stateFor(status.root);
+        if (chores !== undefined) status.chores = chores;
+      }
+    }
     try {
       writeDaemonState(home, {
         format: 1,
@@ -978,6 +1008,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     status.team = loaded.team.project;
     watch.busRoot = canonical;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
+    teams.set(canonical, loaded.team);
     // Registered before any endpoint is started: status can name the root, and a heartbeat
     // keeps its record fresh, while a large store or a slow start below is still in progress.
     register();
@@ -1234,6 +1265,28 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
+  }
+
+  // The chores fleet: one supervised child per group of roots, for a daemon started with the
+  // isolation seam. Each accepted route reads its own policy chain to the team level; a chain
+  // that cannot be read keeps the release defaults and says so in the daemon log. A root that
+  // failed to load has no route and no team, so it gets no chores entry: there is no work to
+  // isolate and no policy to read.
+  if (input.choresHosting === true && routes.length > 0) {
+    choresFleet = createChoresFleet({
+      home,
+      beatMs: heartbeatMs,
+      since,
+      now,
+      routes: routes.flatMap((route) => {
+        const team = teams.get(route.root);
+        return team === undefined
+          ? []
+          : [{ route, team, policy: choresPolicyFor(team, route.root, home, now()) }];
+      }),
+      log: (text) => logLine(text),
+      ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
+    });
   }
 
   /** The seat's current managed binding, read at the moment of use. A missing seat record, an
@@ -1963,6 +2016,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
     // is marked so a pass that displaced this one carries the next due beat itself.
     hostedBeat.tick();
+    // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
+    // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
+    choresFleet?.tick(now());
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
@@ -2167,6 +2223,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         } catch {
           // A synchronous throw is a handle that was already closed.
         }
+      }
+      // The chores children stop with the endpoints, before any drain: a child that could still
+      // run a pass must not write one behind the close. The stop is bounded by its own kill
+      // grace, so a child that never leaves cannot hold the daemon's ownership.
+      if (choresFleet !== null) {
+        admissions.push(choresFleet.stop('the daemon is closing').catch(() => undefined));
       }
       // The endpoint refresh is joined below, after this admission block, so its wait is bounded
       // and a retry joins a run that outlived the first answer. It is not part of `admissions`:
