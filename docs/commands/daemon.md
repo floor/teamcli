@@ -8,7 +8,8 @@ starts; `install` writes and registers the user service unit that starts it at l
 it after a failure; `restart` stops the daemon that unit runs and starts that same unit again,
 writing nothing; `uninstall` removes that unit; `status` is the one-line health reading;
 `fault-watch` asks a running daemon to end one hosted watch's run as a counted fault, so the
-recovery path can be seen on a real daemon.
+recovery path can be seen on a real daemon. Every start also beats the machine's reminder list,
+read from the owner's entity record ([Reminders](#reminders)).
 
 The daemon reads no credential store. The broker feature is not hosted in this build, and a
 machine with no broker handler never falls back to a per-clone broker.
@@ -148,6 +149,80 @@ another daemon run, is not a private 0600 file, or matches no required live watc
 `not reached` for one still pending when it closes. `--dry-run` proves admission, the checkout and
 the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault` document.
 
+`run` also beats the machine's reminder list on the same heartbeat: the list is read from the
+owner's entity record and sent under the daemon's own identity, with no opt-in flag, and the
+next section is the whole of it.
+
+## Reminders
+
+The daemon beats one machine-scoped list of reminders: each is a message it sends under its own
+verified identity to seats of this machine's teams, at wall-clock times the owner chose. The list
+is read from the owner's entity record in the machine folder, `~/.config/team/entities.yaml`,
+under an entity's own key — the same record [`team config`](config.md) edits for that entity's
+`names.unique` word. This build has no `team config` key that writes reminders, so the owner
+writes the entry:
+
+    acme:
+      reminders:
+        - name: daily
+          at: ["07:00", "19:00"]
+          zone: Europe/Paris
+          text: "Stand-up for {team}."
+          to:
+            - lead@acme
+            - to: helper@acme
+              text: "{seat}: your part of the stand-up."
+
+`name`, `at` and `to` are required; `zone`, `catchUp` and `text` are optional:
+
+| Key | Value | Effect |
+| --- | --- | --- |
+| `name` | lower-case letters, digits and hyphens | the reminder's key in the state record, the log and `status`; unique across the record |
+| `at` | one or more `HH:MM` | local times in the entry's zone; a repeated time is read once |
+| `zone` | a zone this runtime knows | the zone the times are read in; without it, the machine's own zone |
+| `catchUp` | `true` or `false` | whether an instant noticed late may still be caught up; on without it |
+| `text` | a sentence | the text a target that has none of its own receives |
+| `to` | one or more targets | each `<seat>@<team>`, or a map of `to:` and `text:` |
+
+A target's own `text:` wins over the entry's. `{team}`, `{seat}` and `{name}` are filled in either,
+per target, with the team's project name, the seat's name and the reminder's name; any other
+brace text stands as written.
+
+An address names a team through the machine's team registry — by id, then project name, then
+session name — and then a seat that checkout's team file declares by name or nickname; `lead`
+names the team's coordinator seat. A scope two registry records answer is refused naming both,
+and the owner, a seat the file marks as a person's and a name no seat declares are refused too.
+A refused entry is refused alone: a configuration entry the parser refuses, and an address the
+resolver refuses, are each named `<entity>.reminders: <why>` in the daemon's log, once per
+change of the file rather than on every beat, and the entries around it still run. `status`'s
+`remindersError` carries the parser's refusals; the resolver's are the daemon's, since `status`
+reads no checkout's team file.
+
+The beat decides by these rules. Only the most recent due instant is considered. An instant
+noticed late may be caught up for half the gap to the next instant, never more than six hours;
+with `catchUp: false` only a tick within one beat of the instant sends. A first run — the first
+beat on which the state record holds no key for the reminder's name — remembers the latest
+instant without sending, so a new reminder never sends an instant that is already old; an
+instant past its window is recorded as missed and skipped; a clock that moves back more than five
+minutes never repeats a stored instant. The
+state record reserves an instant before the send's first byte and settles it after its last, so
+a daemon that stops mid-walk loses results, never an instant; a transport that fails is retried
+on later beats under the message id it already staged, until the window closes, while a refused
+send stands as it is.
+
+A reminder is machine-scoped: one list, run by the one daemon. Each send proves the daemon's own
+authority and admits its target by the same rules a direct send does; a checkout this daemon
+does not host is refused at the fire with the checkout named, and that refusal is recorded. The
+chore runs whenever the daemon runs — there is no opt-in flag, and an entity that writes no
+reminder fires nothing.
+
+The chore keeps `reminders.state.json` beside the daemon's own state record: mode 0600 in the
+0700 machine folder, written atomically. For every reminder name it holds the wall-clock key
+last satisfied, the instant that key stood for, when the send ran and how late, and one result
+per recipient; only the daemon writes it, and `status` reads it. A record that cannot be read
+stops every reminder firing on that beat — it would otherwise repeat or erase an instant — and
+the failure is named in the log and in `status`.
+
 ## Flags
 
 | Flag | Value | Effect |
@@ -171,7 +246,11 @@ the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` 
 remove the user service unit the platform adapter owns; `restart` reads that unit and writes
 nothing; no command prints that path as prose except under `--json` and in the refusal of an
 install that leaves no daemon running, which names where a kept unit is. Each hosted checkout's team file is read to find its send and bus
-endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
+endpoints. On every beat the daemon also reads the machine folder's entity record for the
+reminder list, holding it on a stamp of the file's modification time and size so an unchanged
+file is not re-parsed, and resolves each target's address through the team registry and that
+checkout's team file. It writes the reminder state record `reminders.state.json` (mode 0600,
+written atomically) beside its own. Under `run --presence` the daemon additionally reads each hosted checkout's presence
 folders `<team-file-folder>/presence/<session>/<seat>/` — the `spool` of staged records, the
 append-only `events.jsonl` and the `current.json` projection — writes the ingester's `events.jsonl`,
 `current.json` and session `status.json`, and writes the applied fence
@@ -237,6 +316,13 @@ a start that names `service-manager` without the manager's record to back it is 
 source checkout, and an install that changes the version or the packaged commit is a new daemon
 identity. `heartbeatSeconds` is the whole seconds of the `daemon.heartbeat` word the daemon runs;
 `null` when no word is known, as for a daemon on an injected test beat or an older record.
+It also carries `reminders`: one reading per configured reminder, in the configured
+order — `name`, `nextAt` (the next instant, ISO 8601, or null), `lastDue` (the most recent
+scheduled wall-clock key), `lastResult` (the stored key's outcome: `kind` is `first-run`,
+`missed`, `sent` or `pending`, with `due`, `sent`, `refused`, `lateMs` and `at`) and `missed` —
+and `remindersError` names a refused configuration entry and an unreadable state record when
+there is one.
+The one-line status does not carry the reminder reading.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
 `installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
