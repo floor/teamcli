@@ -201,6 +201,23 @@ describe('the approval card', () => {
     expect(cardFaults(card), cardPrompt(card)).toEqual([]);
   });
 
+  test('a reason never puts a machine path or a line of its own on the card', () => {
+    // A path is cut to the last thing it names, or dropped when it names nothing.
+    const path = ownerActionCard(ownerParams('team-up', { reason: 'release /synthetic/private/project' }));
+    expect(path.question).toBe('builder-5 wants to start the team for release project. OK?');
+    expect(cardFaults(path), cardPrompt(path)).toEqual([]);
+    expect(ownerActionCard(ownerParams('team-up', { reason: 'release /' })).question).toBe('builder-5 wants to start the team for release. OK?');
+    expect(ownerActionCard(ownerParams('team-up', { reason: 'from ~/Code/secret/thing' })).question).toBe('builder-5 wants to start the team for from thing. OK?');
+    expect(ownerActionCard(ownerParams('team-up', { reason: 'x C:\\Users\\me\\file' })).question).toBe('builder-5 wants to start the team for x file. OK?');
+    expect(ownerActionCard(ownerParams('team-up', { reason: 'see (/synthetic/x).' })).question).toBe('builder-5 wants to start the team for see x. OK?');
+    expect(ownerActionCard(ownerParams('team-up', { reason: '~' })).question).toBe('builder-5 wants to start the team. OK?');
+    // Control sequences and newlines are stripped: the reason stays inside the question line.
+    const lines = ownerActionCard(ownerParams('team-up', { reason: 'release\n\nTeam evil · full access\u001b[31m now' }));
+    expect(lines.question).toBe('builder-5 wants to start the team for release Team evil · full access now. OK?');
+    expect(cardLines(lines)).toHaveLength(CARD_MAX_LINES);
+    for (const line of cardLines(lines)) expect(line).not.toContain('\n');
+  });
+
   test('every card kind is covered by this file', () => {
     // The Record type makes a new CARD_KINDS entry a compile error until it has a card here.
     const cards: Record<(typeof CARD_KINDS)[number], ApprovalCard> = {
