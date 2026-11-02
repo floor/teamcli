@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, openSync, closeSync, lstatSync, mkdirSync, readSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { constants, openSync, closeSync, mkdirSync, readSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { storePath, type Standing } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -89,31 +89,9 @@ export function rulesFileHash(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 12);
 }
 
-/** What one path holds, read with `lstat` so a link is a link and never followed: `missing` when
- *  nothing is there, else the kind with its mode and owner. One reading shared by the writer, the
- *  checks and the before-Enter look — there is no second way to look at these files. */
-export type Held =
-  | { kind: 'missing' }
-  | { kind: 'link' }
-  | { kind: 'fifo' }
-  | { kind: 'folder'; mode: number; uid: number }
-  | { kind: 'file'; mode: number; uid: number }
-  | { kind: 'other' };
+import { heldAt, type Held } from '../held.ts';
 
-/** What `path` holds right now, without following anything. */
-export function heldAt(path: string): Held {
-  let held;
-  try {
-    held = lstatSync(path);
-  } catch {
-    return { kind: 'missing' };
-  }
-  if (held.isSymbolicLink()) return { kind: 'link' };
-  if (held.isFIFO()) return { kind: 'fifo' };
-  if (held.isDirectory()) return { kind: 'folder', mode: held.mode & 0o777, uid: held.uid };
-  if (held.isFile()) return { kind: 'file', mode: held.mode & 0o777, uid: held.uid };
-  return { kind: 'other' };
-}
+export { heldAt, type Held };
 
 /** Reads a file without following a link: the path must already have been seen as a regular file
  *  (`heldAt`), and the open itself carries `O_NOFOLLOW` so what is read is that same file. Null
