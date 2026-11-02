@@ -1,4 +1,4 @@
-// Urania's independent scenes (writer-04) for FLO-1190 at 10d30856f: what a codex launch line
+// Independent scenes: what a codex launch line
 // hands the CLI itself, measured as argv by a FAKE codex — a plain script that logs every
 // argument it receives; the real codex is never run. Every shape is executed end-to-end: the
 // command the launcher builds runs under /bin/sh with the fake first on PATH, and the scenes
