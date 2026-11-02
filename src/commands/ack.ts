@@ -22,12 +22,16 @@ import {
   detachedRefusal,
   judgeCallerIn,
   standingOf,
+  type Caller,
+  type SeatStanding,
 } from '../caller.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { gateVerdict } from '../permissions/who.ts';
+import { parseDuration, scanAckSeat } from '../send/message-archive.ts';
 import { recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -41,11 +45,17 @@ import {
 import { recordDir } from './messages.ts';
 
 export const USAGE = `Usage: team ack <id> [--json]
+Usage: team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
 
 Marks the message record <id> read, without printing it. The signed read
 receipt is the same one team messages writes before it shows a body, so the
 message stops waiting for this seat and the unread watch stops ringing it.
 A message the caller answers with team reply is marked read by the answer.
+
+The scoped form marks every record one seat's folder holds that is older
+than <dur> read: the owner or a seat this team marks \`leads\` runs it, and it
+never acknowledges the general seat brief, a client's record or a message a
+handoff has pending. --dry-run lists what it would mark and writes nothing.
 
 Exits 0 when the message is read or already was, 1 when the caller or the
 record is refused, 2 when the invocation or the team file can't be read.
@@ -89,6 +99,38 @@ function written(io: Io, json: boolean, doc: Record<string, unknown>, line: stri
   return 0; // exit: ack.read
 }
 
+/** Whether argv asks for the scoped form, before the parser sees it: `--seat` and
+ *  `--older-than`, in either spelling the parser accepts. */
+function mentions(argv: readonly string[], name: string): boolean {
+  return argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`));
+}
+
+function scopedAck(argv: readonly string[]): boolean {
+  return mentions(argv, 'seat') || mentions(argv, 'older-than');
+}
+
+/** The scoped call's written outcome: every due record is read, or already was. */
+function scopedDone(io: Io, json: boolean, doc: Record<string, unknown>, line: string): number {
+  if (json) writeJson(io, 'team.ack', doc);
+  else io.stdout(line);
+  return 0; // exit: ack.scoped
+}
+
+/** The scoped call's partial outcome: at least one due record could not be marked read, and the
+ *  others were. The failures are named on stderr; the document carries the counts. */
+function scopedFailed(io: Io, json: boolean, doc: Record<string, unknown>, line: string, failures: readonly string[]): number {
+  for (const failure of failures) io.stderr(`team ack: ${failure}\n`);
+  if (json) writeJson(io, 'team.ack', doc);
+  else io.stdout(line);
+  return 1; // exit: ack.scoped-failed
+}
+
+/** The scoped call's refusal: not the owner's or a lead's, or no key to sign a receipt with. */
+function scopedRefused(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'ack', { id: 'ack.scoped-refused', message, repair: null });
+  return 1; // exit: ack.scoped-refused
+}
+
 /** The relative path of one record's receipt, as the caller reads it in a repair line. */
 function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied'): string {
   return join('.agents', 'send-drops', session, seat, `${id}.${status}.json`);
@@ -97,6 +139,7 @@ function receiptPath(session: string, seat: string, id: string, status: 'read' |
 export async function runAck(argv: string[], io: Io, host: AckHost): Promise<number> {
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
+  if (scopedAck(argv)) return await runScopedAck(argv, io, host, json);
   const args = readArgs(argv, [], ['json']);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
@@ -220,4 +263,110 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     written: outcome.kind === 'published',
     at,
   }, `${contextLine(team.project, session)}\n${summary}\n`);
+}
+
+/**
+ * `team ack --seat <seat> --older-than <dur>`: the lead's sweep of one seat's folder. The admission
+ * is the map's `archive` row — the owner or a seat this team marks `leads`, the same caller that
+ * may move a family — so the ack and the archive that follows it refuse together. The window is
+ * the newest file of the family, and nothing a reader would still serve is touched: the general
+ * brief, a client's record, a pending handoff and a fresh family stay. A dry run plans and writes
+ * nothing.
+ */
+async function runScopedAck(argv: string[], io: Io, host: AckHost, json: boolean): Promise<number> {
+  const args = readArgs(argv, ['seat', 'older-than'], ['json', 'dry-run']);
+  if (args.error) return usage(io, json, args.error);
+  if (args.rest.length > 0) return usage(io, json, `unexpected "${args.rest[0]}"`);
+  const seat = args.values.seat;
+  const window = args.values['older-than'];
+  if (seat === undefined) return usage(io, json, '--older-than needs --seat <seat>');
+  if (window === undefined) return usage(io, json, '--seat needs --older-than <dur>');
+  if (!recordNameOk(seat)) return usage(io, json, `"${seat}" is not a seat name`);
+  const olderThanMs = parseDuration(window);
+  if (olderThanMs === null) return usage(io, json, `"${window}" is not a duration; write 90m, 12h or 7d`);
+  const dry = args.flags.has('dry-run');
+
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
+  if (!loaded.ok) {
+    // `team ack` takes no `--file`, so the shared no-repository sentence must not offer one.
+    const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
+    return configuration(io, json, withoutFileOffer(message) || 'the team file cannot be read');
+  }
+  const { team, root } = loaded;
+  const dir = dirname(loaded.path);
+  const session = team.session;
+  if (!team.seats.some((member) => member.name === seat)) {
+    return usage(io, json, `"${seat}" is not a seat of this team`);
+  }
+  const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
+    gateVerdict(who, team, root, host.home, 'archive', at, host.now);
+  const judged = judgeCallerIn(io, dir, team, verdictOf);
+  if (verdictOf(judged.caller, standingOf(dir, judged.session, judged.caller)).kind !== 'ok') {
+    raiseSecurityRefusal(team, root, host.home, dir, judged.caller, 'admission', seat, host.now());
+    return scopedRefused(
+      io,
+      json,
+      `only the owner or a seat this team marks \`leads\` acknowledges another seat's messages; this call is ${describeCaller(judged.caller)}`,
+    );
+  }
+  const keyState = messageKeyState(host.home);
+  if (keyState.kind !== 'key') return scopedRefused(io, json, 'no message key; nothing was written');
+
+  const now = host.now();
+  const scan = scanAckSeat({ root, session, seat, key: keyState.key, olderThanMs, now });
+  const notDue = scan.stays.length;
+  const failures: string[] = [];
+  let read = 0;
+  const at = now.toISOString();
+  if (!dry) {
+    for (const due of scan.due) {
+      const outcome = publishRecordRead({
+        dropDir: recordDir(root, session, seat),
+        id: due.id,
+        to: seat,
+        root,
+        session,
+        home: host.home,
+        key: keyState.key,
+        at,
+      });
+      if (outcome.kind === 'published' || outcome.kind === 'served') {
+        read += 1;
+      } else if (outcome.kind === 'held') {
+        const what = outcome.entry === 'file'
+          ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
+          : `the ${outcome.status} receipt path is held by something that is not a file`;
+        failures.push(`${due.id}: not marked read: ${what}`);
+      } else {
+        const why = outcome.reason === 'changed'
+          ? 'the read receipt name changed while it was being published'
+          : outcome.reason === 'write'
+            ? 'the read receipt could not be written'
+            : 'the read receipt could not be made durable';
+        failures.push(`${due.id}: not marked read: ${why}`);
+      }
+    }
+  } else {
+    read = scan.due.length;
+  }
+  const counted = `${dry ? `would mark ${String(read)} read` : `${String(read)} marked read`}, ${String(scan.already)} already read, ${String(notDue)} not due`;
+  const summary = `seat ${seat}, older than ${window}: ${counted}`;
+  const line = `${contextLine(team.project, session)}\n${summary}\n`;
+  const doc: Record<string, unknown> = {
+    format: 1,
+    status: dry ? 'would-read' : failures.length > 0 ? 'failed' : 'read',
+    action_summary: summary,
+    project: team.project,
+    session,
+    seat,
+    older_than: window,
+    dry_run: dry,
+    read,
+    already_read: scan.already,
+    not_due: notDue,
+    failed: failures.length,
+    at,
+  };
+  if (failures.length > 0) return scopedFailed(io, json, doc, line, failures);
+  return scopedDone(io, json, doc, line);
 }

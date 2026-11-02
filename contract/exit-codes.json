@@ -9,11 +9,32 @@
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
     },
     {
+      "code": 0,
+      "command": "ack",
+      "id": "ack.scoped",
+      "meaning": "every record of the seat due by the window was marked read, or already was",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "ack",
       "id": "ack.refused",
       "meaning": "the message can't be marked read, or the call is not the record's addressee",
       "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-failed",
+      "meaning": "at least one record of the seat due by the window could not be marked read; the others were",
+      "trigger": "team ack --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.scoped-refused",
+      "meaning": "the scoped ack is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team ack --seat worker --older-than 7d"
     },
     {
       "code": 2,
@@ -786,6 +807,13 @@
       "trigger": "team archive --keep-running"
     },
     {
+      "code": 0,
+      "command": "archive",
+      "id": "archive.scoped",
+      "meaning": "every family of the seat due by the window was moved, or nothing was due",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
       "code": 1,
       "command": "archive",
       "id": "archive.detached",
@@ -812,6 +840,20 @@
       "id": "archive.out-owner",
       "meaning": "--out is the owner’s",
       "trigger": "team archive --out ~/archives"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-failed",
+      "meaning": "at least one family of the seat due by the window could not be moved; the others were",
+      "trigger": "team archive --seat worker --older-than 7d"
+    },
+    {
+      "code": 1,
+      "command": "archive",
+      "id": "archive.scoped-refused",
+      "meaning": "the scoped archive is not the owner's or a seat this team marks `leads`, or no message key stands",
+      "trigger": "team archive --seat worker --older-than 7d"
     },
     {
       "code": 2,
