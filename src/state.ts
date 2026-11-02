@@ -985,6 +985,16 @@ export class LockBusyError extends Error {
   }
 }
 
+/** Whether `path` is a directory right now. A lock folder can be removed between two calls, so
+ *  a failed stat answers "no" instead of escaping as an error. */
+function stillDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 // One writer at a time. The lock file holds its holder's pid; a lock whose holder is dead is
 // taken over, and `onStale` is told. `waitMs: 0` tries once and throws `LockBusyError` at the
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
@@ -1001,8 +1011,21 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
     try {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && recreated++ < 8) continue;
-      throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      // A reclaimer can remove this folder in the instant the platform makes it, and the
+      // platform then reports EEXIST for a folder that is no longer there (measured: the sweep
+      // scene's acquirer failed 4 of 4 runs with "EEXIST: file already exists, mkdir '<lock
+      // folder>'" thrown at this call). A folder that is still there is what the open below
+      // wants; a folder now gone is made again, within the same bound as the open's retries.
+      // ENOENT is the same race one step earlier.
+      if (code === 'EEXIST' && stillDirectory(dir)) {
+        // The folder is there after all: fall through to the open, which takes the key or
+        // reports who holds it.
+      } else if ((code === 'ENOENT' || code === 'EEXIST') && recreated++ < 8) {
+        continue;
+      } else {
+        throw error;
+      }
     }
     try {
       const fd = openSync(path, 'wx');
