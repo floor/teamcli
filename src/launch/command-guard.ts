@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellQuote } from '../profiles/profile.ts';
+import { stableHookPath } from '../daemon/runtime-entry.ts';
 
 /** The command classes the guard denies. One rule name and one line of guidance each. */
 export type GuardRule =
@@ -547,11 +548,14 @@ export function refusedByGuard(line: string): GuardMatch | null {
   return null;
 }
 
-/** Where the hook script lives beside this module: the source file under this install's
- *  interpreter, the compiled one in a built package. */
-export function commandGuardScriptPath(): string {
+/** Where the hook script a settings file names lives beside this module: the source file under
+ *  this install's interpreter, the compiled one in a built package. A run from a daemon runtime
+ *  copy resolves to the installed package the copy was made from; null when it cannot, so a
+ *  settings file never names a private copy a later refresh may remove. */
+export function commandGuardScriptPath(): string | null {
   const here = fileURLToPath(import.meta.url);
-  return join(dirname(here), here.endsWith('.ts') ? 'command-guard-hook.ts' : 'command-guard-hook.js');
+  const beside = join(dirname(here), here.endsWith('.ts') ? 'command-guard-hook.ts' : 'command-guard-hook.js');
+  return stableHookPath(beside);
 }
 
 /** The context a refusal is raised with: the team file's project, the project root and the
@@ -561,12 +565,15 @@ export type CommandGuardContext = { project: string; root: string; home: string 
 /**
  * The shell command a seat's settings file runs before a Bash call: this install's own
  * interpreter, the hook script, and the context the refusal event is raised with. The seat and
- * session are the launch's, written with the settings file.
+ * session are the launch's, written with the settings file. Null when no stable script path can
+ * be named; the settings file then carries no guard.
  */
-export function commandGuardHookCommand(context: CommandGuardContext, session: string, seat: string): string {
+export function commandGuardHookCommand(context: CommandGuardContext, session: string, seat: string): string | null {
+  const script = commandGuardScriptPath();
+  if (script === null) return null;
   return [
     shellQuote(process.execPath),
-    shellQuote(commandGuardScriptPath()),
+    shellQuote(script),
     '--project', shellQuote(context.project),
     '--root', shellQuote(context.root),
     '--home', shellQuote(context.home),
@@ -578,7 +585,8 @@ export function commandGuardHookCommand(context: CommandGuardContext, session: s
 /** True when the hook script this build would name is there: a settings file that names a
  *  missing script would make every Bash call report a broken hook. */
 export function commandGuardAvailable(): boolean {
-  return existsSync(commandGuardScriptPath());
+  const script = commandGuardScriptPath();
+  return script !== null && existsSync(script);
 }
 
 /** The one PreToolUse entry the settings file adds: a Bash matcher and the hook command. */

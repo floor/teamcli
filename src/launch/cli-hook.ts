@@ -24,10 +24,12 @@ import {
   closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync,
   writeSync, type Stats,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
+import { stableHookPath } from '../daemon/runtime-entry.ts';
 import type { CliHookReading } from '../labels/state.ts';
 import { cliWordList, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { STATE_FILE, emptySession, readState, updateState } from '../state.ts';
@@ -156,13 +158,23 @@ function hookCommand(statePath: string, state: 'working' | 'idle'): string {
 }
 
 /**
- * This install's own CLI, the way `watchCommand` builds the watchdog's line, so `team` need not
- * be on the CLI's PATH. The hook commands append their own subcommand and words.
+ * The `team` entry a hook command names, for one `cli-hook` module location: this build's own
+ * CLI, the way `watchCommand` builds the watchdog's line, so `team` need not be on the CLI's
+ * PATH. A run from a daemon runtime copy (the daemon's restore pass installs hooks in-process)
+ * resolves to the installed program the copy was made from — never the private copy, which a
+ * later install may replace or delete. Null when the copy's origin is not recorded and resolvable:
+ * the seat then gets no CLI hook rather than a command that names a path a refresh can remove.
  */
-function cliRunner(): string {
-  const here = fileURLToPath(import.meta.url);
+export function hookRunnerFor(here: string, home: string = homedir()): string | null {
   const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
-  return `${shellQuote(process.execPath)} ${shellQuote(cli)}`;
+  const stable = stableHookPath(cli, home);
+  if (stable === null) return null;
+  return `${shellQuote(process.execPath)} ${shellQuote(stable)}`;
+}
+
+/** This install's own CLI entry for a hook command. */
+function cliRunner(): string | null {
+  return hookRunnerFor(fileURLToPath(import.meta.url));
 }
 
 /**
@@ -170,8 +182,9 @@ function cliRunner(): string {
  * session are appended by `dropReadCommand`; the read itself is `team drops --read`, the one
  * place a record is verified and its signed receipt written.
  */
-export function dropReadRunner(): string {
-  return `${cliRunner()} drops --read`;
+export function dropReadRunner(): string | null {
+  const runner = cliRunner();
+  return runner === null ? null : `${runner} drops --read`;
 }
 
 /** The fields the presence hook needs: every one is written into its argv at install time. The
@@ -197,9 +210,10 @@ export type CliHookPresence = {
 function presenceHookCommand(
   presence: CliHookPresence,
   event: 'turn-start' | 'turn-end' | 'human-wait',
+  runner: string,
 ): string {
   const filter = event === 'human-wait' ? ' --notification permission_prompt' : '';
-  return `${cliRunner()} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
+  return `${runner} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
 }
 
 /**
@@ -255,11 +269,11 @@ const LANDING_ESCAPER = (() => {
  * `epoch`, when the launch has written the seat's claim, is the runtime the read is bound to: the
  * hook then serves only a brief delivered under the same epoch.
  */
-function dropReadCommand(seat: string, session: string, epoch?: string): string {
+function dropReadCommand(seat: string, session: string, runner: string, epoch?: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
   const bound = epoch === undefined ? '' : ` --epoch ${shellQuote(epoch)}`;
   return [
-    `ctx=$(${dropReadRunner()} --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `ctx=$(${runner} drops --read --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
     `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }
@@ -285,25 +299,30 @@ export function cliHookSettings(
   guard?: string,
   inbound?: CrossSessionInbound | null,
   presence?: CliHookPresence,
+  /** The CLI a command hook runs. `undefined` resolves this build's own entry; `null` writes the
+   *  state and declaration without a command that needs the CLI — the seat keeps its declaration
+   *  rather than naming a path this run cannot prove stable. */
+  runner?: string | null,
 ): string {
+  const cli = runner === undefined ? cliRunner() : runner;
   const hook = (state: 'working' | 'idle'): unknown => ({
     hooks: [{ type: 'command', command: hookCommand(statePath, state) }],
   });
   const start: unknown[] = [hook('working')];
-  if (presence !== undefined) {
-    start.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-start') }] });
+  if (presence !== undefined && cli !== null) {
+    start.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-start', cli) }] });
   }
-  if (drops) {
-    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, drops.epoch) }] });
+  if (drops !== undefined && cli !== null) {
+    start.push({ hooks: [{ type: 'command', command: dropReadCommand(drops.seat, drops.session, cli, drops.epoch) }] });
   }
   const stop: unknown[] = [hook('idle')];
-  if (presence !== undefined) {
-    stop.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end') }] });
+  if (presence !== undefined && cli !== null) {
+    stop.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end', cli) }] });
   }
   const hooks: Record<string, unknown> = {};
   if (guard !== undefined) hooks.PreToolUse = [commandGuardEntry(guard)];
-  if (presence !== undefined) {
-    hooks.Notification = [{ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'human-wait') }] }];
+  if (presence !== undefined && cli !== null) {
+    hooks.Notification = [{ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'human-wait', cli) }] }];
   }
   hooks.UserPromptSubmit = start;
   hooks.Stop = stop;
@@ -502,6 +521,8 @@ export function installCliHooks(
   seats: readonly CliHookSeat[],
   guard?: CommandGuardContext,
   root: string = dirname(dir),
+  /** The CLI a hook command runs; see `cliHookSettings`. Callers leave it to this build. */
+  runner?: string | null,
 ): Record<string, string> {
   const planned = plannedCliHooks(dir, session, seats);
   if (Object.keys(planned).length === 0) return {};
@@ -512,6 +533,7 @@ export function installCliHooks(
   if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
     || !ensureFolder(hooks) || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
+  const cli = runner === undefined ? cliRunner() : runner;
   const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
   const byName = new Map(seats.map((seat) => [seat.name, seat]));
   const landed: Record<string, string> = {};
@@ -520,7 +542,7 @@ export function installCliHooks(
     if (statePath === null) continue;
     const epoch = claimEpochAt(dir, session, seat);
     const drops = { seat, session, ...(epoch === undefined ? {} : { epoch }) };
-    const command = guarded ? commandGuardHookCommand(guard, session, seat) : undefined;
+    const command = guarded ? commandGuardHookCommand(guard, session, seat) ?? undefined : undefined;
     const launchWord = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
     const teamWord = byName.get(seat)?.inbound;
     const inbound = launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
@@ -529,7 +551,7 @@ export function installCliHooks(
       ? recordPresenceBinding(dir, session, seat)
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence))) continue;
+    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence, cli))) continue;
     landed[seat] = settingsPath;
   }
   return landed;
