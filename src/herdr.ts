@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { resolveForgeShim } from './settings/forge-shim.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
@@ -335,7 +335,9 @@ export function sessionBinDir(home: string): string {
 function forgeOnPath(pathValue: string | undefined, skip: string): string | null {
   if (pathValue === undefined) return null;
   for (const dir of pathValue.split(':')) {
-    if (dir === '' || dir === skip) continue;
+    // Only an absolute folder names a program this process can point at by path: an empty entry
+    // is the working folder, and a relative one resolves against a folder the shim never bound.
+    if (!isAbsolute(dir) || dir === skip) continue;
     const candidate = join(dir, FORGE_CLI);
     try {
       if (!statSync(candidate).isFile()) continue;
@@ -429,23 +431,34 @@ export function writeForgeShim(dir: string, real: string): boolean {
   }
 }
 
-/** A PATH value with every folder that holds an executable forge CLI removed: the environment's
- *  fail-closed shape when the shim cannot stand first. An empty entry (the working folder) goes
- *  too, since a program there is not one the shim can stand ahead of. */
-function withoutForge(pathValue: string): string {
-  return pathValue
-    .split(':')
-    .filter((dir) => {
-      if (dir === '') return false;
-      try {
-        if (!statSync(join(dir, FORGE_CLI)).isFile()) return true;
-        accessSync(join(dir, FORGE_CLI), constants.X_OK);
-        return false;
-      } catch {
-        return true;
-      }
-    })
-    .join(':');
+/** Whether the folder holds an executable forge CLI. A folder that cannot be inspected proves
+ *  nothing, and is not kept. */
+function holdsForge(dir: string): boolean {
+  try {
+    if (!statSync(join(dir, FORGE_CLI)).isFile()) return false;
+    accessSync(join(dir, FORGE_CLI), constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The absolute system folders a shell finds its own tools in. A server that cannot keep the
+ *  shim keeps only the ones proven free of the forge CLI. */
+const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'] as const;
+
+/** The PATH a server may keep when the shim cannot stand first: absolute folders only — never
+ *  the working folder (an empty entry) and never a relative one, which a shell resolves against
+ *  a folder the shim does not control — and no folder that holds an executable forge CLI. When
+ *  no folder is kept, the system folders are tried instead. `null` is the refusal: an empty
+ *  PATH is not a denial, because a shell reads it as the working folder, so the caller must not
+ *  start the server at all. `holds` is injected so a test can prove the refusal without making
+ *  every system folder hold a CLI. */
+export function failClosedPath(pathValue: string, holds: (dir: string) => boolean = holdsForge): string | null {
+  const kept = pathValue.split(':').filter((dir) => isAbsolute(dir) && !holds(dir));
+  if (kept.length > 0) return kept.join(':');
+  const safe = SYSTEM_PATH.filter((dir) => !holds(dir));
+  return safe.length > 0 ? safe.join(':') : null;
 }
 
 /** The session server's environment: the clean allowlist, the SSH agent when the owner has one,
@@ -469,9 +482,14 @@ export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Proc
     return clean;
   }
   // Fail closed: the shim cannot stand first, so no folder that holds the real CLI stays on the
-  // server's PATH. A seat then has no forge CLI to reach the stored login with, instead of being
-  // handed the fallback the mechanism exists to close.
-  if (clean.PATH !== undefined) clean.PATH = withoutForge(clean.PATH);
+  // server's PATH — and never an empty or relative one, which a shell reads as the working
+  // folder. When no folder is proven free of the CLI, no environment is safe to start in, and
+  // the throw is the refusal `startServer` turns into a plain "it did not start".
+  const safe = failClosedPath(clean.PATH ?? '');
+  if (safe === null) {
+    throw new Error('the forge shim could not be installed and no PATH folder is free of the forge CLI; the session server was not started');
+  }
+  clean.PATH = safe;
   return clean;
 }
 
@@ -480,7 +498,14 @@ export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Proc
 // session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
   if (sessionState(session) !== 'absent') return false;
-  const env = seatServerEnv(process.env, homedir());
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    // No safe environment can be built: a server started with an empty or forge-bearing PATH
+    // would hand the seat the fallback the shim exists to close. The caller says it did not start.
+    return false;
+  }
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
   try {
     const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });

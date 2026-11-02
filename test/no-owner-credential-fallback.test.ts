@@ -12,8 +12,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { NO_SEAT_TOKEN, forgeShimText, seatServerEnv, sessionBinDir, writeForgeShim } from '../src/herdr.ts';
+import { isAbsolute, join } from 'node:path';
+import { NO_SEAT_TOKEN, failClosedPath, forgeShimText, seatServerEnv, sessionBinDir, writeForgeShim } from '../src/herdr.ts';
 import { DEFAULT_FORGE_SHIM, FORGE_SHIM_ENV, FORGE_SHIM_SETTING, resolveForgeShim } from '../src/settings/forge-shim.ts';
 
 // git itself is the machine's own; only the credential helper and the forge CLI are fixtures.
@@ -309,6 +309,43 @@ describe('the session server environment', () => {
     const out = credentialFill(w, env);
     expect(out.status).not.toBe(0);
     expect(existsSync(w.log)).toBe(false);
+  });
+});
+
+describe('the fail-closed PATH', () => {
+  /** A world whose shim cannot be installed: the session's bin path is a file. */
+  function brokenShim(w: World): void {
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    writeFileSync(sessionBinDir(w.home), 'not a directory');
+  }
+
+  test('a PATH of forge folders only is replaced by system folders, never left empty', () => {
+    const w = world();
+    brokenShim(w);
+    const env = seatServerEnv({ HOME: w.home, PATH: w.real }, w.home);
+    expect(env.PATH).toBeDefined();
+    expect(env.PATH).not.toBe('');
+    const entries = env.PATH!.split(':');
+    for (const dir of entries) expect(isAbsolute(dir)).toBe(true);
+    expect(entries).not.toContain(w.real);
+  });
+
+  test('the working folder is never read: a linked forge CLI in the workspace is not reached', () => {
+    const w = world();
+    brokenShim(w);
+    symlinkSync(w.cli, join(w.work, 'gh'));
+    const env = seatServerEnv({ HOME: w.home, PATH: w.real }, w.home);
+    const out = spawnSync('/bin/sh', ['-c', 'gh auth git-credential get'], { cwd: w.work, env: { ...env }, encoding: 'utf8' });
+    expect(out.status).not.toBe(0);
+    expect(existsSync(w.log)).toBe(false);
+  });
+
+  test('relative folders and the working-folder entry are dropped, and a kept folder stays', () => {
+    expect(failClosedPath('bin:.:/usr/bin', () => false)).toBe('/usr/bin');
+  });
+
+  test('no folder proven free of the CLI is a refusal, not an empty PATH', () => {
+    expect(failClosedPath('/forge-only', () => true)).toBeNull();
   });
 });
 
