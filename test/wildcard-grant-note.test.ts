@@ -20,7 +20,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
 
-const NOW = new Date('2026-11-01T20:00:00Z');
+const NOW = new Date('2026-11-02T20:00:00Z');
 const EXPIRES = new Date('2027-01-01T00:00:00Z');
 const KEY = join(import.meta.dir, 'fixtures', 'key.json');
 const OWNER: Caller = { kind: 'owner' };
@@ -140,7 +140,7 @@ function check(root: string, home: string, json = false): { code: number; out: s
   return { code, out: `${io.out}${io.err}`, stdout: io.out };
 }
 
-const SHIPPED = 'agents, approvals, batch, forget, setup';
+const SHIPPED = 'agents, approvals, batch, forget, peek, setup';
 
 describe('team check names a wildcard grant that reaches newer ops', () => {
   test('one note per grant, not a difference, exit unchanged', () => {

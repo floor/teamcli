@@ -257,8 +257,10 @@ export function admitGeneral(home: string, grantPath: string, keyPath: string, o
  * The release that first shipped each op, measured from this repository's release tags: the op's
  * route in the dispatcher table (`src/cli.ts`) at each tag, by tag date, with `abandon` read from
  * `down --abandon` at v0.1.0. A release candidate is not a release, so `-rc.` tags are skipped.
- * `tag` is the provenance of `at`. An op no release ships yet has no entry: `peek`'s route was
- * added after the last release measured here.
+ * `tag` is the provenance of `at`. The newest entry may name the release being cut, whose tag is
+ * created only after its release commit: that row's `at` is the release commit's own time, recorded
+ * from the commit so the op is measured as shipped rather than read as unshipped. An op no release
+ * ships yet has no entry.
  */
 type OpRelease = { tag: string; at: string };
 export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonly GeneralOp[] }[] = [
@@ -278,6 +280,9 @@ export const OP_RELEASE_GROUPS: readonly { tag: string; at: string; ops: readonl
   { tag: 'v0.5.5', at: '2026-10-26T10:45:10+01:00', ops: ['archive', 'import', 'migrate', 'owner-seat', 'workflow'] },
   { tag: 'v0.5.6', at: '2026-10-31T00:56:10+01:00', ops: ['approvals', 'batch', 'forget', 'setup'] },
   { tag: 'v0.5.10', at: '2026-11-01T15:22:48+01:00', ops: ['agents'] },
+  // Measured against the 0.5.11 release commit (chore(release): 0.5.11, 8dbb7ee13): between
+  // v0.5.10 and that commit the dispatcher gained exactly one route, `peek`, and lost none.
+  { tag: 'v0.5.11', at: '2026-11-02T12:21:36+01:00', ops: ['peek'] },
 ];
 /** The first release that shipped each op, or null while no release ships it. */
 export const OP_FIRST_SHIPPED: Readonly<Record<GeneralOp, OpRelease | null>> = (() => {

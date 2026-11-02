@@ -25,13 +25,14 @@ import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts'
 import { installKey, keyOf, signDomain, type Json } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
 
-const NOW = new Date('2026-11-01T20:00:00Z');
+const NOW = new Date('2026-11-02T20:00:00Z');
 // A grant outlives every date this file signs at, so only the signing time decides the note.
 const EXPIRES = new Date('2027-01-01T00:00:00Z');
 // Ops whose route the dispatcher has but no release row measures yet. A release that first
 // ships one adds its row and takes the op out of this list; a route that is neither measured
-// nor named here fails the check below, so a new op cannot slip past unmeasured.
-const UNRELEASED_OPS: readonly string[] = ['peek'];
+// nor named here fails the check below, so a new op cannot slip past unmeasured. The 0.5.11
+// row measures `peek`, so the list is empty today.
+const UNRELEASED_OPS: readonly string[] = [];
 
 const homes: string[] = [];
 afterAll(() => {
@@ -97,22 +98,34 @@ test('no dispatcher route is unmeasured: each has a release row or is declared u
 
 const NEEDS_RELEASE_TAGS = 'this test needs the release tags (git fetch --tags)';
 
+/** The table's newest release: the row whose `at` is latest. Its tag may not exist yet — the
+ *  release commit lands before the owner tags it — so it is the one table tag a clone may lack. */
+const NEWEST_ROW = OP_RELEASE_GROUPS.reduce((late, row) => (Date.parse(row.at) > Date.parse(late.at) ? row : late));
+
 /** The reason the release walk cannot measure this clone, or null when it can. The release
  *  table's own tags are the yardstick: a clone that fetched no tags, or only some, would
  *  otherwise read as "no release ships the op", and the walk would pass without measuring
- *  anything. A plain refusal names the missing tags, never a silent pass. */
+ *  anything. A plain refusal names the missing tags, never a silent pass. The newest table row
+ *  names the release being cut, so its tag may lag the table; every older table tag is required. */
 function tagSetProblem(tags: readonly string[]): string | null {
   if (tags.length === 0) return NEEDS_RELEASE_TAGS;
-  const missing = OP_RELEASE_GROUPS.map((row) => row.tag).filter((tag) => !tags.includes(tag));
+  const missing = OP_RELEASE_GROUPS.map((row) => row.tag).filter(
+    (tag) => tag !== NEWEST_ROW.tag && !tags.includes(tag),
+  );
   return missing.length === 0 ? null : `${NEEDS_RELEASE_TAGS}; it reads no ${missing.join(', ')}`;
 }
 
 test('a tag set the release walk cannot use fails loudly, never passes empty', () => {
   expect(tagSetProblem([])).toBe(NEEDS_RELEASE_TAGS);
   const tableTags = OP_RELEASE_GROUPS.map((row) => row.tag);
+  // Every tag the table names measures. The newest release's tag may not exist yet (it is
+  // created after the release commit), so the set without it measures too — the same state the
+  // walk runs in before the owner tags the release.
   expect(tagSetProblem(tableTags)).toBeNull();
-  // A partial set is caught too: the table names releases whose tags must be readable here.
-  expect(tagSetProblem(tableTags.slice(1))).toContain(NEEDS_RELEASE_TAGS);
+  expect(tagSetProblem(tableTags.filter((tag) => tag !== NEWEST_ROW.tag))).toBeNull();
+  // A set missing an older tag is caught even with every other tag present, and the refusal
+  // names it.
+  expect(tagSetProblem(tableTags.slice(1))).toBe(`${NEEDS_RELEASE_TAGS}; it reads no v0.1.0`);
 });
 
 test('an op declared unshipped is a route at no release tag', () => {
@@ -146,28 +159,30 @@ test('an op declared unshipped is a route at no release tag', () => {
 
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
   const w = world();
-  // Signed after v0.5.5 and before v0.5.6: it reaches v0.5.6's four ops and v0.5.10's one.
+  // Signed after v0.5.5 and before v0.5.6: it reaches v0.5.6's four ops, then v0.5.10's one
+  // and v0.5.11's one.
   const grant = issue(w.home, w.publicKey, ['*'], '2026-10-27T12:00:00Z');
   const widened = wildcardGrantsWidened(w.home, NOW);
   expect(widened.length).toBe(1);
   expect(widened[0]?.grant.grant_id).toBe(grant.grant_id);
   expect(widened[0]?.signed).toBe('2026-10-27T12:00:00.000Z');
-  expect(widened[0]?.ops).toEqual(['agents', 'approvals', 'batch', 'forget', 'setup']);
+  expect(widened[0]?.ops).toEqual(['agents', 'approvals', 'batch', 'forget', 'peek', 'setup']);
   const note = widenedGrantNote(widened[0]!);
   expect(note).toContain(grant.grant_id);
   expect(note).toContain('signed 2026-10-27');
-  expect(note).toContain('agents, approvals, batch, forget, setup');
+  expect(note).toContain('agents, approvals, batch, forget, peek, setup');
   expect(note).toContain('re-sign the grant to stop this note');
   expect(widenedGrantNotes(w.home, NOW)).toEqual([note]);
 });
 
 test('a grant signed on a release reaches nothing of it; signed after the last release, nothing', () => {
   const w = world();
-  // The v0.5.6 release time exactly: the release's own ops are not "later", only v0.5.10's is.
+  // The v0.5.6 release time exactly: the release's own ops are not "later", only v0.5.10's and
+  // v0.5.11's are.
   const on = issue(w.home, w.publicKey, ['*'], '2026-10-30T23:56:10Z');
-  expect(wildcardGrantsWidened(w.home, NOW)[0]?.ops).toEqual(['agents']);
-  // Signed at v0.5.10's own time, the last release this table knows: nothing is later.
-  const after = issue(w.home, w.publicKey, ['*'], '2026-11-01T14:22:48Z');
+  expect(wildcardGrantsWidened(w.home, NOW)[0]?.ops).toEqual(['agents', 'peek']);
+  // Signed at v0.5.11's own time, the last release this table knows: nothing is later.
+  const after = issue(w.home, w.publicKey, ['*'], '2026-11-02T11:21:36Z');
   const ids = wildcardGrantsWidened(w.home, NOW).map((entry) => entry.grant.grant_id);
   expect(ids).toEqual([on.grant_id]);
   expect(ids).not.toContain(after.grant_id);
