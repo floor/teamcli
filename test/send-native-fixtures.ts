@@ -21,12 +21,15 @@ export function filed(body: string): string {
 
 export type World = { root: string; dir: string; sockets: string; home: string; cleanup: () => void };
 
-/** One more file line, launched as a Claude Code seat: the role word a scene wants to give it,
- *  the launch line when the scene needs one other than plain `claude`, and the label the file
- *  writes on it when a scene reads the greeting's label fallback. */
+/** One more file line, launched as a Claude Code seat unless `cli` names another one: the role
+ *  word a scene wants to give it, the launch line when the scene needs one other than plain
+ *  `claude`, and the label the file writes on it when a scene reads the greeting's label
+ *  fallback. */
 export type ExtraSeat = {
   name: string;
   role: string;
+  /** The seat's `cli`, when the scene needs one the default (Claude Code) is not. */
+  cli?: string;
   launch?: string;
   label?: string;
   /** The seat's webhook adapter, when the scene configures one: two absolute paths. */
@@ -42,7 +45,7 @@ function teamFile(root: string, lobby: string, order: readonly string[] | null, 
     .map(
       (seat) => `  - role: ${seat.role}
     name: ${seat.name}
-    cli: claude-code
+    cli: ${seat.cli ?? 'claude-code'}
     vendor: test
     model: Test
     version: "1"

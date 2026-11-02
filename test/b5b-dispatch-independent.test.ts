@@ -274,13 +274,15 @@ describe('the class a send reports for its target', () => {
     expect(io.out).toContain('pull-seat: sent (unconfirmed) (drop, 0 ms); queued; pull-seat reads it at its next turn (pull-only)');
   });
 
-  test('a CLI with no route at all is reported as a seat nothing can wake', async () => {
+  test('a seat with no event adapter is read at its next turn, and the line says so', async () => {
+    // The Muse seat declares a typed wake and no event adapter: this send ends in the bus inbox
+    // because nothing woke the pane, so the line names the seat's next turn, not a route it has.
     made = sendWorld();
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['none-seat', 'hello'], io, sendHost(made));
     console.log(`A4 code=${code} out=${JSON.stringify(io.out)} err=${JSON.stringify(io.err)}`);
     expect(code).toBe(0);
-    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; none-seat has no way to be woken while idle');
+    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; none-seat reads it at its next turn (pull-only)');
   });
 });
 

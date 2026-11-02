@@ -138,6 +138,10 @@
       "description": "optional: prompts team down --abandon answers so the seat closes fully; keys are only escape, ctrl+c or ctrl+u, never a menu option",
       "items": { "type": "object", "additionalProperties": false, "required": ["all", "keys"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "keys": { "type": "array", "minItems": 1, "items": { "enum": ["escape", "ctrl+c", "ctrl+u"] } } } }
     },
+    "typed_wake": {
+      "enum": ["screen"],
+      "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
+    },
     "mcp_inbox": {
       "type": "object",
       "additionalProperties": false,
