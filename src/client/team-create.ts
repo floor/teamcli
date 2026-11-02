@@ -21,10 +21,21 @@ import { readSecurityProfile, ruleRelaxed } from '../security/profile.ts';
 export const TEAM_CREATE_TTL_MS = 15 * 60 * 1000;
 export const TEAM_CREATE_ID_PATTERN = /^tc_[0-9a-f]{24}$/;
 
-export type TeamCreateParams = { kind: 'team-create'; root: string; team: string; head: string | null };
+export type TeamCreateParams = {
+  kind: 'team-create';
+  root: string;
+  team: string;
+  head: string | null;
+  /** Who asked, in their own log label. Display only: not part of `teamCreateHash`. */
+  requested_by?: string;
+  /** Why they asked, in their own words. Display only: not part of `teamCreateHash`. */
+  reason?: string;
+};
 export type TeamCreateRecord = { request_id: string; params: TeamCreateParams; params_sha256: string; created: string; expires_at: string };
 
 export function teamCreateHash(p: TeamCreateParams): string {
+  // `requested_by` and `reason` are display only and stay out of the hash: the owner's answer signs
+  // the folder, team and HEAD, and the asker's words about why must not change what it covers.
   return createHash('sha256').update(JSON.stringify({ kind: p.kind, root: p.root, team: p.team, head: p.head }), 'utf8').digest('hex');
 }
 
@@ -66,9 +77,23 @@ export function teamCreateSummary(p: TeamCreateParams): string {
 }
 
 /** Records one request and delivers its confirmation to the owner seat. Refused with no owner seat. */
-export function createTeamCreateRequest(home: string, root: string, head: string | null, now: Date = new Date()): { ok: true; record: TeamCreateRecord; inbox: string | null; text: string } | { ok: false; why: string } {
+export function createTeamCreateRequest(
+  home: string,
+  root: string,
+  head: string | null,
+  now: Date = new Date(),
+  ask: { requestedBy?: string; reason?: string } = {},
+): { ok: true; record: TeamCreateRecord; inbox: string | null; text: string } | { ok: false; why: string } {
   if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one (team grant --add-owner-seat) or runs team init from a terminal' };
-  const params: TeamCreateParams = { kind: 'team-create', root: canonicalRoot(root), team: basename(canonicalRoot(root)), head };
+  const why = ask.reason?.replace(/\s+/g, ' ').trim();
+  const params: TeamCreateParams = {
+    kind: 'team-create',
+    root: canonicalRoot(root),
+    team: basename(canonicalRoot(root)),
+    head,
+    ...(ask.requestedBy === undefined ? {} : { requested_by: ask.requestedBy }),
+    ...(why === undefined || why === '' ? {} : { reason: why }),
+  };
   const record: TeamCreateRecord = {
     request_id: `tc_${randomBytes(12).toString('hex')}`,
     params,

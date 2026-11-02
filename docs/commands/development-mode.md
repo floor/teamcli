@@ -31,9 +31,9 @@ binds the prior generation, a token shown for one switch never authorizes anothe
 finds the generation moved refuses and says to show the fingerprint again.
 
 `set <mode> --request` is the owner-seat path, exactly as `team config set … --request` records a
-record change: it records one owner-seat request naming this switch — the card reads
-`TeamCLI: development mode` / `Set development mode to <mode> on this machine?` / `One-time
-change. <asker> asked.` — and writes nothing. The owner answers it on her owner page (a passkey or
+record change: it records one owner-seat request naming this switch — for `local-fast` the card
+reads `Turn on fast local development` / `Stop asking Touch ID for routine team changes on this
+Mac. OK?` / `This Mac · all teams`, and the other modes say their own lines — and writes nothing. The owner answers it on her owner page (a passkey or
 Touch ID signature), and `team development-mode set <mode> --approval <request-id>` applies the
 switch once that verified answer binds these words; when the owner seat's Touch ID signer is
 present at the request, the answer is taken then and the switch applies in the same run. The

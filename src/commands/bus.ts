@@ -22,7 +22,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { stopped } from './broker.ts';
 
 export const USAGE = `Usage: team bus
-       team bus --request
+       team bus --request [--reason <text>]
        team bus --approval <request-id>
 
 Runs the event bus for this clone over \`.agents/bus.sock\`, appending signed event records to the
@@ -31,7 +31,7 @@ terminal outside herdr, and a seat the team marks \`leads\` runs it from that se
 Ctrl-C stops it.
 
 The owner-seat form needs no owner terminal: --request records this start (repository, team, HEAD;
-fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a
+fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a
 passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule
 for team-bus covering this folder admits the run with no request. The daemon restarts a dead bus
 on its own, and so does team up.
@@ -52,7 +52,7 @@ export const bus: Command = (argv, io) => runBus(argv, io);
 export default bus;
 
 export async function runBus(argv: string[], io: Io, sources: BusCommandSources = {}): Promise<number> {
-  const args = readArgs(argv, ['approval', 'inherited'], ['request']);
+  const args = readArgs(argv, ['approval', 'inherited', 'reason'], ['request']);
   if (args.error || args.rest.length) {
     io.stderr(`team bus: ${args.error ?? `unexpected "${args.rest[0]}"`}\n${USAGE}`);
     // exit: bus.usage
@@ -67,7 +67,7 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   // and is not an owner-seat request.
   let seatApproved = false;
   if (args.values.inherited === undefined) {
-    const seat = ownerSeatStep('bus', 'team-bus', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json: false }, io, seatSources);
+    const seat = ownerSeatStep('bus', 'team-bus', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json: false, reason: args.values.reason }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: bus.approval-requested
       return 0;

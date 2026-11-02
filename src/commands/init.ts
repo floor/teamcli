@@ -188,7 +188,7 @@ export const init: Command = (argv, io) => runInit(argv, io, undefined, undefine
 export default init;
 
 export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
-       team init --request [--then-up] [--json]
+       team init --request [--reason <text>] [--then-up] [--json]
        team init --execute <request-id> [--json]
        team init --general <grant.json> --key <client.key> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
@@ -214,7 +214,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope', 'general', 'key'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
+  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope', 'general', 'key', 'reason'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -261,12 +261,13 @@ export async function runInit(
     else {
       // `--then-up` bundles the first `team up` into the same request: one owner-seat answer
       // creates the team and starts it (src/client/owner-action.ts).
+      const ask = { requestedBy: callerLabel(callerOf(io)), ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) };
       const made = args.flags.has('then-up')
         ? createOwnerActionRequest(actionHome, {
           actions: ['team-create', 'team-up'], root, team: basename(root), head: git(root, 'rev-parse', 'HEAD'),
-          args: { 'team-create': [], 'team-up': [] }, requestedBy: callerLabel(callerOf(io)),
+          args: { 'team-create': [], 'team-up': [] }, ...ask,
         }, now)
-        : createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now);
+        : createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now, ask);
       if (!made.ok) actionRefusal(made.why);
       else actionDone('requested', `team init: request recorded`, { request_id: made.record.request_id, text: made.text, ...(made.inbox !== null ? { inbox: made.inbox } : {}) });
       actionOutcome = made.ok ? 'done' : 'refused';

@@ -49,7 +49,7 @@ export type OwnerPageRequest = {
   id: string;
   /** The inbox line. The page shows the card instead of this prompt. */
   text: string;
-  /** The card's title line, in plain words: `TeamCLI: change the team's record`. */
+  /** The card's title line, in plain words: `Change the team's record`. */
   title: string;
   /** The card's question, one sentence. */
   description: string;
@@ -128,7 +128,7 @@ export function ownerPageRequest(message: { request_id: string; text?: string; k
     const card = grantCard({ prompt: prompt ?? msg('card.grant.question'), ...(grant?.master === true ? { master: true } : {}), ...(grant?.up != null ? { up: true } : {}) });
     const full = grant?.text ?? strippedPrompt(text);
     const details = [msg('card.details.request', { id }), full].join('\n');
-    return { id, text, title: card.title, description: card.question, ...(onceOnly ? { scope: msg('card.scope.once') } : {}), onceOnly, details };
+    return { id, text, title: card.title, description: card.question, onceOnly, details };
   }
   return unknown(strippedPrompt(text));
 }
