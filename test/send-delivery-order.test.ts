@@ -35,12 +35,12 @@ import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { ProjectRecord } from '../src/registry/projects.ts';
-import { upsertProject } from '../src/registry/projects.ts';
+import { ofTeam, ProjectsError, upsertProject } from '../src/registry/projects.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { planPolicySet, writePolicySet } from '../src/policy/index.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
-import { deliveryChainOf } from '../src/send/delivery.ts';
+import { deliveryChainOf, DeliveryChainUnreadable } from '../src/send/delivery.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readPending } from '../src/send/pending.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
@@ -50,6 +50,7 @@ import { installKey, messageKeyState } from '../src/store/keys.ts';
 import { isRead, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { recordBody, testIo } from './helpers.ts';
+import { unreadableTeamFolder } from './helpers/registry-team.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T06:00:00.000Z');
@@ -294,6 +295,15 @@ function projectRecord(order?: DeliveryLeg[]): ProjectRecord {
 /** The registry seam a scene hands the host: one project, answering every read. */
 function projectSources(record: ProjectRecord | null): ProjectSources {
   return { list: () => (record ? [record] : []), byName: () => record, ofTeam: () => record };
+}
+
+/** The seam a scene hands the host when the projects registry cannot answer: every read throws
+ *  the reader's own error, the shape an unreadable `projects.yaml` has. */
+function refusingProjectSources(why: string): ProjectSources {
+  const fail = (): never => {
+    throw new ProjectsError(why);
+  };
+  return { list: fail, byName: fail, ofTeam: fail };
 }
 
 function lastEntry(root: string, home: string): Record<string, unknown> {
@@ -675,17 +685,111 @@ describe('the chain is read from the files when the host hands none in', () => {
     expect(deliveryChainOf({ root: w.root, seat: 'lead', home: w.home, projectOfTeam: () => null })).toEqual({});
   });
 
-  test('a registry that cannot answer is no project word, never a failed send', () => {
+  test('a registry that cannot name the team’s project refuses the chain instead of widening it', () => {
     const w = world({ top: 'delivery_order: [typed]\n' });
-    const chain = deliveryChainOf({
+    let caught: unknown;
+    try {
+      deliveryChainOf({
+        root: w.root,
+        seat: 'lead',
+        home: w.home,
+        projectOfTeam: () => {
+          throw new ProjectsError('team acme is named in 2 projects');
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    // The project's word can only narrow the order; reading a bound the reader cannot see as
+    // "no word" would let the default behind it name legs the project keeps out.
+    expect(caught).toBeInstanceOf(DeliveryChainUnreadable);
+    expect((caught as Error).message).toContain('named in 2 projects');
+  });
+
+  test('a project registry folder this user cannot search refuses the chain, never reads as no project', () => {
+    const w = world();
+    upsertProject(w.home, 'acme', { name: 'Acme', teams: [teamIdOf(w.root)], deliveryOrder: ['drop'], at: NOW.toISOString() });
+    const readable = deliveryChainOf({
       root: w.root,
       seat: 'lead',
       home: w.home,
-      projectOfTeam: () => {
-        throw new Error('team acme is named in 2 projects');
-      },
+      file: w.team,
+      projectOfTeam: (id) => ofTeam(w.home, id),
     });
-    expect(chain).toEqual({ team: ['typed'] });
+    expect(readable).toEqual({ project: ['drop'] });
+    const held = unreadableTeamFolder(w.home);
+    try {
+      expect(() => deliveryChainOf({
+        root: w.root,
+        seat: 'lead',
+        home: w.home,
+        file: w.team,
+        projectOfTeam: (id) => ofTeam(w.home, id),
+      })).toThrow(DeliveryChainUnreadable);
+    } finally {
+      held.restore();
+    }
+    // The same registry answers again once the folder is searchable.
+    expect(deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      file: w.team,
+      projectOfTeam: (id) => ofTeam(w.home, id),
+    })).toEqual({ project: ['drop'] });
+  });
+
+  test('a project policy record that does not verify refuses the chain, never falls back to the default', () => {
+    const w = world();
+    const written = writePolicySet(w.home, { level: 'project', target: 'acme', name: 'delivery-order', value: ['drop'] }, { now: NOW });
+    expect(written.ok ? 'ok' : written.why).toBe('ok');
+    const path = join(w.home, '.config', 'team', 'projects.yaml');
+    const text = readFileSync(path, 'utf8');
+    const corrupted = text.replace(/(signature:).*/u, '$1 not-the-owners-signature');
+    expect(corrupted).not.toBe(text);
+    writeFileSync(path, corrupted);
+
+    // The signed drop-only word is what this project declares; a record that exists and cannot
+    // be read is not "no word", and the default behind it would travel where the project forbids.
+    expect(() => deliveryChainOf({
+      root: w.root,
+      seat: 'lead',
+      home: w.home,
+      projectOfTeam: () => projectRecord(),
+    })).toThrow(DeliveryChainUnreadable);
+  });
+
+  test('a project’s drop-only word keeps the walk off the typed default', async () => {
+    const w = world();
+    const host = walker(w);
+    host.projects = projectSources(projectRecord(['drop']));
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+
+    // Nothing was typed and nothing was skipped: the project's one leg took the send, so the
+    // default's mcp-inbox and typed legs were never candidates.
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.via).toBe('drop');
+    expect(entry.failed).toBeUndefined();
+    expect(host.typed).toEqual([]);
+  });
+
+  test('a registry that cannot answer refuses the send instead of walking the default typed legs', async () => {
+    const w = world();
+    const host = walker(w);
+    host.projects = refusingProjectSources('~/.config/team/projects.yaml: EACCES: permission denied');
+    const io = owner(w.root);
+
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    // No walk: the project's word may keep the drop leg out, so the fallback is never used as a
+    // stand-in, and no pane is read or typed into.
+    expect(code).toBe(2);
+    expect(io.err).toContain('the project registry cannot name this team\'s project');
+    expect(io.err).toContain('EACCES');
+    expect(host.typed).toEqual([]);
+    expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
   test('the project word is asked for the team’s own id', () => {

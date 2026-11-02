@@ -12,8 +12,9 @@ import type { Caller, SeatStanding } from '../../src/caller.ts';
 import { writeGrant, type GrantRecord } from '../../src/permissions/grants.ts';
 import { COMMAND_GATES } from '../../src/permissions/map.ts';
 import { resolvePermission, type CallerRecord } from '../../src/permissions/resolve.ts';
-import { gateVerdict, resolveCaller, type BridgeTeam } from '../../src/permissions/who.ts';
+import { gateVerdict, resolveCaller, rosterOf, type BridgeTeam } from '../../src/permissions/who.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
+import { unreadableTeamFolder } from '../helpers/registry-team.ts';
 
 const AGENT = 'agt_0123456789ab';
 const OTHER_AGENT = 'agt_ffffffffffff';
@@ -127,6 +128,34 @@ describe('a registry that cannot be read (a)', () => {
       }
     });
   }
+
+  // A folder that cannot be read is not an empty registry. A stat failure on `teams.yaml`
+  // (an unsearchable team folder) makes it invisible to an existence check, and reading that
+  // invisibility as "no teams" hands `lead` back to the file's own declaration: the very
+  // fallback the scenes above refuse. The control reads the valid registry held inside: the
+  // roster names `worker` and not `lead`, so the file's coordinator is refused. With the folder
+  // unreadable the answer must be the registry refusal, never that file fallback.
+  test('a team folder that cannot be read is refused as unreadable, never read as no registry', () => {
+    const { root, home, id } = world();
+    register(root, home, [{ agent: AGENT, seat: 'worker', role: 'implementer' }]);
+    expect(rosterOf(home, root)).toMatchObject({ kind: 'listed' });
+    expect(resolveCaller(seatCaller('lead'), fileTeam(id), root, home, 'remove', placement(), NOW))
+      .toMatchObject({ effect: 'deny' });
+    const held = unreadableTeamFolder(home);
+    try {
+      expect(rosterOf(home, root)).toMatchObject({ kind: 'unreadable' });
+      const decision = resolveCaller(seatCaller('lead'), fileTeam(id), root, home, 'remove', placement(), NOW);
+      expect(decision).toMatchObject({ effect: 'deny', rule: 'unreadable' });
+      expect(decision.why).toContain('the registry cannot be read');
+      for (const command of ['remove', 'up', 'down', 'restart', 'register', ...SEAT_RECORDS]) {
+        expect(gateVerdict(seatCaller('lead'), fileTeam(id), root, home, command, placement(), () => NOW))
+          .toEqual({ kind: 'refused' });
+      }
+    } finally {
+      held.restore();
+    }
+    expect(rosterOf(home, root)).toMatchObject({ kind: 'listed' });
+  });
 });
 
 describe('a caller no registry record stands for (b)', () => {

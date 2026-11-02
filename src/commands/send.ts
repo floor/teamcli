@@ -42,7 +42,7 @@ import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord,
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { deliveryChainOf } from '../send/delivery.ts';
+import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import { webhookRouteOf } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
@@ -1122,18 +1122,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     overrides = read.overrides;
   }
-  const rawChain = host.delivery ?? deliveryChainOf({
-    root: to.root,
-    seat: to.seat,
-    home: host.home,
-    // Across teams the file loaded above is the caller's own: the receiving team's is loaded
-    // from its root, and one that cannot be read declares nothing.
-    ...(to.cross ? {} : { file: team }),
-    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-    overrides,
-    now: host.now(),
-  });
-  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
+  // The project's word can only narrow the order, so a project registry or project policy record
+  // that exists and cannot be read refuses the send: walking the fallback behind it could type
+  // into a pane the project keeps out. `host.delivery` (tests) names the order itself.
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = host.delivery ?? deliveryChainOf({
+      root: to.root,
+      seat: to.seat,
+      home: host.home,
+      // Across teams the file loaded above is the caller's own: the receiving team's is loaded
+      // from its root, and one that cannot be read declares nothing.
+      ...(to.cross ? {} : { file: team }),
+      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+      overrides,
+      now: host.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return configuration(io, error.message, report);
+  }
+  const order = deliveryOrder(rawChain);
   // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
   // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
   // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
@@ -3740,14 +3749,22 @@ export async function walkBriefDelivery(input: {
   } catch {
     // A file that cannot even be read declares nothing, as one that does not validate does.
   }
-  const order = deliveryOrder(deliveryChainOf({
-    root: input.root,
-    seat: seatName,
-    home: input.host.home,
-    ...(file === undefined ? {} : { file }),
-    projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
-    overrides: read.overrides,
-  }));
+  // A project word the reader cannot see is not "no word": it may keep legs out, and the
+  // fallback behind it could travel where the project forbids. No leg is walked on it.
+  let order: readonly DeliveryLeg[];
+  try {
+    order = deliveryOrder(deliveryChainOf({
+      root: input.root,
+      seat: seatName,
+      home: input.host.home,
+      ...(file === undefined ? {} : { file }),
+      projectOfTeam: (id: string) => (input.host.projects ? input.host.projects.ofTeam(id) : projectRegistry.ofTeam(input.host.home, id)),
+      overrides: read.overrides,
+    }));
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return { via: null, walked: false, exit: 0, failures: [error.message] };
+  }
   const declared = file?.seats.find((seat) => seat.name === seatName);
   const project = input.project ?? file?.project ?? '';
   // A human's pane never takes typing, whatever its order says: its walk is the drop leg alone,
@@ -3947,16 +3964,25 @@ async function deliverClientRecord(
     });
     return;
   }
-  const rawChain = host.delivery ?? deliveryChainOf({
-    root,
-    seat: seatName,
-    home: host.home,
-    file: team,
-    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-    overrides,
-    now: host.now(),
-  });
-  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
+  // The client's drop is already written; a project order this run cannot read leaves it as the
+  // delivery, and no leg is walked on a guess that could travel where the project forbids.
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = host.delivery ?? deliveryChainOf({
+      root,
+      seat: seatName,
+      home: host.home,
+      file: team,
+      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+      overrides,
+      now: host.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${error.message}, so no delivery leg was walked`, host.now());
+    return;
+  }
+  const order = deliveryOrder(rawChain);
   const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
   const inbound = declaredInboundOf({
     dir,

@@ -9,7 +9,7 @@
 // read-modify-write under a lock ending in an atomic replace, exactly like teams.ts, so a reader
 // never sees half a file and two writers never lose each other's update.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DELIVERY_LEGS, isLivenessSeconds, isSenderNameMode, SENDER_NAME_MODES, type DeliveryLeg, type LivenessThresholds, type SenderNameMode } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
@@ -86,16 +86,19 @@ export function projectsFile(home: string): string {
   return join(home, '.config', 'team', 'projects.yaml');
 }
 
-/** Every registered project, by project ID. A missing file is no projects. A file that does not
- *  read as a project registry throws `ProjectsError`, so a writer never replaces a file it could
- *  not read. */
+/** Every registered project, by project ID. A missing file is no projects; a file that cannot
+ *  be read — a corrupt one, or one under a folder this user cannot search — throws
+ *  `ProjectsError`, so no reader takes an unreadable registry as an empty one (a team no
+ *  project names reads as its own project) and no writer replaces a file it could not read. */
 export function readProjects(home: string): Record<string, ProjectRecord> {
   const path = projectsFile(home);
-  if (!existsSync(path)) return {};
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
+    // Absence is ENOENT alone: an existence check would read a folder this user cannot search
+    // as "no project registry".
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw new ProjectsError(`${path}: ${(error as Error).message}`);
   }
   if (!text.trim()) return {};

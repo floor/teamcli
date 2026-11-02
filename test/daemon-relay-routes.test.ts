@@ -456,6 +456,27 @@ describe('daemon route-selection and capability integration (selectDaemonRelayRo
     }
   });
 
+  test('a project registry that cannot answer refuses the selection instead of routing on the default order', () => {
+    const scene = createScene({ claudeInbound: 'accept' });
+    const refused = selectDaemonRelayRoutes(
+      { route: scene.route, team: scene.team, seat: 'worker-claude', home: scene.home, now: NOW },
+      {
+        projectOfTeam: () => {
+          throw new Error('~/.config/team/projects.yaml: EACCES: permission denied');
+        },
+      },
+    );
+    // The project's word may keep the socket leg out; a selection that read its loss as "no
+    // word" would wake the seat by the default route instead of refusing.
+    expect(refused).toEqual({
+      ok: false,
+      code: 'daemon.route-settings',
+      outcome: 'refused',
+      message: "the project registry cannot name this team's project: ~/.config/team/projects.yaml: EACCES: permission denied",
+      broker: 'absent',
+    });
+  });
+
   test('selects implied socket-first for claude-code with accept, implied native-first for codex, headless-resume for gemini/cursor, and durable-copy only for human', () => {
     const acceptScene = createScene({ claudeInbound: 'accept' });
     const claudePlan = selectDaemonRelayRoutes({

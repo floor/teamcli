@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { canonicalRecord, teamRecordOf } from './canonical-record.ts';
 import { loadTeamFile, loadTeamText, TEAM_FILE } from './load.ts';
@@ -135,18 +135,21 @@ function withSource(result: LoadResult, source: TeamConfigSource): LoadResult {
 }
 
 /** A team file left beside a registry team: present, and whether it says what the registry says.
- *  Read and validated only to compare; a file that does not validate does not match. */
+ *  Read and validated only to compare; a file that does not validate does not match. Absence is
+ *  `ENOENT` alone: a file this reader may not read is a leftover it cannot compare, so it is
+ *  reported as a difference and the migration's verification never accepts it as unchanged. An
+ *  existence check would read a folder this user cannot search as no leftover at all. */
 function leftoverOf(
   path: string,
   team: TeamFile,
   root: string,
   options: { home?: string },
 ): { path: string; matches: boolean } | undefined {
-  if (!existsSync(path)) return undefined;
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     return { path, matches: false };
   }
   const file = loadTeamText(text, root, path, { ...(options.home !== undefined ? { home: options.home } : {}), checkOnly: true });
