@@ -153,6 +153,15 @@ describe('the messages name where the team lives', () => {
     expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
     expect(teamPlace(at.file, { home: at.home, source: 'file' })).toBe('the team file');
   });
+
+  // A record that cannot be read still has a home, and a message names it: the display helper
+  // refuses plainly instead of throwing the store's error out of a refusal it was wording.
+  test('a record that cannot be read is still named, never thrown from a message', async () => {
+    const at = await migrated();
+    writeFileSync(join(at.home, '.config', 'team', 'team-config', `${teamIdOf(at.root)}.json`), '{"format": 1, "text": ');
+    expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
+    expect(teamPlace(at.file, { home: at.home, source: 'file' })).toBe('the team file');
+  });
 });
 
 test('no scene wrote the real registry folder', async () => {

@@ -36,7 +36,7 @@ import {
   type PolicyLevel,
   type PolicyValue,
 } from './types.ts';
-import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
+import { readTeamText, readTeamTextTarget, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 
 export type PolicyChainInput = {
   home?: string;
@@ -456,8 +456,15 @@ export function readTeamPolicySource(
   let rawLegacyDelivery: unknown = team?.deliveryOrder ?? undefined;
 
   // Without a team handed in, the team's text is read where its edits land: the registry's record
-  // under `team-config.source: registry`, the file otherwise (src/file/team-text.ts).
-  const onRegistry = rawPolicies === undefined && teamRoot !== null && teamTextTarget(path, { home }).kind === 'registry';
+  // under `team-config.source: registry`, the file otherwise (src/file/team-text.ts). A record
+  // that cannot be read is this source's own refusal, naming the registry — never an exception
+  // out of the chain, and never a fallback to the file beside it.
+  let onRegistry = false;
+  if (rawPolicies === undefined && teamRoot !== null) {
+    const target = readTeamTextTarget(path, { home });
+    if (!target.ok) return { ok: false, level: 'team', target: primaryTarget, source: path, why: target.why };
+    onRegistry = target.target.kind === 'registry';
+  }
   if (rawPolicies === undefined && teamRoot && (onRegistry || existsSync(path))) {
     let text: string;
     try {

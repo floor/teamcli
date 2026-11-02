@@ -38,6 +38,8 @@ export type TeamTextTarget =
   | { kind: 'file'; path: string }
   | { kind: 'registry'; path: string; root: string; id: string; home: string };
 
+export type TeamTextTargetRead = { ok: true; target: TeamTextTarget } | { ok: false; why: string };
+
 function real(path: string): string {
   try {
     return realpathSync(path);
@@ -67,10 +69,24 @@ export function teamTextTarget(path: string, options: TeamTextOptions = {}): Tea
   return { kind: 'registry', path, root, id, home };
 }
 
+/** The same resolution, for callers that must refuse plainly: a record that cannot be read comes
+ *  back as the sentence the plain read refuses with, never as an exception. The writers keep
+ *  calling `teamTextTarget` itself, which still throws rather than fall back to the file. */
+export function readTeamTextTarget(path: string, options: TeamTextOptions = {}): TeamTextTargetRead {
+  try {
+    return { ok: true, target: teamTextTarget(path, options) };
+  } catch (error) {
+    if (!(error instanceof TeamConfigStoreError)) throw error;
+    return { ok: false, why: `the registry's record of this team cannot be read: ${error.message}` };
+  }
+}
+
 /** How a message names where the team lives: `the registry's record` under the registry source,
- *  `the team file` otherwise, so a refusal never names a file that is not read. */
+ *  `the team file` otherwise, so a refusal never names a file that is not read. A record that
+ *  cannot be read is still the registry's: its name is the last thing a refusal can say. */
 export function teamPlace(path: string, options: TeamTextOptions = {}, onFile = 'the team file'): string {
-  return teamTextTarget(path, options).kind === 'registry' ? "the registry's record" : onFile;
+  const read = readTeamTextTarget(path, options);
+  return read.ok && read.target.kind === 'file' ? onFile : "the registry's record";
 }
 
 /** The team a launched pointer names, read as the team it is. A pointer records the file a
@@ -79,24 +95,15 @@ export function teamPlace(path: string, options: TeamTextOptions = {}, onFile = 
  *  writes, so the read never serves a copy the registry has moved past (a seat stopped with
  *  `remove --keep`, for one). Any other file is read as the file it names, as `--file` is. */
 export function readLaunchedTeam(file: string, options: ReadTeamConfigOptions = {}): LoadResult {
-  let target: TeamTextTarget;
-  try {
-    target = teamTextTarget(file, {
-      ...(options.source !== undefined ? { source: options.source } : {}),
-      ...(options.home !== undefined ? { home: options.home } : {}),
-      ...(options.env !== undefined ? { env: options.env } : {}),
-    });
-  } catch (error) {
-    if (!(error instanceof TeamConfigStoreError)) throw error;
-    return {
-      ok: false,
-      path: file,
-      errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }],
-    };
-  }
+  const target = readTeamTextTarget(file, {
+    ...(options.source !== undefined ? { source: options.source } : {}),
+    ...(options.home !== undefined ? { home: options.home } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
+  });
+  if (!target.ok) return { ok: false, path: file, errors: [{ line: 0, message: target.why }] };
   const { file: _named, ...rest } = options;
-  return target.kind === 'registry'
-    ? readTeamConfig(target.root, rest)
+  return target.target.kind === 'registry'
+    ? readTeamConfig(target.target.root, rest)
     : readTeamConfig(dirname(file), { ...rest, file });
 }
 

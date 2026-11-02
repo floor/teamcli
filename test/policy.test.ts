@@ -1671,6 +1671,31 @@ describe('under the registry source', () => {
       fx.cleanup();
     }
   });
+
+  // The team source asks the writers' seam where the team's text is; a record that cannot be
+  // read is this source's own refusal, naming the registry — never an exception out of the
+  // policy reader, and never a fallback to the file beside it.
+  test('a record that cannot be read is a team refusal naming the registry', async () => {
+    const fx = makeFixture();
+    try {
+      intoRegistry(fx.root, fx.home);
+      const record = join(fx.home, '.config', 'team', 'team-config', `${teamIdOf(fx.root)}.json`);
+      writeFileSync(record, '{"format": 1, "text": ');
+      await underRegistry(async () => {
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(false);
+        if (!read.ok) {
+          expect(read.level).toBe('team');
+          expect(read.why).toContain("the registry's record of this team cannot be read: ");
+          expect(read.why).toContain(record);
+          expect(read.why).toContain('JSON Parse error');
+        }
+      });
+      expect(realRegistryTouched()).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
 });
 
 test('owner setup policies remain signed and readable by policy view for either entity', async () => {
