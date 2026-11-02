@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { type Caller } from '../src/caller.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
-import { runSwap, type SwapCommandOptions } from '../src/commands/swap.ts';
+import { queuedRowProblem, runSwap, type SwapCommandOptions } from '../src/commands/swap.ts';
 import type { Launch } from '../src/commands/up.ts';
 import type { RestartSources } from '../src/commands/restart.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -1160,4 +1160,17 @@ describe('team swap now and --run', () => {
     expect(again.code).toBe(1);
     expect(again.err).toContain('waits on no swap');
   });
+});
+
+test('a queued row the team file would refuse is refused before the record is written', () => {
+  const bad = {
+    cli: 'claude-code', vendor: 'moonshot', model: 'Kimi K2.5', version: '2.5',
+    display: 'Kimi K2.5', launch: 'claude --model kimi-k2.5',
+  };
+  expect(queuedRowProblem(TEAM, 'lead', bad)).toContain('display must contain the version "2.5" as a token of its own');
+  expect(queuedRowProblem(TEAM, 'lead', { ...bad, display: 'Kimi K2.5 2.5' })).toBeNull();
+  // The same helper proves the quoting fix end to end: a double-quoted row rewritten with a
+  // vendor command carrying `"` and `$` is valid where it used to end its string early.
+  const quoted = TEAM.replace('launch: claude --model claude-opus-5-5', 'launch: "claude --model claude-opus-5-5"');
+  expect(queuedRowProblem(quoted, 'lead', { ...bad, display: 'Kimi K2.5 2.5', launch: 'claude -a "$USER" --model kimi-k2.5' })).toBeNull();
 });

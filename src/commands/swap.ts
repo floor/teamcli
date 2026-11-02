@@ -17,7 +17,10 @@ import {
 import { charterGate } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
+import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
 import { launchTeamFile } from '../file/load.ts';
+import { readTeamText } from '../file/team-text.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -474,6 +477,25 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     now,
   };
   let queued: QueuedSwap;
+  // The run rewrites the seat's declaration and validates the whole file before it launches
+  // (`writeTeamFile` / the registry write), so the queue proves the same write now: a row the
+  // team file would refuse is never reported as queued, and no record is left behind for a run
+  // that could only fail. The validator is the file loader's own.
+  if (current.path === undefined) {
+    refuse(rawIo, io, json, 'swap.io', 'the team has no text the swap row could be written to', null, notice, null);
+    return 'io';
+  }
+  let rowProblem: string | null;
+  try {
+    rowProblem = queuedRowProblem(readTeamText(current.path, { home, command: 'swap' }), seat.name, request.to);
+  } catch (error) {
+    refuse(rawIo, io, json, 'swap.io', `the team cannot be read to check the swap's row: ${(error as Error).message}`, null, notice, null);
+    return 'io';
+  }
+  if (rowProblem !== null) {
+    refuse(rawIo, io, json, 'swap.target', plainText(`the swap would write a row the team file refuses: ${rowProblem}`), null, notice, null);
+    return 'target';
+  }
   try {
     queued = enqueueSwap(dir, request);
   } catch (error) {
@@ -706,6 +728,21 @@ function choose(
     return { kind: 'target', message: plainText(breach.reason ?? 'no recipe is available for this seat'), repair: null };
   }
   return { kind: 'recipe', donor: breach.proposal.donor, recipe: breach.proposal.recipe };
+}
+
+/**
+ * Why the queue may not report this row as queued, or null: the run writes the recipe into the
+ * seat's entry and validates the whole file before it launches, so a row the file refuses is
+ * refused here, before `enqueueSwap` leaves a record a run could only fail. `text` is the
+ * team's own text, read the way the run reads it; `fields` is the record's `to`.
+ */
+export function queuedRowProblem(text: string, name: string, fields: SeatModelFields): string | null {
+  if (!hasSeat(text, name)) return `${name} is no longer in the team file`;
+  const parsed = validateTeamFile(rewriteSeatModel(text, name, fields));
+  if (parsed.ok) return null;
+  const first = parsed.errors[0];
+  if (first === undefined) return 'the rewritten file is invalid';
+  return `${first.line === undefined ? '' : `line ${first.line}: `}${first.message}`;
 }
 
 /** The profile's own attribute-only credential check, run on this machine. A profile with no
