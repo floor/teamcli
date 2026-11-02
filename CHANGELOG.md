@@ -19,12 +19,12 @@ an action changes a team or answers a dialog.
 - Seats can receive accepted inbox records through a webhook with configurable headers and
   request bodies. Delivery reports identify the route that accepted a message, and status shows
   whether each seat can be woken while idle or reads its inbox on its next turn.
-- `team answer` handles supported questions, plan approvals and confirmations. The watch
-  reports these dialog kinds and reads questions whose blocks reach the edge of the window.
+- `team answer` handles questions, plan approvals and confirmations on supported CLI versions.
+  The watch reports these dialogs, includes their visible text and flags incomplete questions.
 - An entity can require unique seat nicknames across teams. Configuration changes keep a
   seat's label and nickname together, and checks report conflicting names.
-- Signed send grants can reach another team's orchestrator while retaining their operation
-  and entity limits. `team daemon restart` accepts a verified general grant.
+- Owner-signed send grants can address another team's orchestrator within the same entity.
+  `team daemon restart` accepts a verified general grant that covers the daemon operation.
 
 ### Changed
 
@@ -37,14 +37,22 @@ an action changes a team or answers a dialog.
   records, renews its own watch heartbeat and reports failed endpoints. Installation uses a
   verified program copy without grant credentials in the service definition, and a failed
   refresh restores and checks the previous program.
+- Custom screen rules require a matching condition. The `reason` field belongs only to
+  rate-limit rules.
 
 ### Fixed
 
-- Quoted launch scripts retain their intended arguments, conversation identity and supported
-  options. Launch records and fallback reports describe the conversation actually started,
+- Supported quoted Claude Code launch scripts keep resume and session options inside the
+  script. Launch records and fallback reports describe the conversation actually started,
   and managed endpoint sockets remain usable for teams in deeply nested folders.
-- Restored seats refresh their displayed state on the first watch cycle. Slow process and
-  screen reads finish before the state lock is taken.
+- Managed Codex conversations can accept queued messages during a running turn or dialog.
+- Launched-team commands read current registry records. Inbox registration works without a
+  local team file and retries a failed registration before leaving the seat unlaunched.
+- Workflow runs preserve error transitions even when the requested destination is the error
+  state, and check each step before saving it.
+- Restored seats refresh their displayed state on the first watch cycle. Status reads a
+  wrapper's model only from an unambiguous welcome header. Slow process and screen reads finish
+  before the state lock is taken.
 - Signed bus verification keeps an authenticated checkpoint across restarts. Closing a bus
   cancels deferred work, and webhook delivery preserves configured header and body values
   while refusing redirects and unsafe file inputs.
@@ -59,7 +67,6 @@ an action changes a team or answers a dialog.
   resolved trust folder immediately before acting.
 - Credential checks recognise framed tokens in team configuration. Private-text checks also
   scan binary-looking files and complete commit messages containing NUL bytes.
-
 ## [0.5.10] - 2026-11-01
 
 0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is
