@@ -25,7 +25,8 @@ import {
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
-import { placedProblems } from '../file/load.ts';
+import { launchTeamFile, placedProblems } from '../file/load.ts';
+import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -129,8 +130,8 @@ const realUpLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
@@ -460,6 +461,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     root,
     home,
     path,
+    launchFile: launchTeamFile(loaded),
     team,
     session,
     name,
@@ -544,6 +546,12 @@ export type PerformInput = {
   root: string;
   home: string;
   path: string;
+  /** The team file the launch names, when the caller already knows it: the file a file-team load
+   *  read, absent for a registry team, whose record is the definition and whose file beside it
+   *  need not exist. A caller that does not say (the swap's run, a direct caller) leaves the
+   *  question to the writer's seam in the sequence below, which names the file only where the
+   *  file is the team. `path` stays the root's file path for every read. */
+  launchFile?: string;
   team: TeamFile;
   session: string;
   name: string;
@@ -651,6 +659,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // file entry otherwise. The inspection above it reads the old declaration — the pane still
   // runs the old CLI.
   const next = input.next ?? declared;
+  // The team file this launch names to the CLI it starts. A caller that read the team itself
+  // says; a caller that hands only the root's path (the swap's run, a direct caller) asks the
+  // writer's own seam, the same question a launched pointer's reader asks: a registry team's file
+  // beside the root need not exist and is never named, and every other file is the team the
+  // launch reads. Naming no file is not the same as naming a missing one: the launched seat
+  // resolves a registry team from the registry.
+  const launchFile = input.launchFile ?? (teamTextTarget(path, { home }).kind === 'file' ? path : undefined);
   const noteIo: Io = json
     ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
     : out;
@@ -759,7 +774,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: launchFile,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -1057,7 +1072,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: launchFile,
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -1543,7 +1558,7 @@ function hostOf(input: {
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
