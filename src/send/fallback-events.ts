@@ -819,17 +819,33 @@ export function planRetirement(ctx: EscalationContext, options: { at?: Date } = 
  * outlives the episode. Each episode is retired under its own key lock and re-read inside it, so
  * a fact or a due escalation running beside the pass is neither lost nor archived mid-write: it
  * lands first and the pass sees the new state, or it waits for the pass. Only the first `limit`
- * eligible episodes, oldest first, are retired per pass. A retirement that does not complete
- * leaves the live marker in place and is reported; the next pass tries again.
+ * eligible episodes, oldest first, are retired per pass, except that a store carrying more than
+ * `backlogAbove` eligible episodes takes up to `backlogLimit` instead: a store never retired before
+ * carries its whole history, and the steady limit would need hours to clear it. The backlog is
+ * counted among finished episodes only, so a pending or unsettled marker is never a candidate
+ * whatever the limit. A retirement that does not complete leaves the live marker in place and is
+ * reported; the next pass tries again.
  */
 export function retireFinished(
   ctx: EscalationContext,
-  options: { at?: Date; lockWaitMs?: number; limit?: number } = {},
+  options: {
+    at?: Date;
+    lockWaitMs?: number;
+    limit?: number;
+    /** Above this many eligible finished episodes, one pass retires up to `backlogLimit`. */
+    backlogAbove?: number;
+    backlogLimit?: number;
+  } = {},
 ): RetirementReport {
   const at = options.at ?? ctx.now();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
   const plan = planRetirement(ctx, { at });
+  const backlog = plan.candidates.reduce((count, candidate) => count + (candidate.eligible ? 1 : 0), 0);
+  const passLimit =
+    options.backlogAbove !== undefined && options.backlogLimit !== undefined && backlog > options.backlogAbove
+      ? Math.max(limit, options.backlogLimit)
+      : limit;
   const report: RetirementReport = {
     at: at.toISOString(),
     retired: [],
@@ -841,7 +857,7 @@ export function retireFinished(
     retention: plan.retention,
   };
   for (const candidate of plan.candidates) {
-    if (report.retired.length >= limit) break;
+    if (report.retired.length >= passLimit) break;
     if (!candidate.eligible) {
       report.waiting.push({
         messageId: candidate.messageId,

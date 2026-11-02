@@ -265,6 +265,11 @@ const FALLBACK_STORE_PASS_MS = 30_000;
 /** Episodes retired and lock folders judged by one retirement pass. A store with a long history
  *  drains over several passes instead of one tick holding the event loop. */
 const FALLBACK_STORE_PASS_LIMIT = 256;
+/** A store that was never retired carries its whole history, and 256 a pass needs hours to clear
+ *  it. Above this many finished episodes one pass retires up to the limit below: the first few
+ *  passes after an upgrade empty the backlog in minutes, then the steady limit returns. */
+const FALLBACK_STORE_BACKLOG_ABOVE = 256;
+const FALLBACK_STORE_BACKLOG_LIMIT = 2_000;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -1870,7 +1875,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       roots: sweepRoots,
       now,
       ...(housekeeping
-        ? { retire: { limit: FALLBACK_STORE_PASS_LIMIT, lockWaitMs: 0 } }
+        ? {
+            retire: {
+              limit: FALLBACK_STORE_PASS_LIMIT,
+              backlogAbove: FALLBACK_STORE_BACKLOG_ABOVE,
+              backlogLimit: FALLBACK_STORE_BACKLOG_LIMIT,
+              lockWaitMs: 0,
+            },
+          }
         : {}),
     });
     for (const entry of swept.roots) {

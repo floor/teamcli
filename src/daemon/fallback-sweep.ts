@@ -60,8 +60,9 @@ export function sweepFallbackEscalations(input: {
   now: () => Date;
   /** Ask this pass to retire finished episodes and reclaim their lock folders after the
    *  escalation pass. Absent, the pass only escalates — a direct sweep never writes the store's
-   *  history. */
-  retire?: { limit?: number; lockWaitMs?: number; youngMs?: number };
+   *  history. `backlogAbove`/`backlogLimit` let one pass drain a store that was never retired
+   *  before; see `retireFinished`. */
+  retire?: { limit?: number; lockWaitMs?: number; youngMs?: number; backlogAbove?: number; backlogLimit?: number };
 }): FallbackSweepResult {
   const at = input.now();
   const roots: SweepRootResult[] = [];
@@ -95,6 +96,8 @@ export function sweepFallbackEscalations(input: {
           at,
           lockWaitMs: input.retire.lockWaitMs ?? 0,
           ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+          ...(input.retire.backlogAbove !== undefined ? { backlogAbove: input.retire.backlogAbove } : {}),
+          ...(input.retire.backlogLimit !== undefined ? { backlogLimit: input.retire.backlogLimit } : {}),
         });
         reclaim = reclaimFallbackLocks(ctx, {
           ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
