@@ -2397,17 +2397,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       sleepAt.set(key, promise);
       return promise;
     };
-    /** Writes a seat's waiting record, with the process identity read in the same write. The
+    /** Writes a seat's waiting record, with the process identity read before the write. The
      *  pause's own `[s]` and a run with no terminal (the daemon's restore sweep, a `keep` dialog)
-     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane. */
+     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane.
+     *  The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+     *  while another command waits to write. */
     const writeWaiting = (name: string, waiting: WaitingRecord, pane: string, workspace?: string): void => {
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -2745,6 +2747,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       lock: () => acquireSeatLock(dir, session, input.seat),
       state: () => readState(dir).sessions[session]?.seats[input.seat],
       write(change) {
+        // The terminal host is read before the state lock, so a slow read holds no writer; the
+        // `change` itself still runs under the lock, against the record the write replaces.
+        // `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose process is gone
+        // or replaced.
+        const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
         updateState(dir, (file) => {
           const current = (file.sessions[session] ??= emptySession());
           const prior = current.seats[input.seat] ?? { stage: 'launched' as const };
@@ -2752,10 +2759,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           if (current.retained_seats?.[input.seat]) delete current.retained_seats[input.seat];
           const id = prior.id ?? retained?.id ?? mintSeatId();
           const record = change(prior.waiting);
-          // The process identity is read here, at the moment the record is written, in the same
-          // write: `[o]`, `[s]`, a resumed `up` and `team answer` all refuse a pane whose
-          // process is gone or replaced.
-          const identity = launchedIdentity(launch.processInfo?.(session, input.pane) ?? null);
           current.seats[input.seat] = {
             ...prior,
             id,

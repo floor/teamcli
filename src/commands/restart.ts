@@ -1686,13 +1686,15 @@ function hostOf(input: {
     stopSession: () => false,
     dialog: { mode: 'keep' },
     recordWaiting(name, waiting, pane, workspace) {
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write.
+      const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: 'launched' as const };
         const retained = current.retained_seats?.[name];
         if (current.retained_seats?.[name]) delete current.retained_seats[name];
         const id = prior.id ?? retained?.id ?? mintSeatId();
-        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
         current.seats[name] = {
           ...prior,
           id,
@@ -1721,6 +1723,12 @@ function hostOf(input: {
     },
     record(name, patch) {
       let replaced: string | undefined;
+      // The terminal host is read before the state lock: its 10 s timeout must not hold team.lock
+      // while another command waits to write. It is read only when the brief's diagnostics can
+      // use it; whether they are written is still decided under the lock, below.
+      const identity = name === seat.name && patch.pane !== undefined && input.brief !== undefined
+        ? launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null)
+        : null;
       updateState(dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
         const prior = current.seats[name] ?? { stage: patch.stage };
@@ -1758,7 +1766,8 @@ function hostOf(input: {
         // The brief's pane diagnostics, written under this same state lock and only while the
         // state still holds the claim this launch was delivered at: id, incarnation, epoch,
         // digest and stage, compared whole. A claim a recovery or a replacement delivery wrote
-        // in between is the claim that stands, and nothing here overwrites it.
+        // in between is the claim that stands, and nothing here overwrites it. The pane's
+        // process identity was read before the lock, above.
         const expected = input.brief;
         if (isTarget && patch.pane !== undefined && expected !== undefined) {
           const claim = current.briefs?.[name];
@@ -1770,7 +1779,6 @@ function hostOf(input: {
             && claim.sha256 === expected.sha256
             && claim.stage === expected.stage
           ) {
-            const identity = launchedIdentity(launch.processInfo?.(session, patch.pane) ?? null);
             const diagnosed = { ...claim, seat_handle: id, pane: patch.pane };
             if (identity === null) delete diagnosed.pane_root_pid;
             else diagnosed.pane_root_pid = identity.shell;
