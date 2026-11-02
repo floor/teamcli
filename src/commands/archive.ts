@@ -245,8 +245,8 @@ function scopedDone(io: Io, lines: readonly string[]): number {
   return 0; // exit: archive.scoped
 }
 
-/** The scoped call's partial outcome: at least one family was left in place, and the others
- *  moved. The failures are named on stderr; the summary carries both counts. */
+/** The scoped call's failed outcome: at least one family was left in place, or the move was
+ *  refused before it began. The failures are named on stderr; a summary travels to stdout. */
 function scopedFailed(io: Io, lines: readonly string[], failures: readonly string[]): number {
   for (const failure of failures) io.stderr(`team archive: ${failure}\n`);
   for (const line of lines) io.stdout(`${line}\n`);
@@ -423,10 +423,8 @@ async function runScopedArchive(
     // first rename, so a link standing where it would be made refuses the run with every family
     // still in place, rather than moving files whose record would land outside the checkout.
     const folderProblem = ensureFoldersBelow(agents, [relative(agents, dirname(manifestPath(agents, now)))]);
-    if (folderProblem !== null) {
-      io.stderr(`team archive: ${folderProblem}\n`);
-      return 1; // exit: archive.scoped-failed
-    }
+    // Nothing moved, and the caller sees the same failed outcome a left-behind family gives.
+    if (folderProblem !== null) return scopedFailed(io, [], [folderProblem]);
     for (const family of planned) {
       const moved = moveFamily(family, { root, agents, date, session });
       movedFiles.push(...moved.moved);
