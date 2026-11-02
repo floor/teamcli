@@ -9,12 +9,13 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
+import { canonicalScope } from '../client/emission.ts';
 import { ownerActionDetails, teamCreateDetails } from '../client/approval-card.ts';
 import { listOwnerActionRules, OWNER_ACTION_ID_PATTERN, readOwnerActionRecord, revokeOwnerActionRule } from '../client/owner-action.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { ownerAdmitsRecord, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, listTeamCreateRules, readTeamCreateRecord, revokeTeamCreateRule, TEAM_CREATE_ID_PATTERN } from '../client/team-create.ts';
-import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { describeCaller, detachedRefusal } from '../caller.ts';
 import { hasJsonFlag } from '../output/index.ts';
 import type { Command, Io } from '../io.ts';
 
@@ -28,10 +29,10 @@ Lists the owner seat's always rules — team-create (tc_…) and owner-action (o
 every id in the one command. Listing reads the owner's folder and changes nothing. Details prints
 one request's full record — request id, repository, HEAD, bound arguments, hashes — and the audit
 entries written for it; the card the owner answers never carries them. Revoking is the owner's,
-from a terminal outside herdr, or an owner-seat answer for that revoke: --request records every
+from a terminal outside the terminal host, or an owner-seat answer for that revoke: --request records every
 id as one request (--reason <text> is the short reason the card shows) and --approval <request-id> runs it once the owner has answered on the owner
 page. One card and one Touch ID cover the whole list. A signed always rule for
-team-revoke-approval covering this folder admits the revoke with no request. A bad id revokes
+team-revoke-approval covering the folder of every rule named admits the revoke with no request. A bad id revokes
 nothing.
 
 Exits 0 when the rules are listed, the details are printed, the rules are revoked, or a request
@@ -129,12 +130,9 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
     // exit: approvals.approval-refused
     return 1;
   }
-  const caller = callerOf(io);
-  if (!seatApproved && !isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources);
   if (!seatApproved) {
-    const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
-    if (detached !== undefined) return refused(io, json, detached);
-    if (!isOwner(caller)) return refused(io, json, `only the owner revokes an approval rule, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+    const gate = recordGate(io, home, now, store, ids, seatSources);
+    if (gate.kind === 'refused') return refused(io, json, gate.why);
   }
   if (args.values.approval === undefined) {
     const ready = rulesReady(home, ids);
@@ -157,6 +155,41 @@ function auditNames(home: string, id: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** The shared check for changing approval records (src/client/owner-action-step.ts): the owner's
+ *  terminal, or a verified owner-signer `always` rule covering the folder of every rule named in
+ *  `ids`. A rule whose file does not verify has no folder that can be checked, so it admits
+ *  nothing — and a refusal writes nothing. */
+function recordGate(
+  io: Io,
+  home: string,
+  now: Date,
+  store: OwnerSeatKeyStore,
+  ids: readonly string[],
+  sources: { home: string; now: () => Date; ownerSeatStore?: OwnerSeatKeyStore },
+): { kind: 'admitted' } | { kind: 'refused'; why: string } {
+  const created = listTeamCreateRules(home, store, now).rules;
+  const actions = listOwnerActionRules(home, store, now).rules;
+  const folders: string[] = [];
+  let unknown: string | null = null;
+  for (const id of ids) {
+    const scope = created.find((rule) => rule.rule_id === id)?.scope ?? actions.find((rule) => rule.rule_id === id)?.scope;
+    if (scope === undefined) {
+      unknown = id;
+      break;
+    }
+    folders.push(canonicalScope(scope));
+  }
+  const admitted = ownerAdmitsRecord('team-revoke-approval', io, unknown === null ? folders : null, sources);
+  if (admitted.ok) return { kind: 'admitted' };
+  const caller = admitted.caller;
+  if (admitted.kind === 'caller') {
+    const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
+    return { kind: 'refused', why: detached ?? `only the owner revokes an approval rule, from a terminal outside the terminal host; this call is ${describeCaller(caller)}` };
+  }
+  if (unknown !== null) return { kind: 'refused', why: `"${unknown}" is not a rule the owner signed, so the folder it covers cannot be checked; this call is ${describeCaller(caller)}` };
+  return { kind: 'refused', why: `the owner-seat rule covers ${admitted.ruleFolder ?? 'no folder'}; ${(admitted.targets ?? folders).join(', ')} is outside it; this call is ${describeCaller(caller)}` };
 }
 
 /** Every id is one rule file. Nothing is unlinked here. */

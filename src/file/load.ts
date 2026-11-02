@@ -140,6 +140,21 @@ export function loadTeamFile(cwd: string, options: LoadTeamFileOptions = {}): Lo
   return readRegistryThenFile(cwd, options);
 }
 
+/**
+ * The team file a launch names to the CLI it starts: the file the launch read, when it read one.
+ * A registry read carries a path for a file that need not exist — `team init` writes only the
+ * record, and `team migrate` moves `.agents/team.yaml` away — so a registry-sourced load names no
+ * file, and everything downstream resolves the team from the registry instead. A file read (a
+ * named `--file`, or a root the registry holds no record for) names the file it actually read.
+ * The question is put to anything carrying the read's own marks, so the commands' remembered read
+ * (`Current`), which has no text, answers it as a load does.
+ */
+export function launchTeamFile(
+  loaded: { ok: true; path?: string; source?: 'registry' | 'team-file' } | { ok: false },
+): string | undefined {
+  return loaded.ok && loaded.source === 'team-file' ? loaded.path : undefined;
+}
+
 function configSource(options: LoadTeamFileOptions): 'registry' | 'file' | LoadResult {
   const resolved = resolveTeamConfigSource({
     ...(options.home !== undefined ? { home: options.home } : {}),

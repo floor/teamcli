@@ -89,8 +89,8 @@ resolves as its lead, so a separate operator seat gains nothing.
 - `team check --repair`
 - `team remove --abandon`, `team down --abandon`
 - `team broker`, `team tempo`
-- `team daemon install`, `team daemon uninstall`, `team daemon fault-watch` — `team daemon run`
-  is not this gate, and no mode admits a seat to it
+- `team daemon install`, `team daemon restart`, `team daemon uninstall`, `team daemon fault-watch`
+  — `team daemon run` is not this gate, and no mode admits a seat to it
 
 **The installer designation.** `team queue install` normally records an install only while the
 file's `installer:` section is part of the approval in force. With dev mode on at the team's

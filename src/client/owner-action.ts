@@ -613,6 +613,20 @@ export function admitOwnerActionByRule(home: string, ask: Omit<OwnerActionAsk, '
   return { ok: true, via: 'rule', ruleId: rule.rule_id, signer: rule.signer };
 }
 
+/** Records that a verified `always` rule admitted `action` for a record at `targets` (the folders
+ *  the record changes), in the same shape a rule admission by the caller's own repository writes.
+ *  The shared check (src/client/owner-action-step.ts) calls this only on admission. */
+export function auditRuleAdmission(home: string, rule: OwnerActionRule, action: OwnerAction, targets: readonly string[], now: Date = new Date()): void {
+  audit(home, `rule-${rule.rule_id}-${action}-${now.getTime()}`, {
+    rule_id: rule.rule_id,
+    action,
+    root: targets.length === 1 ? targets[0] : [...targets],
+    via: 'rule',
+    signer: rule.signer,
+    at: now.toISOString(),
+  });
+}
+
 function audit(home: string, name: string, entry: Record<string, unknown>): void {
   try {
     mkdirSync(actionAuditFolder(home), { recursive: true, mode: 0o700 });

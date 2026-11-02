@@ -192,6 +192,7 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
     unit: (home) => thisProcessUnitRecord(path(home)),
     install: () => failure,
     uninstall: () => ({ ok: false, why: 'an uninstall is not part of this scene', detail: null }),
+    restart: () => ({ ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null }),
   };
 }
 
@@ -386,7 +387,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     );
     expect(io.err).not.toContain('launchctl');
     // The rollback left a daemon running, so there is no recovery command to give.
-    expect(io.err).not.toContain('the owner runs');
+    expect(io.err).not.toContain('the owner or a general-grant holder runs');
     // The daemon log carries the technical failure and the rollback, so the incident is
     // diagnosable after the one line has gone by.
     const log = readFileSync(daemonLogPath(home), 'utf8');
@@ -429,7 +430,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     // rollback gives — no daemon, and the command that starts one.
     expect(document.error.id).toBe('daemon.install-rollback-failed');
     expect(document.error.message).toContain('did not answer');
-    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root}\``);
+    expect(document.error.repair).toBe(`the owner or a general-grant holder runs \`team daemon install --root ${root}\``);
     // The check is bounded: eight probes, with the growing waits between them and no more.
     expect(probes).toBe(8);
     expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000]);
@@ -481,12 +482,12 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     expect(code).toBe(1);
     expect(io.err).toContain('no daemon was started');
     // The exact rerun, carrying the root this install recorded, and where the unit it kept is.
-    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to start a daemon again`);
+    expect(io.err).toContain(`the owner or a general-grant holder runs \`team daemon install --root ${root}\` to start a daemon again`);
     expect(io.err).toContain(`; the previous unit is kept at ${manager.unitPath(home)}`);
     expect(io.err).not.toContain('launchctl');
   });
 
-  test('install --json sets repair to the same rerun, in the owner-runs shape the other repairs use', async () => {
+  test('install --json sets repair to the same rerun, in the owner-or-grant-holder shape the other repairs use', async () => {
     const { root, home, manager } = refuseRefresh([LOAD_REFUSED]);
     const io = testIo(root, { kind: 'owner' });
 
@@ -494,7 +495,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     const document = JSON.parse(io.out) as { error: { repair: string | null } };
-    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root}\``);
+    expect(document.error.repair).toBe(`the owner or a general-grant holder runs \`team daemon install --root ${root}\``);
   });
 
   test('the opt-ins this install was given are part of the rerun command', async () => {
@@ -505,7 +506,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     const document = JSON.parse(io.out) as { error: { repair: string | null } };
-    expect(document.error.repair).toBe(`the owner runs \`team daemon install --root ${root} --presence --watch\``);
+    expect(document.error.repair).toBe(`the owner or a general-grant holder runs \`team daemon install --root ${root} --presence --watch\``);
   });
 
   test('a first install the manager refuses names the rerun to try again and no kept unit', async () => {
@@ -516,7 +517,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const code = await runDaemon(['install'], io, sourcesOf(home, manager));
 
     expect(code).toBe(1);
-    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to try again`);
+    expect(io.err).toContain(`the owner or a general-grant holder runs \`team daemon install --root ${root}\` to try again`);
     // Its own definition was taken back out, so there is no unit to point the owner at.
     expect(io.err).not.toContain('is kept at');
   });
@@ -536,7 +537,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     expect(io.err).toContain('could not be put back; no daemon was started');
-    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to start a daemon again`);
+    expect(io.err).toContain(`the owner or a general-grant holder runs \`team daemon install --root ${root}\` to start a daemon again`);
     expect(io.err).not.toContain('is kept at');
   });
 
@@ -594,7 +595,7 @@ describe('an install whose new daemon does not answer is taken back out', () => 
 
     expect(code).toBe(1);
     expect(io.err).toContain('the daemon the new unit started did not answer the health probe');
-    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to try again`);
+    expect(io.err).toContain(`the owner or a general-grant holder runs \`team daemon install --root ${root}\` to try again`);
     // Its own definition was taken back out, so there is no kept unit to name.
     expect(io.err).not.toContain('is kept at');
     expect(existsSync(manager.unitPath(home))).toBe(false);

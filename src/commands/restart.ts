@@ -25,7 +25,8 @@ import {
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
-import { placedProblems } from '../file/load.ts';
+import { launchTeamFile, placedProblems } from '../file/load.ts';
+import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -76,7 +77,7 @@ import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../o
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
-import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
@@ -129,8 +130,8 @@ const realUpLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
@@ -357,6 +358,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     state: recordedSeat,
   });
   let resume: string | undefined;
+  // Plain words for the pre-close context line when no conversation is carried: the line before
+  // the close repeats the reason this run already gave, so it never reads as a resume that
+  // quietly became a fresh start. Set where each decision is made, never inferred from the line.
+  let resumeNote: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
   // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
@@ -378,6 +383,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     else if (dry) out.stdout(`! ${said}\n`);
     else out.stderr(`team restart: ${plainText(said)}\n`);
     if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
+    resumeNote = `not resuming its recorded conversation (${why})`;
   };
   // The id to resume is the one the records bind, not one the state copy must also agree with:
   // the registry record is the proof, and a state copy naming no id is a copy that predates the
@@ -416,6 +422,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         // The line selects the recorded id, or names none and takes it appended — never under
         // the caller's `--abandon`, which starts fresh.
         if (!abandon) resume = resumeCandidate.id;
+        else resumeNote = 'abandoned by the caller';
       } else if (pinned) {
         // The recorded launcher names another conversation, or resumes without naming one:
         // stopping the seat and running that line would resume something nothing proved. Nothing
@@ -440,6 +447,9 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         );
       }
     }
+  } else {
+    // Neither record binds a conversation for this seat: the launch starts a fresh one.
+    resumeNote = 'no recorded conversation';
   }
 
   // The client's grant, read once more under its lock immediately before the first effect, and its audit
@@ -460,6 +470,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     root,
     home,
     path,
+    launchFile: launchTeamFile(loaded),
     team,
     session,
     name,
@@ -478,6 +489,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
@@ -544,6 +556,12 @@ export type PerformInput = {
   root: string;
   home: string;
   path: string;
+  /** The team file the launch names, when the caller already knows it: the file a file-team load
+   *  read, absent for a registry team, whose record is the definition and whose file beside it
+   *  need not exist. A caller that does not say (the swap's run, a direct caller) leaves the
+   *  question to the writer's seam in the sequence below, which names the file only where the
+   *  file is the team. `path` stays the root's file path for every read. */
+  launchFile?: string;
   team: TeamFile;
   session: string;
   name: string;
@@ -574,6 +592,10 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** Plain words for the pre-close context line when `resume` is absent: no recorded
+   *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
+   *  The line then states why the relaunch starts a fresh conversation. */
+  resumeNote?: string;
   /** The registry-bound session id this restart proves a restored pane against. Absent when no
    *  binding exists, or the CLI has no measured resume form and the state copy names no id: the
    *  pane is then never tied to the launch, and a replaced process is left as it is. */
@@ -651,6 +673,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // file entry otherwise. The inspection above it reads the old declaration — the pane still
   // runs the old CLI.
   const next = input.next ?? declared;
+  // The team file this launch names to the CLI it starts. A caller that read the team itself
+  // says; a caller that hands only the root's path (the swap's run, a direct caller) asks the
+  // writer's own seam, the same question a launched pointer's reader asks: a registry team's file
+  // beside the root need not exist and is never named, and every other file is the team the
+  // launch reads. Naming no file is not the same as naming a missing one: the launched seat
+  // resolves a registry team from the registry.
+  const launchFile = input.launchFile ?? (teamTextTarget(path, { home }).kind === 'file' ? path : undefined);
   const noteIo: Io = json
     ? { ...out, stdout: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
     : out;
@@ -713,6 +742,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // losslessly. It is applied before the dry answer so the plan prints the line the launch would
   // run; the log line itself is written once the seat is down and the launch is going out.
   let resumed: string | undefined;
+  // The caller's plain words for why no conversation is carried; the drop below replaces them
+  // with its own reason, so the context line always names the decision that stood last.
+  let resumeNote = input.resumeNote;
   if (input.resume !== undefined) {
     const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
     if (carried.kind === 'line') {
@@ -726,8 +758,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         kind: 'not-ready',
         message: `${name}: its launch line does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
       };
+    } else {
+      // The line this launch would run cannot take the id: the CLI has no measured resume form,
+      // or the line sets a session of its own. The launch runs fresh, and the context line says
+      // so with the same reason, rather than reading as a resume that quietly became a start.
+      resumeNote = `not resuming its recorded conversation (${carried.why})`;
     }
-    // A CLI with no measured resume form runs fresh; the caller already said so.
   }
   // The entity model rule's word on the model the line about to run names, read before the seat
   // is stopped. Two lines can run: the declaration's own (a fresh start, and the line a resume
@@ -759,7 +795,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: launchFile,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -810,6 +846,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         planSeat.launch = declaredLaunch;
         resumed = undefined;
         continuitySession = undefined;
+        resumeNote = `its recorded conversation was dropped before the launch (${why})`;
         const said = `${name}: not resuming its recorded session (${why})`;
         if (json) notes.push(said);
         else out.stderr(`team restart: ${plainText(said)}\n`);
@@ -862,7 +899,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (rechecked.agent) {
       // Print the three pre-close facts before stopping or closing the seat's workspace. Under
       // `--json` they are collapsed notes on the document instead. A screen the profile cannot
-      // read is not claimed empty: its input box was not read.
+      // read is not claimed empty: its input box was not read. The context line quotes the line
+      // this run launches (`planSeat`'s, with the resume it carried), never the bare declaration.
       const box = rechecked.unrecognised !== undefined
         ? 'not read (the screen is not recognised)'
         : draftCopy !== undefined
@@ -870,7 +908,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           : rechecked.where === 'unsent' ? 'holds unsent text' : 'empty';
       noteIo.stdout(`${plainLine(name)}: input box: ${box}\n`);
       noteIo.stdout(`${plainLine(name)}: turn: ${rechecked.where === 'working' ? 'mid-turn (working)' : `not working (${rechecked.where})`}\n`);
-      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; relaunch runs "${plainLine(next.launch)}" in a new workspace without passing the old transcript\n`);
+      // A carried conversation is said as one: the old transcript phrase described a fresh start,
+      // and the field read it as one even when the resume was on the line. With nothing carried,
+      // the line states the reason the run already gave, so the terminal never shows a silent
+      // fresh start.
+      const context = resumed !== undefined
+        ? `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace and resumes the recorded conversation ${plainLine(resumed)}`
+        : `relaunch runs "${plainLine(planSeat.launch)}" in a new workspace without passing the old transcript${resumeNote === undefined ? '' : `; ${plainLine(resumeNote)}`}`;
+      noteIo.stdout(`${plainLine(name)}: context: workspace close ends the pane; ${context}\n`);
       if (rechecked.unrecognised !== undefined) {
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
@@ -1057,7 +1102,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: launchFile,
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -1222,9 +1267,14 @@ function modelIdWords(text: string): string[] {
   return text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
 }
 
-/** The model id a launch line names with `--model`, where it names one. */
-function launchModelId(launch: string): string | null {
-  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(launch);
+/** The model id a launch line names with `--model`, where it names one. Read from the CLI's own
+ *  words, so a flag inside a trailing quoted script counts. A line this version cannot prove is
+ *  read as 0.5.10 read it — the raw text — so a model it plainly names is the id the banner is
+ *  compared with, and one only a quoted flag name appears to name is not. */
+function launchModelId(cli: string, launch: string): string | null {
+  const words = cliWordList(cli, launch);
+  const text = words === null ? launch : words.join(' ');
+  const match = /(?:^|\s)--model(?:=|\s+)([A-Za-z0-9._/-]+)/.exec(text);
   return match?.[1] ?? null;
 }
 
@@ -1246,7 +1296,7 @@ export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
   }
   const banner = bannerModel(screen);
   if (banner !== null) {
-    const expected = launchModelId(seat.launch) ?? seat.model;
+    const expected = launchModelId(seat.cli, seat.launch) ?? seat.model;
     const wanted = modelIdWords(expected);
     const got = modelIdWords(banner);
     const same = wanted.length === got.length && wanted.every((word) => got.includes(word));
@@ -1543,7 +1593,7 @@ function hostOf(input: {
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }

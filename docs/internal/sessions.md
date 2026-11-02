@@ -52,9 +52,11 @@ never as zero — TeamCLI did not measure it, and zero would be a claim it never
 
 Where a CLI accepts a session id at launch, TeamCLI sets one and records it; in this release that
 CLI is Claude Code alone (`supportsSessionId`). A Claude Code launch line that does not already
-choose a session gets `--session-id <uuid>` appended; a line that already carries `--session-id`,
-`--resume`/`-r`, or `--continue`/`-c` is left as the owner wrote it, and an id the line spells is
-recorded. `team restart` records a second source: the recorded conversation a launch resumes, for
+choose a session gets `--session-id <uuid>` appended — inside the quoted script when the line
+runs the CLI in one, where the CLI reads its own words, never after the closing quote; a line that
+already carries `--session-id`, `--resume`/`-r`, or `--continue`/`-c` is left as the owner wrote
+it, and an id the line spells is recorded (a resume the line spells is read the same way, inside
+its quotes included). `team restart` records a second source: the recorded conversation a launch resumes, for
 every CLI with a measured resume form — Codex, Antigravity and Grok as well as Claude Code — so a
 resumed start is `resumable` even where TeamCLI set no id. TeamCLI takes no session id from the
 CLI's session files and reads none of their contents: the id is the one TeamCLI set, or the
