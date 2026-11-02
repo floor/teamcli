@@ -65,21 +65,29 @@ type CliRun = {
   env?: Record<string, string>;
 };
 
+/** Runs a built launch line with a stub CLI on the PATH and returns the argv that CLI saw.
+ *  A scene that makes many calls passes its own directory to `cliArgvIn` and keeps it: measured
+ *  on this host, the first spawn in each fresh fixture directory costs ~160-200 ms, so a scene
+ *  that runs twenty lines in twenty fresh directories pays that twenty times. */
+function cliArgvIn(dir: string, command: string, run: CliRun = {}): string[] {
+  const binary = run.binary ?? 'claude';
+  if (run.wrapper !== undefined) writeFileSync(join(dir, 'wrapper.sh'), run.wrapper);
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const out = join(dir, 'argv');
+  writeFileSync(join(bin, binary), `#!/bin/sh\nprintf '%s\\0' "$@" > "$ARGV_OUT"\n`, { mode: 0o755 });
+  execFileSync(run.runner ?? '/bin/sh', ['-c', command], {
+    cwd: dir,
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out, ...run.env },
+  });
+  return readFileSync(out, 'utf8').split('\0').filter((word) => word !== '');
+}
+
 /** Runs a built launch line with a stub CLI on the PATH and returns the argv that CLI saw. */
 function cliArgv(command: string, run: CliRun = {}): string[] {
-  const binary = run.binary ?? 'claude';
   const dir = mkdtempSync(join(tmpdir(), 'quoted-launch-'));
   try {
-    if (run.wrapper !== undefined) writeFileSync(join(dir, 'wrapper.sh'), run.wrapper);
-    const bin = join(dir, 'bin');
-    mkdirSync(bin);
-    const out = join(dir, 'argv');
-    writeFileSync(join(bin, binary), `#!/bin/sh\nprintf '%s\\0' "$@" > "$ARGV_OUT"\n`, { mode: 0o755 });
-    execFileSync(run.runner ?? '/bin/sh', ['-c', command], {
-      cwd: dir,
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out, ...run.env },
-    });
-    return readFileSync(out, 'utf8').split('\0').filter((word) => word !== '');
+    return cliArgvIn(dir, command, run);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1044,18 +1052,25 @@ describe("a script-file wrapper, an $'…' script and a nested shell all reach t
       String.raw`/bin/bash -c $'claude --model m\$'`,
     ];
     if (!BASH) return;
-    for (const line of LINES) {
-      const warnings: string[] = [];
-      const command = launchCommand(claude, line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
-      const before = cliArgv(line, { runner: '/bin/bash' });
-      expect(command).toBe(`AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt '${RULES}'`);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('after the line, where the CLI may not read them');
-      // The fallback changes no word the CLI receives: the options are the script's positional
-      // words, never the CLI's.
-      expect(cliArgv(command, { runner: '/bin/bash' })).toEqual(before);
+    // One fixture directory for every line, removed once: alone, this scene measured
+    // 3.80-4.16 s in twenty fresh directories and 1.04 s in one.
+    const dir = mkdtempSync(join(tmpdir(), 'quoted-launch-'));
+    try {
+      for (const line of LINES) {
+        const warnings: string[] = [];
+        const command = launchCommand(claude, line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+        const before = cliArgvIn(dir, line, { runner: '/bin/bash' });
+        expect(command).toBe(`AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt '${RULES}'`);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('after the line, where the CLI may not read them');
+        // The fallback changes no word the CLI receives: the options are the script's positional
+        // words, never the CLI's.
+        expect(cliArgvIn(dir, command, { runner: '/bin/bash' })).toEqual(before);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 
   test('a nested shell one level deep takes the rules, the id and a resume in its CLI script', () => {
     const line = `/bin/sh -c "sh -c 'exec claude --model m'"`;
