@@ -5119,6 +5119,13 @@
       "trigger": "team send worker hello"
     },
     {
+      "code": 0,
+      "command": "send",
+      "id": "send.session-created",
+      "meaning": "the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows",
+      "trigger": "team send worker hello"
+    },
+    {
       "code": 1,
       "command": "send",
       "id": "send.approval-refused",
@@ -6375,6 +6382,13 @@
     {
       "code": 0,
       "command": "worktree",
+      "id": "worktree.pulled",
+      "meaning": "the seat CLI's own pull call applied the remote session's patch in the worktree; nothing was committed, branched or pushed",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 0,
+      "command": "worktree",
       "id": "worktree.record-gone",
       "meaning": "the record was removed after the folder was already gone",
       "trigger": "team worktree remove task"
@@ -6571,6 +6585,48 @@
     {
       "code": 1,
       "command": "worktree",
+      "id": "worktree.pull-elsewhere",
+      "meaning": "the task is recorded in another session; nothing was pulled",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-failed",
+      "meaning": "the seat CLI's pull call failed; no patch was applied",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-gone",
+      "meaning": "the worktree is recorded but its folder is not on disk",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-missing",
+      "meaning": "no worktree of that name is recorded; nothing was pulled",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-seat",
+      "meaning": "no seat's CLI pull command resolves for the worktree, so no pull was run",
+      "trigger": "team worktree pull task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
+      "id": "worktree.pull-task",
+      "meaning": "the task name is not a single segment",
+      "trigger": "team worktree pull ../task --remote-session 123456"
+    },
+    {
+      "code": 1,
+      "command": "worktree",
       "id": "worktree.recorded",
       "meaning": "the task is already recorded",
       "trigger": "team worktree new task --kind fix"
@@ -6714,6 +6770,20 @@
       "id": "worktree.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team worktree new task"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.pull-flags",
+      "meaning": "pull takes no --kind",
+      "trigger": "team worktree pull task --remote-session 123456 --kind fix"
+    },
+    {
+      "code": 2,
+      "command": "worktree",
+      "id": "worktree.pull-remote",
+      "meaning": "pull needs --remote-session, and no other subcommand takes it",
+      "trigger": "team worktree pull task"
     },
     {
       "code": 2,

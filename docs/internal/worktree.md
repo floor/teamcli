@@ -8,7 +8,7 @@ worktree in this state file — the same rows the limit counts — and writes no
 whose folder is gone names `team worktree remove <task>`, which drops that record and
 prunes, and does not delete the branch.
 
-## What new and remove do
+## What new, pull and remove do
 
 Creates and removes a task worktree: a second checkout of the project on a branch of its own, where
 one seat does one task. `new` cuts the branch from `workspace.base`, records the worktree in the
@@ -18,11 +18,20 @@ lost, and keeps its branch. The branch `remove` checks and names is the worktree
 unpublished, and the record's branch is only a hint. A detached HEAD, or a folder the list does not
 name, has no branch there; the record's branch stands for it then, as it always did.
 
+`pull` takes a session id and runs the receiving CLI's own pull call in the worktree: the profile of
+the seat the record names — or, when the record names none, the `--seat` this call names — supplies
+the call (its argv, then `--session <id> --apply`), and the CLI applies the session's patch to the
+worktree. It stages nothing itself: no commit, no branch, no push, and no state record changes. A
+`--seat` that disagrees with the one the record holds is refused rather than guessed between. The
+pull is the operator's own move; a send never runs it.
+
 ## What it reads and writes
 
 Reads the team file and this machine's approval store, the session's state
 (`.agents/team.state.json`), and git: the base branch, the branch names, and the worktree itself.
-With `--session`, the state of that session instead of `team.session`.
+With `--session`, the state of that session instead of `team.session`. `pull` also reads the seat's
+CLI profile for the pull call it declares, and runs that call in the worktree's folder; the CLI
+alone writes there.
 
 Every value the subcommands read from the file is the **approved copy's** while a verified
 approval is in force, whatever the file says now and whether or not the fingerprints match:
@@ -88,8 +97,8 @@ and a process of the same user that writes its own pane there under the orchestr
 renames its pane, passes. The check guards a mistaken agent, not a hostile process running as the
 same user.
 `--file` and `--session` are the owner's alone, from a terminal outside herdr: a non-owner aiming
-either is refused before the flagged file or session is read at all. `list`, `new` and `remove` refuse
-the same way.
+either is refused before the flagged file or session is read at all. `list`, `new`, `pull` and
+`remove` refuse the same way.
 
 ## What it prints
 
@@ -98,25 +107,31 @@ the same way.
 `1 worktree` / `<n> worktrees`; it writes nothing. `new` prints the context line and
 `worktree <task>: created at <path>`, and `remove` the context line and
 `removed <task>; the branch <branch> is kept` — or, for a record whose folder was already gone,
-`removed the record of <task>; its folder was already gone. No branch was deleted.`
+`removed the record of <task>; its folder was already gone. No branch was deleted.` `pull` prints
+the CLI's own output first, then the context line and `remote session <id>: pulled into <path>`; a
+refused pull prints the CLI's error line on stderr and `team worktree: <reason>` without the
+context line.
 
 Under `--json` each is one `team.worktree` v1 document on stdout, its `schema` tag first. `list`'s
 carries `format`, `project`, `session`, `notice` (null), `worktrees` — one
 `{ task, branch, path, session, seat, exists }` per record, `seat` null when none is recorded —
-`notes` (the `limit` line) and `summary` (`{ worktrees }`). `new` and `remove` carry `format`,
-`dry_run` (always false — neither has one), `status` (`created`, `removed`, or `record-gone` for a
-folder that was already gone), `action_summary` (the line above), `project`, `session`, `action`
-(`new` or `remove`), `task`, `branch` and `path`. A refusal under `--json` writes a `team.error`
-v1 document on stdout instead — the refusal's own `id`, its `message` and `repair`, and no usage
-text — and stderr stays empty. The exit code is the same as without `--json`.
+`notes` (the `limit` line) and `summary` (`{ worktrees }`). `new`, `pull` and `remove` carry
+`format`, `dry_run` (always false — none of the three has a dry run), `status` (`created`, `removed`,
+`record-gone` for a folder that was already gone, or `pulled`), `action_summary` (the line above),
+`project`, `session`, `action` (`new`, `remove` or `pull`), `task`, `branch` and `path`; `pull`
+adds `remote_session`. A refusal under `--json` writes a `team.error` v1 document on stdout
+instead — the refusal's own `id`, its `message` and `repair`, and no usage text — and stderr stays
+empty. The exit code is the same as without `--json`; a JSON pull keeps the CLI's own streams out
+of the document and carries its ending in `action_summary` or the refusal message.
 
 ## Refusals
 
 | Message | Exit |
 | --- | --- |
 | `team worktree: a subcommand is required` / `unknown subcommand "x"` / `a task name is required` / `unexpected "x"` (each with the usage) | 2 |
-| `team worktree: remove takes no --kind or --seat` (with the usage) | 2 |
-| `team worktree: new takes no --branch` / `list takes no --branch` (with the usage) | 2 |
+| `team worktree: remove takes no --kind or --seat` / `pull takes no --kind` (with the usage) | 2 |
+| `team worktree: new takes no --branch` / `list takes no --branch` / `pull takes no --branch` (with the usage) | 2 |
+| `team worktree: pull needs --remote-session <id>` / `new takes no --remote-session` / `list takes no --remote-session` / `remove takes no --remote-session` (with the usage) | 2 |
 | `team worktree: line <n>: <message>` | 2 |
 | `team worktree: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team worktree: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
@@ -145,7 +160,11 @@ text — and stderr stays empty. The exit code is the same as without `--json`.
 | `team worktree: the worktree was not created: <first line of git's error>` | 1 |
 | `team worktree: setup failed on command <n> of <m>; the worktree is kept and recorded as setup: failed` | 1 |
 | `team worktree: no worktree named "t" is recorded` | 1 |
-| `team worktree: "t" is recorded in session x, not in y; nothing was removed` | 1 |
+| `team worktree: "t" is recorded in session x, not in y; nothing was removed` / `… ; nothing was pulled` | 1 |
+| `team worktree: <path> is recorded but not on disk; nothing was pulled` | 1 |
+| `team worktree: the worktree records no seat, and no --seat was given, so no CLI's pull command is known (name one with --seat, or remake it with team worktree new <task> --seat <name>); nothing was pulled` | 1 |
+| `team worktree: this worktree records seat <a>, not "<b>"; nothing was pulled` / `seat "<name>" is not in this team file; nothing was pulled` / `<cli> has no session pull command in this build; nothing was pulled` | 1 |
+| `team worktree: the <cli> CLI exited <n> (<last error line>); nothing was pulled` — the pull's own ending; `the <cli> CLI could not be run (<message>); nothing was pulled` when the call never started | 1 |
 | `team worktree: seat <name> is recorded in this worktree; team remove <name> first` | 1 |
 | `team worktree: uncommitted or untracked files:` … the first twenty, one per line | 1 |
 | `team worktree: the recorded path "<path>" is not "<folder>"; nothing was removed` — the state record's path is not `workspace.path` filled for the task | 1 |

@@ -176,6 +176,7 @@ fields:
 | `rules` | `first-message` \| `prepend` \| `{ option: <flag> }` | the delivery: `first-message` reads as `message`, `{ option }` as `option` |
 | `delivery` | `push` \| `between-turns` \| `pull-on-turn` \| `none` | the measured way an idle seat of this CLI is reached: an event adapter that wakes it (the development channel, the cross-session socket), its runtime's own queue between turns, an MCP inbox read when it takes a turn, or nothing; the launch refines it (`src/launch/delivery-class.ts`) |
 | `standing_rules` | string[] | rules for every seat of this CLI, over the file's |
+| `public_only` | boolean | every seat of this CLI is public-only: no rules are prepended to its briefs, and a send reads the body against the machine's private lists before the CLI's session call; absent reads as false (`src/send/public-only.ts`) |
 | `login.check`, `login.hint` | string[] / string | the arguments that exit 0 only when logged in, and the login command |
 | `exit` | string | the text typed at an idle prompt to exit; absent when the CLI exits by key |
 | `exit_keys` | string[] | the keys that exit an idle CLI; empty when `exit` is used |

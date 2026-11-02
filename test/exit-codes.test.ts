@@ -138,6 +138,7 @@ import { runImport } from '../src/commands/import.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
+import { cleanupFakeJules, fakeJulesOnPath, type FakeJules, type FakeJulesAnswer } from './helpers/fake-jules.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -169,6 +170,34 @@ const WORKER = `  - role: implementer
     launch: claude --model claude-opus-5-5
     stopped: true
 `;
+
+/** A seat whose CLI creates and pulls its own remote session: the jules profile's `new` and
+ *  `remote pull`. Every scene that walks these legs installs a fake `jules` FIRST on PATH and
+ *  asserts that order, so the real CLI is never reached and no session is created at the
+ *  provider. */
+const JULES_SEAT = `  - role: implementer
+    name: solo
+    cli: jules
+    vendor: google
+    model: Jules
+    version: "0.1.42"
+    launch: jules
+`;
+
+/** The line a session-creating CLI prints when it took the body: the id after the last
+ *  `/session/` segment is the delivery. */
+const SESSION_CREATED_LINE = 'Session created: https://jules.google.com/session/abc123\n';
+
+/** The team a session-leg send goes to: the lead, and a jules seat declaring no order of its
+ *  own, so the CLI's own session call stands first in the implied walk. */
+const SESSION_TEAM = `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${JULES_SEAT}`;
 
 const TEAM = `format: 1
 project: acme
@@ -304,6 +333,20 @@ function layout(repo: boolean): Place {
     git(root, 'commit', '-q', '-m', 'first');
   }
   return { base, root, home, file: join(root, '.agents', 'team.yaml') };
+}
+
+/** Runs a scene body with a fake `jules` FIRST on PATH, asserting that order before the body
+ *  runs anything: a machine with a real `jules` installed is never reached. The fake's folder
+ *  sits in the scene's own scratch folder, PATH is handed back in a finally block, and a body
+ *  that checks `jules.calls()` does so before that cleanup. */
+async function withJules(place: Place, answer: FakeJulesAnswer, run: (jules: FakeJules) => Promise<Ran>): Promise<Ran> {
+  const fakeJules = fakeJulesOnPath(answer, place.base);
+  expect(fakeJules.firstOnPath()).toBe(fakeJules.binary);
+  try {
+    return await run(fakeJules);
+  } finally {
+    cleanupFakeJules();
+  }
 }
 
 function write(place: Place, text: string): void {
@@ -3543,6 +3586,97 @@ scene('worktree.remove-branch', async (place) => {
   return show(await worktree(place, ['remove', 'task', '--branch', 'fix/other']), 'does not name the branch');
 });
 
+// The operator's pull: the seat's own CLI call, run in the worktree's folder. Every scene
+// installs a fake `jules` FIRST on PATH and asserts that order, so the real CLI is never
+// reached; the scenes whose refusal comes before any call also assert the fake was not called.
+scene('worktree.pull-remote', async (place) => {
+  approve(place, worktreeText());
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'pull needs --remote-session');
+  });
+});
+scene('worktree.pull-flags', async (place) => {
+  approve(place, worktreeText());
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task', '--remote-session', '1', '--kind', 'fix']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'pull takes no --kind');
+  });
+});
+scene('worktree.pull-task', async (place) => {
+  approve(place, worktreeText());
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', '../task', '--remote-session', '1']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'one segment');
+  });
+});
+scene('worktree.pull-missing', async (place) => {
+  approve(place, worktreeText());
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task', '--remote-session', '1']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'no worktree named');
+  });
+});
+scene('worktree.pull-elsewhere', async (place) => {
+  approve(place, worktreeText());
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.other ??= emptySession());
+    session.worktrees.task = { path: '../worktrees/acme/task', branch: 'fix/task', setup: 'ok' };
+  });
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task', '--remote-session', '1']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'not in acme');
+  });
+});
+scene('worktree.pull-gone', async (place) => {
+  approve(place, worktreeText());
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.worktrees.task = { path: '../worktrees/acme/task', branch: 'fix/task', setup: 'ok', seat: 'solo' };
+  });
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task', '--remote-session', '1']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'recorded but not on disk');
+  });
+});
+scene('worktree.pull-seat', async (place) => {
+  publish(place);
+  approve(place, `${worktreeText()}${JULES_SEAT}`);
+  expect((await worktree(place, ['new', 'task', '--kind', 'fix', '--seat', 'lead'])).code).toBe(0);
+  return withJules(place, {}, async (jules) => {
+    const ran = await worktree(place, ['pull', 'task', '--remote-session', '1']);
+    expect(jules.calls()).toEqual([]);
+    return show(ran, 'claude-code has no session pull command in this build');
+  });
+});
+scene('worktree.pull-failed', async (place) => {
+  publish(place);
+  approve(place, `${worktreeText()}${JULES_SEAT}`);
+  expect((await worktree(place, ['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+  return withJules(place, { status: 1, stderr: 'error: session not found\n' }, async (jules) => {
+    const ran = await worktree(place, ['pull', 'session-pull', '--remote-session', '1']);
+    expect(jules.calls()).toHaveLength(1);
+    return show(ran, 'the jules CLI exited 1 (error: session not found); nothing was pulled');
+  });
+});
+scene('worktree.pulled', async (place) => {
+  publish(place);
+  approve(place, `${worktreeText()}${JULES_SEAT}`);
+  expect((await worktree(place, ['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+  const folder = join(place.base, 'worktrees', 'acme', 'session-pull');
+  return withJules(place, { status: 0, stdout: 'applied the patch\n' }, async (jules) => {
+    const ran = await worktree(place, ['pull', 'session-pull', '--remote-session', '123456']);
+    expect(jules.calls()).toEqual([{ argv: ['remote', 'pull', '--session', '123456', '--apply'], cwd: folder }]);
+    return show(ran, 'remote session 123456: pulled into ../worktrees/acme/session-pull');
+  });
+});
+
 scene('team.help', async (place) => show(await entry(['--help'], testIo(place.root, owner)), 'Usage:'));
 scene('team.no-command', async (place) => show(await entry([], testIo(place.root, owner)), 'Usage:'));
 scene('team.version', async (place) => show(await entry(['--version'], testIo(place.root, owner)), version()));
@@ -5707,6 +5841,25 @@ scene('send.client-usage', async (place) => {
   } finally {
     rmSync(world.base, { recursive: true, force: true });
   }
+});
+
+// The session leg's ending: the receiving CLI took the whole body as one argument of its own
+// session-creating call and printed the session line with an id. The fake `jules` is the call
+// the walk makes, spawned from PATH in the seat's own folder, so the scene proves the real
+// spawn path and never reaches a real CLI.
+scene('send.session-created', async (place) => {
+  approve(place, SESSION_TEAM);
+  return withJules(place, { status: 0, stdout: SESSION_CREATED_LINE }, async (jules) => {
+    const ran = await sent(place, ['solo', 'hello'], owner, sendHost(place));
+    const calls = jules.calls();
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    if (call === undefined) throw new Error('the session call was not made');
+    expect(call.argv[0]).toBe('new');
+    expect(call.argv.at(-1)).toContain('hello');
+    expect(realpathSync(call.cwd)).toBe(realpathSync(place.root));
+    return show(ran, 'solo: delivered (session abc123)');
+  });
 });
 
 const CLIENT_ROOT = '88888888-8888-4888-8888-888888888888';

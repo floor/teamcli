@@ -693,15 +693,15 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
-    // Dropping or reordering channels present in `higher` is within. `native`, `socket` and
-    // `headless-resume` are the legs a word may add: none is in the fallback order, and a level
-    // that names one is the sender choosing that channel — its own SendMessage, this build's
-    // frame on the receiver's socket, or a headless runtime's own turn, which no default order
-    // ever inserts. Every other leg absent from `higher` is still an addition, and the whole
-    // word is set aside.
+    // Dropping or reordering channels present in `higher` is within. `native`, `socket`,
+    // `headless-resume` and `session` are the legs a word may add: none is in the fallback order,
+    // and a level that names one is the sender choosing that channel — its own SendMessage, this
+    // build's frame on the receiver's socket, a headless runtime's own turn, or the receiving
+    // CLI's own session call, which no default order ever inserts. Every other leg absent from
+    // `higher` is still an addition, and the whole word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
   // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the

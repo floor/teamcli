@@ -242,6 +242,8 @@ function humanSkipReasonFor(leg: DeliveryLeg): string {
       return "the pane is a human's, and the drop leg is the only one walked";
     case 'channel':
       return "the pane is a human's, and the drop leg is the only one walked";
+    case 'session':
+      return "the pane is a human's, and no session is created for it";
     case 'drop':
       return '';
   }
@@ -260,6 +262,9 @@ function relayRouteOfLeg(leg: DeliveryLeg): RuntimeRelayRoute | null {
     case 'mcp-inbox':
     case 'channel':
     case 'typed':
+      // The session leg runs the receiving CLI's own call, which only the sender's walk makes:
+      // a hosted relay route stores or wakes, it never creates a session.
+    case 'session':
       return null;
   }
 }

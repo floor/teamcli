@@ -12,6 +12,7 @@ import { WORKTREE_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
 import { readState, updateState, emptySession } from '../../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
+import { cleanupFakeJules, fakeJulesOnPath, type FakeJules, type FakeJulesAnswer } from '../helpers/fake-jules.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 import { writeTextSignedApproval } from '../helpers/text-signed-approval.ts';
 
@@ -111,6 +112,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(base, { recursive: true, force: true });
+  cleanupFakeJules();
 });
 
 describe('team worktree new', () => {
@@ -997,5 +999,119 @@ describe('team worktree list', () => {
     const flags = await run(['list', '--seat', 'lead']);
     expect(flags.code).toBe(2);
     expect(flags.err).toContain('list takes no --kind or --seat');
+  });
+});
+
+describe('team worktree pull', () => {
+  // The seat whose CLI declares a pull call: the jules profile's own `remote pull`, run by the
+  // operator. Every scene installs a fake `jules` executable FIRST on PATH and asserts that
+  // order, so a real CLI installed on the machine is never reached and nothing is published.
+  const JULES_SEAT = `  - role: implementer
+    name: solo
+    cli: jules
+    vendor: google
+    model: Jules
+    version: "0.1.42"
+    launch: jules
+`;
+
+  function julesFirstOnPath(answer: FakeJulesAnswer = {}): FakeJules {
+    const fakeJules = fakeJulesOnPath(answer, base);
+    expect(fakeJules.firstOnPath()).toBe(fakeJules.binary);
+    return fakeJules;
+  }
+
+  test('the seat CLI\'s own pull runs in the worktree; nothing is committed, branched or pushed', async () => {
+    approve(`${teamText()}${JULES_SEAT}`);
+    expect((await run(['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+    const folder = join(base, 'worktrees', 'acme', 'session-pull');
+    const jules = julesFirstOnPath({ status: 0, stdout: 'applied the patch\n' });
+
+    const io = await run(['pull', 'session-pull', '--remote-session', '123456']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe('applied the patch\nteam acme, session "acme"\nremote session 123456: pulled into ../worktrees/acme/session-pull\n');
+    expect(jules.calls()).toEqual([{
+      argv: ['remote', 'pull', '--session', '123456', '--apply'],
+      cwd: folder,
+    }]);
+    expect(git(folder, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('fix/session-pull');
+    expect(git(project, 'ls-remote', '--heads', 'origin')).not.toContain('fix/session-pull');
+  });
+
+  test('--json carries the pulled action envelope and keeps the CLI\'s streams out of it', async () => {
+    approve(`${teamText()}${JULES_SEAT}`);
+    expect((await run(['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+    const jules = julesFirstOnPath({ status: 0, stdout: 'applied the patch\n' });
+
+    const io = await run(['pull', 'session-pull', '--remote-session', '123456', '--json']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, WORKTREE_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      schema: { name: 'team.worktree', version: 1 },
+      format: 1,
+      dry_run: false,
+      status: 'pulled',
+      action_summary: 'remote session 123456: pulled into ../worktrees/acme/session-pull',
+      project: 'acme',
+      session: 'acme',
+      action: 'pull',
+      task: 'session-pull',
+      branch: 'fix/session-pull',
+      path: '../worktrees/acme/session-pull',
+      remote_session: '123456',
+    });
+    expect(io.out).not.toContain('applied the patch');
+    expect(jules.calls()).toHaveLength(1);
+  });
+
+  test('a failed pull is the worktree.pull-failed document: its last line, and nothing pulled', async () => {
+    approve(`${teamText()}${JULES_SEAT}`);
+    expect((await run(['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+    julesFirstOnPath({ status: 1, stderr: 'error: session not found\n' });
+
+    const io = await run(['pull', 'session-pull', '--remote-session', '1', '--json']);
+    expect(io.code).toBe(1);
+    expect(io.err).toBe('');
+    assertJsonErrorShape(io.out, {
+      id: 'worktree.pull-failed',
+      messageContains: 'the jules CLI exited 1 (error: session not found); nothing was pulled',
+      repair: null,
+    });
+
+    const text = await run(['pull', 'session-pull', '--remote-session', '1']);
+    expect(text.code).toBe(1);
+    expect(text.err).toBe('error: session not found\nteam worktree: the jules CLI exited 1 (error: session not found); nothing was pulled\n');
+  });
+
+  test('pull needs --remote-session, takes no --kind, and refuses a task it holds no record for', async () => {
+    const jules = julesFirstOnPath();
+    const missing = await run(['pull', 'session-pull']);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain('pull needs --remote-session <id>');
+    const kind = await run(['pull', 'session-pull', '--remote-session', '1', '--kind', 'fix']);
+    expect(kind.code).toBe(2);
+    expect(kind.err).toContain('pull takes no --kind');
+    const unrecorded = await run(['pull', 'nope', '--remote-session', '1']);
+    expect(unrecorded.code).toBe(1);
+    expect(unrecorded.err).toContain('no worktree named "nope" is recorded');
+    expect(jules.calls()).toEqual([]);
+  });
+
+  test('the record\'s seat wins over a disagreeing --seat, and a CLI with no pull call is refused', async () => {
+    approve(`${teamText()}${JULES_SEAT}`);
+    expect((await run(['new', 'session-pull', '--kind', 'fix', '--seat', 'solo'])).code).toBe(0);
+    expect((await run(['new', 'plain', '--kind', 'fix', '--seat', 'lead'])).code).toBe(0);
+    const jules = julesFirstOnPath();
+
+    const wrong = await run(['pull', 'session-pull', '--remote-session', '1', '--seat', 'lead']);
+    expect(wrong.code).toBe(1);
+    expect(wrong.err).toContain('this worktree records seat solo, not "lead"; nothing was pulled');
+
+    const noPull = await run(['pull', 'plain', '--remote-session', '1']);
+    expect(noPull.code).toBe(1);
+    expect(noPull.err).toContain('claude-code has no session pull command in this build; nothing was pulled');
+    expect(jules.calls()).toEqual([]);
   });
 });

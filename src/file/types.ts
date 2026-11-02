@@ -164,6 +164,14 @@ export type Seat = {
    */
   inbound?: CrossSessionInbound;
   /**
+   * The seat is public-only, when the file marks it with `public_only: true`: the team's rules are
+   * never prepended to its briefs, and a send reads the whole body against the machine's private
+   * lists before the CLI's session call. A profile may declare every seat of its CLI public-only
+   * on its own; a seat can only add the guard, never remove it — `public_only: false` reads as
+   * absent. Omitted when the file marks none, so a file that marks no seat keeps its digest.
+   */
+  publicOnly?: true;
+  /**
    * The seat's webhook delivery adapter, when the file writes one: the routine every accepted
    * signed message for the seat is POSTed to, with the drop file kept as the backup. Its two
    * paths are fields of the built seat like every other, so writing one is a change the owner

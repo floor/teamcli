@@ -318,7 +318,7 @@ describe('the map names every word the contract exposes, and no more', () => {
   });
 
   test('a `team-change` row is the verdict function\'s, and a record alone refuses it', () => {
-    for (const command of ['hold', 'worktree', 'worktree:list', 'worktree:new', 'worktree:remove']) {
+    for (const command of ['hold', 'worktree', 'worktree:list', 'worktree:new', 'worktree:pull', 'worktree:remove']) {
       expect(COMMAND_GATES[command]?.kind).toBe('team-change');
       // A `leads` seat is not one of the three callers the function admits, and membership is
       // not placement: the record-only resolver says so and names the function.

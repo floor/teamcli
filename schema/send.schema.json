@@ -92,6 +92,7 @@
             "native",
             "headless-resume",
             "channel",
+            "session",
             null
           ]
         },
@@ -196,7 +197,8 @@
                   "mcp-inbox",
                   "typed",
                   "drop",
-                  "headless-resume"
+                  "headless-resume",
+                  "session"
                 ]
               },
               "state": {
