@@ -124,6 +124,16 @@ the remote session's result: that is the operator's own call, `team worktree pul
 --remote-session <id>`, which runs the CLI's own pull into the worktree it belongs in
 ([team worktree](worktree.md)).
 
+A public-only seat — its CLI's profile declares `public_only: true`, as a hosted CLI's does, or
+the team file marks the seat — never receives the team's rules: no rules text is prepended to its
+body. Its body is read against the machine's private lists, the names and phrases files the
+pre-push gate reads, before the session call. A body that matches a rule is a leg that did not
+take the send: the failed leg reads `session: the body matches a private rule (names entry 1); no
+session was created` (source, class and ordinal — never the text), the walk falls through to the
+leg behind it, and the message still lands in the seat's own drop folder. A list that is present
+and cannot be read refuses the body the same way; a machine with neither list has nothing
+configured to protect, and the send proceeds.
+
 A listener that runs another install is no route for the channel or the `mcp-inbox` leg: the
 marker names the version, the entry build and the packed commit the server started from, and a
 listener of another install cannot take a record this build signs, so the channel is not walked

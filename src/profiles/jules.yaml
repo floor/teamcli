@@ -11,9 +11,9 @@
 # `What do you want Jules to work on?` under the ` Type the task description` label.
 #
 # The TUI has no standing session: every brief is a new remote session. A send creates it with
-# the CLI's own `session_cli` call below — the whole body as one argument, never the screens —
-# and `rules: prepend` puts the seat's rules at the front of that body. The compose module keeps
-# the screens readable (`jules-compose.ts`), but no send types through them.
+# the CLI's own `session_cli` call below — the whole body as one argument, never the screens.
+# The seat is public-only (below): the rules are never prepended, and a send reads the body
+# against the machine's private lists before the call, so nothing private reaches the service.
 format: 1
 cli: jules
 binary: jules
@@ -28,11 +28,18 @@ tested:
 # walks them.
 unattended: []
 rules: prepend
+# Every jules session runs on Google's service, not on this machine, so every seat of this CLI
+# is public-only: the team's rules never ride a brief, and a send reads the whole body against
+# the machine's private lists before the CLI's session call, refusing a body that matches one
+# (the walk then falls through to the leg behind it). A team file can mark one seat the same
+# way; nothing can turn it off for this CLI.
+public_only: true
 # The delivery class a run measured: a fresh session per brief means no runtime holds a queue
 # for it, and no MCP inbox is registered; an idle seat cannot be woken.
 delivery: none
 # The TUI's `ctrl+d` deletes a session for the whole account, not just this seat, and a delete
-# cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
+# cannot be undone. The profile never sends it; the standing line below states the rule for any
+# delivery that carries this profile's rules.
 standing_rules:
   - Never delete a Jules session.
 # herdr 0.7.1 reports a jules pane as no agent, or `unknown`, while the TUI runs (captured: a

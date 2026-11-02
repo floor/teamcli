@@ -456,6 +456,16 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
+`public_only` is optional on a seat: `public_only: true` says its briefs go to a service outside
+this machine. The team's rules are never prepended to its briefs, and a send reads the whole body
+against the machine's private lists before the receiving CLI's own session call — a body that
+matches a rule is not handed to the service: the send names the rule by source, class and ordinal
+(never the text) and the walk falls through to the leg behind it, so the message still lands in
+the seat's own drop folder. A CLI whose whole service is hosted declares it for every seat of
+that CLI in its profile (`public_only: true` there); a seat's word can only add the guard, never
+remove it, and `public_only: false` reads as absent. The key is part of the seat's digest, and a
+record that marks no seat keeps every digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the

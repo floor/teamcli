@@ -629,6 +629,10 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "public_only": {
+            "type": "boolean",
+            "$comment": "the seat's briefs go to a service outside this machine: the team's rules are never prepended, and a send reads the body against the machine's private lists and falls through on a match; a hosted CLI's profile is public-only on its own, and a seat can only add the guard"
+          },
           "inbound": {
             "enum": [
               "accept",

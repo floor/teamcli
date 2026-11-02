@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
@@ -67,7 +67,7 @@ function scratchWithJules(answer: FakeJulesAnswer = {}): { dir: string; jules: F
 /** The team a session-leg scene sends into: acme's lead, and a jules seat declaring no order of
  *  its own. A CLI with no installed watcher takes the seat's shape word — the inbox and the typed
  *  wake — and the session call stands where that retired typed word stands. */
-function julesWorld(opts: { order?: readonly string[] | null; origin?: string } = {}): World {
+function julesWorld(opts: { order?: readonly string[] | null; origin?: string; julesFields?: string } = {}): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-session-cli-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -104,7 +104,7 @@ seats:
     model: Jules
     version: "0.1.42"
     launch: jules
-${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`);
+${opts.julesFields ?? ''}${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`);
   const made: World = {
     root,
     dir: join(root, '.agents'),
@@ -114,6 +114,22 @@ ${order === null ? '' : `delivery_order: [${order.join(', ')}]\n`}`);
   };
   cleanup = made.cleanup;
   return made;
+}
+
+/** Synthetic private lists under the scene's own base folder: one entry a body can name, and a
+ *  phrases path that does not exist. A public-only send reads the paths the host hands it, so no
+ *  scene ever touches the machine's own lists. */
+function privateLists(made: World, entries: readonly string[] = ['Zephyrine Quillfeather']): { names: string; phrases: string } {
+  const folder = join(dirname(made.root), 'private');
+  mkdirSync(folder, { recursive: true });
+  const names = join(folder, 'names.txt');
+  writeFileSync(names, entries.map((entry) => `${entry}\n`).join(''), { mode: 0o600 });
+  return { names, phrases: join(folder, 'phrases.txt') };
+}
+
+/** The scene's host with those lists: every send in this file goes through one. */
+function host(made: World, patch: Parameters<typeof fake>[1] = {}): ReturnType<typeof fake> {
+  return fake(made, { privateLists: privateLists(made), ...patch });
 }
 
 function entries(made: World): Record<string, unknown>[] {
@@ -232,7 +248,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
     const io = owner(made.root);
 
-    const code = await runSend([SEAT, 'hello'], io, fake(made));
+    const code = await runSend([SEAT, 'hello'], io, host(made));
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
@@ -244,7 +260,10 @@ describe('a send to a seat whose CLI creates its own session', () => {
     expect(call.argv).toHaveLength(2);
     expect(call.argv[0]).toBe('new');
     const body = call.argv[1] ?? '';
-    expect(body).toContain('Never delete a Jules session.');
+    // The seat is public-only (its profile declares it): no rules are prepended, and the
+    // sender header and the message are the whole body.
+    expect(body).not.toContain('Never delete a Jules session.');
+    expect(body).not.toContain('Rules for this session');
     expect(body).toContain(senderHeader('owner', 'the owner'));
     expect(body.endsWith('hello')).toBe(true);
     expect(realpathSync(call.cwd)).toBe(realpathSync(made.root));
@@ -260,7 +279,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const made = julesWorld({ origin: 'git@github.com:owner/repo.git' });
     const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
 
-    expect(await runSend([SEAT, 'hello'], owner(made.root), fake(made))).toBe(0);
+    expect(await runSend([SEAT, 'hello'], owner(made.root), host(made))).toBe(0);
 
     const argv = jules.calls()[0]?.argv ?? [];
     expect(argv).toHaveLength(4);
@@ -273,7 +292,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const jules = julesFirstOnPath({ status: 1, stderr: 'Error: no account\n' });
     const io = owner(made.root);
 
-    const code = await runSend([SEAT, 'hello'], io, fake(made, { sendId: () => SEND_ID }));
+    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID }));
 
     expect(code).toBe(0);
     expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
@@ -288,11 +307,47 @@ describe('a send to a seat whose CLI creates its own session', () => {
     ]));
   });
 
+  test('a body that names a private entry never reaches the CLI: the rule is named, the text is not, and the drop keeps it', async () => {
+    const made = julesWorld();
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+
+    const code = await runSend([SEAT, 'notes for Zephyrine Quillfeather'], io, host(made, { sendId: () => SEND_ID }));
+
+    expect(code).toBe(0);
+    expect(jules.calls()).toEqual([]);
+    expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
+    // The local copy keeps the body: the message is not lost, it is not handed to a public
+    // service. The refusal names the rule it matched and never repeats the text.
+    expect(recordBody(join(seatDropDir(made), SEND_ID))).toContain('Zephyrine Quillfeather');
+    const entry = lastEntry(made);
+    expect(entry).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    const failed = (entry.failed as string[] | undefined) ?? [];
+    expect(failed).toEqual(expect.arrayContaining([
+      'session: the body matches a private rule (names entry 1); no session was created',
+    ]));
+    expect(failed.join('\n')).not.toContain('Zephyrine');
+    expect(io.err).not.toContain('Zephyrine');
+    expect(io.out).not.toContain('Zephyrine');
+  });
+
+  test('a seat the team file marks public_only keeps the guard on', async () => {
+    const made = julesWorld({ julesFields: '    public_only: true\n' });
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+
+    const code = await runSend([SEAT, 'notes for Zephyrine Quillfeather'], io, host(made, { sendId: () => SEND_ID }));
+
+    expect(code).toBe(0);
+    expect(jules.calls()).toEqual([]);
+    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+  });
+
   test('a declared order keeps its words; the retired typed wake stands where the session call can', async () => {
     const made = julesWorld({ order: ['mcp-inbox', 'typed'] });
     const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
 
-    expect(await runSend([SEAT, 'hello'], owner(made.root), fake(made))).toBe(0);
+    expect(await runSend([SEAT, 'hello'], owner(made.root), host(made))).toBe(0);
 
     expect(jules.calls()).toHaveLength(1);
     expect(lastEntry(made)).toMatchObject({ via: 'session', session: 'abc123' });
@@ -305,7 +360,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     // The lead is a Claude Code seat: its profile declares no session call, so the named leg is
     // skipped with the reason and the drop leg behind it still takes the message.
-    const code = await runSend(['lead', 'hello'], io, fake(made));
+    const code = await runSend(['lead', 'hello'], io, host(made));
 
     expect(code).toBe(0);
     expect(jules.calls()).toEqual([]);
@@ -321,7 +376,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const jules = julesFirstOnPath();
     const io = owner(made.root);
 
-    expect(await runSend([SEAT, 'hello', '--dry-run'], io, fake(made))).toBe(0);
+    expect(await runSend([SEAT, 'hello', '--dry-run'], io, host(made))).toBe(0);
 
     expect(jules.calls()).toEqual([]);
     expect(io.out).toContain("the CLI's own session call, with the brief as one argument");
@@ -333,7 +388,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const jules = julesFirstOnPath();
     const io = owner(made.root);
 
-    expect(await runSend([SEAT, 'hello', '--dry-run', '--json'], io, fake(made))).toBe(0);
+    expect(await runSend([SEAT, 'hello', '--dry-run', '--json'], io, host(made))).toBe(0);
 
     expect(jules.calls()).toEqual([]);
     const doc = assertMatchesOutputSchema<{

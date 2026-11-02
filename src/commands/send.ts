@@ -39,6 +39,7 @@ import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
 import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
@@ -406,6 +407,10 @@ export type SendHost = {
   watch?: WatchSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
+  /** The two external private lists a public-only body is scanned against. Absent (the real
+   *  host), the machine's default paths are read; a test hands in its own files, so no send
+   *  touches the machine's lists. */
+  privateLists?: PrivateListPaths;
 };
 
 export const realHost: SendHost = {
@@ -982,6 +987,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // without the block gives its seats no session leg, and a level of the chain that names the
   // leg for such a seat hears it recorded as unavailable rather than attempted.
   const sessionCli: SessionCliSpec | null = profileFor(to.cli)?.sessionCli ?? null;
+  // A public-only seat's CLI keeps its sessions on a service this machine does not run: the
+  // team's rules are never prepended to its briefs, and the session leg below reads the whole
+  // body against the machine's private lists before the CLI is asked to create one. The profile
+  // says so for a hosted CLI; a team file may mark one seat the same way.
+  const publicOnly = isPublicOnly(profileFor(to.cli), declared);
   // The receiving seat's delivery class, read once for this send. An outcome that cannot claim
   // delivery appends it, so `sent (unconfirmed)` never stands as the whole answer to whether the
   // seat will read the message: the line says whether it is woken, holds the message between
@@ -1108,8 +1118,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // them: `rules: prepend` puts the same text a launch would deliver in front of each brief,
   // on every leg — the drop file, the socket frame and a compose seat's typed box all carry
   // this one body. `rulesOf` is the launch's own builder, so the file's rules, the seat's
-  // signature lines and the workspace lines are the ones its launch would have sent.
-  if (declared !== undefined && receiving.ok && profileFor(declared.cli)?.rulesMode === 'prepend') {
+  // signature lines and the workspace lines are the ones its launch would have sent. A
+  // public-only seat is never given them: its rules are the team's own text, and a service
+  // outside this machine reads the whole body it is handed.
+  if (declared !== undefined && receiving.ok && !publicOnly && profileFor(declared.cli)?.rulesMode === 'prepend') {
     body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source))}\n\n${body}`;
   }
 
@@ -1939,6 +1951,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         markLeg('session', 'skipped', why);
         note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
+      }
+      // A public-only body leaves this machine for a service it does not run, so it is read
+      // against the machine's private lists before any session call. A hit, or a list that is
+      // configured and cannot be read, is a route that did not take the send: the reason names
+      // the rule by source, class and ordinal and never the text, and the walk falls through to
+      // the leg behind it — the message still lands locally.
+      if (publicOnly) {
+        const scan = scanPublicBody(body, host.privateLists);
+        if (!scan.ok) {
+          const why = `${scan.why}; no session was created`;
+          failures.push(`session: ${why}`);
+          markLeg('session', 'skipped', why);
+          note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+          continue;
+        }
       }
       // The signed record is staged before the call: a session the CLI created and then failed to
       // report still leaves the seat a durable copy of what it was asked to do.

@@ -100,6 +100,10 @@
         }
       }
     },
+    "public_only": {
+      "type": "boolean",
+      "description": "optional: whether every seat of this CLI is public-only — the team's rules are never prepended to its briefs, and a send scans the whole body against the machine's private lists before the CLI's session call, refusing a body that matches one; absent reads as false, and a hosted CLI whose sessions run on another service sets true"
+    },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
