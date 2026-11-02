@@ -17,6 +17,8 @@ import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { markStopped, seatIsStopped } from '../src/file/lines.ts';
+import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
@@ -26,6 +28,7 @@ import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -245,6 +248,10 @@ function makeHarness(
     /** The relaunched pane never draws the paste: the restore's read-back fails. */
     pasteDrops?: boolean;
     closeFails?: boolean;
+    /** Workspace creation fails: the launch never reaches a pane. */
+    createFails?: boolean;
+    /** The launch command fails: the pane is there and its CLI never starts. */
+    paneRunFails?: boolean;
     doctorVersion?: string | null;
     machine?: (root: string) => Machine;
   } = {},
@@ -323,6 +330,7 @@ function makeHarness(
     sessionUp: () => true,
     createWorkspace() {
       did.created += 1;
+      if (opts.createFails) return null;
       const pane = did.created === 1 ? 'pane-new' : `pane-new-${did.created}`;
       const workspace = did.created === 1 ? 'ws-new' : `ws-new-${did.created}`;
       newPanes.set(pane, { text: opts.newPaneScreen ?? IDLE, agent: false, name: null, workspace });
@@ -330,6 +338,7 @@ function makeHarness(
     },
     paneRun(_session, pane, command) {
       did.runs.push(command);
+      if (opts.paneRunFails) return false;
       const slot = newPanes.get(pane);
       if (slot) slot.agent = true;
       return true;
@@ -489,7 +498,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(1);
     expect(io.out).toContain('worker: input box: empty\n');
     expect(io.out).toContain('worker: turn: not working (free)\n');
-    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript\n');
+    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation\n');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
 
@@ -931,7 +940,7 @@ describe('team restart <seat>', () => {
     expect(replaced.did.created).toBe(0);
   });
 
-  test('refuses unknown, temporary, signed-off seats, and held run-lock; supports --dry-run', async () => {
+  test('refuses unknown and temporary seats, and a held run-lock; supports --dry-run', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -947,10 +956,6 @@ describe('team restart <seat>', () => {
     expect(await runRestart(['worker-tmp-1'], ioTemp, sources)).toBe(1);
     expect(ioTemp.err).toBe('team restart: worker-tmp-1 is a temporary copy; use team remove worker-tmp-1 then team add --temporary --like worker\n');
 
-    const ioStopped = testIo(fixture.root, { kind: 'owner' });
-    expect(await runRestart(['parked-seat'], ioStopped, sources)).toBe(1);
-    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner takes the sign-off off in the file and runs team up\n');
-
     // Dry run
     const ioDry = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker', '--dry-run'], ioDry, sources)).toBe(0);
@@ -965,6 +970,162 @@ describe('team restart <seat>', () => {
     const ioLocked = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], ioLocked, sources)).toBe(1);
     expect(ioLocked.err).toContain('another session-mutating run is holding');
+  });
+
+  // `remove --keep` writes the sign-off into the registry's record when the team lives there, and
+  // leaves `.agents/team.yaml` as it was. A seat that leads the team restarts the stopped seat
+  // from its own pane: the run reads the launched pointer through the seam, so the mark it
+  // clears is the registry's own — in the same write that records the launch — and the stale
+  // file beside it is left exactly as it was launched.
+  test('a team\'s lead revives a registry team\'s stopped seat, clearing the registry mark the pointer leads to', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const stored = storedTeam(fixture.root, fixture.home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    await underRegistry(async () => {
+      expect(writeTeamText(fixture.file, markStopped(stored.text, 'worker'), { home: fixture.home, command: 'remove' }))
+        .toEqual({ ok: true, target: 'registry' });
+      // The mark is the registry's; the file the session was launched from is exactly as launched.
+      expect(storedTeam(fixture.root, fixture.home)?.text ?? '').toContain('stopped: true');
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.launched_file = fixture.file;
+        session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      });
+      noteLaunchedPane(fixture.home, fixture.file, 'pane-lead', 'acme');
+
+      const { sources, did } = makeHarness(fixture);
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+      expect(io.err).toBe('');
+      expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+      // The mark the restart cleared is the registry's, and the stale file is untouched.
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'worker')).toBe(false);
+      // The write cleared that seat's mark and no other: the fixture's own signed-off seat stands.
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'parked-seat')).toBe(true);
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+      expect(did.typed).toEqual(['/exit']);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+      const after = readState(fixture.dir).sessions.acme?.seats.worker;
+      expect(after?.stage).toBe('ready');
+      expect(after?.pane).toBe('pane-new');
+    });
+  });
+
+  // The owner's own terminal carries no launched pointer: the same mark is read from the registry
+  // itself, and the owner's restart clears and relaunches the seat the same way.
+  test('the owner revives a registry team\'s stopped seat from the owner\'s own terminal', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const stored = storedTeam(fixture.root, fixture.home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    await underRegistry(async () => {
+      expect(writeTeamText(fixture.file, markStopped(readTeamText(fixture.file, { home: fixture.home }), 'worker'), { home: fixture.home, command: 'remove' }))
+        .toEqual({ ok: true, target: 'registry' });
+      const { sources, did } = makeHarness(fixture);
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+      expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'worker')).toBe(false);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+    });
+  });
+
+  // A stopped seat is its own team's to revive: the owner, or a seat that leads this team on its
+  // own recorded pane. The run clears `stopped: true` in the same write that records the launch,
+  // then relaunches; a launch that does not reach ready puts the mark back. Every scene below
+  // runs with dev mode off, except where it says otherwise.
+  test('a team\'s lead restarts its own team\'s stopped seat: the mark is cleared in the run that launches it', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
+    expect(readFileSync(fixture.file, 'utf8')).not.toContain('stopped: true');
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    const after = readState(fixture.dir).sessions.acme?.seats['parked-seat'];
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
+  });
+
+  // A launch that never reaches ready is no revival: the run puts the sign-off back in its own
+  // validated write, so the file keeps the mark exactly as it had it, and the failure is said.
+  for (const failure of ['create', 'run'] as const) {
+    test(`a stopped seat whose ${failure === 'create' ? 'workspace creation' : 'launch command'} fails keeps its mark`, async () => {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      });
+      const { sources, did } = makeHarness(fixture, failure === 'create' ? { createFails: true } : { paneRunFails: true });
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['parked-seat'], io, sources)).not.toBe(0);
+      expect(did.created).toBe(1);
+      expect(did.runs).toHaveLength(failure === 'run' ? 1 : 0);
+      expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(true);
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+      expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).not.toBe('ready');
+      expect(io.err).toContain('its sign-off was put back in the team file');
+    });
+  }
+
+  // A worker is not `leads`, whatever pane it stands on: the caller gate refuses it as it always
+  // has, and nothing is cleared or launched.
+  test('a worker is refused the stopped seat, naming the caller, and nothing is written', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is worker\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // A seat leading another team is placed, but not as a lead of this one: the placement alone is
+  // no admission.
+  test('another team\'s lead is refused this team\'s stopped seat, and nothing is written', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats['rival-lead'] = { stage: 'ready', pane: 'pane-rival', workspace: 'ws-rival' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'rival-lead', pane: 'pane-rival', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is rival-lead\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // Dev mode folds the caller gate into a warning; it does not lift the sign-off. The refusal
+  // still stands, and names the command that does work.
+  test('a worker is still refused the stopped seat with dev mode on, naming `team restart`', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toContain('team restart: parked-seat is signed off; a `leads` seat of its own team clears it with `team restart parked-seat`\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
   });
 
   // The stop is a session mutation, so a restart stands aside while another run mutates the
@@ -1383,7 +1544,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     // The resume read refuses the record that is another agent's, and the relaunch starts fresh.
     expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // The pull-only reason is the binder's own: the endpoint read it made proves no thread.
+    expect(io.out).toContain('pull-only: the Codex endpoint socket is not listening (ENOENT)');
     // The managed launch did its part: endpoint and incarnation are recorded, bound to each other.
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.presence_binding).toBe(BOUND);
@@ -1497,7 +1659,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // Several threads prove nothing; the summary says which reading refused it.
+    expect(io.out).toContain("pull-only: its Codex endpoint holds 2 threads; none is proven to be this seat's");
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.agent_session).toBeUndefined();
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_old');
@@ -1657,6 +1820,217 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain(
       `AGENT_UNATTENDED=1 ${launch} -r ${GROK_SESSION} --always-approve`,
     );
+  });
+
+  test('a restored Claude Code wrapper resumes inside its quoted script and says so before the close', async () => {
+    // The launch line runs the CLI inside a quoted script: a word after the closing quote never
+    // reaches `claude`, so the resume and the profile's options go inside it, and the pre-close
+    // line quotes the line the run launches rather than the bare declaration.
+    const launch = 'zsh -lc "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const resumed = 'zsh -lc "claude --model claude-opus-5-5 --resume ses_keep"';
+    const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+    const ran = run.did.runs.find((line) => line.includes('zsh -lc'));
+    expect(ran).toBeDefined();
+    // The resume and every profile option sit inside the quoted script, where the CLI reads
+    // them; the settings file is the last word before the closing quote.
+    expect(ran?.startsWith('AGENT_UNATTENDED=1 zsh -lc "claude --model claude-opus-5-5 --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt ')).toBe(true);
+    expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
+    expect(io.out).toContain(
+      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
+    );
+    // The recipe the launch records is the declared line, with the resume it carried.
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
+  });
+
+  test('a wrapper chain hands the carried resume to the CLI as an argument', async () => {
+    // The field's shape: a shell starts a wrapper that execs the command it is given, which starts
+    // a second wrapper that handles some words itself and collects the rest for the CLI. Running
+    // the line the restart plans proves which words reach the CLI, and in what order.
+    const launch = '/bin/sh as-floor.sh /bin/bash claude-kimi.sh';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    // A stub CLI on PATH records the argv it is handed. The wrappers sit in the seat's folder,
+    // where its launch line runs.
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+    writeFileSync(join(fixture.root, 'as-floor.sh'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    writeFileSync(
+      join(fixture.root, 'claude-kimi.sh'),
+      [
+        '#!/bin/bash',
+        'args=()',
+        'while [ "$#" -gt 0 ]; do',
+        '  case "$1" in',
+        '    --model) model="$2"; shift 2 ;;',
+        '    *) args+=("$1"); shift ;;',
+        '  esac',
+        'done',
+        'exec claude --model "${model:-kimi-k2}" "${args[@]}"',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('claude-kimi.sh'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // The exact words the CLI receives, in order: the wrapper's own model, then the carried resume,
+    // then the profile's unattended, naming, rules and hook options — and no positional prompt.
+    // The stub terminates each word with NUL, so the multi-line rules text stays one word.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'kimi-k2',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
+  });
+
+  test("a shell's own -c is not read as Claude Code's continue, so the line resumes", async () => {
+    // `<shell> -c "<script>"` is the common quoted-script shape: the shell's -c is the shell's
+    // option, not the CLI's continue. Both lines carry the recorded conversation, and the
+    // profile's options go inside the script with it. The line is planned and recorded here;
+    // the next scene runs one.
+    for (const launch of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
+      const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+      const { fixture, run } = seeded({
+        registry: 'ses_keep',
+        state: 'ses_keep',
+        workerSession: 'ses_keep',
+        launched: true,
+        launch,
+        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      const io = testIo(fixture.root, { kind: 'owner' });
+
+      expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+      const ran = run.did.runs.find((line) => line.includes('--resume ses_keep'));
+      expect(ran).toBeDefined();
+      const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+      expect(ran?.startsWith(
+        `AGENT_UNATTENDED=1 ${launch.slice(0, -1)} --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt `,
+      )).toBe(true);
+      expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
+      expect(io.out).toContain('resumes the recorded conversation ses_keep');
+    }
+  });
+
+  test('a quoted script hands the profile options to the CLI as arguments', async () => {
+    // The field's shape: a launch line whose last word is a quoted script running the CLI. A word
+    // after the closing quote never reaches the CLI, so the profile's options must go inside it.
+    // Running the planned line with a stub CLI on PATH proves which words the CLI is handed — the
+    // containment check on the line cannot see the difference. The shell's own -c is not Claude
+    // Code's --continue: only the words inside the script are the CLI's.
+    const launch = '/bin/sh -c "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('/bin/sh -c'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // Every word the CLI receives, in order: the line's own model, the carried resume, then the
+    // profile's unattended, naming, rules and hook options — none of them after the closing quote.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'claude-opus-5-5',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
   });
 
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
@@ -1926,6 +2300,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    // The caller's own flag is the reason: the context line does not present it as none recorded.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "codex -m gpt-6.1-sol" in a new workspace without passing the old transcript; abandoned by the caller\n',
+    );
   });
 
   test('a restored Codex seat running another conversation is still left as it is', async () => {
@@ -2018,6 +2396,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
+    // The context line repeats the reason the run gave: it never reads as a silent fresh start.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
+    );
   });
 
   test('a record that changes between the caller\'s read and the run lock is not resumed', async () => {
@@ -2048,6 +2430,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(moved).toBe(true);
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
+    // The carried resume was dropped under the run lock: the context line says so, with the why.
+    expect(io.out).toContain(
+      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
+    );
   });
 
   test('a dry run prints the resume the launch would use, and writes no log line', async () => {

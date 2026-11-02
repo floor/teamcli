@@ -470,11 +470,13 @@ describe('file replacement refuses links, interference and failed writes', () =>
 
   test('an atomic writer error is caught and leaves the live file intact', async () => {
     const place = folder();
-    const temporary = `${place.file}.${process.pid}.tmp`;
     const originalWrite = fs.writeFileSync;
     let attempted = false;
     const failing = spyOn(fs, 'writeFileSync').mockImplementation(((...args: Parameters<typeof fs.writeFileSync>) => {
-      if (args[0] === temporary) {
+      // The temporary's own name now carries a fresh random suffix; the write seam is what this
+      // scene faults, whichever name that write drew.
+      const target = args[0];
+      if (typeof target === 'string' && target.startsWith(`${place.file}.`) && target.endsWith('.tmp')) {
         attempted = true;
         throw new Error('synthetic atomic write failure');
       }

@@ -5600,7 +5600,7 @@ describe('team down, live', () => {
       run.sourcesOf({
         status: () => {
           looks += 1;
-          return looks === 1 ? 'idle' : 'working';
+          return looks <= 2 ? 'idle' : 'working';
         },
       }),
     );
@@ -5823,15 +5823,15 @@ describe('team down, live', () => {
       run.setBox(claudeBox('exi'));
       return true;
     };
-    // The caller check before the clearing key is the fifth read of the foreground — the plan's
-    // own opening classification, the opening check, after the typing, after the draw wait,
-    // then this one.
+    // The caller check before the clearing key is the sixth read of the foreground — the plan's
+    // own opening classification, the opening check, the check before the typing, after the
+    // typing, after the draw wait, then this one.
     let looks = 0;
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf({
       foreground: () => {
         looks += 1;
-        if (looks === 5) run.setBox(claudeBox('/exit'));
+        if (looks === 6) run.setBox(claudeBox('/exit'));
         return ['claude'];
       },
     }));
@@ -5871,13 +5871,13 @@ describe('team down, live', () => {
       return false;
     };
     // The pane finishes the draw at the caller check before the clearing key, as in the test
-    // above: the fifth read of the foreground.
+    // above: the sixth read of the foreground.
     let looks = 0;
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf({
       foreground: () => {
         looks += 1;
-        if (looks === 5) run.setBox(claudeBox('/exit'));
+        if (looks === 6) run.setBox(claudeBox('/exit'));
         return ['claude'];
       },
     }));

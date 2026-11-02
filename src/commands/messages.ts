@@ -186,7 +186,7 @@ function text(value: unknown): value is string {
 }
 
 /** The payload a legacy message signature covers, or null when the file is not that shape. */
-function messagePayload(value: unknown): MessagePayload | null {
+export function messagePayload(value: unknown): MessagePayload | null {
   if (!isRecord(value)) return null;
   const payload = value.payload;
   if (!isRecord(payload)) return null;
@@ -197,7 +197,7 @@ function messagePayload(value: unknown): MessagePayload | null {
   return payload as MessagePayload;
 }
 
-function legacyReceiptMatches(path: string, seat: string, id: string, root: string, session: string, key: KeyObject): boolean {
+export function legacyReceiptMatches(path: string, seat: string, id: string, root: string, session: string, key: KeyObject): boolean {
   if (!isFile(path)) return false;
   const parsed = readJson(path);
   if (!isRecord(parsed) || !isRecord(parsed.payload) || !text(parsed.signature)) return false;

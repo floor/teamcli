@@ -45,9 +45,11 @@ export function unitEntry(text: string): string | null {
   return words[1] ?? null;
 }
 
-export function refreshFixture(realWait = false, inPlace = false) {
-  // Keep the synthetic files in temporary storage so a failing scene can be inspected.
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'service-refresh-scene-')));
+export function refreshFixture(realWait = false, inPlace = false, baseDir = tmpdir()) {
+  // Keep the synthetic files in storage a failing scene can inspect. A scene that also writes a
+  // client key names a base outside the OS temp folder: a key's own placement rule refuses a
+  // folder that overlaps it.
+  const base = realpathSync(mkdtempSync(join(baseDir, 'service-refresh-scene-')));
   const root = join(base, 'repo');
   const home = join(base, 'home');
   const bin = join(base, 'bin');

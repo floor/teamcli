@@ -2,7 +2,8 @@
 
 Shows the seat registry for the team: one row per seat whose STATUS is not `stopped`, or every seat
 when `--all` is given, with its human name when the file writes one, its stable seat handle
-(`seat_<12 hex>`), role, CLI, model, effort, status, state, last active time, and pane.
+(`seat_<12 hex>`), role, CLI, model, effort, status, state, last active time, pane, and whether a
+message can wake it while it is idle.
 
 ## Synopsis
 
@@ -20,7 +21,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | `--team` | `<team>` | with `--client`, the team the grant is for |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
-| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies; a seat the daemon observes also carries `presence` — the canonical four-state word (`working`, `idle`, `waiting-for-a-person`, `gone`), its runtime source (`runtime-hook`, `runtime-event`, `daemon-launch`), the event and its `since` instant, and `live` — beside the legacy state word |
+| `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, its wakeability as `wake`, and `blind: true` where it applies; a seat the daemon observes also carries `presence` — the canonical four-state word (`working`, `idle`, `waiting-for-a-person`, `gone`), its runtime source (`runtime-hook`, `runtime-event`, `daemon-launch`), the event and its `since` instant, and `live` — beside the legacy state word |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Columns
@@ -39,6 +40,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | SOURCE | where that reading came from — `cli`, `presence`, `cli-hook`, `herdr`, `trace`, `process`, `hold` or `none`; `presence` is the daemon's reading of the seat's own turn events, its last known word when the route is not currently healthy, and `cli` is the screen's fallback classification, used only when no such reading exists |
 | LAST ACTIVE | `now` when working, relative age (`2m ago`), or `-` |
 | PANE | the herdr pane, or `-` when not running |
+| WAKE | the delivery class a send measures — `push`, `between-turns`, `pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is idle; the facts that explain it follow in parentheses (`endpoint, no bound conversation`, `inbox`, `unread <age>`). [`team status`](status.md) explains the reading |
 
 The handle belongs to the seat, not to one run of it. It is minted on the seat's first launch or
 `team add`, and parked in the state's `retained_seats` when the record goes away: `team down` and
@@ -110,8 +112,8 @@ Without `--all`, stopped seats are omitted:
 ```console
 $ team seats ; echo "exit $?"
 team beacon, session "beacon"
-SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
-claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE  WAKE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -     !pull-on-turn
 1 seat
 exit 0
 ```
@@ -121,16 +123,17 @@ With `--all`, stopped seats are included:
 ```console
 $ team seats --all ; echo "exit $?"
 team beacon, session "beacon"
-SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE
-claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -
-claude-beacon  -          seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -
+SEAT           NICKNAME   ID                 ROLE         CLI          MODEL            EFFORT  STATUS   STATE  SOURCE   LAST ACTIVE  PANE  WAKE
+claude-keeper  agamemnon  seat_0123456789ab  coordinator  claude-code  Claude Opus 5.5  max     missing  done   process  2m ago       -     !pull-on-turn
+claude-beacon  -          seat_fedcba987654  implementer  claude-code  Claude Opus 5.5  -       stopped  done   process  1h ago       -     !pull-on-turn
 2 seats
 exit 0
 ```
 
 `--json` prints the same registry as one document: each seat's `status` is the comparison's
 phrase about the record, and its own reading — the table's `STATE` and `SOURCE` — rides beside it
-as `state` and `state_source`, with `blind: true` only where it applies:
+as `state` and `state_source`, with `blind: true` only where it applies, and its wakeability as
+`wake`:
 
 ```console
 $ team seats --json ; echo "exit $?"
@@ -156,7 +159,15 @@ $ team seats --json ; echo "exit $?"
       "state_source": "process",
       "last_active": "2026-10-04T08:58:00.000Z",
       "pane": null,
-      "launch_line": "claude --model claude-opus-5-5"
+      "launch_line": "claude --model claude-opus-5-5",
+      "wake": {
+        "class": "pull-on-turn",
+        "wakeable": false,
+        "conversation": false,
+        "endpoint": false,
+        "listener": false,
+        "oldest_unread_seconds": null
+      }
     }
   ]
 }

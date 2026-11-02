@@ -75,8 +75,10 @@ export function readStoredTeamConfig(home: string, id: string): StoredTeamConfig
   let value: unknown;
   try {
     value = JSON.parse(readFileSync(path, 'utf8'));
-  } catch (error) {
-    throw new TeamConfigStoreError(`${path}: ${(error as Error).message}`);
+  } catch {
+    // JSON.parse's own message quotes the text it refused, and a record may hold anything. The
+    // refusal names the file and the fault; the record's content never reaches the message.
+    throw new TeamConfigStoreError(`${path}: the record is not valid JSON`);
   }
   const record = value as Partial<StoredTeamConfig> | null;
   if (
