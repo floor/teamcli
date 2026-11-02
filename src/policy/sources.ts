@@ -6,7 +6,7 @@
 // - seat:    `<home>/.config/team/agents/<agentId>.yaml` under `policies`
 
 import type { KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
@@ -37,6 +37,13 @@ import {
   type PolicyValue,
 } from './types.ts';
 import { readTeamText, readTeamTextTarget, teamTextTarget, writeTeamText } from '../file/team-text.ts';
+
+/** True only for the error that says a policy file is not there. A file that cannot be read is
+ *  not an empty declaration: its policies may include the one that tightens this run, so every
+ *  reader below refuses it instead of treating the source as declaring nothing. */
+function isAbsent(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ENOENT';
+}
 
 export type PolicyChainInput = {
   home?: string;
@@ -347,18 +354,18 @@ function verifyPoliciesMap(
 
 /**
  * Reads the entity-level policies for `entity` from `<home>/.config/team/entities.yaml`.
- * An absent file or absent entity entry declares no policies; an unreadable or invalidly signed
- * file returns `{ ok: false, level: 'entity', why }`.
+ * An absent file or absent entity entry declares no policies; a file that cannot be read, or an
+ * invalidly signed one, returns `{ ok: false, level: 'entity', why }`.
  */
 export function readEntityPolicySource(home: string = homedir(), entity: string | null = null): PolicySourceRead {
   const path = entitiesPath(home);
-  if (!existsSync(path)) {
-    return { ok: true, level: 'entity', target: entity, policies: [] };
-  }
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
+    if (isAbsent(error)) {
+      return { ok: true, level: 'entity', target: entity, policies: [] };
+    }
     return { ok: false, level: 'entity', target: entity, source: path, why: `${path}: ${(error as Error).message}` };
   }
   if (!text.trim()) {
@@ -390,18 +397,18 @@ export function readEntityPolicySource(home: string = homedir(), entity: string 
 
 /**
  * Reads the project-level policies for `projectId` from `<home>/.config/team/projects.yaml`.
- * An absent file or absent project entry declares no policies; an unreadable or invalidly signed
- * record returns `{ ok: false, level: 'project', why }`.
+ * An absent file or absent project entry declares no policies; a file that cannot be read, or an
+ * invalidly signed record, returns `{ ok: false, level: 'project', why }`.
  */
 export function readProjectPolicySource(home: string = homedir(), projectId: string | null = null): PolicySourceRead {
   const path = projectsFile(home);
-  if (!existsSync(path)) {
-    return { ok: true, level: 'project', target: projectId, policies: [] };
-  }
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch (error) {
+    if (isAbsent(error)) {
+      return { ok: true, level: 'project', target: projectId, policies: [] };
+    }
     return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: ${(error as Error).message}` };
   }
   if (!text.trim()) {
@@ -465,26 +472,35 @@ export function readTeamPolicySource(
     if (!target.ok) return { ok: false, level: 'team', target: primaryTarget, source: path, why: target.why };
     onRegistry = target.target.kind === 'registry';
   }
-  if (rawPolicies === undefined && teamRoot && (onRegistry || existsSync(path))) {
-    let text: string;
+  if (rawPolicies === undefined && teamRoot) {
+    let text: string | undefined;
     try {
       text = readTeamText(path, { home });
     } catch (error) {
-      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${onRegistry ? 'the registry' : path}: ${(error as Error).message}` };
+      // A registry record that cannot be read is refused by the plain read's own sentence. A
+      // team file that is not there declares no policies; one that cannot be read is a refusal,
+      // never read as an empty declaration.
+      if (!onRegistry && isAbsent(error)) {
+        text = undefined;
+      } else {
+        return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${onRegistry ? 'the registry' : path}: ${(error as Error).message}` };
+      }
     }
-    let root: YamlValue;
-    try {
-      root = toValue(parseYaml(text));
-    } catch (error) {
-      const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
-      return { ok: false, level: 'team', target: primaryTarget, source: path, why };
-    }
-    if (!isMap(root)) {
-      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${path}: expected a map` };
-    }
-    rawPolicies = root.policies;
-    if (rawLegacyDelivery === undefined && root.delivery_order !== undefined) {
-      rawLegacyDelivery = root.delivery_order;
+    if (text !== undefined) {
+      let root: YamlValue;
+      try {
+        root = toValue(parseYaml(text));
+      } catch (error) {
+        const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
+        return { ok: false, level: 'team', target: primaryTarget, source: path, why };
+      }
+      if (!isMap(root)) {
+        return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${path}: expected a map` };
+      }
+      rawPolicies = root.policies;
+      if (rawLegacyDelivery === undefined && root.delivery_order !== undefined) {
+        rawLegacyDelivery = root.delivery_order;
+      }
     }
   }
 
@@ -555,13 +571,15 @@ export function readSeatPolicySource(
 
   if (agentId) {
     const path = join(agentsDir(home), `${agentId}.yaml`);
-    if (existsSync(path)) {
-      let text: string;
-      try {
-        text = readFileSync(path, 'utf8');
-      } catch (error) {
+    let text: string | undefined;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      if (!isAbsent(error)) {
         return { ok: false, level: 'seat', target, source: path, why: `${path}: ${(error as Error).message}` };
       }
+    }
+    if (text !== undefined) {
       let root: YamlValue;
       try {
         root = toValue(parseYaml(text));
@@ -985,13 +1003,18 @@ function writeEntityPolicyEntry(
 ): void {
   const path = entitiesPath(home);
   let root: Record<string, YamlValue> = {};
-  if (existsSync(path)) {
-    const text = readFileSync(path, 'utf8');
-    if (text.trim()) {
-      const parsed = toValue(parseYaml(text));
-      if (!isMap(parsed)) throw new Error(`${path}: expected a map of entities`);
-      root = { ...parsed };
-    }
+  let text: string | undefined;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    // A file that is not there is a new one. A file that cannot be read is never replaced by this
+    // write: it would drop every other entity's policies this run could not see.
+    if (!isAbsent(error)) throw error;
+  }
+  if (text !== undefined && text.trim()) {
+    const parsed = toValue(parseYaml(text));
+    if (!isMap(parsed)) throw new Error(`${path}: expected a map of entities`);
+    root = { ...parsed };
   }
   const existingEntity = isMap(root[entity]) ? { ...(root[entity] as Record<string, YamlValue>) } : {};
   const existingPolicies = isMap(existingEntity.policies) ? { ...(existingEntity.policies as Record<string, YamlValue>) } : {};

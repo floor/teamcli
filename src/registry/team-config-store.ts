@@ -11,7 +11,7 @@
 // never sees half a record.
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { writeAtomic } from '../state.ts';
 
@@ -67,14 +67,28 @@ export function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
-/** The team's stored configuration, or null when the registry holds none. A record that does not
- *  read, or whose text does not match its digest, throws `TeamConfigStoreError` naming the file. */
+/** True only for the error that says the record is not there. Every other read failure — an
+ *  unreadable folder, a record that cannot be opened — is not absence: the registry may hold the
+ *  team and this read could not see it, so callers must refuse rather than read a file beside it. */
+function isAbsent(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ENOENT';
+}
+
+/** The team's stored configuration, or null when the registry holds none (the record path does
+ *  not exist). A record that cannot be read or parsed, or whose text does not match its digest,
+ *  throws `TeamConfigStoreError` naming the file. */
 export function readStoredTeamConfig(home: string, id: string): StoredTeamConfig | null {
   const path = teamConfigRecordPath(home, id);
-  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (isAbsent(error)) return null;
+    throw new TeamConfigStoreError(`${path}: ${(error as Error).message}`);
+  }
   let value: unknown;
   try {
-    value = JSON.parse(readFileSync(path, 'utf8'));
+    value = JSON.parse(text);
   } catch (error) {
     throw new TeamConfigStoreError(`${path}: ${(error as Error).message}`);
   }
