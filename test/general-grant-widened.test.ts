@@ -4,6 +4,7 @@
 // release tags in this repository (each op's route in the dispatcher table at each tag, by tag
 // date), not remembered; the table below is that measurement.
 import { afterAll, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands } from '../src/cli.ts';
@@ -92,6 +93,29 @@ test('no dispatcher route is unmeasured: each has a release row or is declared u
   expect([...UNRELEASED_OPS].sort()).toEqual(
     GENERAL_OPS.filter((op) => OP_FIRST_SHIPPED[op] === null).sort(),
   );
+});
+
+test('an op declared unshipped is a route at no release tag', () => {
+  // The declaration can rot in the one way the equality above cannot see: the op ships in a
+  // release while its row and this list are both left untouched, so the null entry and the
+  // declaration still agree. Measure the declaration against the releases themselves: an op
+  // declared unshipped is a route at no release tag. Once a tag carries it, this fails until
+  // the row is added, which also takes the op out of the declaration. Each tag's dispatcher
+  // table is read the way the table above was measured (every non-rc tag yields one, 11 at
+  // v0.1.0 through 68 at v0.5.10), so a tag this reader cannot parse fails here too.
+  const repo = join(import.meta.dir, '..');
+  const tags = execFileSync('git', ['tag', '--list', '--sort=v:refname', 'v*'], { cwd: repo, encoding: 'utf8' })
+    .split('\n')
+    .filter((tag) => tag !== '' && !tag.includes('-rc.'));
+  expect(tags.length).toBeGreaterThan(0);
+  for (const tag of tags) {
+    const source = execFileSync('git', ['show', `${tag}:src/cli.ts`], { cwd: repo, encoding: 'utf8' });
+    const routes = [...source.matchAll(/^  '?([a-z][a-z0-9-]*)'?: \(\) => import\('\.\/commands\/[^']+'\)/gm)].map(
+      (match) => match[1]!,
+    );
+    expect(routes.length, `${tag} reads its dispatcher`).toBeGreaterThan(0);
+    expect(UNRELEASED_OPS.filter((op) => routes.includes(op)), `${tag} ships no declared-unshipped op`).toEqual([]);
+  }
 });
 
 test('a wildcard grant signed before a release reaches the ops that release shipped', () => {
