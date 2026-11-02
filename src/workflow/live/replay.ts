@@ -1,10 +1,12 @@
 // The live fold and the live replay. `foldLive` is the structural fold every read and append uses:
 // sequence, state continuity, revisions, activations and occurrence ids, with no definition in
-// hand. `replayLive` rechecks the same journal against the pinned definition's bytes: the
-// transition set, the request digests, the run-open pin, and the decision itself — it re-derives
-// the engine's answer for every step with the pinned settings, the recorded evidence and the real
-// guard catalogue, then compares the next state, the error move and the effect plan. Neither
-// writes anything, verifies a signature, dispatches or claims the Kernel ledger.
+// hand. `recheckLive` rechecks a folded journal against the pinned definition: the transition set,
+// the request digests, the run-open pin, and the decision itself — it re-derives the engine's
+// answer for every step with the pinned settings, the recorded evidence and the real guard
+// catalogue, then compares the next state, the error move and the effect plan. `replayLive` parses
+// the bytes and calls it; the store calls it on the records it is about to extend, so a step the
+// replay would refuse is refused before it is written. Neither writes anything, verifies a
+// signature, dispatches or claims the Kernel ledger.
 
 import {
   canonicalEffectPayload,
@@ -105,10 +107,10 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
         }
         const previousActivation = live.activation;
         const next = record.next ?? record.transition.to;
-        if (next === record.transition.to) {
-          if (record.error !== undefined) return fail('a normal step records an error move', record.seq);
-        } else if (record.error === undefined) {
-          return fail('an error-path step records no refused effect', record.seq);
+        if (record.error === undefined) {
+          if (next !== record.transition.to) {
+            return fail('an error-path step records no refused effect', record.seq);
+          }
         } else {
           if (record.error.from !== record.transition.from || record.error.to !== next) {
             return fail('the error move names another move', record.seq);
@@ -122,7 +124,7 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
             return fail(`effect "${effect.name}" names an activation that is neither the old nor the new one`, record.seq);
           }
           if (effect.activation === previousActivation) {
-            if (next !== record.transition.to) {
+            if (record.error !== undefined) {
               return fail('an error-path step records an exit effect', record.seq);
             }
             if (effect.state !== record.transition.from) {
@@ -398,8 +400,9 @@ export function stepFault(input: {
     return `the definition moves ${step.transition.from}/${step.signal} to "${transition.to}", not "${step.transition.to}"`;
   }
   if (transition.guard !== undefined) {
-    // The guard is recorded on a normal step; the error path abandons the transition before it.
-    if (step.next !== undefined && step.next !== step.transition.to) {
+    // The guard is recorded on a normal step; the error path abandons the transition before it,
+    // whatever state it enters.
+    if (step.error !== undefined) {
       if (step.guard !== undefined) return 'an error-path step records a guard';
     } else if (step.guard === undefined || step.guard.name !== transition.guard.name) {
       return `the transition's guard "${transition.guard.name}" is not recorded`;
@@ -420,8 +423,8 @@ export function stepFault(input: {
 
   const next = step.next ?? step.transition.to;
   let expected: DryEffectRecord[];
-  if (next === step.transition.to) {
-    if (step.error !== undefined) return 'a normal step records an error move';
+  if (step.error === undefined) {
+    if (next !== step.transition.to) return 'the error-path step records no refused effect';
     const exit = expectedEffects(
       definition,
       input.runId,
@@ -452,7 +455,6 @@ export function stepFault(input: {
       return `the step moves to "${next}", not the definition's error state "${definition.error}"`;
     }
     const move = step.error;
-    if (move === undefined) return 'the error-path step records no refused effect';
     if (move.rule !== 'entry-effect-refused') return `the error move names the rule "${move.rule}"`;
     if (move.from !== step.transition.from || move.to !== next) {
       return 'the error move names another move than the step';
@@ -520,20 +522,29 @@ export function evidenceConflict(records: readonly LiveRecord[], document: Evide
   return undefined;
 }
 
-export type ReplayLiveFailure = {
+export type LiveCheckFailure = {
   code: 'journal-invalid' | 'definition-mismatch' | 'start-mismatch' | 'step-mismatch' | 'entry-outcome-mismatch';
   record?: number;
   why: string;
 };
 
-export type ReplayLiveResult =
+export type LiveCheckResult =
   | { ok: true; run: RunState; live: LiveState }
-  | { ok: false; fail: ReplayLiveFailure };
+  | { ok: false; fail: LiveCheckFailure };
+
+export type ReplayLiveFailure = LiveCheckFailure;
+export type ReplayLiveResult = LiveCheckResult;
 
 export type ReplayLiveInput = {
   definitionBytes: Uint8Array | string;
   definition: Workflow;
   journalText: string;
+};
+
+export type LiveCheckInput = {
+  definition: Workflow;
+  definitionId: DefinitionId;
+  records: readonly LiveRecord[];
 };
 
 /**
@@ -550,16 +561,26 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
 
   const parsed = parseJournalText(input.journalText);
   if (!parsed.ok) return { ok: false, fail: { code: 'journal-invalid', why: parsed.why } };
-  const folded = foldLive(parsed.records);
+  return recheckLive({ definition: input.definition, definitionId: pin, records: parsed.records });
+}
+
+/**
+ * The judgement every reader applies to a journal: the structural fold, the run-open pin, the
+ * start plan, and every step's decision re-derived from the folded run state and the evidence the
+ * step itself records. `replayLive` calls it on parsed bytes; the store calls it on the records it
+ * is about to extend, so a step that replay would later refuse is refused before it is written.
+ */
+export function recheckLive(input: LiveCheckInput): LiveCheckResult {
+  const folded = foldLive(input.records);
   if (!folded.ok) {
     return { ok: false, fail: { code: 'journal-invalid', ...(folded.seq !== undefined ? { record: folded.seq } : {}), why: folded.why } };
   }
   const live = folded.live;
-  const open = parsed.records[0]!;
+  const open = input.records[0]!;
   if (open.record !== 'run-open') {
     return { ok: false, fail: { code: 'journal-invalid', record: open.seq, why: 'the journal does not start with a run-open record' } };
   }
-  if (!sameDefinition(open.definition, pin)) {
+  if (!sameDefinition(open.definition, input.definitionId)) {
     return {
       ok: false,
       fail: { code: 'definition-mismatch', record: open.seq, why: 'the run opened with a different definition pin' },
@@ -591,7 +612,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
 
   let run: RunState = {
     runId: open.run,
-    definitionId: pin,
+    definitionId: input.definitionId,
     state: open.initial,
     revision: 0,
     activation: 1,
@@ -608,7 +629,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
   const guards = provisionalResolvers().guards;
 
   let stepIndex = 0;
-  for (const record of parsed.records) {
+  for (const record of input.records) {
     if (record.record !== 'step') continue;
     const fault = stepFault({
       definition: input.definition,
@@ -631,7 +652,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     const envelope: WorkflowEnvelope = {
       format: 1,
       run: open.run,
-      definition: pin,
+      definition: input.definitionId,
       expectedRevision: run.revision,
       requestId: record.requestId,
       move: { transition: record.transition },
@@ -648,7 +669,7 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     try {
       decision = decide({
         definition: input.definition,
-        definitionId: pin,
+        definitionId: input.definitionId,
         run: decisionRun,
         envelope,
         signal: { name: record.signal, at: record.at },

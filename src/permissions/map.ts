@@ -180,7 +180,7 @@ function buildGates(): Record<string, Gate> {
     },
     daemon: {
       kind: 'owner-only',
-      why: 'the one machine daemon is the owner\'s: install, uninstall and run are owner-only, and the system service manager\'s no-terminal start is the owner\'s own login session',
+      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager\'s no-terminal start is the owner\'s own login session',
     },
     'daemon:status': {
       kind: 'any-caller',
@@ -192,7 +192,11 @@ function buildGates(): Record<string, Gate> {
     },
     'daemon:install': {
       kind: 'owner-only',
-      why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way',
+    },
+    'daemon:restart': {
+      kind: 'owner-only',
+      why: 'restarting the daemon the installed unit runs is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way; the restart writes nothing',
     },
     'daemon:fault-watch': {
       kind: 'owner-only',
@@ -298,6 +302,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-pause',
       why: 'a pause stops every seat\'s intake of new work, the orchestrator\'s own lever on the team: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`',
       terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
+    },
+    peek: {
+      kind: 'team-read',
+      why: 'the last lines of one seat\'s screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner\'s own pane and a name the file does not declare are refused, and every attempt after the file loads is logged',
     },
     plan: {
       kind: 'seat-only',
@@ -445,6 +453,10 @@ function buildGates(): Record<string, Gate> {
     'approvals:list': {
       kind: 'any-caller',
       why: 'the list reads team-create and owner-action always rules and writes nothing',
+    },
+    'approvals:details': {
+      kind: 'any-caller',
+      why: 'the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out',
     },
     'approvals:revoke': {
       kind: 'owner-only',

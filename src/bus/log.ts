@@ -29,12 +29,12 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, type KeyObject } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
-import { LockBusyError, withLock } from '../state.ts';
+import { LockBusyError, withLock, writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -109,7 +109,9 @@ export type EventAppendInput = Omit<EventPayload, 'v' | 'seq'>;
 
 export type EventAppendResult =
   | { ok: true; record: SignedEventRecord; duplicate: boolean; path: string }
-  | { ok: false; reason: string };
+  /** `busy` marks the one failure that is worth retrying: another process held the event lock
+   *  for the whole wait, so the record was never looked at. */
+  | { ok: false; reason: string; busy?: true };
 
 export type EventReadResult =
   | {
@@ -600,14 +602,107 @@ function prefixDigest(lines: RetainedLine[], upTo: number): string {
   return hash.digest('hex');
 }
 
+/** The verification checkpoint as it survives its process: the same key print and prefix digest
+ *  for a fixed retained-file count and one store, signed under the message key, written beside the
+ *  log by a read that verified every retained record. A later process verifies only the records
+ *  past `seq`; the signature over every field and the digest over the retained bytes are both
+ *  checked first, so a recomputed digest, a rewritten field, a trim, a dropped segment, another
+ *  key, or another store is a miss and that read verifies in full.
+ *
+ *  It is trusted local state: the signature is an integrity control against a mistaken agent, not
+ *  containment against a hostile same-user process — a reader of the message key is outside that
+ *  model (docs/internal/events.md §6). A stale or mismatching checkpoint is only ever a miss, and
+ *  the record is never trusted for anything a full verify would decide. */
+const VERIFY_CHECKPOINT_FILE = 'verify-checkpoint.json';
+const VERIFY_CHECKPOINT_FORMAT = 1;
+/** Its own domain, so a checkpoint signature can never be read as an event signature or the
+ *  reverse, even though both use the message key. */
+const CHECKPOINT_DOMAIN = 'teamcli bus verify-checkpoint v1\n';
+
+type CheckpointFields = {
+  format: number;
+  keyPrint: string;
+  kept: number;
+  seq: number;
+  digest: string;
+  store: string;
+};
+
+type StoredCheckpoint = CheckpointFields & { signature: string };
+
+/** The fields the signature covers, built the same way when the file is written and when it is
+ *  read, so no field — not the key print, the retained count, the sequence, the digest, or the
+ *  store the checkpoint describes — can be changed without the message key. */
+function checkpointPayload(fields: CheckpointFields): Json {
+  return {
+    format: fields.format,
+    keyPrint: fields.keyPrint,
+    kept: fields.kept,
+    seq: fields.seq,
+    digest: fields.digest,
+    store: fields.store,
+  };
+}
+
+/** The stored checkpoint, or null when there is none, it is not the shape this build wrote, or its
+ *  signature does not verify under the message key. Read without following a link; with no key
+ *  there is no trust to extend. A partial, unparsable, foreign, or altered file is a miss, never a
+ *  guess: the caller still compares the key print, the retained count, and the store the file
+ *  names against the read it is serving. */
+function readStoredCheckpoint(storeDir: string, keyState: ReturnType<typeof messageKeyState>): StoredCheckpoint | null {
+  if (keyState.kind !== 'key') return null;
+  const text = readNoFollow(join(storeDir, VERIFY_CHECKPOINT_FILE));
+  if (text === null || text === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Partial<StoredCheckpoint>;
+  if (record.format !== VERIFY_CHECKPOINT_FORMAT) return null;
+  if (typeof record.keyPrint !== 'string') return null;
+  if (typeof record.digest !== 'string' || !/^[0-9a-f]{64}$/.test(record.digest)) return null;
+  if (typeof record.kept !== 'number' || !Number.isInteger(record.kept) || record.kept < 1) return null;
+  if (typeof record.seq !== 'number' || !Number.isInteger(record.seq) || record.seq < 1) return null;
+  if (typeof record.store !== 'string' || record.store === '') return null;
+  if (typeof record.signature !== 'string') return null;
+  const fields: CheckpointFields = {
+    format: VERIFY_CHECKPOINT_FORMAT,
+    keyPrint: record.keyPrint,
+    kept: record.kept,
+    seq: record.seq,
+    digest: record.digest,
+    store: record.store,
+  };
+  if (!verifyDomain(CHECKPOINT_DOMAIN, checkpointPayload(fields), record.signature, keyState.key)) return null;
+  return { ...fields, signature: record.signature };
+}
+
+/** Writes the checkpoint beside the log, signed under the message key, atomically and best
+ *  effort: it only saves work on the next read, so a store that cannot take it keeps verifying in
+ *  full instead of failing. */
+function writeStoredCheckpoint(storeDir: string, fields: CheckpointFields, key: KeyObject): void {
+  try {
+    const signature = signDomain(CHECKPOINT_DOMAIN, checkpointPayload(fields), key);
+    writeAtomic(join(storeDir, VERIFY_CHECKPOINT_FILE), `${JSON.stringify({ ...fields, signature })}\n`);
+  } catch {
+    // The log is intact without it.
+  }
+}
+
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
  *  verifying each record's signature against the checkout's message key. Unverified or malformed
  *  lines are counted in `unverified` and never returned as events.
  *
- *  Verification is incremental: the retained lines at or below the checkpoint's last verified
+ *  Verification is incremental: the retained lines at or below a checkpoint's last verified
  *  sequence are pinned by its digest, and only the records after it are checked against the key.
- *  When the log has no checkpoint, the key changed, or the digest does not match the retained
- *  bytes, the whole log is verified (`full: true`) and the checkpoint is rebuilt. */
+ *  The process keeps its checkpoint in memory; a process that has none reads the one written
+ *  beside the log, signed under the message key, and only a read that verified every retained
+ *  record writes that file. When the log has no checkpoint, the key changed, the signature does
+ *  not verify, or the digest does not match the retained bytes, the whole log is verified
+ *  (`full: true`) and the checkpoint is rebuilt. */
 export function readEvents(
   project: string,
   root: string,
@@ -671,6 +766,7 @@ export function readEvents(
   let unverified: number;
   let checked: number;
   let full = true;
+  const stored = readStoredCheckpoint(storeDir, keyState);
   const matched =
     checkpoint !== undefined &&
     checkpoint.keyPrint === keyPrint &&
@@ -702,17 +798,65 @@ export function readEvents(
       events.push(line.parsed);
     }
     unverified += prefixParsed - checkpoint.events.length;
+  } else if (
+    stored !== null &&
+    keyState.kind === 'key' &&
+    stored.keyPrint === keyPrint &&
+    stored.kept === kept &&
+    stored.store === storeDir &&
+    prefixDigest(lines, stored.seq) === stored.digest
+  ) {
+    // Another process verified every retained record at or below this sequence on bytes that
+    // still hash to its digest, and it writes the file only when that read left nothing
+    // unverified, so the whole prefix is one verified block. The file's signature verified under
+    // the same key print this read holds, so no field and no byte it covers was altered by a
+    // writer without the key. Only the records past it are checked against the key now; a parsed
+    // record inside the prefix is returned, because none of them were unverified when the file
+    // was written.
+    full = false;
+    events = [];
+    unverified = 0;
+    checked = 0;
+    for (const line of lines) {
+      if (line.parsed === null) {
+        unverified += 1;
+        continue;
+      }
+      if (line.parsed.payload.seq <= stored.seq) {
+        events.push(line.parsed);
+        continue;
+      }
+      checked += 1;
+      if (!verifyDomain(EVENT_DOMAIN, line.parsed.payload as unknown as Json, line.parsed.signature, keyState.key)) {
+        unverified += 1;
+        continue;
+      }
+      events.push(line.parsed);
+    }
   } else {
     ({ events, unverified, checked } = verifyAll());
   }
 
   const highest = events.reduce((max, event) => Math.max(max, event.payload.seq), 0);
-  readCheckpoints.set(cacheKey, {
-    keyPrint,
-    seq: highest,
-    digest: prefixDigest(lines, highest),
-    events: events.slice(),
-  });
+  const digest = prefixDigest(lines, highest);
+  readCheckpoints.set(cacheKey, { keyPrint, seq: highest, digest, events: events.slice() });
+
+  // What this read verified is what the next process may lean on. A checkpoint cannot record which
+  // prefix records were unverified, so the file is written only when this read left none; a real
+  // key is required for any of it to mean anything; and an empty log has nothing to cover. An
+  // unchanged checkpoint is left as it is, so a quiet read does not rewrite the file.
+  if (
+    unverified === 0 &&
+    keyState.kind === 'key' &&
+    highest >= 1 &&
+    (stored === null || stored.seq !== highest || stored.digest !== digest)
+  ) {
+    writeStoredCheckpoint(
+      storeDir,
+      { format: VERIFY_CHECKPOINT_FORMAT, keyPrint, kept, seq: highest, digest, store: storeDir },
+      keyState.key,
+    );
+  }
 
   const oldestSeq = events.length > 0 ? events[0]!.payload.seq : null;
   const newestSeq = events.length > 0 ? events[events.length - 1]!.payload.seq : null;
@@ -804,17 +948,21 @@ const heldEventLocks = new Set<string>();
 /** Runs `work` under the store's event lock. A call made while this process already holds the
  *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
  *  directly under the lock its caller holds. */
-function withEventLock<T>(storeDir: string, work: () => T): T {
+function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number): T {
   const lockDir = join(storeDir, 'locks', 'events');
   if (heldEventLocks.has(lockDir)) return work();
-  return withLock(lockDir, () => {
-    heldEventLocks.add(lockDir);
-    try {
-      return work();
-    } finally {
-      heldEventLocks.delete(lockDir);
-    }
-  });
+  return withLock(
+    lockDir,
+    () => {
+      heldEventLocks.add(lockDir);
+      try {
+        return work();
+      } finally {
+        heldEventLocks.delete(lockDir);
+      }
+    },
+    lockWaitMs === undefined ? {} : { waitMs: lockWaitMs },
+  );
 }
 
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
@@ -989,6 +1137,10 @@ export function appendEvent(
     /** When false the append performs no retention of its own: the drop record written by a
      *  dropping pass uses this so declaring a drop cannot drop again. */
     retain?: boolean;
+    /** How long the append waits for the event lock. Omitted, it waits the lock's own budget;
+     *  0 tries once and answers `busy` instead of pausing, so a caller on an event loop can
+     *  defer the record without freezing the loop. */
+    lockWaitMs?: number;
   } = {},
 ): EventAppendResult {
   const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
@@ -1009,10 +1161,10 @@ export function appendEvent(
   const lockDir = join(storeDir, 'locks', 'events');
   if (!heldEventLocks.has(lockDir)) {
     try {
-      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options));
+      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options), options.lockWaitMs);
     } catch (error) {
       if (error instanceof LockBusyError) {
-        return { ok: false, reason: 'the event log is busy; the record was not written' };
+        return { ok: false, busy: true, reason: 'the event log is busy; the record was not written' };
       }
       throw error;
     }

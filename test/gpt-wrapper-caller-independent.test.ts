@@ -1,6 +1,8 @@
 // Independent refusal-description scenes and a decision-only snapshot.
 import {expect,test} from 'bun:test';
+import {createHash} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 const subject=process.env.TEAM_GPT_SUBJECT_ROOT??resolve(import.meta.dir,'..');
@@ -62,7 +64,12 @@ test('W80: a truly unplaced caller remains unplaced',()=>{
 test('W81: a matched external delegate retains its admitted command',()=>{
  for(const command of commands){const input=fixture('delegate',command);expect(delegateGate(input)).toEqual({kind:'passed',pane:'external-session/fixture-pane-delegate'});expect(delegateNamedFor(input.team,input.command,input.io)).toBe(true);}
 });
-test('W90: record decisions independently of display text',()=>{
+// The 300 decisions this scene measures, as one pin: every command, caller mode, flag set,
+// standing record and swap combination, with the gate's verdict and the seat name it reports.
+// A flipped verdict, a dropped flag refusal or a reordered row fails here; the scene writes the
+// rows it measured to a file under the system temp folder so the difference can be read.
+const MATRIX_DIGEST='205e2edd8603e69bb91aa112cb2071a20fb6426c65eabb40315c6afe0fef431d';
+test('W90: assert decisions independently of display text',()=>{
  const rows:unknown[]=[];
  for(const command of commands)for(const mode of ['managed','terminal','unplaced','delegate','other-command'])for(const flags of [[],['file'],['abandon']])for(const verified of [false,true])for(const swap of [false,true]){
   const input=fixture(mode,command,flags,verified,swap),answer=delegateGate(input);
@@ -70,6 +77,12 @@ test('W90: record decisions independently of display text',()=>{
   expect(answer.kind==='passed'||(answer.kind==='refused'&&typeof answer.id==='string')).toBe(true);
   rows.push({command,mode,flags,verified,swap,decision,named:delegateNamedFor(input.team,input.command,input.io)});
  }
- expect(rows.length).toBe(300);
+ const digest=createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+ if(digest!==MATRIX_DIGEST){
+  const path=join(tmpdir(),'team-gpt-matrix-actual.json');
+  writeFileSync(path,JSON.stringify(rows,null,1));
+  console.log(`the 300 delegate decisions changed; the rows measured now are in ${path}`);
+ }
+ expect({rows:rows.length,digest}).toEqual({rows:300,digest:MATRIX_DIGEST});
  if(process.env.TEAM_GPT_MATRIX_PATH)writeFileSync(process.env.TEAM_GPT_MATRIX_PATH,JSON.stringify(rows));
 });

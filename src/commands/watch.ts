@@ -7,7 +7,7 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
-import { isParseError } from '../file/load.ts';
+import { isParseError, launchTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -177,6 +177,10 @@ export type WatchSources = {
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
+  /** The unacked-record read this pass rings and reports from: a scan of every drop and legacy
+   *  record. Read before the fold, never inside it — the scan is unbounded, and the fold holds
+   *  the state lock. Absent, the shipped reader. */
+  readMailbox?(root: string, dir: string, team: TeamFile, live: Live, home: string, now: Date): MailboxWaiting[];
   /** The live world a queued swap's run reads: the restart path's own sources. Absent, the
    *  watch queues the rule's breaches but carries no swap out (a test without a faked launch). */
   swapSources?: RestartSources;
@@ -902,21 +906,35 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The entity's model rule, read once for this pass: the breach list `team check` prints,
         // narrowed to this team by name. The pass never reads the entity's files itself.
         const modelRule = modelRuleOfPass(team, root, sources.home);
+        // The pass's record reads happen before its fold, never inside it: the fold holds the
+        // state lock, and an unbounded scan (the mailbox, the agent registry, the liveness
+        // files) must not keep another command out of the state while it runs. Each reads this
+        // pass's own snapshot, so moving them changes no figure the pass computes.
+        const signing = sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
+          const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
+          return [seat.name, agent ? { ...agent.signing, cli: agent.cli, launch: agent.launch } : null] as const;
+        }));
+        // The same records, read for continuity: a pane restored from outside the launch line
+        // is the seat while the record's session is the one the pane runs.
+        const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+          home: sources.home,
+          root,
+          herdrSession: session,
+          seats: team.seats,
+          states: state.seats,
+        });
+        const liveness = {
+          machine: machineLiveness(sources.home),
+          entity: entityLiveness(sources.home, team.entity),
+          project: projectLiveness(sources.home, root),
+        };
+        const mailbox = !foreign && sources.home
+          ? (sources.readMailbox ?? mailboxWaiting)(root, dir, team, live, sources.home, new Date(now))
+          : [];
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
-          signing: sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
-            const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
-            return [seat.name, agent ? { ...agent.signing, cli: agent.cli, launch: agent.launch } : null] as const;
-          })),
-          // The same records, read for continuity: a pane restored from outside the launch line
-          // is the seat while the record's session is the one the pane runs.
-          continuityIds: sources.home === undefined ? undefined : continuityIdsOf({
-            home: sources.home,
-            root,
-            herdrSession: session,
-            seats: team.seats,
-            states: state.seats,
-          }),
+          signing,
+          continuityIds,
           team, state, live, machine, now, memory,
           queueDepths,
           queueBacklog,
@@ -929,11 +947,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           seatPauses: whole.seat_pauses ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
           modelRule,
-          liveness: {
-            machine: machineLiveness(sources.home),
-            entity: entityLiveness(sources.home, team.entity),
-            project: projectLiveness(sources.home, root),
-          },
+          liveness,
           // The team's words are the watch as written, not as `tempo` scaled it: the tighten-only
           // check reads declarations, and the tempo is applied to the resolved idle window after.
           livenessTeam: watchWords(standing.kind === 'verified' ? team.watch : defaultWatch()),
@@ -945,7 +959,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
-          mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home, new Date(now)) : [],
+          mailbox,
         });
         // The pass folds its figures where the state is held: two watches of the project fold one
         // after the other, not over each other. A watch on a foreign session still folds, for its
@@ -1211,6 +1225,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               root,
               home: sources.home,
               path: current.path,
+              launchFile: launchTeamFile(current),
               team,
               session,
               io,
@@ -1699,7 +1714,10 @@ export function watchReportEvent(
   if (colon < 0) return null;
   const prefix = report.key.slice(0, colon);
   const rawSeat = report.key.slice(colon + 1);
-  const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  const withoutOwner = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  // A report may name its occurrence after the seat — `question:<seat>:<digest>` — so the seat is
+  // the first field, never the whole tail.
+  const seat = withoutOwner.split(':')[0] ?? '';
   if (seat === '') return null;
 
   if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
@@ -1725,7 +1743,19 @@ export function watchReportEvent(
       reason: report.text,
     };
   }
-  if (prefix === 'blocked' || prefix === 'question') {
+  if (prefix === 'question' || prefix === 'plan approval' || prefix === 'confirmation') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: prefix,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'blocked') {
     return {
       ts,
       kind: 'seat.blocked',

@@ -7,7 +7,9 @@ import { readArgs } from '../args.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { admitOwnerAction, approveOwnerAction, canonicalRoot, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { ownerAdmitsRecord } from '../client/owner-action-step.ts';
+import { canonicalScope } from '../client/emission.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -17,7 +19,8 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
-import { noteTeam } from '../registry/teams.ts';
+import { nicknameChangeGate } from '../registry/names.ts';
+import { noteTeam, teamIdOf } from '../registry/teams.ts';
 import { createAtomic, LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
@@ -186,7 +189,7 @@ export const init: Command = (argv, io) => runInit(argv, io, undefined, undefine
 export default init;
 
 export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
-       team init --request [--then-up] [--json]
+       team init --request [--reason <text>] [--then-up] [--json]
        team init --execute <request-id> [--json]
        team init --general <grant.json> --key <client.key> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
@@ -212,7 +215,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope', 'general', 'key'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
+  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope', 'general', 'key', 'reason'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -236,6 +239,8 @@ export async function runInit(
   }
   // Owner-seat approval of a team creation (src/client/team-create.ts). Each of these forms runs
   // without the owner terminal: the authority is an owner signer's signature, never the caller.
+  // The revoke is the one that reads the caller: it is the owner's act, admitted by her terminal
+  // or by an owner-signer's always rule, as `team approvals revoke` admits it.
   const actionHome = home ?? homedir();
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
   const now = sources.now?.() ?? new Date();
@@ -257,12 +262,13 @@ export async function runInit(
     else {
       // `--then-up` bundles the first `team up` into the same request: one owner-seat answer
       // creates the team and starts it (src/client/owner-action.ts).
+      const ask = { requestedBy: callerLabel(callerOf(io)), ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) };
       const made = args.flags.has('then-up')
         ? createOwnerActionRequest(actionHome, {
           actions: ['team-create', 'team-up'], root, team: basename(root), head: git(root, 'rev-parse', 'HEAD'),
-          args: { 'team-create': [], 'team-up': [] }, requestedBy: callerLabel(callerOf(io)),
+          args: { 'team-create': [], 'team-up': [] }, ...ask,
         }, now)
-        : createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now);
+        : createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now, ask);
       if (!made.ok) actionRefusal(made.why);
       else actionDone('requested', `team init: request recorded`, { request_id: made.record.request_id, text: made.text, ...(made.inbox !== null ? { inbox: made.inbox } : {}) });
       actionOutcome = made.ok ? 'done' : 'refused';
@@ -283,27 +289,75 @@ export async function runInit(
     actionDone('answered', 'team init: team-create approval rules', { rules: listed.rules, ignored: listed.ignored });
     actionOutcome = 'done';
   } else if (args.values['approval-mode'] !== undefined) {
-    // Signed once by an owner signer at setup; never by the requester at action time.
-    const assertion = assertionFile(args.values.assertion, io.cwd);
+    // A mode change replaces the folder's signed record, so it is a revoke as much as a set:
+    // the owner's act, on the shared record check (src/client/owner-action-step.ts) — her
+    // terminal, or an owner-signer's `team-revoke-approval` always rule covering the folder the
+    // mode record changes. The `none` record is signed by the owner signer inside
+    // setApprovalMode, which removes nothing before that signature succeeds; `per-action` and
+    // `always-rule` remove nothing at all until the caller is admitted here.
+    const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
     const scope = args.values.scope;
-    const set = scope === undefined
-      ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
-      : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
-        ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
-        ...(assertion !== undefined ? { assertion } : {}),
-      });
-    if (!set.ok) actionRefusal(set.why);
-    else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
-    actionOutcome = set.ok ? 'done' : 'refused';
+    // The folder this call changes, canonicalized exactly as setApprovalMode writes it. A rule
+    // that admits the call must cover that folder too: a mode record outside the rule's scope
+    // would change approval for another repository, which the owner never signed for.
+    const target = scope === undefined ? null : canonicalRoot(resolve(io.cwd, scope));
+    const admitted = ownerAdmitsRecord('team-revoke-approval', io, target === null ? null : [target], seatSources);
+    if (!admitted.ok) {
+      const caller = admitted.caller;
+      if (admitted.kind === 'caller') {
+        const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
+        actionRefusal(detached ?? `only the owner changes an approval mode, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
+      } else if (target === null || admitted.targets === null) {
+        actionRefusal('--approval-mode needs --scope <folder>');
+      } else {
+        actionRefusal(`the owner-seat rule that admits this caller covers ${admitted.ruleFolder ?? 'no folder'}; ${scope} is outside it, and a mode change is the owner's for the folder it changes; this call is ${describeCaller(caller)}`);
+      }
+      actionOutcome = 'refused';
+    } else {
+      const assertion = assertionFile(args.values.assertion, io.cwd);
+      const set = scope === undefined
+        ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
+        : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
+          ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
+          ...(assertion !== undefined ? { assertion } : {}),
+        });
+      if (!set.ok) actionRefusal(set.why);
+      else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
+      actionOutcome = set.ok ? 'done' : 'refused';
+    }
   } else if (args.flags.has('approval-modes')) {
     const listed = listApprovalModes(actionHome, store, now);
     actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });
     actionOutcome = 'done';
   } else if (args.values['revoke-approval'] !== undefined) {
-    const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
-    if (!revoked.ok) actionRefusal(revoked.why);
-    else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
-    actionOutcome = revoked.ok ? 'done' : 'refused';
+    // Revoking is the owner's, on the shared record check `team approvals revoke` and
+    // `team grant --revoke-approval` read (src/client/owner-action-step.ts): her terminal
+    // outside the terminal host, or an owner-signer's `team-revoke-approval` always rule
+    // covering the folder of the rule it removes. The rule carries the owner's signature, so a
+    // seat admitted by it still acts as the owner's answer, never on its own say-so.
+    const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+    const ruleId = args.values['revoke-approval']!;
+    // The rule being revoked carries the folder it covers. A call admitted by an owner-seat
+    // rule may revoke only a rule inside that rule's own folder: deleting a rule elsewhere would
+    // change approval for a repository the owner never signed for.
+    const targetRule = listTeamCreateRules(actionHome, store, now).rules.find((rule) => rule.rule_id === ruleId);
+    const targetScope = targetRule === undefined ? null : canonicalScope(targetRule.scope);
+    const admitted = ownerAdmitsRecord('team-revoke-approval', io, targetScope === null ? null : [targetScope], seatSources);
+    if (!admitted.ok) {
+      const caller = admitted.caller;
+      if (admitted.kind === 'caller') {
+        const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
+        actionRefusal(detached ?? `only the owner revokes an approval rule, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
+      } else {
+        actionRefusal(`the owner-seat rule that admits this caller covers ${admitted.ruleFolder ?? 'no folder'}; rule ${ruleId} ${targetScope === null ? 'is not a rule the owner signed, so the folder it covers cannot be checked' : `covers ${targetScope}, outside it`}; this call is ${describeCaller(caller)}`);
+      }
+      actionOutcome = 'refused';
+    } else {
+      const revoked = revokeTeamCreateRule(actionHome, ruleId);
+      if (!revoked.ok) actionRefusal(revoked.why);
+      else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
+      actionOutcome = revoked.ok ? 'done' : 'refused';
+    }
   }
   let seatApproved = false;
   if (actionOutcome === null && args.values.execute !== undefined) {
@@ -543,6 +597,19 @@ export async function runInit(
     }
     what = 'wrote a skeleton';
     first = `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team up.\n`;
+  }
+  // A nickname the new team's text carries is held to the entity's `names.unique` word before
+  // anything is written: a restored copy or an archive bringing a name another team's seat holds
+  // is refused whole. The team is new here, so every nickname in it is newly set.
+  const namesHome = sources.registryHome ?? home;
+  const namesParsed = validateTeamFile(text, { home, root });
+  if (namesParsed.ok) {
+    const names = nicknameChangeGate({ home: namesHome, teamId: teamIdOf(root), root, before: null, after: namesParsed.team });
+    if (!names.ok) {
+      refuse(io, json, 'init', { id: 'init.name-taken', message: names.message, repair: null });
+      // exit: init.name-taken
+      return 1;
+    }
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);

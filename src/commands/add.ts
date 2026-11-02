@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { auditClientRefusal, authorizeClientRun, clientFormProblem, rosterApprovalText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
@@ -23,7 +23,7 @@ import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
-import { findRoot, placedProblems } from '../file/load.ts';
+import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -63,7 +63,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
@@ -72,7 +72,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -104,8 +104,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
@@ -154,12 +154,12 @@ export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --request [--reason <text>] [--json]
        team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
-The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, and never starts the orchestrator or the operator.
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 `;
@@ -204,7 +204,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval'], ['temporary', 'dry-run', 'json', 'request']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval', 'reason'], ['temporary', 'dry-run', 'json', 'request']);
   const json = wantsJson;
   // The one refusal of the client form, at every site.
   const clientRefused = (message: string): number => {
@@ -252,7 +252,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, { ...sources, root: seatRoot });
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
   if (seatStep.kind === 'requested') {
     // exit: add.approval-requested
     return 0;
@@ -331,12 +331,20 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+  const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-  });
+  };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team rename` wrote into the registry's record is
+  // started under the name the record gives it, never missed over the file the session launched
+  // from. A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     if (json) {
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -746,6 +754,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.placed
     return 1;
   }
+  // Nothing here is held to the entity's `names.unique` word: an add never sets a new nickname.
+  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy repeats the
+  // source's `nickname:` line, which the file's own check refuses as a duplicate above (exit 2)
+  // before this point. A team file's own wording is the only nickname an add can bring.
   // The session this run addresses — `--session`, or the caller's own placement — reads its own
   // recorded lobby, which is the file's own unless the run names another.
   const runTeam = { ...prepared.team, session };
@@ -897,7 +909,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
-          teamFile: path,
+          teamFile: launchTeamFile(loaded),
           cliHooks: plannedCliHooks(dir, session, [planned]),
           briefEpochs: currentBriefEpochs(dir, session),
           watchLabel: watchLabel(prepared.team.project),
@@ -1002,7 +1014,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
-      teamFile: path,
+      teamFile: launchTeamFile(loaded),
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(prepared.team.project),
@@ -1116,7 +1128,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
     const who = clientText ?? describeCaller(caller);
     if (clientRun !== null && built.edited !== original) {
-      const said = rosterApprovalText('add', built.name, clientRun);
+      const said = clientRosterText('add', built.name, clientRun);
       out.stderr(`team add: ${plainText(said)}\n`);
       logLine(dir, 'add', who, said, sources.now());
     }
@@ -1157,7 +1169,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };
@@ -1382,12 +1394,11 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root, undefined, origin),
-    sessionName: sessionDisplayName({
-      seat: seat.name,
-      nickname: seat.nickname ?? null,
+    sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+      seats: team.seats,
     }),
     ...seatDeliveryOf(standing, team, seat, root, home, true, origin),
     ...(start.lobby ? { lobby: true } : {}),
@@ -1513,7 +1524,7 @@ function hostOf(input: {
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }

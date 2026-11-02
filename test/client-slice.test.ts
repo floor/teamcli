@@ -7,6 +7,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { readArgs } from '../src/args.ts';
 import type { CheckSources } from '../src/check/team.ts';
@@ -47,7 +48,7 @@ import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { DeliveryLeg } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
-import { testIo } from './helpers.ts';
+import { fixtureBase, testIo } from './helpers.ts';
 
 const TEAM_ID = 'aaaaaaaaaaaa';
 const OTHER_TEAM_ID = 'bbbbbbbbbbbb';
@@ -78,7 +79,7 @@ afterAll(() => {
 });
 
 function fixture(label: string): Fixture {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), `.client-${label}-`)));
+  const base = fixtureBase(`.client-${label}-`);
   made.push(base);
   const home = join(base, 'home');
   const teamRoot = join(base, 'floor');
@@ -207,7 +208,7 @@ seats:
 `;
 
 function checkWorld(): { root: string } {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-check-')));
+  const base = fixtureBase('.client-check-');
   made.push(base);
   const root = join(base, 'acme');
   mkdirSync(join(root, '.agents'), { recursive: true });
@@ -871,7 +872,7 @@ describe('the client pane guard', () => {
 
 describe('the client pane guard on keygen', () => {
   test('keygen inside a team pane is refused and writes nothing', () => {
-    const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-keygen-pane-')));
+    const base = fixtureBase('.client-keygen-pane-');
     made.push(base);
     const home = join(base, 'home');
     mkdirSync(home, { recursive: true });
@@ -884,7 +885,7 @@ describe('the client pane guard on keygen', () => {
   });
 
   test('keygen by an external agent outside herdr is not refused by the guard', () => {
-    const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-keygen-ext-')));
+    const base = fixtureBase('.client-keygen-ext-');
     made.push(base);
     const home = join(base, 'home');
     mkdirSync(home, { recursive: true });
@@ -1194,4 +1195,24 @@ describe('the client send walk', () => {
     expect(frame.message.content).toContain('Message from Grok Bot (owner)');
     expect(frame.message.content).not.toContain('client:grok-bot@');
   });
+});
+
+// The placement rule refuses a client key under the OS temp folder, and a checkout can itself sit
+// under it. Every world here builds its home under the shared fixture root, never beside the
+// checkout, so the rule holds wherever the checkout is. This scene takes the one step a test can
+// take: it stands in a temp folder as the working directory — what a temp-located checkout looked
+// like to the old fixtures — and builds a world; before the fixture root, that world's key was
+// refused here.
+test('a world built from a temp working directory still places its client key', () => {
+  const cwd = process.cwd();
+  const tempCheckout = realpathSync(mkdtempSync(join(tmpdir(), 'client-temp-checkout-')));
+  try {
+    process.chdir(tempCheckout);
+    const f = fixture('temp-checkout');
+    expect(relative(tempCheckout, f.base).startsWith('..')).toBe(true);
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+  } finally {
+    process.chdir(cwd);
+    rmSync(tempCheckout, { recursive: true, force: true });
+  }
 });

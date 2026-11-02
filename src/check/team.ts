@@ -15,6 +15,7 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
+import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -28,16 +29,17 @@ import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
-import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
+import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
-import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
+import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -78,6 +80,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
+import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
 import { defaultSocketsDirs } from '../send/address.ts';
@@ -370,6 +373,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     interval: inForce.interval,
   });
   const watchRoute = canonicalRoot(root) ?? root;
+  // The daemon's hosted watch for this checkout, judged once: a stopped, failed or gate-blocked
+  // watch is not enforcing anything, and it is the owner's own install that repairs it. Its
+  // lines are the difference's then, and the notes below do not say them again.
+  const hostedWatch = hostedWatchDifferences(watch);
   // The registry's own continuity per declared seat, read once: the check's process gate and
   // `compare()` must decide a restored pane the same way `up` and `status` do.
   const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
@@ -439,6 +446,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...socketSkipped.differences,
+    // The daemon's watch for this checkout: not running when the route carries one, or running
+    // with its outbound gate closed, is a difference — the watch is not enforcing anything.
+    ...hostedWatch,
     ...policyChecked.differences,
     ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
@@ -451,6 +461,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
+    // A daemon endpoint that failed is a difference here too, with its checkout, reason and age;
+    // the note above names the daemon's reading, this row is what the check counts.
+    ...(sources.daemon !== undefined ? daemonDifferences(sources.daemon, sources.now()) : []),
   ]);
   const differences = comparison.differences;
   // A deprecated field the file still reads: the check is the one command that names it, with
@@ -494,14 +507,21 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // simply not installed is the ordinary state and is said in `status`, not counted here.
     ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
     // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
-    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
+    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing, and a
+    // route whose watch is already the difference above keeps only the lines it does not carry.
     ...(sources.daemon !== undefined
-      ? hostedWatchCheckNotes(
-          sources.daemon,
-          sources.now(),
-          watch.kind === 'pane' ? { route: watchRoute, live: watch.health.state === 'live' } : undefined,
-        )
+      ? hostedWatchCheckNotes(sources.daemon, sources.now(), {
+          ...(watch.kind === 'hosted' && hostedWatch.length > 0 ? { differing: watch.root } : {}),
+          ...(watch.kind === 'pane'
+            ? { ownPane: { route: watchRoute, live: watch.health.state === 'live' } }
+            : {}),
+        })
       : []),
+    // A running seat whose CLI registers its inbox in a project file, and whose folder holds no
+    // registration: the seat receives nothing on its inbox leg, and nothing else says so. Read
+    // from the file the profile's route writes. A launch-line route writes no file and a seat
+    // whose launch folder was never recorded cannot be read this way: both say nothing.
+    ...inboxRegistrationNotes(team, state, live),
     // A pane watch when no hosted one owns the route: live, dead, stale or — only with a daemon
     // reading to prove no hosted watch exists — missing. Notes only, like every line above.
     ...paneWatchCheckNotes(watch, {
@@ -521,6 +541,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...leadNameNotes(team),
+    ...nicknameDriftNotes(team),
+    ...nicknameTakenNotes(team, root, sources.home),
     ...leadRoleNotes(team),
     // The default session moved to <entity>-<project>: the line the approval's own comparison
     // names, so the owner sees the old and the new session before the next launch.
@@ -530,6 +552,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...modelRule.notes,
     ...socketSkipped.notes,
     ...unknownStatusNotes(team, state, live),
+    // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
+    // status` prints: the fallback is a reading worth acting on, never a silent state.
+    ...unmanagedEndpointNotes(team.seats, state),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
@@ -822,6 +847,29 @@ function leadRoleNotes(team: TeamFile): string[] {
   const lead = team.seats.find((seat) => seat.name === team.orchestrator);
   if (lead === undefined || lead.role !== 'coordinator') return [];
   return [`the lead seat "${lead.name}" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set \`role: orchestrator\` on it when convenient`];
+}
+
+/**
+ * A seat whose written label names a word that is not the name the seat goes by. A persona the
+ * `nickname:` field could hold is that name (src/file/sections/seats.ts:seatNicknames), so a field
+ * a hand edit left behind means the seat sends under the label's word while the record says
+ * another; a word the field could not hold — a space or an accent, the reserved `lead`, a name
+ * another seat already carries — stays a workspace title, and the record's nickname remains the
+ * address. A config set on either name writes the other with it whenever the pair can be one name
+ * (src/config/edit.ts:syncSeatNames), so this is what a hand edit leaves. A note, not a
+ * difference: the team runs either way.
+ */
+function nicknameDriftNotes(team: TeamFile): string[] {
+  return team.seats.flatMap((seat) => {
+    const persona = labelPersona(seat);
+    if (persona === null) return [];
+    const name = seatNickname(team.seats, seat);
+    if (name !== persona) {
+      return [`seat "${seat.name}": its written label names "${persona}", but the seat goes by "${name ?? seat.name}" — a space, an accent, the reserved "lead" or a word another seat carries is not a nickname, so the label's word is the workspace title alone; set seats.${seat.name}.nickname to choose the address`];
+    }
+    if (seat.nickname === undefined || seat.nickname === persona) return [];
+    return [`seat "${seat.name}": its nickname is "${seat.nickname}" and its written label names "${persona}" — the label wins from the next launch, and a set on seats.${seat.name}.label writes the two together`];
+  });
 }
 
 /**
@@ -1701,6 +1749,10 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     // replaces that row with its own stuck-prompt line (`attentionDifferences`).
     case 'question':
       return { what: `${name} asked a question: the operator's to act on`, repair: 'the operator acts in the pane' };
+    case 'plan approval':
+      return { what: `${name} waits at a plan approval prompt: the operator's to act on`, repair: 'the operator acts in the pane' };
+    case 'confirmation':
+      return { what: `${name} waits at a confirmation prompt: the operator's to act on`, repair: 'the operator acts in the pane' };
     case 'vendor notice':
       return { what: `${name} shows a vendor notice: its owner's to act on`, repair: 'the owner acts in the pane', owner: true };
     case 'blocked':
@@ -1708,6 +1760,28 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
     default:
       return null;
   }
+}
+
+/**
+ * A note for a running seat whose CLI registers its inbox in a project file, and whose folder
+ * holds no such registration: that seat's inbox leg is gone, and no other line says so. The file
+ * read is the one the profile's route writes, in the folder the seat's launch started in. A
+ * seat whose launch folder is not recorded, and a profile whose registration lives on the launch
+ * line rather than in a file, are not readable this way and say nothing.
+ */
+function inboxRegistrationNotes(team: TeamFile, state: SessionState, live: Live): string[] {
+  const out: string[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const recorded = state.seats[seat.name];
+    if (recorded?.stage !== 'ready' || recorded.start_cwd === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    if (agent === undefined || agent.pane !== recorded.pane) continue;
+    const read = inboxRegistration(recorded.cli ?? seat.cli, recorded.start_cwd);
+    if (read === null || read.registered) continue;
+    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(recorded.start_cwd, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
+  }
+  return out;
 }
 
 /**

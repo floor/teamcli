@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles, type ClientGrantScope } from '../src/client/records.ts';
@@ -19,6 +19,7 @@ import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { keyOf } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
+import { fixtureBase } from './helpers.ts';
 
 const TEAM_ID = 'cccccccccccc';
 const made: string[] = [];
@@ -38,7 +39,7 @@ ${extra}`;
 const ENTITIES = 'floor:\n  clients:\n    grok-bot:\n      seats: [orchestrator, zeus]\n    acme-bot:\n      seats: [orchestrator]\n';
 
 function world(label: string) {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), `.grant-emission-${label}-`)));
+  const base = fixtureBase(`.grant-emission-${label}-`);
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, 'floor');
@@ -264,6 +265,8 @@ describe('conversational requests and approvals', () => {
     const s = screen();
     const a = await requestOf(w, s);
     const io = capture(w);
+    // Denying is the owner's, on the same record check `team approvals revoke` reads.
+    io.io.caller = { kind: 'owner' };
     expect(await runGrant(['--deny', a.json.target], io.io, { home: w.home })).toBe(0);
     expect((await execute(w, a.json.target, ['--code', s.codes[0]!])).code).toBe(1);
     expect(readdirSync(join(w.home, '.config', 'team', 'grants')).filter((n) => n.startsWith('cg_'))).toHaveLength(0);
@@ -352,6 +355,7 @@ describe('always: standing approval rules', () => {
     writeFileSync(path, original);
     expect((await requestOf(w, s)).json.status).toBe('updated');
     const revoke = capture(w);
+    revoke.io.caller = { kind: 'owner' };
     expect(await runGrant(['--revoke-approval', ruleId], revoke.io, { home: w.home })).toBe(0);
     expect((await requestOf(w, s)).json.status).toBe('requested');
   });
@@ -418,7 +422,9 @@ describe('the owner answers a request from the owner terminal', () => {
     const ruleId = /standing rule: (ar_[0-9a-f]{24})/.exec(done.io.out())![1]!;
     expect((await requestOf(w, noScreen as never)).json.rule_id).toBe(ruleId);
     expect((await requestOf(w, noScreen as never, ['--allow-grant', '--grant-entity', 'floor'])).json.status).toBe('requested');
-    expect(await runGrant(['--revoke-approval', ruleId], capture(w).io, { home: w.home })).toBe(0);
+    const revoke = capture(w);
+    revoke.io.caller = { kind: 'owner' };
+    expect(await runGrant(['--revoke-approval', ruleId], revoke.io, { home: w.home })).toBe(0);
     expect((await requestOf(w, noScreen as never)).json.status).toBe('requested');
   });
 });

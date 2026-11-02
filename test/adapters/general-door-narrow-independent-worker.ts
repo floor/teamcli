@@ -20,7 +20,7 @@ const { upsertProject } = await import('../../src/registry/projects.ts');
 const { registerAgent } = await import('../../src/registry/agents.ts');
 const { readStoredTeamConfig } = await import('../../src/registry/team-config-store.ts');
 const { lobbyDir, lobbyTrustEntry } = await import('../../src/lobby/gate.ts');
-const { testIo } = await import('../helpers.ts');
+const { testIo, thisProcessJobRecord, thisProcessUnitRecord } = await import('../helpers.ts');
 const roots: Record<string, string> = {};
 const files: Record<string, string> = {};
 const ids: Record<string, string> = {};
@@ -89,8 +89,11 @@ if (input.mode === 'daemon') {
         kind: 'system-service-manager',
         unitPath: () => join(base, 'synthetic-unit'),
         plan: (_home, program) => { servicePlans++; return { unitPath: join(base, 'synthetic-unit'), program: [program.execPath, program.entry] }; },
+        job: () => thisProcessJobRecord(),
+        unit: () => thisProcessUnitRecord(join(base, 'synthetic-unit')),
         install: () => { serviceInstalls++; return { ok: true, unitPath: join(base, 'synthetic-unit') }; },
         uninstall: () => ({ ok: true, unitPath: join(base, 'synthetic-unit'), removed: false }),
+        restart: () => ({ ok: false, reason: 'refused', why: 'this synthetic manager cannot restart the installed daemon', detail: null }),
       },
     });
   }

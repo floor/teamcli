@@ -1,13 +1,14 @@
 // Command execution is instrumented inside child processes; all stores and keys are synthetic.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const fixtureRoot = fileURLToPath(new URL('../../general-door-narrow-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
-afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (bases.length > 0) discardFixtures(bases, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 type Input = { command: string; words: string[]; entities?: string[]; ops?: string[]; mode?: 'daemon' | 'config' | 'up' };
 type Result = { storeChanges: string[]; home: string; code: number; out: string; err: string; calls: number; calledAs?: { kind: string }; received: string[]; marker: boolean; servicePlans: number; serviceInstalls: number; upReads: number; storedModel?: string; originalFile: string };
 function scene(input: Input): Result {

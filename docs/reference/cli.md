@@ -67,7 +67,7 @@ Usage:
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
-    team add <name> [--like <seat>] --request [--json]
+    team add <name> [--like <seat>] --request [--reason <text>] [--json]
     team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
 ### Who may run it
@@ -89,6 +89,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--like` | yes | no | no |
 | `--model` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
@@ -162,8 +163,9 @@ Hidden: no
 Usage:
 
     team answer <seat> trust [--session <name>] [--file <path>] [--json]
+    team answer <seat> question [--session <name>] [--file <path>] [--json]
 
-Literal: `trust`
+Literal: `question`, `trust`
 
 ### Who may run it
 
@@ -194,8 +196,9 @@ Hidden: no
 Usage:
 
     team approvals list [--json]
+    team approvals details <id> [--json]
     team approvals revoke <id...> [--json]
-    team approvals revoke <id...> --request [--json]
+    team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
 
 ### Who may run it
@@ -214,6 +217,34 @@ Usage:
 ### Positionals
 
 None.
+
+### `details`
+
+Hidden: no
+
+Usage:
+
+    team approvals details <id> [--json]
+
+#### Who may run it
+
+`any-caller` — the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
 
 ### `list`
 
@@ -248,7 +279,7 @@ Hidden: no
 Usage:
 
     team approvals revoke <id...> [--json]
-    team approvals revoke <id...> --request [--json]
+    team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
 
 #### Who may run it
@@ -266,6 +297,7 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -483,7 +515,7 @@ Hidden: no
 Usage:
 
     team bus
-    team bus --request
+    team bus --request [--reason <text>]
     team bus --approval <request-id>
 
 ### Who may run it
@@ -501,6 +533,7 @@ A run with no terminal is refused: only the owner or a `leads` seat runs this, f
 | `--help` | no | no | no |
 | `--inherited` | yes | no | yes |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -549,7 +582,7 @@ Hidden: no
 Usage:
 
     team client keygen --out <dir> [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--reason <text>] [--json]
     team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --approval <id> [--json]
     team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
 
@@ -576,7 +609,7 @@ Hidden: no
 
 Usage:
 
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--reason <text>] [--json]
     team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --approval <id> [--json]
     team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
 
@@ -597,6 +630,7 @@ Usage:
 | `--may-issue` | no | no | no |
 | `--ops` | yes | no | no |
 | `--public-key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--to` | yes | no | no |
 | `--via` | yes | no | no |
@@ -698,7 +732,7 @@ Usage:
     team config get <path> [--json]
     team config set <path> <value>
     team config unset <path>
-    team config set <path> <value> --request [--json]
+    team config set <path> <value> --request [--reason <text>] [--json]
     team config set <path> <value> --approval <request-id> [--json]
     team config set <path> <value> --general <grant.json> --key <client.key> [--json]
     team config unset <path> --general <grant.json> --key <client.key> [--json]
@@ -809,7 +843,7 @@ Hidden: no
 Usage:
 
     team config set <path> <value>
-    team config set <path> <value> --request [--json]
+    team config set <path> <value> --request [--reason <text>] [--json]
     team config set <path> <value> --approval <request-id> [--json]
     team config set <path> <value> --general <grant.json> --key <client.key> [--json]
 
@@ -826,6 +860,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -892,12 +927,13 @@ Usage:
     team daemon status [--json]
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon restart [--dry-run] [--json]
     team daemon uninstall [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
-`owner-only` — the one machine daemon is the owner's: install, uninstall and run are owner-only, and the system service manager's no-terminal start is the owner's own login session
+`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session
 
 ### Flags
 
@@ -951,7 +987,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — registering the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way
 
 #### Flags
 
@@ -965,6 +1001,33 @@ Usage:
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--watch` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `restart`
+
+Hidden: no
+
+Usage:
+
+    team daemon restart [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — restarting the daemon the installed unit runs is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way; the restart writes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1090,6 +1153,8 @@ Usage:
 
     team development-mode [--json]
     team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --request [--reason <text>] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 ### Who may run it
 
@@ -1116,6 +1181,8 @@ Hidden: no
 Usage:
 
     team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --request [--reason <text>] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 #### Who may run it
 
@@ -1125,11 +1192,14 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `--show` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1177,7 +1247,7 @@ Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
     team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]
-    team down --request [--dry-run] [--wait] [--json]
+    team down --request [--reason <text>] [--dry-run] [--wait] [--json]
     team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]
 
 ### Who may run it
@@ -1197,6 +1267,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
@@ -1278,7 +1349,7 @@ Hidden: no
 Usage:
 
     team forget <id...> [--json]
-    team forget <id...> --request [--json]
+    team forget <id...> --request [--reason <text>] [--json]
     team forget <id...> --approval <request-id> [--json]
 
 ### Who may run it
@@ -1296,6 +1367,7 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1313,6 +1385,7 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+    team grant --send --from <side> --to <side> --expires <ISO> [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO|never>] [--json]
@@ -1362,6 +1435,7 @@ Usage:
 | `--entity` | yes | no | no |
 | `--execute` | yes | no | no |
 | `--expires` | yes | no | no |
+| `--from` | yes | no | no |
 | `--general` | yes | no | no |
 | `--grant-entity` | yes | no | no |
 | `--grant-project` | yes | no | no |
@@ -1378,9 +1452,11 @@ Usage:
 | `--rp-id` | yes | no | no |
 | `--scope` | yes | no | no |
 | `--seat` | yes | no | no |
+| `--send` | no | no | no |
 | `--signer` | yes | no | no |
 | `--signer-public-key` | yes | no | no |
 | `--team` | yes | no | no |
+| `--to` | yes | no | no |
 | `--type` | yes | no | no |
 | `--up` | no | no | no |
 | `--via` | yes | no | no |
@@ -1489,7 +1565,7 @@ Hidden: no
 Usage:
 
     team init [--restore] [--from-archive <folder>] [--json]
-    team init --request [--then-up] [--json]
+    team init --request [--reason <text>] [--then-up] [--json]
     team init --execute <request-id> [--json]
     team init --general <grant.json> --key <client.key> [--json]
     team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
@@ -1517,6 +1593,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--restore` | no | no | no |
 | `--revoke-approval` | yes | no | no |
@@ -1764,7 +1841,7 @@ Hidden: no
 Usage:
 
     team migrate [--keep-file] [--dry-run] [--json]
-    team migrate [--keep-file] --request [--json]
+    team migrate [--keep-file] --request [--reason <text>] [--json]
     team migrate [--keep-file] --approval <request-id> [--json]
 
 ### Who may run it
@@ -1782,6 +1859,7 @@ Usage:
 | `--json` | no | no | no |
 | `--keep-file` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1996,6 +2074,34 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `name` | yes | no |
+
+## `peek`
+
+Hidden: no
+
+Usage:
+
+    team peek <seat> [--lines <n>]
+
+### Who may run it
+
+`team-read` — the last lines of one seat's screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner's own pane and a name the file does not declare are refused, and every attempt after the file loads is logged
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--lines` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `plan`
 
@@ -3128,7 +3234,7 @@ Usage:
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
-    team send <seat> <message> --request [--json]
+    team send <seat> <message> --request [--reason <text>] [--json]
     team send <seat> <message> --approval <request-id> [--dry-run] [--json]
 
 ### Who may run it
@@ -3152,6 +3258,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--list` | no | no | no |
 | `--ms` | yes | no | no |
+| `--reason` | yes | no | no |
 | `--record` | yes | no | no |
 | `--request` | no | no | no |
 | `--request-id` | yes | no | no |
@@ -3555,7 +3662,7 @@ Usage:
     team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
     team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]
-    team up --request [--serial] [--json]
+    team up --request [--reason <text>] [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
 
 ### Who may run it
@@ -3575,6 +3682,7 @@ Usage:
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--no-launch` | no | no | no |
+| `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |

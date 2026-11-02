@@ -1,15 +1,16 @@
-// Under the working folder, not the OS temp folder: a client key never sits under the temp folder.
+// Under the shared fixture root, not the OS temp folder and not the checkout: a client key never
+// sits under the temp folder.
 // `team init --general`: an owner-signed general grant covering `init` admits a create with no
 // owner terminal, for an entity the grant covers; everything else is refused, fail-closed.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { issueHeldGeneralGrant, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, fixtureBase, testIo } from './helpers.ts';
 
 let base: string;
 let home: string;
@@ -18,7 +19,7 @@ const detached = { kind: 'owner-no-tty' } as const;
 const noLogin = { loggedIn: () => false };
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(process.cwd(), '.gg-init-test-')));
+  base = fixtureBase('.gg-init-test-');
   home = join(base, 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));

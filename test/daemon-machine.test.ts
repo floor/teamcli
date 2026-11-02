@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
-import { daemonHealth } from '../src/daemon/health.ts';
+import { daemonHealth, type DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type HostedWatchExtras } from '../src/daemon/host.ts';
 import { busListening, startBus, type StartBusInput, type StartBusResult } from '../src/bus/server.ts';
 import type { BrokerWorkSource } from '../src/idle_work.ts';
@@ -18,7 +18,7 @@ import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram, ServiceRunResult } from '../src/daemon/service.ts';
 import { DAEMON_PROTOCOL_VERSION, type DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -62,6 +62,26 @@ function scratch(): { base: string; root: string; home: string } {
 afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
+
+/** A program on disk for the adapter scenes: an entry and one module beside it. The adapter
+ *  keeps the entry's own folder as the whole program, so this folder is what a unit runs. */
+function programAt(home: string, name = 'v1'): string {
+  const folder = join(home, 'app', name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'module.js'), 'export const ok = true;\n');
+  const entry = join(folder, 'cli.js');
+  writeFileSync(entry, 'synthetic entry\n');
+  return entry;
+}
+
+/** The runtime folders an install kept under this home. */
+function runtimeFolders(home: string): string[] {
+  try {
+    return readdirSync(join(machineConfigDir(home), 'daemon-runtime')).sort();
+  } catch {
+    return [];
+  }
+}
 
 /** The heartbeat runs on its own; poll the state record until it reflects the change. */
 async function waitFor(check: () => Promise<boolean> | boolean, ms = 3000): Promise<void> {
@@ -209,7 +229,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     }
   });
 
-  test('status names a checkout whose endpoints were not hosted', async () => {
+  test('status names a checkout whose endpoints failed to start', async () => {
     const { base, root, home } = scratch();
     const absent = join(base, 'absent');
     const started = await startMachineDaemon({
@@ -225,7 +245,10 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
       expect(status.out).toContain('roots 2 (send 1, bus 1)');
-      expect(status.out).toContain('2 endpoints not hosted here');
+      // Both endpoints of the unreadable checkout failed to start, and the line names the
+      // checkout and the reason rather than counting them as merely not hosted.
+      expect(status.out).toContain(`2 endpoints failed (send for ${absent}: `);
+      expect(status.out).toContain(`bus for ${absent}: `);
       expect(status.out.trim().split('\n').length).toBe(1);
 
       const json = testIo(home, owner);
@@ -294,7 +317,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     }
   });
 
-  test('the heartbeat marks a hosted send endpoint that stopped answering', async () => {
+  test('the heartbeat closes and restarts a hosted send endpoint that stopped answering', async () => {
     const { root, home } = scratch();
     const started = await startMachineDaemon({
       home,
@@ -306,21 +329,20 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
-      unlinkSync(sendSocketPath('acme', root, home));
-      await waitFor(async () => (await daemonHealth(home)).roots[0]?.send === 'failed');
+      const socket = sendSocketPath('acme', root, home);
+      expect(existsSync(socket)).toBe(true);
+      unlinkSync(socket);
+      // Three probes in a row fail, the dead handle is closed and the endpoint is started again
+      // in this process: the socket is bound again without the daemon exiting.
+      await waitFor(() => existsSync(socket));
 
       const health = await daemonHealth(home);
-      expect(health.roots[0]).toMatchObject({
-        send: 'failed',
-        bus: 'serving',
-        why: 'the hosted send endpoint stopped answering',
-      });
+      expect(health.roots[0]).toMatchObject({ send: 'serving', bus: 'serving' });
 
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
-      expect(status.out).toContain('roots 1 (send 0, bus 1)');
-      expect(status.out).toContain('1 endpoint not hosted here');
+      expect(status.out).toContain('roots 1 (send 1, bus 1)');
+      expect(status.out).not.toContain('did not start here');
     } finally {
       await started.daemon.close();
     }
@@ -648,12 +670,19 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
       return { status: 0, stdout: '', stderr: '' };
     };
     const manager = darwinServiceManager({ runner, uid: 501 });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(installed.ok).toBe(true);
     if (!installed.ok) return;
     const unit = readFileSync(installed.unitPath, 'utf8');
     expect(unit).toContain('/runtime/bin/node');
-    expect(unit).toContain('/app/dist/cli.js');
+    // The unit runs the retained copy of the whole program, never the package folder.
+    const retained = installed.program?.[1] ?? '';
+    expect(retained.startsWith(join(machineConfigDir(home), 'daemon-runtime'))).toBe(true);
+    expect(readFileSync(retained, 'utf8')).toBe('synthetic entry\n');
+    expect(readFileSync(join(retained, '..', 'module.js'), 'utf8')).toBe('export const ok = true;\n');
+    expect(unit).toContain(retained);
+    expect(unit).not.toContain(entry);
     expect(unit).toContain('daemon');
     expect(unit).toContain('run');
     expect(unit).toContain('--started-by');
@@ -673,13 +702,14 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
   test('the unit carries the presence opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
     if (!plain.ok) return;
     expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--presence');
 
     const opted = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], presence: true,
     });
     expect(opted.ok).toBe(true);
     if (!opted.ok) return;
@@ -694,21 +724,22 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
   test('the unit carries the watch opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
     if (!plain.ok) return;
     expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--watch');
 
     // The watch opt-in is independent of presence: a presence-only unit carries no watch flag.
     const presenceOnly = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], presence: true,
     });
     expect(presenceOnly.ok).toBe(true);
     if (!presenceOnly.ok) return;
     expect(readFileSync(presenceOnly.unitPath, 'utf8')).not.toContain('--watch');
 
     const opted = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], watch: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], watch: true,
     });
     expect(opted.ok).toBe(true);
     if (!opted.ok) return;
@@ -726,49 +757,58 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: [] });
     expect(installed.ok).toBe(false);
     if (installed.ok) return;
-    expect(installed.why).toBe('the system service manager refused to start the daemon');
+    expect(installed.why).toBe('the system\'s service manager refused to start the daemon');
     expect(installed.why).not.toContain('launchctl');
     expect(installed.why).not.toContain('launchd');
   });
 
-  test('a failed first install leaves no unit the next login could load', () => {
+  test('a failed first install leaves no unit the next login could load, and no copy behind', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(installed.ok).toBe(false);
     // The definition was written before the registration was refused; it is taken back out so
-    // the service manager cannot load an unregistered unit at the next login.
+    // the service manager cannot load an unregistered unit at the next login, and the copy the
+    // failed install added goes with it: nothing it could not finish stays behind.
     expect(existsSync(manager.unitPath(home))).toBe(false);
+    expect(runtimeFolders(home)).toEqual([]);
   });
 
   test('a failed reinstall puts the earlier unit back for the next login', () => {
     const { home } = scratch();
     const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const first = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const first = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v1'), roots: ['/repo'] });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const before = readFileSync(first.unitPath, 'utf8');
     const failing = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
-    const again = failing.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] });
+    const again = failing.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v2'), roots: ['/repo'] });
     expect(again.ok).toBe(false);
     // The new definition is gone and the one the machine already carried is back, byte for byte.
     expect(readFileSync(first.unitPath, 'utf8')).toBe(before);
+    // Only the earlier unit's copy is kept; the failed install removed the one it added.
+    expect(runtimeFolders(home)).toHaveLength(1);
   });
 
   test('a stop the service manager refuses is reported as a refusal, and the unit stays', () => {
     const { home } = scratch();
     const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const installed = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const installed = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: ['/repo'] });
     expect(installed.ok).toBe(true);
     if (!installed.ok) return;
     const before = readFileSync(installed.unitPath, 'utf8');
@@ -779,7 +819,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const removed = refuses.uninstall(home);
     expect(removed.ok).toBe(false);
     if (removed.ok) return;
-    expect(removed.why).toBe('the system service manager did not confirm the daemon stopped');
+    expect(removed.why).toBe('the system\'s service manager did not confirm the daemon stopped');
     expect(removed.why).not.toContain('launchctl');
     expect(removed.why).not.toContain('launchd');
     // The unit is the recovery state: it is untouched so the owner can retry the uninstall.
@@ -810,6 +850,10 @@ function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
       programs.push(program);
       return { unitPath: join(home, 'unit.plist'), program: [program.execPath, program.entry, 'daemon', 'run'] };
     },
+    // This fake's record describes the test process, so a scene that replays the unit's start
+    // is admitted by the same three checks the live daemon passes.
+    job: () => thisProcessJobRecord(),
+    unit: (home) => thisProcessUnitRecord(join(home, 'unit.plist')),
     install: (home, program) => {
       calls.push('install');
       programs.push(program);
@@ -818,6 +862,10 @@ function fakeService(overrides: Partial<ServiceManager> = {}): FakeService {
     uninstall: (home) => {
       calls.push('uninstall');
       return { ok: true, unitPath: join(home, 'unit.plist'), removed: true };
+    },
+    restart: (home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
     },
   };
   return { ...base, ...overrides, calls, programs };
@@ -834,6 +882,27 @@ const snapshot: DaemonHealthSnapshot = {
   features: { broker: 'absent' },
 };
 
+/** The health reading an install scene injects: the daemon the command just installed answers its
+ *  probe, so the scene never opens the machine socket and reaches the success line. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+
 const owner = { kind: 'owner' } as const;
 
 function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
@@ -841,6 +910,9 @@ function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}):
     home,
     program: { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js' },
     version: 'test',
+    // An install reports success only after the daemon it started answers; this reading stands
+    // for that answer unless a scene injects its own.
+    health: async () => ANSWERING,
     ...overrides,
   };
 }
@@ -869,7 +941,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(code).toBe(0);
     expect(service.calls).toEqual([]);
     expect(io.out).toContain('would install');
-    expect(io.out).toContain('system service manager');
+    expect(io.out).toContain("the system's service manager");
     expect(io.out).not.toContain('launchd');
   });
 
@@ -913,7 +985,7 @@ describe('team daemon status, install, uninstall and run', () => {
     const seat = { kind: 'seat', name: 'worker-1', pane: 'w1:p2', session: 'acme' } as const;
     const install = testIo(root, seat);
     expect(await runDaemon(['install'], install, sourcesOf(home, { service: fakeService() }))).toBe(1);
-    expect(install.err).toContain('only the owner installs or removes the machine daemon');
+    expect(install.err).toContain('only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
 
     const started: string[] = [];
     const run = testIo(root, seat);
@@ -926,7 +998,7 @@ describe('team daemon status, install, uninstall and run', () => {
       })),
     ).toBe(1);
     expect(started).toEqual([]);
-    expect(run.err).toContain('only the owner or the system service manager');
+    expect(run.err).toContain('only the owner or the system\'s service manager');
   });
 
   test('run only accepts the three startedBy sources', async () => {
@@ -1039,13 +1111,13 @@ describe('team daemon status, install, uninstall and run', () => {
     // The unit is the one admitted no-terminal start, and it carries --watch only when it was
     // installed with it; the run side accepts the same pair.
     const unitCaller = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(['run', '--watch', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--watch', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start, service: fakeService() }))).toBe(0);
     expect(seen[0]?.watchHosting).toBe(true);
     expect(seen[0]?.startedBy).toBe('service-manager');
 
     const manual = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--watch'], manual, sourcesOf(home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain('only the owner or the system\'s service manager runs the machine daemon');
     expect(seen.length).toBe(1);
   });
 
@@ -1059,13 +1131,13 @@ describe('team daemon status, install, uninstall and run', () => {
     // The unit is the one admitted no-terminal start, and it carries --presence only when it was
     // installed with it; the run side accepts the same pair.
     const unitCaller = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(['run', '--presence', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(['run', '--presence', '--started-by', 'service-manager'], unitCaller, sourcesOf(home, { start, service: fakeService() }))).toBe(0);
     expect(seen[0]?.presenceHosting).toBe(true);
     expect(seen[0]?.startedBy).toBe('service-manager');
 
     const manual = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--presence'], manual, sourcesOf(home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain('only the owner or the system\'s service manager runs the machine daemon');
     expect(seen.length).toBe(1);
   });
 
@@ -1260,7 +1332,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.out).toContain('team daemon: stopped');
   });
 
-  test('run names endpoints that were not hosted', async () => {
+  test('run names an endpoint that failed to start', async () => {
     const { root, home } = scratch();
     const io = testIo(root, owner);
     const code = await runDaemon(['run'], io, sourcesOf(home, {
@@ -1289,7 +1361,7 @@ describe('team daemon status, install, uninstall and run', () => {
     }));
     expect(code).toBe(0);
     expect(io.out).toContain('roots 1 (send 1, bus 0)');
-    expect(io.out).toContain('1 endpoint not hosted here');
+    expect(io.out).toContain(`1 endpoint failed (bus for ${root}: another bus server holds the project socket)`);
   });
 
   test('run reports an existing daemon and a held lock without starting a second one', async () => {
@@ -1314,7 +1386,7 @@ describe('team daemon status, install, uninstall and run', () => {
   test('the installed unit’s own argv starts the one daemon hosting send and bus', async () => {
     const { root, home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root] });
+    const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: [root] });
     expect(unit.ok).toBe(true);
     if (!unit.ok) return;
     const argv = unitArguments(unit.unitPath);
@@ -1322,12 +1394,13 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(argv).toContain('--started-by');
 
     // The login start, end to end: the unit's own argv through the command surface and the real
-    // machine daemon. The run is admitted as the no-terminal owner because the source is the
-    // service manager, and one process binds the machine socket and hosts this root's existing
-    // send and bus in it, with the broker not hosted.
+    // machine daemon. A synthetic manager keeps this process's own record, so the replay of the
+    // unit's words is admitted; one process binds the machine socket and hosts this root's
+    // existing send and bus in it, with the broker not hosted.
     let release: (() => void) | undefined;
     const io = testIo(root, { kind: 'owner-no-tty' });
     const running = runDaemon(argv.slice(3), io, sourcesOf(home, {
+      service: fakeService(),
       stop: (end) => {
         release = end;
         return () => {};

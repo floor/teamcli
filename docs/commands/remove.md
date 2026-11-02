@@ -23,7 +23,7 @@ stops the record instead.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out, and `team add <name>` starts it again. On the orchestrator's or the operator's seat it is a swap: the file is not edited, the state records the swap, and `team add <name>` starts the new agent |
+| `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out; `team restart <name>` brings it back, clears the mark and launches it again (the owner, or the team's `leads` seat), and `team add <name>` also starts it again. On the orchestrator's or the operator's seat it is a swap: the file is not edited, the state records the swap, and `team add <name>` starts the new agent |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
@@ -45,9 +45,8 @@ and again under the grant lock before the first effect; it must carry `remove` a
 Without `--client` the refusal below is unchanged. The run is never the owner's, and it is narrower than the
 owner's: `--keep`, `--abandon`, `--file` and `--session` are refused with `--client` (exit 2), a seat marked
 `human: true` is never removed, and the orchestrator and the operator are never removed (exit 1,
-`remove.client-refused`). The approval record is not touched: the roster change is for the owner to approve with
-the owner seat, and the closing line says so. Removing a seat does not end `team up --client`, because a removed
-seat is no difference to the fingerprints the owner signed. The run is logged as `client-remove-authorized: …`.
+`remove.client-refused`). Removing a seat does not end `team up --client`: a removed seat needs no new
+signature. The run is logged as `client-remove-authorized: …`.
 
 ## Who may run it
 

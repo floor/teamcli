@@ -831,9 +831,10 @@ describe('team down', () => {
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
       // The watch proof: the live pid runs this install's entry as this session's watch, started
-      // when the record says.
+      // when the record says, from this team's folder.
       commandOf: () => `node ${SELF_ENTRY} watch --session acme-web`,
       startOf: () => Date.parse('2026-10-03T13:59:00Z'),
+      cwdOf: () => root,
     });
     // None of these panes is recorded, so the plan must not claim a close. The first head
     // printed the unnamed pane's leave-line in front of this text and closed nothing.

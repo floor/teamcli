@@ -33,8 +33,7 @@ team config edit                  # the whole record, as YAML
 ```
 
 Writes are the owner's, from a terminal outside herdr; `get` is any caller's. A write that does
-not validate is refused whole, and nothing is stored. A change to an owner section leaves the
-approval stale, and the run names what the approval no longer covers. The other editor commands
+not validate is refused whole, and nothing is stored. The other editor commands
 (`team add`, `team remove`, `team rename`, `team tempo`, `team grant`, `team delegate`) edit the
 same record. `team config get <path> --json` prints the value as JSON. The record itself is a JSON
 document in the registry holding the YAML text, its digest and its canonical record; read and write

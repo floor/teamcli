@@ -27,7 +27,7 @@ import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
-import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
+import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap, wrapperPane } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
@@ -749,7 +749,7 @@ describe('a pass of the watch', () => {
   test('a signed wrapper whose banner reorders the version is reported as another model', () => {
     // The pane's own id holds the signed version's parts in another order: `v1.4` is 1.4, not
     // the 4.1 the record signs, so the pass reports the wrapper as running another model.
-    const seen = live({ 'deepseek-acme': { screen: `deepseek-v1.4-flash · API Usage Billing\n${busy}` } });
+    const seen = live({ 'deepseek-acme': { screen: wrapperPane('deepseek-v1.4-flash') + busy } });
     const result = pass({
       team: team(), watch: team().watch, state: emptySession(), live: seen, machine: fine, now: 0, memory: newMemory(),
       signing: new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', cli: 'claude-code', launch: 'team-deepseek' }]]),
@@ -2402,6 +2402,37 @@ describe('the sidebar of a running seat', () => {
     slot.title = label?.title;
     const second = paint(screen, 'claude-coordinator-acme', memory);
     expect(second.labels.find((item) => item.name === 'claude-coordinator-acme')).toBeUndefined();
+  });
+
+  test('a restored seat\'s first cycle paints the record, and a later cycle follows the screen', () => {
+    // The host restored the pane: the process is not the launched one, and the live agent runs
+    // the recorded conversation. The screen still carries the model the pane showed before.
+    const seen = live({ 'codex-acme': { status: 'idle', screen: '  GPT-6-Astra xhigh · Context 100% left\n' } });
+    const codex = seen.agents.find((candidate) => candidate.name === 'codex-acme');
+    if (!codex) throw new Error('fixture is missing codex-acme');
+    codex.session = 'kept';
+    const state = emptySession();
+    state.seats['codex-acme'] = {
+      stage: 'ready', pane: codex.pane, workspace: codex.workspace, launched: { shell: 400, cli: [401] }, agent_session: 'kept',
+    };
+    const memory = newMemory();
+    const scene = () => pass({
+      team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory,
+      processes: { [codex.pane]: { shell: 500, foreground: [501] } },
+    });
+
+    // The first cycle pushes the file's line, not the one the pre-restore screen still shows.
+    const first = scene();
+    const label = first.labels.find((item) => item.name === 'codex-acme');
+    expect(label?.displayAgent).toBe('GPT-6 Sol default');
+    expect(label?.title).toBe('codex-acme · implementer');
+
+    // Once the line is known, the pass reads the pane again: a model the screen really shows is
+    // a change like any other and is pushed.
+    const slot = (memory.seatLabels['codex-acme'] ??= {});
+    slot.line = label?.displayAgent;
+    slot.title = label?.title;
+    expect(line(scene(), 'codex-acme')).toBe('GPT Astra 6 xhigh');
   });
 
   test('a different yielded model is pushed once, and a failed push is tried again', () => {

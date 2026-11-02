@@ -39,7 +39,7 @@ seats:
 const MOVED = team('entity: lab\n');
 
 const NOTE =
-  'note: `session` changed: "acme" -> "lab-acme", the new default session (<entity>-<project>); approve the file again, or set `session: acme` to keep the old one';
+  'note: `session` changed: "acme" -> "lab-acme", the new default session (<entity>-<project>); set `session: acme` to keep the old one';
 
 const made: string[] = [];
 afterEach(() => {

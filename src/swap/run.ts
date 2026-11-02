@@ -81,6 +81,10 @@ export type SwapRunOptions = {
   home: string;
   /** The team file's path: what the launch plan and the state record name. */
   path: string;
+  /** The team file the launch names, when the caller read one: the file a file-team load names,
+   *  absent for a registry team. A run that does not say leaves the launch's own seam to answer,
+   *  which never names a registry team's file and never drops a file team's. */
+  launchFile?: string;
   team: TeamFile;
   session: string;
   io: Io;
@@ -137,6 +141,9 @@ export function observeSwap(
     : agent.status === 'idle' || agent.status === 'done');
   const working = agent.status === 'working' || screen.kind === 'working';
   const prompt = screen.kind === 'permission'
+    || screen.kind === 'plan approval'
+    || screen.kind === 'confirmation'
+    || screen.kind === 'login'
     || screen.kind === 'trust'
     || screen.kind === 'question'
     || screen.kind === 'exit question'
@@ -290,6 +297,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     root,
     home,
     path: input.path,
+    ...(input.launchFile === undefined ? {} : { launchFile: input.launchFile }),
     team,
     session,
     name,

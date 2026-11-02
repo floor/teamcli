@@ -88,9 +88,11 @@ cycled`, `watch: stopping in the daemon`, `watch: stopped in the daemon (<reason
 failed in the daemon (<reason>)`, with `no reason recorded` where the record gives none. A watch
 standing down for a live pane watch reads `watch: standing by; a live pane watch owns this session
 (<reason>)`: it leaves that session to the pane watch and touches nothing there. A watch whose
-outbound effects are closed adds `watch: outbound effects blocked (no verified admitted sender is
-injected); it is not enforcing anything` — it can cycle while those effects are closed, and the
-reading never prints it as enforcing. The phase line names the identity that is cycling, not
+outbound effects are closed adds `watch: outbound effects blocked; it is not enforcing anything`
+— it can cycle while those effects are closed, and the reading never prints it as enforcing. A
+hosted root needs no prior `up`: when the session records no watchdog file binding, the daemon
+records the route's own team file before the watch's first pass, and it never overwrites a record
+that names another file. The phase line names the identity that is cycling, not
 whether its last pass failed; the check names a failed pass. A stopped or failed watch is terminal
 in the record: nothing here restarts it, and the daemon does not bring it back by itself, so it
 runs again only when it is started again. A route the daemon records no watch for prints no such
@@ -221,6 +223,15 @@ comparison already holds, so no extra terminal-host call is made; the seat's own
 agent record a send would resolve are read from disk. `--json` rows carry no such word: `reach` is
 the plain table's alone.
 
+Every row ends with the WAKE cell, the delivery class a send measures — `push`, `between-turns`,
+`pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is idle. The
+facts that explain the class follow in parentheses: `endpoint, no bound conversation` when a
+managed endpoint is recorded and no conversation is bound to it, `inbox` when a live listener
+stands in the seat's drop folder, and `unread <age>` for the oldest unread drop. `team send`
+refuses to spend a wake and a dispatch pass on a seat whose class is `pull-on-turn` or `none`, so
+the table shows that before a message sits unread. `--json` carries the same reading on each row
+as `seat_wake`.
+
 ## Example
 
 ```yaml file=.agents/team.yaml
@@ -266,6 +277,7 @@ budgets:
 
 ```fixture
 checks: [examples/checks/codex-quota]
+panes: neutral
 agents: [claude-beacon]
 screens:
   claude-beacon: working
@@ -311,14 +323,14 @@ never reported — that one too comes from the status line, so its row marks it 
 ```console
 $ team status ; echo "exit $?"
 team beacon, session "beacon"
-  SEAT           STATE    MODEL            PANE   REACH
-  claude-keeper  missing  Claude Opus 5.5  -      typed
-  claude-beacon  working  Claude Opus 5.5  w1:p1  typed
+  SEAT           STATE    MODEL            PANE   REACH  WAKE
+  claude-keeper  missing  Claude Opus 5.5  -      typed  !pull-on-turn
+  claude-beacon  working  Claude Opus 5.5  pane1  typed  !pull-on-turn
 budgets:
   openai  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh
   openai  daily  left 70%  used 30%  resets unknown  claude-beacon  last seen 40m ago  status line (fallback)  stale
   openai  weekly  left 5%  used 95%  resets in 44m  claude-beacon  changed 2m ago  status line (fallback)  fresh, inside reserve 20%
-note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
+note: watch: pane pane9, pid 4242, last heartbeat 0s ago
 difference: claude-keeper is in the file and is not running
   repair: team restart claude-keeper
   who: the team's lead

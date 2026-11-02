@@ -196,7 +196,7 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', choice + idle).kind).toBe('idle');
     expect(readScreen('cursor', choice + unsent).kind).toBe('unsent');
     expect(readScreen('cursor', typed(idle, choice)).kind).toBe('unsent');
-    expect(readScreen('cursor', fixture('permission-plan')).kind).toBe('permission');
+    expect(readScreen('cursor', fixture('permission-plan')).kind).toBe('confirmation');
     expect(readScreen('cursor', question).kind).toBe('question');
   });
 
@@ -1892,7 +1892,7 @@ describe('the border inserted around every other capture (Cursor)', () => {
       'unsent -> unknown': 38,
       'unsent -> unsent': 2,
       'working -> working': 14,
-      'permission -> permission': 2,
+      'confirmation -> confirmation': 2,
       'question -> question': 2,
       'trust -> trust': 4,
       'unknown -> unknown': 4,
@@ -2105,11 +2105,11 @@ describe('dialog text and a complete idle frame on one screen (Cursor)', () => {
   });
 
   test.each([
-    ['bordered-idle', 'permission-plan', 'permission / unknown'],
+    ['bordered-idle', 'permission-plan', 'confirmation / unknown'],
     ['bordered-idle', 'trust', 'trust / unknown'],
     ['bordered-idle', 'question', 'question / unknown'],
     ['bordered-idle', 'working', 'working / idle'],
-    ['idle', 'permission-plan', 'permission / unknown'],
+    ['idle', 'permission-plan', 'confirmation / unknown'],
     ['idle', 'trust', 'trust / unknown'],
     ['idle', 'question', 'question / unknown'],
     ['idle', 'working', 'working / idle'],

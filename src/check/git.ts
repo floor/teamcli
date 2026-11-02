@@ -101,6 +101,21 @@ function parseLog(output: string): Commit[] {
   return commits;
 }
 
+/** A commit object's message, read whole: `git log --format=%B` stops at a NUL byte in it, while
+ *  the object keeps the bytes after it and `git cat-file` prints them. */
+function rawMessage(cwd: string, sha: string): string {
+  const result = run(cwd, ['cat-file', 'commit', sha]);
+  if (result.status !== 0) throw new GitError(`can't read the commit ${sha}`);
+  let start = 0;
+  while (start < result.stdout.length) {
+    const end = result.stdout.indexOf('\n', start);
+    if (end === -1) break;
+    if (end === start) return result.stdout.slice(end + 1);
+    start = end + 1;
+  }
+  throw new GitError(`the commit ${sha} carries no message`);
+}
+
 /**
  * The commits `check` reads for `<ref>`: the range as given when it holds
  * `..`, else that one commit, without what is reachable from `since`.
@@ -139,5 +154,6 @@ export function selectCommits(cwd: string, ref: string, since?: string): Selecti
   const commits = parseLog(
     git(cwd, ['log', '--no-color', `--format=tformat:${FORMAT}`, '--end-of-options', ...revisions]),
   );
+  for (const commit of commits) commit.message = rawMessage(cwd, commit.hash);
   return { commits, skipped: total - commits.length, since: sinceHash };
 }

@@ -14,7 +14,7 @@ import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwne
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
-import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
+import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -55,7 +55,8 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
-import { processCommandOf, processStartOf, watchStopRead } from '../watch/pane.ts';
+import { processCommandOf, processStartOf, watchLaunchOf, watchStopRead } from '../watch/pane.ts';
+import { processWorkingFolderOf } from '../watch/process-adapter.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -66,9 +67,11 @@ export type DownSources = {
   alive(pid: number): boolean;
   /** The command line of the process at a pid, and the instant it started (epoch ms). The watch
    *  stop's ownership proof reads both; absent, a pane-less watch pid is unproven and left
-   *  alone. */
+   *  alone. `cwdOf` is the process's working folder, read for a watch line that names no team
+   *  file: the launch's folder is then its side of the identity, and absent leaves it unproven. */
   commandOf?(pid: number): string | null;
   startOf?(pid: number): number | null;
+  cwdOf?(pid: number): string | null;
   /** Herdr's status is not enough: a permission prompt is reported as idle. */
   screen(session: string, pane: string, cli: string, cwd?: string | null): Screen;
   /** The pane's raw text, for reading the input box back before any Enter. */
@@ -175,6 +178,7 @@ export const realSources: DownSources = {
   },
   commandOf: processCommandOf,
   startOf: processStartOf,
+  cwdOf: processWorkingFolderOf,
   screen(session, pane, cli, cwd) {
     return readScreen(cli, paneRead(pane, 200, aim(session)) ?? undefined, {
       cwd: cwd ?? undefined,
@@ -197,7 +201,7 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]\n       team down --request [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts. --abandon (seats holding unsent text, unrecognised screens, or not launched by team) takes --client only on a default bundle grant (--bundle default, formerly developer), still for that one team; --file and --session never take --client.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]\n       team down --request [--reason <text>] [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts. --abandon (seats holding unsent text, unrecognised screens, or not launched by team) takes --client only on a default bundle grant (--bundle default, formerly developer), still for that one team; --file and --session never take --client.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
@@ -250,7 +254,7 @@ export function stateOf(status: string, screen: Screen, cli?: string): DownSeat[
   // A framed exit question already on screen was left by an earlier stop. This run did not ask
   // it, so it is blocked: no key is sent, and `--abandon` closes it only as it closes every
   // other seat that cannot be asked.
-  if (screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit') return 'blocked';
+  if (screen.kind === 'permission' || screen.kind === 'plan approval' || screen.kind === 'confirmation' || screen.kind === 'login' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit') return 'blocked';
   // A screen showing a running turn is working even when herdr's status has not caught up:
   // `--wait` waits for it, and it is never typed into.
   if (screen.kind === 'working') return 'working';
@@ -407,7 +411,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // screen the reader cannot name) proves nothing about where the typed text went, and keeps
     // that report.
     const dialog =
-      kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'exit question' || kind === 'provider error' || kind === 'rate limit';
+      kind === 'permission' || kind === 'plan approval' || kind === 'confirmation' || kind === 'login' || kind === 'trust' || kind === 'question' || kind === 'exit question' || kind === 'provider error' || kind === 'rate limit';
     if (!dialog) return false;
     return { left: `its exit was not confirmed; the screen was reading ${kind} before the Enter; left running` };
   }
@@ -497,7 +501,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'wait', 'abandon', 'json', 'request']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'reason'], ['dry-run', 'wait', 'abandon', 'json', 'request']);
   // The lines plain output writes while it works ride on the document as notes under `--json`.
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
@@ -567,7 +571,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, seatSources);
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -701,7 +705,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
   const launched = args.values.file || clientDown !== null ? undefined : launchedTeamFile(io, sources.home);
-  const file = branching() ? undefined : (args.values.file ?? launched);
+  // A launched pointer names where this session was launched from, not a copy to read: the run
+  // reads the team where the edits write it, so the session it stops and the seats it knows are
+  // the registry's record, never missed over the file the session launched from. A `--file`
+  // names its file, and is read as that file.
+  const pointer = branching() ? undefined : launched;
+  const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
 
   // The run's file. The load is today's: `currentTeam` falls back to the last copy that
@@ -719,7 +728,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? currentTeam(io.cwd, file, loadedAt!, sources.home, false);
+  const current: Current = liveCurrent ?? (pointer !== undefined
+    ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
+    : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -1218,19 +1229,21 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
   // of this team — is stopped only under the full ownership proof: the live process's command
   // line proves this install's own CLI entry running this team's `team watch` for this session,
-  // and its start instant is the one the watch recorded. A pid alone is never signalled: after
-  // the watch exited the OS can hand its pid to an unrelated process, and a record an older build
-  // wrote names no start instant to check. An unproven pid is left alone, named, and its record
-  // is kept. A record carrying a well-formed epoch is the session host's own process, never a
-  // watch to signal: killing it would stop the host. A record with a pane is left alone here —
-  // `up` verifies through that pane — and stopping the session takes it with the session. A
-  // record whose process is dead, or whose pane's first pass has not written a pid yet, has
-  // nothing to stop.
+  // names this team's file when it names one, or — naming none — is a launch from a folder this
+  // team's file is read from, and its start instant is the one the watch recorded. A pid alone is
+  // never signalled: after the watch exited the OS can hand its pid to an unrelated process, and
+  // another team's watch in the same session is that collision with a matching command line. An
+  // unproven pid is left alone, named, and its record is kept. A record carrying a well-formed
+  // epoch is the session host's own process, never a watch to signal: killing it would stop the
+  // host. A record with a pane is left alone here — `up` verifies through that pane — and
+  // stopping the session takes it with the session. A record whose process is dead, or whose
+  // pane's first pass has not written a pid yet, has nothing to stop.
   const watchStop = watchStopRead(state?.watch, session, {
     alive: (pid) => sources.alive(pid),
     commandOf: (pid) => sources.commandOf?.(pid) ?? null,
     startOf: (pid) => sources.startOf?.(pid) ?? null,
-  });
+    cwdOf: (pid) => sources.cwdOf?.(pid) ?? null,
+  }, watchLaunchOf(current.path, current.dir));
   const watchPid = watchStop.kind === 'proven' ? watchStop.pid : null;
   if (watchStop.kind === 'unproven' && refusals.length === 0) {
     notes.push(`watch: ${watchStop.why}; it was not signalled and the record is kept`);

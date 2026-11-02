@@ -187,7 +187,7 @@
       "code": 1,
       "command": "add",
       "id": "add.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team add worker"
     },
     {
@@ -522,6 +522,13 @@
     {
       "code": 0,
       "command": "answer",
+      "id": "answer.question",
+      "meaning": "the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 0,
+      "command": "answer",
       "id": "answer.ready",
       "meaning": "the trust dialog was answered and the seat is ready",
       "trigger": "team answer lead trust"
@@ -551,8 +558,15 @@
       "code": 1,
       "command": "answer",
       "id": "answer.caller",
-      "meaning": "the caller may not answer a trust dialog",
+      "meaning": "the caller may not answer a dialog",
       "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.delivery",
+      "meaning": "the dialog was dismissed, but the decision line could not be delivered; the recovery stays recorded",
+      "trigger": "team answer lead question"
     },
     {
       "code": 1,
@@ -560,6 +574,13 @@
       "id": "answer.detached",
       "meaning": "a run with no terminal",
       "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.disagree",
+      "meaning": "two fresh reads of the pane do not agree on the dialog",
+      "trigger": "team answer lead question"
     },
     {
       "code": 1,
@@ -585,6 +606,20 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.identity",
+      "meaning": "the seat's launched identity was not recorded; no process in its pane can be checked against it",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.incomplete",
+      "meaning": "the question runs past the rows this version reads; it is not answered",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.label",
       "meaning": "the trust choice is not the recorded one",
       "trigger": "team answer lead trust"
@@ -592,9 +627,30 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.login",
+      "meaning": "the pane is at a login prompt; it is never answered",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.no-pane",
       "meaning": "the state records no pane for the caller's seat",
       "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.not-a-question",
+      "meaning": "the pane is not at a question, plan approval or confirmation dialog",
+      "trigger": "team answer lead question"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.permission",
+      "meaning": "the pane is at a permission prompt, including trust to run a command; it is never answered",
+      "trigger": "team answer lead question"
     },
     {
       "code": 1,
@@ -614,7 +670,7 @@
       "code": 1,
       "command": "answer",
       "id": "answer.recovery",
-      "meaning": "the trust answer did not complete: the seat stays in recovery",
+      "meaning": "the answer did not complete: the seat stays in recovery",
       "trigger": "team answer lead trust"
     },
     {
@@ -635,7 +691,14 @@
       "code": 1,
       "command": "answer",
       "id": "answer.state",
-      "meaning": "the seat is not waiting at a trust dialog",
+      "meaning": "the seat is not waiting at the dialog this word answers",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
+      "id": "answer.trust-identity",
+      "meaning": "the seat's launched identity was not recorded; no process in its pane can be checked against it",
       "trigger": "team answer lead trust"
     },
     {
@@ -649,21 +712,21 @@
       "code": 1,
       "command": "answer",
       "id": "answer.version",
-      "meaning": "this version has no trust answer",
+      "meaning": "this version has no answer for the dialog",
       "trigger": "team answer lead trust"
     },
     {
       "code": 2,
       "command": "answer",
       "id": "answer.configuration",
-      "meaning": "the team file cannot be read",
+      "meaning": "the team file cannot be read, or the decision line would go to another team",
       "trigger": "team answer lead trust --file missing.yaml"
     },
     {
       "code": 2,
       "command": "answer",
       "id": "answer.usage",
-      "meaning": "the invocation is not a seat and trust",
+      "meaning": "the invocation is not a seat and trust or question",
       "trigger": "team answer"
     },
     {
@@ -672,6 +735,13 @@
       "id": "approvals.approval-requested",
       "meaning": "an owner-seat request for this revoke was recorded and sent to the owner seat",
       "trigger": "team approvals revoke <id...> --request"
+    },
+    {
+      "code": 0,
+      "command": "approvals",
+      "id": "approvals.details",
+      "meaning": "one request's full record and the audit entries written for it were printed",
+      "trigger": "team approvals details <id>"
     },
     {
       "code": 0,
@@ -1362,6 +1432,27 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.entity.unchanged",
+      "meaning": "the entity already writes that names.unique word; nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.value",
+      "meaning": "the entity's names.unique word is printed",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.written",
+      "meaning": "the entity's names.unique word was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.shown",
       "meaning": "the settings registry is printed",
       "trigger": "team config keys"
@@ -1411,6 +1502,48 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.entity.detached",
+      "meaning": "an entity's word was set with no terminal",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.general-refused",
+      "meaning": "the general grant does not cover this entity or admit this set; nothing was written",
+      "trigger": "team config set <entity>.names.unique off --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.names-value",
+      "meaning": "the word is not one of entity, project, team or off; nothing was written",
+      "trigger": "team config set <entity>.names.unique everywhere"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.no-value",
+      "meaning": "the entity's entry writes no names.unique word",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.not-owner",
+      "meaning": "an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.path",
+      "meaning": "the entity's entry cannot be set (no such entry, or a value on the way); nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.general-refused",
       "meaning": "the general grant does not admit this edit; nothing was written",
       "trigger": "team config set <path> <value> --general <grant.json> --key <client.key>"
@@ -1421,6 +1554,13 @@
       "id": "config.invalid",
       "meaning": "the changed record does not validate; nothing was written",
       "trigger": "team config set seats.lead.cli nope"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.name-taken",
+      "meaning": "a nickname the change sets is already held by another team's seat; nothing was written",
+      "trigger": "team config set seats.worker.label \"Cicero · implementer\""
     },
     {
       "code": 1,
@@ -1449,6 +1589,20 @@
       "id": "config.editor",
       "meaning": "the editor exited non-zero; nothing was written",
       "trigger": "team config edit"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.unreadable",
+      "meaning": "the entities file cannot be read",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.usage",
+      "meaning": "an entity-form invocation is not one of its forms",
+      "trigger": "team config set <entity>.names.unique"
     },
     {
       "code": 2,
@@ -1524,8 +1678,22 @@
       "code": 0,
       "command": "daemon",
       "id": "daemon.installed",
-      "meaning": "the user service unit was written and registered, and the system service manager starts the daemon",
+      "meaning": "the user service unit was written and registered, and the daemon it started answers the machine socket; success is reported only after that probe",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
+      "id": "daemon.restart-dry-run",
+      "meaning": "the restart plan was printed and nothing was stopped or started",
+      "trigger": "team daemon restart --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
+      "id": "daemon.restarted",
+      "meaning": "the installed unit's daemon was stopped and that same unit started again, and the daemon it started answers the machine socket",
+      "trigger": "team daemon restart"
     },
     {
       "code": 0,
@@ -1554,6 +1722,13 @@
       "id": "daemon.entry-missing",
       "meaning": "the CLI entry cannot be found, so the service unit cannot be written",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fatal",
+      "meaning": "a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it",
+      "trigger": "team daemon run"
     },
     {
       "code": 1,
@@ -1607,16 +1782,65 @@
     {
       "code": 1,
       "command": "daemon",
-      "id": "daemon.install-failed",
-      "meaning": "the system service manager refused to write or start the unit",
+      "id": "daemon.grant-refused",
+      "meaning": "the general grant recorded on the run no longer admits the daemon op: its chain, its key or its ops failed verification",
       "trigger": "team daemon install"
     },
     {
       "code": 1,
       "command": "daemon",
-      "id": "daemon.not-owner",
-      "meaning": "the caller may not install or remove the machine daemon",
+      "id": "daemon.install-failed",
+      "meaning": "the system's service manager refused to write or start the unit, or the daemon it started did not answer its health probe and no earlier unit could be put back",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.install-rollback-failed",
+      "meaning": "the system's service manager refused the new unit or its daemon did not answer the health probe, and the previous one could not be started again, so no daemon was started",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.install-rolled-back",
+      "meaning": "the new unit failed or its daemon did not answer the health probe; the previous unit was put back, and its daemon started again and answered",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.not-installed",
+      "meaning": "no user service unit is installed, so a restart had nothing to stop or start",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.not-owner",
+      "meaning": "the caller may not install, restart or remove the machine daemon",
+      "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-failed",
+      "meaning": "the system's service manager refused to start the installed unit again after stopping its daemon, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rollback-failed",
+      "meaning": "the restarted daemon did not answer the health probe, and the daemon started again did not answer either, so no daemon is running",
+      "trigger": "team daemon restart"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.restart-rolled-back",
+      "meaning": "the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers",
+      "trigger": "team daemon restart"
     },
     {
       "code": 1,
@@ -1629,8 +1853,29 @@
       "code": 1,
       "command": "daemon",
       "id": "daemon.run-not-owner",
-      "meaning": "the caller may not run the machine daemon; only the owner or the system service manager starts it",
+      "meaning": "the caller may not run the machine daemon; only the owner or the system's service manager starts it",
       "trigger": "team daemon run"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.pid",
+      "meaning": "the system's service manager's record of the job does not name this process",
+      "trigger": "team daemon run --started-by service-manager"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.program",
+      "meaning": "the record and the unit do not run this executable with these words",
+      "trigger": "team daemon run --started-by service-manager"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.service-managed.unit",
+      "meaning": "no unit file of this daemon's own can be read: another label, another owner, a group- or world-writable file, or no readable unit on this platform",
+      "trigger": "team daemon run --started-by service-manager"
     },
     {
       "code": 1,
@@ -1643,7 +1888,7 @@
       "code": 1,
       "command": "daemon",
       "id": "daemon.uninstall-failed",
-      "meaning": "the system service manager refused to stop or remove the unit",
+      "meaning": "the system's service manager refused to stop or remove the unit",
       "trigger": "team daemon uninstall"
     },
     {
@@ -1712,9 +1957,23 @@
     {
       "code": 0,
       "command": "development-mode",
+      "id": "development-mode.approval-requested",
+      "meaning": "an owner-seat request for this exact switch was recorded and sent to the owner seat; nothing was written",
+      "trigger": "team development-mode set local-fast --request"
+    },
+    {
+      "code": 0,
+      "command": "development-mode",
       "id": "development-mode.done",
       "meaning": "the machine development mode was read, shown, planned, or switched",
       "trigger": "team development-mode set local-fast --show"
+    },
+    {
+      "code": 1,
+      "command": "development-mode",
+      "id": "development-mode.approval-refused",
+      "meaning": "the owner-seat request named another switch, is unanswered, expired or already used, or the request id is not one",
+      "trigger": "team development-mode set local-fast --approval oa_nope"
     },
     {
       "code": 1,
@@ -1741,7 +2000,7 @@
       "code": 1,
       "command": "doctor",
       "id": "doctor.missing",
-      "meaning": "something is missing",
+      "meaning": "something is missing, including an override rule with no matching primitive",
       "trigger": "team doctor"
     },
     {
@@ -2377,6 +2636,13 @@
     {
       "code": 1,
       "command": "init",
+      "id": "init.name-taken",
+      "meaning": "a nickname the restored team brings is already held by another team's seat; nothing was written",
+      "trigger": "team init --from-archive <folder>"
+    },
+    {
+      "code": 1,
+      "command": "init",
       "id": "init.not-owner",
       "meaning": "not the owner",
       "trigger": "team init"
@@ -2982,6 +3248,55 @@
       "id": "pause.team",
       "meaning": "the name is neither a declared seat nor a registered team, or names more than one",
       "trigger": "team pause other"
+    },
+    {
+      "code": 0,
+      "command": "peek",
+      "id": "peek.shown",
+      "meaning": "the seat's last lines were printed, masked where a line looks like a credential",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.owner-pane",
+      "meaning": "the named seat is a person's pane, and the owner's pane is never read",
+      "trigger": "team peek desk"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.unknown",
+      "meaning": "the team declares no seat by that name",
+      "trigger": "team peek ghost"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team peek lead --lines 0"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.no-screen",
+      "meaning": "no screen is readable: no pane is recorded, no reader stands, or the read failed",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.not-yours",
+      "meaning": "the caller is not the owner or a seat the read gate places on its recorded pane",
+      "trigger": "team peek lead"
     },
     {
       "code": 0,
@@ -4282,7 +4597,7 @@
       "code": 1,
       "command": "restart",
       "id": "restart.signed-off",
-      "meaning": "the seat is parked or stopped",
+      "meaning": "the seat is stopped, and the caller is not the owner or its own team's leads seat",
       "trigger": "team restart worker"
     },
     {
@@ -4743,6 +5058,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.grant-invalid",
+      "meaning": "a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed",
+      "trigger": "team send native@other hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.held",
       "meaning": "the message is on disk and the pane was left untouched",
       "trigger": "team send worker hello"
@@ -5017,7 +5339,7 @@
       "code": 1,
       "command": "status",
       "id": "status.difference",
-      "meaning": "there is a difference",
+      "meaning": "there is a difference, including an override rule with no matching primitive",
       "trigger": "team status"
     },
     {
@@ -5528,7 +5850,7 @@
       "code": 1,
       "command": "up",
       "id": "up.doctor",
-      "meaning": "doctor refuses the launch",
+      "meaning": "doctor refuses the launch, an override rule with no matching primitive among its findings",
       "trigger": "team up"
     },
     {

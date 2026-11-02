@@ -3,8 +3,8 @@
 // declare `crossSessionInbound: accept`, the team file authorizes the route, its box holds no
 // unconfirmed frame, and the pane carries a live session socket — and `typed` otherwise: another
 // CLI, a launch that does not admit the frame, a pane that is gone or one the terminal host could
-// not read. The plain table prints it as its last column; the JSON row keeps the published shape
-// it always had.
+// not read. The plain table prints it in its own REACH column, with the WAKE cell after it; the
+// JSON row keeps the published shape it always had, and adds the seat's wakeability as `seat_wake`.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -182,22 +182,30 @@ async function status(current: Live, ...argv: string[]) {
   return { code, out: io.out, err: io.err };
 }
 
-test('the plain table prints each active seat how a send would reach it, as its last column', async () => {
+/** One cell of the plain table, found by its header name rather than by position: the WAKE cell
+ *  follows REACH, so the last column is not the reach word. */
+function cellOf(out: string, seat: string, column: string): string {
+  const lines = out.split('\n');
+  const heads = (lines.find((line) => line.trimStart().startsWith('SEAT ')) ?? '').trim().split(/\s{2,}/);
+  const row = lines.find((line) => line.trimStart().startsWith(`${seat} `)) ?? '';
+  return row.trim().split(/\s{2,}/)[heads.indexOf(column)] ?? '';
+}
+
+test('the plain table prints each active seat\'s reach under its own header, and its wake after', async () => {
   // The scene carries differences (agents the state never launched), so the table is what is
   // pinned here, not the exit code. Stopped seats are hidden from the default table.
   const { out } = await status(live({ 'w1:p1': processes(SESSION_PID) }));
-  const line = (name: string) => out.split('\n').find((candidate) => candidate.trimStart().startsWith(`${name} `)) ?? '';
-  expect(line('claude-coordinator-acme')).toMatch(/  typed$/);
-  expect(line('codex-acme')).toMatch(/  typed$/);
-  expect(line('grok-acme')).toBe('');
+  expect(cellOf(out, 'claude-coordinator-acme', 'REACH')).toBe('typed');
+  expect(cellOf(out, 'codex-acme', 'REACH')).toBe('typed');
+  expect(out.split('\n').find((candidate) => candidate.trimStart().startsWith('grok-acme '))).toBeUndefined();
 });
 
 test('--json keeps the reach word out of the rows: it is the plain table\'s alone', async () => {
   const { out } = await status(live({ 'w1:p1': processes(SESSION_PID) }), '--json');
   const doc = JSON.parse(out) as { rows: Record<string, unknown>[] };
-  // The published keys stand, the seat's own reading riding beside them additively; `reach`
+  // The published keys stand, the seat's own readings riding beside them additively; `reach`
   // never crosses over, and no row here is blind (each reads a word), so no `blind` key either.
   for (const row of doc.rows) {
-    expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'seat_state', 'seat_state_source', 'state']);
+    expect(Object.keys(row).sort()).toEqual(['model', 'name', 'pane', 'seat_state', 'seat_state_source', 'seat_wake', 'state']);
   }
 });

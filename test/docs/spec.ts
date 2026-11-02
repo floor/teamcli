@@ -15,6 +15,9 @@
 //                            holds the general brief's signed record, as a launch leaves it;
 //                            delivered-and-read: every CLI seat also holds the read receipt its
 //                            turn-start reader leaves)
+//   panes: host              host | neutral: the pane ids this page's world reports. `neutral`
+//                            reads pane1, pane2 — a page whose example is a fixture says so
+//                            rather than print the terminal host's own id shape.
 //   tools:                   per cli: fine | missing | old | logged-out | unread
 //     claude-code: fine
 //   state:                   merged into the session's record in .agents/team.state.json
@@ -61,6 +64,7 @@ export type Spec = {
   machine: 'calm' | 'tight' | 'small-swap';
   watch: 'alive' | 'none' | 'stale';
   briefs: 'none' | 'delivered' | 'delivered-and-read';
+  panes: 'host' | 'neutral';
   tools: Record<string, ToolState>;
   state: Record<string, unknown>;
   checks: string[];
@@ -78,6 +82,7 @@ export const DEFAULT_SPEC: Spec = {
   machine: 'calm',
   watch: 'alive',
   briefs: 'none',
+  panes: 'host',
   tools: {},
   state: {},
   checks: [],
@@ -243,6 +248,7 @@ export function specOf(block: Block | undefined): Spec {
     machine: oneOf(map.machine, ['calm', 'tight', 'small-swap'] as const, DEFAULT_SPEC.machine, 'machine'),
     watch: oneOf(map.watch, ['alive', 'none', 'stale'] as const, DEFAULT_SPEC.watch, 'watch'),
     briefs: oneOf(map.briefs, ['none', 'delivered', 'delivered-and-read'] as const, DEFAULT_SPEC.briefs, 'briefs'),
+    panes: oneOf(map.panes, ['host', 'neutral'] as const, DEFAULT_SPEC.panes, 'panes'),
     tools: mapped(map.tools, TOOLS, 'tools'),
     state: object(map.state, 'state'),
     checks: paths(map.checks, 'checks'),

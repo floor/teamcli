@@ -5,17 +5,22 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder, setApprovalMode } from '../src/client/team-create.ts';
+import type { Caller } from '../src/caller.ts';
+import { approveOwnerAction } from '../src/client/owner-action.ts';
+import { GRANT_REQUEST_DOMAIN, GRANT_RULE_DOMAIN, grantApprovalsFolder, grantEmissionAuditFolder, grantRequestsFolder, pendingGrantHash, type PendingGrantParams } from '../src/client/emission.ts';
+import { runApprovals } from '../src/commands/approvals.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { acceptOwnerSigner, acceptedSigners, readOwnerSeat } from '../src/client/owner-seat.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { keyOf, messageKeyOf, signDomain } from '../src/store/keys.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { keyOf, messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
 
 const made: string[] = [];
 afterAll(() => {
@@ -253,7 +258,15 @@ describe('team init approved by the owner seat', () => {
       const code = await runInit(argv, c.io, h.home, undefined, sources(now));
       return { code, out: c.out(), err: c.err(), json: argv.includes('--json') && c.out().trim().startsWith('{') ? JSON.parse(c.out()) : null };
     };
-    return { ...h, store, run };
+    // A pinned caller, so a scene about who may run the line never reads the machine's own
+    // process tree (`callerOf` places an unpinned io from it).
+    const runAs = async (caller: Caller, cwd: string, argv: string[], now?: Date) => {
+      const c = io(cwd);
+      c.io.caller = caller;
+      const code = await runInit(argv, c.io, h.home, undefined, sources(now));
+      return { code, out: c.out(), err: c.err() };
+    };
+    return { ...h, store, run, runAs };
   }
 
   test('a non-owner request lands in the owner seat inbox; execute needs the signed answer; once is single-use', async () => {
@@ -372,10 +385,57 @@ describe('team init approved by the owner seat', () => {
     writeFileSync(rulePath, original.replace(/"scope": "[^"]*"/, '"scope": "/"'));
     expect((await s.run(first, ['--approvals', '--json'])).json.ignored).toEqual([id]);
     writeFileSync(rulePath, original);
-    expect((await s.run(first, ['--revoke-approval', id])).code).toBe(0);
+    expect((await s.runAs({ kind: 'owner' }, first, ['--revoke-approval', id])).code).toBe(0);
     const third = repo(s.base, 'more');
     const tid = (await s.run(third, ['--request', '--json'])).json.request_id as string;
     expect((await s.run(third, ['--execute', tid])).code).toBe(1);
+  });
+
+  // Revoking a team-create rule is the owner's, the same gate `team approvals revoke`
+  // reads — her terminal outside the terminal host, or an owner-signer's rule.
+  test('only the owner revokes a team-create rule: a seat and a line with no terminal are refused', async () => {
+    const s = setup('init-revoke-caller');
+    const first = repo(s.base, 'docs');
+    const id = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', id, 'always'])).code).toBe(0);
+    const rule = join(actionApprovalsFolder(s.home), `${id}.json`);
+    expect(existsSync(rule)).toBe(true);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first, ['--revoke-approval', id]);
+    expect(seat.code).toBe(1);
+    expect(seat.err).toContain('only the owner revokes an approval rule');
+    expect(seat.err).toContain('probe');
+    expect(existsSync(rule)).toBe(true);
+    const detached = await s.runAs({ kind: 'owner-no-tty' }, first, ['--revoke-approval', id]);
+    expect(detached.code).toBe(1);
+    expect(detached.err).toContain('only the owner runs this, from a terminal outside the terminal host');
+    expect(existsSync(rule)).toBe(true);
+    const owner = await s.runAs({ kind: 'owner' }, first, ['--revoke-approval', id]);
+    expect(owner.code, owner.err).toBe(0);
+    expect(existsSync(rule)).toBe(false);
+  });
+
+  // The rule route is the owner's signature, not the caller's: an `always` answer to a revoke
+  // request covers the folder, so a seat can revoke another rule there afterwards.
+  test('a signed always rule for team-revoke-approval admits the revoke from a seat', async () => {
+    const s = setup('init-revoke-rule');
+    const first = repo(s.base, 'docs');
+    const second = repo(s.base, 'notes');
+    const one = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', one, 'always'])).code).toBe(0);
+    const two = (await s.run(second, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(second, ['--approve-as-owner-seat', two, 'always'])).code).toBe(0);
+    const ask = io(first);
+    ask.io.caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', one, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, second, ['--revoke-approval', two]);
+    expect(seat.code, seat.err).toBe(0);
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${two}.json`))).toBe(false);
+    // The rule answered for the revoke; the rule the owner named in the request is untouched.
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${one}.json`))).toBe(true);
   });
 
   test('with no owner seat a request is refused', async () => {
@@ -395,12 +455,16 @@ describe('approval mode none for team-create: one owner signature at setup, none
     const counted: OwnerSeatKeyStore = { ...store, sign: (l, m, r) => { signs += 1; return store.sign(l, m, r); } };
     expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, counted).ok).toBe(true);
     allowSigners(h.home, ['mac']);
-    const run = async (cwd: string, argv: string[]) => {
+    // Changing a mode is the owner's from her terminal; a scene that wants another caller pins
+    // it rather than letting the machine's own process tree decide.
+    const runAs = async (caller: Caller, cwd: string, argv: string[], store: OwnerSeatKeyStore = counted) => {
       const c = io(cwd);
-      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: counted });
+      c.io.caller = caller;
+      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: store });
       return { code, out: c.out(), err: c.err(), json: argv.includes('--json') && c.out().trim().startsWith('{') ? JSON.parse(c.out()) : null };
     };
-    return { ...h, store: counted, run, signs: () => signs };
+    const run = (cwd: string, argv: string[]) => runAs({ kind: 'owner' }, cwd, argv);
+    return { ...h, store: counted, run, runAs, signs: () => signs };
   }
 
   test('a signed none mode lets request then execute run with no answer, audited via policy, no signature at action time', async () => {
@@ -473,5 +537,334 @@ describe('approval mode none for team-create: one owner signature at setup, none
     const root = repo(s.base, 'later');
     const id = (await s.run(root, ['--request', '--json'])).json.request_id as string;
     expect((await s.run(root, ['--execute', id])).code).toBe(1);
+  });
+
+  // A mode change removes the signed record of that scope, so it is a revoke: the owner's act,
+  // admitted by her terminal or by an owner-signer's team-revoke-approval rule. A seat must not
+  // remove or replace the record at all, and the removal waits for any replacement's signature.
+  test('a seat changes no approval mode: every mode is refused and the signed record stays byte-identical', async () => {
+    const s = setup('mode-seat-gate');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const path = join(actionApprovalsFolder(s.home), `${modeId}.json`);
+    const original = readFileSync(path);
+    let seatSigns = 0;
+    const refusing = { ...s.store, sign: () => { seatSigns += 1; return { ok: false as const, why: 'synthetic signer refused' }; } };
+    for (const mode of ['per-action', 'always-rule', 'none']) {
+      const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, s.base, ['--approval-mode', mode, '--scope', scope, '--json'], refusing);
+      expect(seat.code, mode).toBe(1);
+      // With --json the refusal is the error envelope on stdout; the seat's name is in the words.
+      const message = seat.json.error.message as string;
+      expect(message, mode).toContain('only the owner changes an approval mode');
+      expect(message, mode).toContain('probe');
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path).equals(original)).toBe(true);
+    }
+    // No owner signer was called for any of them: the caller is refused before the branch runs.
+    expect(seatSigns).toBe(0);
+    const detached = await s.runAs({ kind: 'owner-no-tty' }, s.base, ['--approval-mode', 'per-action', '--scope', scope]);
+    expect(detached.code).toBe(1);
+    expect(detached.err).toContain('only the owner runs this, from a terminal outside the terminal host');
+    expect(readFileSync(path).equals(original)).toBe(true);
+  });
+
+  test('a refused signature leaves the signed mode record byte-identical', async () => {
+    const s = setup('mode-sign-refused');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const path = join(actionApprovalsFolder(s.home), `${modeId}.json`);
+    const original = readFileSync(path);
+    const refusing = { ...s.store, sign: () => ({ ok: false as const, why: 'synthetic signer refused' }) };
+    const c = io(s.base);
+    c.io.caller = { kind: 'owner' };
+    const code = await runInit(['--approval-mode', 'none', '--scope', scope], c.io, s.home, undefined, { loggedIn: () => true, ownerSeatStore: refusing });
+    expect(code).toBe(1);
+    expect(c.err()).toContain('synthetic signer refused');
+    // The replacement was never signed, so nothing was removed and nothing was added.
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path).equals(original)).toBe(true);
+    expect(readdirSync(actionApprovalsFolder(s.home)).filter((name) => name.startsWith('am_'))).toEqual([`${modeId}.json`]);
+  });
+
+  test('a signed always rule for team-revoke-approval admits an approval-mode change from a seat', async () => {
+    const s = setup('mode-seat-rule');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const first = repo(s.base, 'docs');
+    const second = repo(s.base, 'notes');
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const teamRule = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(first);
+    ask.io.caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, second, ['--approval-mode', 'per-action', '--scope', scope, '--json']);
+    expect(seat.code, seat.err).toBe(0);
+    expect(seat.json.revoked).toEqual([modeId]);
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${modeId}.json`))).toBe(false);
+    // The rule the revoke request named is untouched by the change it admitted.
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${teamRule}.json`))).toBe(true);
+  });
+
+  // An owner-signer rule is signed for one repository, and its scope is that repository's parent
+  // folder. It admits its own folder's business, never a folder outside it: a mode record there
+  // would change approval for another repository, which no one signed for.
+  async function seatWithRule(s: ReturnType<typeof setup>, at: string): Promise<void> {
+    const teamRule = (await s.run(at, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(at, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(at);
+    ask.io.caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+  }
+
+  function approvalBytes(homePath: string): Record<string, string> {
+    const dir = actionApprovalsFolder(homePath);
+    return Object.fromEntries(readdirSync(dir).filter((name) => name.startsWith('am_')).sort()
+      .map((name) => [name, readFileSync(join(dir, name), 'utf8')]));
+  }
+
+  test('a folder rule changes no approval mode outside the folder it covers', async () => {
+    const s = setup('mode-scope-outside');
+    const first = repo(s.base, 'docs');
+    const outside = join(s.base, 'elsewhere');
+    mkdirSync(outside);
+    const outsideMode = (await s.run(first, ['--approval-mode', 'none', '--scope', outside, '--json'])).json.mode_id as string;
+    expect(outsideMode).toMatch(/^am_/);
+    await seatWithRule(s, first);
+    const control = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', join(s.base, 'code', 'shared'), '--json']);
+    expect(control.code, control.err).toBe(0);
+    const before = approvalBytes(s.home);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', outside, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(approvalBytes(s.home)).toEqual(before);
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${outsideMode}.json`))).toBe(true);
+  });
+
+  test('a link out of the covered folder changes no approval mode', async () => {
+    const s = setup('mode-scope-link');
+    const first = repo(s.base, 'docs');
+    const external = join(s.base, 'external');
+    mkdirSync(external);
+    symlinkSync(external, join(s.base, 'code', 'link'));
+    await seatWithRule(s, first);
+    const before = approvalBytes(s.home);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', join(s.base, 'code', 'link'), '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(approvalBytes(s.home)).toEqual(before);
+  });
+
+  test('a folder above the covered folder changes no approval mode', async () => {
+    const s = setup('mode-scope-above');
+    const first = repo(s.base, 'docs');
+    await seatWithRule(s, first);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', s.base, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+  });
+
+  test('a folder rule revokes no rule outside the folder it covers', async () => {
+    const s = setup('revoke-scope-outside');
+    const first = repo(s.base, 'docs');
+    const elsewhere = home('revoke-scope-far');
+    const far = repo(elsewhere.base, 'far');
+    const farRule = (await s.run(far, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(far, ['--approve-as-owner-seat', farRule, 'always'])).code).toBe(0);
+    await seatWithRule(s, first);
+    const path = join(actionApprovalsFolder(s.home), `${farRule}.json`);
+    expect(existsSync(path)).toBe(true);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first, ['--revoke-approval', farRule, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(existsSync(path)).toBe(true);
+  });
+});
+
+// Removing or narrowing an approval record — denying a pending grant request, revoking a
+// standing rule — is the owner's, on the same gate `team init` and `team approvals revoke` read:
+// her terminal, or an owner-signer's `team-revoke-approval` always rule. The rule must cover the
+// record it changes; the caller's own folder is not the record's. A refused call writes nothing.
+describe("grant deny and revoke cover the record they change", () => {
+  const seatCaller: Caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+
+  function setup(label: string) {
+    const h = home(label);
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
+    const sources = { home: h.home, ownerSeatStore: store };
+    const grantAs = async (caller: Caller, argv: string[]) => {
+      const c = io(h.base);
+      c.io.caller = caller;
+      const code = await runGrant(argv, c.io, sources);
+      return { code, out: c.out(), err: c.err() };
+    };
+    const initAs = async (caller: Caller, cwd: string, argv: string[]) => {
+      const c = io(cwd);
+      c.io.caller = caller;
+      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: store });
+      return { code, out: c.out(), err: c.err() };
+    };
+    return { ...h, store, sources, grantAs, initAs };
+  }
+
+  /** Registers one team whose root is `root`; a rule covers its parent folder. */
+  function teamAt(s: ReturnType<typeof setup>, name: string, root: string): void {
+    mkdirSync(root, { recursive: true });
+    upsertTeam(s.home, teamIdOf(root), { project: name, entity: 'floor', session: name, root, lobby: join(root, '.lobby'), roster: [], lifecycle: 'running' });
+  }
+
+  /** A pending grant request, signed as `team grant --request` writes one. */
+  function pending(s: ReturnType<typeof setup>, id: string, team: string): string {
+    const params: PendingGrantParams = {
+      client_id: 'grok-bot', entity: 'floor', public_key: `04${'ab'.repeat(64)}`, key_id: 'key-1', key_dir: join(s.base, 'keys'),
+      team, seat: null, expires: null, inbox: false, allow_grant: false, grant_scope: null,
+    };
+    const now = new Date();
+    const body = {
+      request_id: id,
+      params,
+      params_sha256: pendingGrantHash(params),
+      created: now.toISOString(),
+      expires_at: new Date(now.getTime() + 900_000).toISOString(),
+      adapter: 'owner-answer',
+      seal: '',
+    };
+    const signature = signDomain(GRANT_REQUEST_DOMAIN, { name: id, grant_request: body as unknown as Json }, keyOf(s.home));
+    mkdirSync(grantRequestsFolder(s.home), { recursive: true });
+    writeFileSync(join(grantRequestsFolder(s.home), `${id}.json`), `${JSON.stringify({ grant_request: body, signature }, null, 2)}\n`);
+    return id;
+  }
+
+  /** A standing approval rule signed by the owner key, naming one team. */
+  function standingRule(s: ReturnType<typeof setup>, id: string, team: string): string {
+    const rule = { rule_id: id, created: new Date().toISOString(), approved_by: 'test', client_id: 'grok-bot', entity: 'floor', teams: [team], seats: ['orchestrator'], ops: ['send'], max_duration_seconds: 604800 };
+    const signature = signDomain(GRANT_RULE_DOMAIN, { name: id, approval_rule: rule }, keyOf(s.home));
+    mkdirSync(grantApprovalsFolder(s.home), { recursive: true });
+    const path = join(grantApprovalsFolder(s.home), `${id}.json`);
+    writeFileSync(path, `${JSON.stringify({ approval_rule: rule, signature }, null, 2)}\n`);
+    return path;
+  }
+
+  /** An owner-signer `always` rule for team-revoke-approval, scoped to `<base>/code`. */
+  async function admittingRule(s: ReturnType<typeof setup>): Promise<void> {
+    const at = repo(s.base, 'ask');
+    const made = JSON.parse((await s.initAs({ kind: 'owner' }, at, ['--request', '--json'])).out);
+    const teamRule = made.request_id as string;
+    expect((await s.initAs({ kind: 'owner' }, at, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(at);
+    ask.io.caller = seatCaller;
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+  }
+
+  /** Every approval record under this home, by file, byte for byte. */
+  function records(h: string): Record<string, Record<string, string>> {
+    const folders = [grantRequestsFolder(h), grantApprovalsFolder(h), actionApprovalsFolder(h), actionAuditFolder(h), actionRequestsFolder(h), grantEmissionAuditFolder(h)];
+    const snap: Record<string, Record<string, string>> = {};
+    for (const folder of folders) {
+      try {
+        snap[folder] = Object.fromEntries(readdirSync(folder).sort().map((name) => [name, readFileSync(join(folder, name), 'utf8')]));
+      } catch {
+        snap[folder] = {};
+      }
+    }
+    return snap;
+  }
+
+  test("a seat's deny and revoke are refused and every record stays byte-identical", async () => {
+    const s = setup('record-caller');
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'1'.repeat(24)}`, 'team-a');
+    const ar = `ar_${'2'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const before = records(s.home);
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(1);
+    expect(deny.err).toContain('only the owner denies a pending grant request');
+    expect(deny.err).toContain('probe');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('only the owner revokes an approval rule');
+    expect(revoke.err).toContain('probe');
+    expect(records(s.home)).toEqual(before);
+  });
+
+  test('an owner-signer always rule covering the record admits a seat', async () => {
+    const s = setup('record-admitted');
+    await admittingRule(s);
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'3'.repeat(24)}`, 'team-a');
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(0);
+    expect(existsSync(join(grantRequestsFolder(s.home), `${gr}.used`))).toBe(true);
+    const ar = `ar_${'4'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(0);
+    expect(existsSync(join(grantApprovalsFolder(s.home), `${ar}.json`))).toBe(false);
+  });
+
+  test('a rule for one folder admits no record outside it', async () => {
+    const s = setup('record-outside');
+    await admittingRule(s);
+    teamAt(s, 'team-b', join(s.base, 'other', 'team-b'));
+    const gr = pending(s, `gr_${'5'.repeat(24)}`, 'team-b');
+    const ar = `ar_${'6'.repeat(24)}`;
+    standingRule(s, ar, 'team-b');
+    const before = records(s.home);
+    const deny = await s.grantAs(seatCaller, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(1);
+    expect(deny.err).toContain('outside');
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('outside');
+    expect(records(s.home)).toEqual(before);
+  });
+
+  test('the owner at a terminal denies and revokes with no rule at all', async () => {
+    const s = setup('record-owner');
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const gr = pending(s, `gr_${'7'.repeat(24)}`, 'team-a');
+    const deny = await s.grantAs({ kind: 'owner' }, ['--deny', gr]);
+    expect(deny.code, deny.err).toBe(0);
+    expect(existsSync(join(grantRequestsFolder(s.home), `${gr}.used`))).toBe(true);
+    const ar = `ar_${'8'.repeat(24)}`;
+    standingRule(s, ar, 'team-a');
+    const revoke = await s.grantAs({ kind: 'owner' }, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(0);
+    expect(existsSync(join(grantApprovalsFolder(s.home), `${ar}.json`))).toBe(false);
+  });
+
+  test('a rule that does not verify cannot place the record, and the seat is refused', async () => {
+    const s = setup('record-tamper');
+    await admittingRule(s);
+    teamAt(s, 'team-a', join(s.base, 'code', 'team-a'));
+    const ar = `ar_${'9'.repeat(24)}`;
+    const path = standingRule(s, ar, 'team-a');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"send"', '"status"'));
+    const before = records(s.home);
+    const revoke = await s.grantAs(seatCaller, ['--revoke-approval', ar]);
+    expect(revoke.code, revoke.err).toBe(1);
+    expect(revoke.err).toContain('cannot be checked');
+    expect(records(s.home)).toEqual(before);
   });
 });

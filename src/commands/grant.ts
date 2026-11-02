@@ -5,10 +5,11 @@ import { runAddOwnerSignerMode, runAddOwnerSeatMode, runOwnerSeatApproveMode, ru
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
-import { runStandingGrant } from '../permissions/manage.ts';
+import { runSendGrant, runStandingGrant } from '../permissions/manage.ts';
 
 export const USAGE = `Usage: team grant <seat> --scope <act,...> [--dry-run] [--json]
        team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+       team grant --send --from <side> --to <side> --expires <ISO> [--name <stem>] [--dry-run] [--json]
        team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
        team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
        team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO|never>] [--json]
@@ -46,7 +47,7 @@ export default grant;
 export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEditOptions & GrantApprovalOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'client', 'entity', 'public-key', 'seat', 'team', 'via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'code', 'approve', 'deny', 'revoke-approval', 'answer', 'approve-as-owner-seat', 'signer', 'type', 'signer-public-key', 'credential-id', 'rp-id', 'assertion', 'at', 'bundle'], ['dry-run', 'inbox', 'json', 'allow-grant', 'client-request', 'request', 'approvals', 'add-owner-seat', 'owner-seat-inbox', 'add-owner-signer', 'up', 'down']);
+  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'from', 'to', 'client', 'entity', 'public-key', 'seat', 'team', 'via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'code', 'approve', 'deny', 'revoke-approval', 'answer', 'approve-as-owner-seat', 'signer', 'type', 'signer-public-key', 'credential-id', 'rp-id', 'assertion', 'at', 'bundle'], ['dry-run', 'inbox', 'json', 'allow-grant', 'client-request', 'request', 'approvals', 'add-owner-seat', 'owner-seat-inbox', 'add-owner-signer', 'up', 'down', 'send']);
   const dryRun = args.flags.has('dry-run');
   let result: 'ok' | 'refused' | 'invalid';
   const approval: GrantApprovalOptions = {
@@ -67,25 +68,27 @@ export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEdit
   } else if (args.error === undefined && args.values.answer !== undefined && args.rest.length === 1 && args.values.client === undefined) {
     result = runAnswerGrantMode(rawIo, io, args.values.answer, args.rest[0]!, json, home, options.now);
   } else if (alone && args.values.deny !== undefined) {
-    result = runDenyGrantMode(rawIo, io, args.values.deny, json, home);
+    result = runDenyGrantMode(rawIo, io, args.values.deny, json, home, approval);
   } else if (alone && args.flags.has('approvals')) {
     result = runListApprovalsMode(io, json, home);
   } else if (alone && args.values['revoke-approval'] !== undefined) {
-    result = runRevokeApprovalMode(rawIo, io, args.values['revoke-approval'], json, home);
+    result = runRevokeApprovalMode(rawIo, io, args.values['revoke-approval'], json, home, approval);
   } else if (args.values.execute !== undefined && args.error === undefined && args.rest.length === 0 && !args.flags.has('request') && !args.flags.has('client-request')) {
     result = runExecuteGrantMode(rawIo, io, args, json, options.home ?? homedir(), approval);
+  } else if (args.flags.has('send')) {
+    const problem = sendInvocationProblem(args);
+    if (problem !== null) return invocationFailure(rawIo, io, json, problem);
+    result = runSendGrant(rawIo, {
+      from: args.values.from!,
+      to: args.values.to!,
+      expires: args.values.expires!,
+      ...(args.values.name !== undefined ? { name: args.values.name } : {}),
+    }, { ...options, dryRun, json });
   } else if (args.values.client !== undefined) {
     result = runClientGrantMode(rawIo, io, args, json, options.home ?? homedir(), approval);
   } else {
     const problem = invocationProblem(args);
-    if (problem !== null) {
-      if (json) {
-        writeJsonError(rawIo, 'grant.invocation', plainText(problem), null);
-      } else {
-        io.stderr(`team grant: ${problem}\n${USAGE}`);
-      }
-      return 2; // exit: grant.invocation
-    }
+    if (problem !== null) return invocationFailure(rawIo, io, json, problem);
     const capabilities = args.values.capabilities;
     result = capabilities === undefined
       ? await runAuthorityEdit('grant', { kind: 'grant', seat: args.rest[0]!, scope: args.values.scope!.split(',') }, rawIo, { ...options, dryRun, json })
@@ -104,6 +107,40 @@ export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEdit
     return 2; // exit: grant.invalid
   }
   return 0; // exit: grant.done
+}
+
+/** One invocation failure, in both the plain and the JSON spellings: exit 2, and the words name
+ *  the form the flags would have written. Every invocation problem the forms share returns here,
+ *  so the id has one site. */
+function invocationFailure(rawIo: Io, io: Io, json: boolean, problem: string): 2 {
+  if (json) {
+    writeJsonError(rawIo, 'grant.invocation', plainText(problem), null);
+  } else {
+    io.stderr(`team grant: ${problem}\n${USAGE}`);
+  }
+  return 2; // exit: grant.invocation
+}
+
+/**
+ * The problems of the `--send` form: it takes no positional, no other form's values or flags, and
+ * all three of `--from`, `--to` and `--expires`. Returned as data like `invocationProblem`, so the
+ * one marked `return 2` above carries the exit id.
+ */
+function sendInvocationProblem(args: Args): string | null {
+  if (args.error !== undefined) return args.error;
+  if (args.rest.length !== 0) return 'team grant --send takes no positional: the pair is --from and --to';
+  for (const value of ['scope', 'capabilities', 'client', 'entity', 'public-key', 'seat', 'team', 'via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'code', 'approve', 'deny', 'revoke-approval', 'answer', 'approve-as-owner-seat', 'signer', 'type', 'signer-public-key', 'credential-id', 'rp-id', 'assertion', 'at', 'bundle'] as const) {
+    if (args.values[value] !== undefined) {
+      return `--${value} belongs to another form; team grant --send writes one send grant from --from, --to and --expires`;
+    }
+  }
+  for (const flag of ['inbox', 'allow-grant', 'client-request', 'request', 'approvals', 'add-owner-seat', 'owner-seat-inbox', 'add-owner-signer', 'up', 'down'] as const) {
+    if (args.flags.has(flag)) return `--${flag} belongs to another form; team grant --send writes one send grant from --from, --to and --expires`;
+  }
+  if (args.values.from === undefined) return '--from is required: the side the record admits as sender';
+  if (args.values.to === undefined) return '--to is required: the side the record admits as receiver';
+  if (args.values.expires === undefined) return '--expires is required: a send grant states when it stops';
+  return null;
 }
 
 /**

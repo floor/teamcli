@@ -20,6 +20,7 @@ import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { LOG_FILE, emptySession, updateState } from '../src/state.ts';
+import { generationsFolder } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -486,7 +487,10 @@ describe('the scope the approval signed', () => {
 describe('the approval the grant rides on', () => {
   test('the granted seat is admitted with no approval record', async () => {
     setup({ approve: false });
+    // A home no approval was ever written for: the store and the generation recorded beside
+    // the key both go, because the generation is what says a record once existed.
     rmSync(storePath('acme', root, home), { recursive: true, force: true });
+    rmSync(generationsFolder(home), { recursive: true, force: true });
     record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' }, worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
     const { sources, trace } = upTrace();
     const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [LEAD.root], LEAD.pane);

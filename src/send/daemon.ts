@@ -29,6 +29,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stage as relayStage } from '../../packages/relay/index.js';
 import { createHostServer } from '../../packages/relay/host/server.js';
+import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
@@ -52,7 +53,7 @@ import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { frameFor, frameReplyFor } from './frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketEligible, socketHeldReason,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
 } from './inbound.ts';
 
@@ -66,7 +67,8 @@ export const DELIVER_WAIT_MS = 15_000;
 export const POLL_READY_MS = 250;
 
 const NOFOLLOW = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
-const DIALOG = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
+/** The screen kinds a send never types into: the box is the dialog's, and a message waits. */
+const DIALOG = new Set(['question', 'plan approval', 'confirmation', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
 
 export type DaemonHost = {
   agents(session: string): { name: string; pane: string }[] | null;
@@ -977,7 +979,11 @@ function displayOf(
   const template = request.template
     ?? messageDisplayInForce({ home: host.home, root, team, now: host.now() });
   const declared = team.seats.find((seat) => seat.name === request.from);
-  const name = request.name ?? declared?.nickname ?? request.from;
+  // The caller's own name when it read one, else the name the seat goes by — its written label's
+  // persona when the nickname field could hold it, else the record's nickname
+  // (src/file/sections/seats.ts:seatNicknames) — the same answer the launch and the message
+  // header read.
+  const name = request.name ?? (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
   const header = renderMessageDisplay(template, {
     name,
     seat: request.from,
@@ -1653,14 +1659,15 @@ async function executeSocketSend(
   }
   // A session started before its launcher's declaration was in force would hold the frame; the
   // socket's age answers whether the setting the file declares is the one the session runs with.
-  if (!inboundIsLive(inbound, socketPath)) {
+  const staleInbound = inboundStaleReason(inbound, socketPath);
+  if (staleInbound !== null) {
     return {
       v: 1,
       ok: false,
       id: msgId,
       seat: seatName,
       outcome: 'refused',
-      detail: `${seatName}: the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts; nothing was sent`,
+      detail: `${seatName}: ${staleInbound}; nothing was sent`,
     };
   }
 

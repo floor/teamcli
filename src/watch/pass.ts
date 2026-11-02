@@ -59,7 +59,7 @@ import { idleQueueSummary, teamIdle } from './checks/team-idle.ts';
 import type { QueueDepths } from '../queues.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
-import { readScreen, statusRow, type Screen } from './screen.ts';
+import { questionText, readScreen, statusRow, type Screen } from './screen.ts';
 export {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -201,6 +201,8 @@ export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, appr
 export function attentionOf(screen: Screen, status: string, quiet: boolean, theirWord = false): Attention {
   if (screen.kind === 'permission' || screen.kind === 'trust') return 'permission';
   if (screen.kind === 'question' || screen.kind === 'exit question') return 'question';
+  if (screen.kind === 'plan approval') return 'plan approval';
+  if (screen.kind === 'confirmation') return 'confirmation';
   if (screen.kind === 'vendor notice') return 'vendor notice';
   if (theirWord) return screen.kind === 'unknown' ? 'unknown' : null;
   if (status === 'blocked') return 'blocked';
@@ -447,6 +449,7 @@ export function pass({
         parked,
         stopped,
         attention: null,
+        dialogText: null,
         model: null,
         history: { lastWorking: undefined, idleSince: undefined },
         liveness,
@@ -469,7 +472,7 @@ export function pass({
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
-    const prompt = screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
+    const prompt = screen.kind === 'permission' || screen.kind === 'plan approval' || screen.kind === 'confirmation' || screen.kind === 'login' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
     if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
@@ -488,6 +491,12 @@ export function pass({
     }
 
     const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
+    const continuity = replacedSeat(verdict, {
+      asked: true,
+      namedOnPane: state.seats[name]?.pane === agent.pane,
+      recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
+      liveSession: agent.session,
+    });
     const signed = signing?.get(name);
     observations.push({
       name,
@@ -503,12 +512,7 @@ export function pass({
       quota: quotaOf(cli, screen, pane, reportedLiveAgent(foreground?.[agent.pane] ?? null, profileFor(cli)?.processNames ?? []), patternsOf(cli)),
       identity: verdict,
       launcher: seat ? usesLauncher(seat) : false,
-      continuity: replacedSeat(verdict, {
-        asked: true,
-        namedOnPane: state.seats[name]?.pane === agent.pane,
-        recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
-        liveSession: agent.session,
-      }),
+      continuity,
       running: true,
       recorded: state.seats[name]?.stage,
       quiet,
@@ -518,6 +522,7 @@ export function pass({
       parked,
       stopped,
       attention: attentionOf(screen, agent.status, quiet, theirWord),
+      dialogText: questionText(cli, pane),
       // The observation is read off the pane, except for a wrapper: Claude Code prints its own
       // default family whatever the launcher selected, so the model that seat runs is the
       // declaration it was launched from — the registry's signing where a record names one, the
@@ -532,7 +537,7 @@ export function pass({
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
     });
-    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory));
+    if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory, continuity === 'restored'));
   }
 
   // The figures this pass saw, folded into the readings the project keeps (§ 4.3, § 4.4). Only an
@@ -658,6 +663,8 @@ export function pass({
   const attentionKeys: [prefix: string, check: string][] = [
     ['blocked:', 'attention'],
     ['question:', 'attention'],
+    ['plan approval:', 'attention'],
+    ['confirmation:', 'attention'],
     ['vendor notice:', 'attention'],
     ['unknown:', 'attention'],
     ['unsent:', 'unsent'],
@@ -825,17 +832,19 @@ function pauseDrops(
 
 /** The sidebar lines a running file seat needs this pass. The first cycle paints both lines
  *  from the file, with a live model or effort in place of the file's when the screen shows
- *  one. A later cycle paints only a line that changed. A temporary seat has no file seat and
- *  is not passed here. */
+ *  one. A restored seat's pane is not trusted on its first cycle: the record's line is
+ *  painted, and a later cycle reads the pane again. A later cycle paints only a line that
+ *  changed. A temporary seat has no file seat and is not passed here. */
 function labelOf(
   seat: Seat,
   pane: string,
   workspace: string,
   screen: string | undefined,
   memory: Memory,
+  restored: boolean,
 ): PassResult['labels'] {
   const prior = memory.seatLabels[seat.name];
-  const live = liveDisplayAgent(seat, screen, prior?.effort);
+  const live = liveDisplayAgent(seat, restored && prior === undefined ? undefined : screen, prior?.effort);
   if (live.effort) (memory.seatLabels[seat.name] ??= {}).effort = live.effort;
   const title = workspaceLabel(seat);
   const push: PassResult['labels'][number] = { name: seat.name, pane, workspace };

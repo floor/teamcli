@@ -137,9 +137,11 @@ A broken seat is not asked: its screen cannot answer, and its swap runs at once.
 compared with the new declaration (`modelDiffers`), and a mismatch is a failed swap, reported
 and logged — the queue record stands and no log line says the swap succeeded. A model the
 profile cannot show is looked for in the CLI's own model-id line (the
-`· API Usage Billing` banner a launch-wrapper pane draws, captured in
-`test/fixtures/nudge-typing/`); the id is compared by its normalized words with the id the
-donor seat shows the same way. When neither reading exists the log says `read-back: unread`
+`· API Usage Billing` banner a launch-wrapper pane draws on the model line under its welcome
+header, captured in `test/fixtures/nudge-typing/`); the id is compared by its normalized words
+with the id the donor seat shows the same way. A pane holding no welcome header, or more than
+one, names no current model: a quoted banner line in the transcript and an older box left in
+the scrollback are not the reading. When neither reading exists the log says `read-back: unread`
 and never claims the swap verified.
 
 The steps done by hand on 2026-10-19 are the shared restart path's and remain so for a swap:

@@ -636,6 +636,41 @@
             ],
             "$comment": "the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch's crossSessionInbound accept, and any other launch still needs accept here"
           },
+          "webhook": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url_file": {
+                "type": "string",
+                "minLength": 1,
+                "$comment": "absolute; the file whose contents are the routine's URL, read at POST time; the URL itself is never written here, printed or logged"
+              },
+              "secret_file": {
+                "type": "string",
+                "minLength": 1,
+                "$comment": "absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path's value nor its contents are ever printed or logged"
+              },
+              "header": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+                "$comment": "an HTTP field name; the secret file's line is sent as this header's value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>"
+              },
+              "body": {
+                "enum": [
+                  "event",
+                  "inbox"
+                ],
+                "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
+              }
+            },
+            "required": [
+              "url_file",
+              "secret_file"
+            ],
+            "$comment": "the seat's webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here"
+          },
           "count": {
             "type": "integer",
             "minimum": 1

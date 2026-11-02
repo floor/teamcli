@@ -66,13 +66,15 @@ export function mergeScreen(base: ScreenData, added: ProfileOverride): ScreenDat
 // A shipped vendor notice is never weakened by an override: an added pattern may move a reading
 // toward caution, never away from the one record that names a screen the owner must act on. The
 // CLI's own exit question is pinned the same way, on the stop's side: a stop answers that screen
-// with the profile's key, so an override may not move the reading away from it.
-const KEPT = new Set<Screen['kind']>(['permission', 'trust', 'question', 'vendor notice', 'exit question', 'provider error', 'rate limit']);
+// with the profile's key, so an override may not move the reading away from it. A plan approval
+// and a confirmation are pinned for the same reason as the exit question — an answer layer acts
+// on them — and a login screen because nothing is ever typed into one.
+const KEPT = new Set<Screen['kind']>(['permission', 'trust', 'plan approval', 'confirmation', 'login', 'question', 'vendor notice', 'exit question', 'provider error', 'rate limit']);
 // `vendor notice` is not here on purpose: an override can never add that stage (DIALOG_STAGES
 // names the stages it may add patterns to), so a merged reading can never gain one. A shipped
 // one is pinned by KEPT above. `exit question` is the same, and for the same reason: only the
 // shipped profile may name the screen a stop answers.
-const DIALOG = new Set<Screen['kind']>(['unknown', 'trust', 'permission', 'question']);
+const DIALOG = new Set<Screen['kind']>(['unknown', 'trust', 'permission', 'plan approval', 'confirmation', 'login', 'question']);
 
 /**
  * An added pattern may move a reading toward a dialog. It may not make a screen

@@ -5,7 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { recordedPaneOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
+import { generalDoor } from '../src/client/general-door.ts';
+import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
+import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
@@ -37,7 +41,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, fixtureBase, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
@@ -86,7 +90,12 @@ const QUIET_LIVE: Live = {
   screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
 };
 
-function makeFixture(yamlText: string = TEAM_YAML): {
+function makeFixture(
+  yamlText: string = TEAM_YAML,
+  // A client key's folder must sit outside the OS temp directory, so a scene that writes one
+  // names its base outside it; every other scene keeps the temp base.
+  base: string = realpathSync(mkdtempSync(join(tmpdir(), 'team-policy-'))),
+): {
   base: string;
   home: string;
   root: string;
@@ -94,7 +103,6 @@ function makeFixture(yamlText: string = TEAM_YAML): {
   agentId: string;
   cleanup: () => void;
 } {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-policy-')));
   const home = join(base, 'home');
   const root = join(base, 'beacon');
   mkdirSync(home, { recursive: true });
@@ -173,13 +181,22 @@ function makeFixture(yamlText: string = TEAM_YAML): {
   };
 }
 
+/** The pane the fixture's own state records for a seat of its session: a caller stands where the
+ *  seat was placed, so dev mode's placement proof finds it without a pane-shaped literal in the
+ *  test, which the release's privacy gate refuses in added lines. */
+function recordedPane(root: string, name: string): string {
+  const pane = recordedPaneOf(join(root, '.agents'), 'beacon', name);
+  if (pane === undefined) throw new Error(`the fixture records no pane for ${name}`);
+  return pane;
+}
+
 describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.2, §2.7)', () => {
   test('the four inheritance levels are entity, project, team, seat in outermost-first order', () => {
     expect(POLICY_LEVELS).toEqual(['entity', 'project', 'team', 'seat']);
   });
 
-  test('dev-mode lifts the nine everyday operations (reload and rename included) and is never seat-scoped', () => {
-    expect(DEV_MODE_OPERATIONS).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename']);
+  test('dev-mode lifts the ten everyday operations (reload, rename and peek included) and is never seat-scoped', () => {
+    expect(DEV_MODE_OPERATIONS).toEqual(['up', 'down', 'remove', 'register', 'add', 'restart', 'init', 'reload', 'rename', 'peek']);
     expect(POLICY_CATALOGUE['dev-mode'].levels).toEqual(['entity', 'project', 'team']);
     expect(POLICY_CATALOGUE['dev-mode'].defaultValue).toBe('off');
     expect(POLICY_CATALOGUE['dev-mode'].gateLifting).toBe(true);
@@ -993,6 +1010,82 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(log).toContain('level entity (floor) dev-mode: unset -> off (setter: owner)');
       expect(log).toContain('level entity (floor) dev-mode: off -> unset (setter: owner)');
       expect(log).toContain('level team (');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  // The gate admits three writers as the owner; the log credits the run's real one. A dev-mode
+  // lift is the seat it placed, on the set and the unset alike, and the signed record keeps
+  // naming the owner, whose declaration it is.
+  test('the log credits the dev-mode seat that ran a vault-root set and unset, and the record still says setter: owner', async () => {
+    const fx = makeFixture();
+    try {
+      const lead = testIo(fx.root, { kind: 'seat', name: 'lead', pane: recordedPane(fx.root, 'lead'), session: 'beacon' });
+      lead.env = { TEAMCLI_DEV_MODE: '1' };
+      const setCode = await runPolicy(['set', 'entity', 'vault-root', '/synthetic/vault'], lead, { home: fx.home, now: () => NOW });
+      expect(setCode, lead.err).toBe(0);
+      expect(lead.err).toContain('dev mode continues');
+
+      const source = readEntityPolicySource(fx.home, 'floor');
+      expect(source.ok).toBe(true);
+      if (source.ok) expect(source.policies.find((p) => p.name === 'vault-root')?.setter).toBe('owner');
+
+      const unsetLead = testIo(fx.root, { kind: 'seat', name: 'lead', pane: recordedPane(fx.root, 'lead'), session: 'beacon' });
+      unsetLead.env = { TEAMCLI_DEV_MODE: '1' };
+      const unsetCode = await runPolicy(['unset', 'entity', 'vault-root'], unsetLead, { home: fx.home, now: () => NOW });
+      expect(unsetCode, unsetLead.err).toBe(0);
+
+      const log = readFileSync(join(fx.root, '.agents', 'team.log'), 'utf8');
+      expect(log).toContain('policy [lead] level entity (floor) vault-root: unset -> /synthetic/vault (setter: lead, dev mode)');
+      expect(log).toContain('policy [lead] level entity (floor) vault-root: /synthetic/vault -> unset (setter: lead, dev mode)');
+      expect(log).toContain('admitted as orchestrator');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  // A wildcard grant's run reaches the command as the owner; the log names the client and the
+  // grant the door verified, and the signed record keeps naming the owner.
+  test('the log credits a general-door client with its grant id, and the record still says setter: owner', async () => {
+    const fx = makeFixture(TEAM_YAML, fixtureBase('.policy-door-'));
+    try {
+      // The client key's placement check reads where each recorded seat started; the fixture's
+      // launch stands in for that record.
+      updateState(join(fx.root, '.agents'), (state) => {
+        for (const seat of Object.values(state.sessions.beacon?.seats ?? {})) seat.start_cwd = fx.root;
+      });
+      const pair = newClientKeyPair();
+      const written = writeClientKeyFiles(join(fx.home, '.config', 'team-client', 'client-a'), pair);
+      if (!written.ok) throw new Error(written.why);
+      const issued = issueOwnerGeneralGrant(fx.home, {
+        clientId: 'client-a',
+        publicKey: pair.publicKey,
+        entities: ['*'],
+        ops: ['policy'],
+        mayIssue: false,
+        expires: new Date(Date.now() + 86_400_000),
+      });
+      if (!issued.ok) throw new Error(issued.why);
+
+      const scene = testIo(fx.root);
+      scene.env = { HOME: fx.home };
+      const door = generalDoor(
+        'policy',
+        ['set', 'entity', 'vault-root', '/synthetic/vault', '--general', issued.path, '--key', written.keyPath],
+        scene,
+      );
+      if (door.kind !== 'admitted') throw new Error(`${door.kind}: ${'why' in door ? door.why : ''}`);
+      const code = await runPolicy(door.argv, door.io, { home: fx.home, now: () => NOW });
+      expect(code, scene.err).toBe(0);
+
+      const log = readFileSync(join(fx.root, '.agents', 'team.log'), 'utf8');
+      expect(log).toContain(
+        `policy [client:client-a] level entity (floor) vault-root: unset -> /synthetic/vault (setter: client client-a, grant ${issued.grant.grant_id})`,
+      );
+      const source = readEntityPolicySource(fx.home, 'floor');
+      expect(source.ok).toBe(true);
+      if (source.ok) expect(source.policies.find((p) => p.name === 'vault-root')?.setter).toBe('owner');
     } finally {
       fx.cleanup();
     }

@@ -1,9 +1,11 @@
-import { readFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
+import { DAEMON_LABEL } from '../src/daemon/paths.ts';
+import type { ServiceJobRecord, ServiceUnitRecord } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/general-brief.ts';
 import { rulesText } from '../src/launch/rules.ts';
@@ -11,6 +13,25 @@ import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
+
+/** The service manager's record of a job that is this test process: the pid and program the
+ *  daemon's start admission compares against. A fake manager answers with this when a scene
+ *  needs the record admission to pass; a scene about a refusal changes one field. */
+export function thisProcessJobRecord(): ServiceJobRecord {
+  return { pid: process.pid, program: process.execPath };
+}
+
+/** The unit record a scene's fake manager answers with for this process: the daemon's own label,
+ *  the test user as owner, a private unit, and this process's own launch words. */
+export function thisProcessUnitRecord(path: string): ServiceUnitRecord {
+  return {
+    path,
+    label: DAEMON_LABEL,
+    ownerUid: typeof process.getuid === 'function' ? process.getuid() : 0,
+    mode: 0o600,
+    programArguments: [process.execPath, ...process.argv.slice(1)],
+  };
+}
 
 /** The signed record at `path`, parsed: a test that asserts the message's body asserts the
  *  record's payload, never the envelope's bytes. Throws when the file is not a record. */
@@ -123,6 +144,13 @@ export function claudeBox(text: string): string {
   const lines = CLAUDE_COMPOSER_LINES.slice();
   lines[1] = [`❯\u00a0${first}`, ...rest.map((line) => `  ${line}`)].join('\n');
   return lines.join('\n');
+}
+
+/** A launch wrapper's pane: the welcome box's measured two lines (`test/fixtures/banner/`), its
+ *  model line the provider's id, above a plain composer. A banner line anywhere else on the pane
+ *  is not the surface the reader reads. */
+export function wrapperPane(id: string): string {
+  return `\n ▐▛███▛█   Claude Code v2.1.291\n▝▜██████▀  ${id} · API Usage Billing\n ▝▝   ▝▝   /w/acme\n`;
 }
 
 export type AgyRuleShape = 'close-short' | 'close-long' | 'open-short';
@@ -312,4 +340,29 @@ export function gitEnv(): NodeJS.ProcessEnv {
     delete env[name];
   }
   return env;
+}
+
+/**
+ * A world's base folder, under a scratch root outside the OS temp directory and outside the
+ * checkout. A client key refuses to sit under the temp folder, so a fixture whose synthetic HOME
+ * holds one cannot live in temp — and a checkout may itself sit under temp, so neither can the
+ * fixture be placed beside the checkout by assumption. The root is `TEAMCLI_TEST_SCRATCH` when it
+ * names one, else `<home>/.cache/teamcli-tests`; a root the placement rule would refuse is an
+ * error, never silently used. Callers create what they need under the returned folder and remove
+ * it themselves.
+ */
+export function fixtureBase(prefix: string): string {
+  const checkout = resolve(import.meta.dir, '..');
+  const named = process.env.TEAMCLI_TEST_SCRATCH;
+  const root = resolve(named !== undefined && named !== '' ? named : join(homedir(), '.cache', 'teamcli-tests'));
+  mkdirSync(root, { recursive: true });
+  const real = realpathSync(root);
+  const temp = realpathSync(tmpdir());
+  if (real === temp || real.startsWith(temp + sep)) {
+    throw new Error(`the fixture scratch root "${real}" overlaps the OS temp directory; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  if (real === checkout || real.startsWith(checkout + sep)) {
+    throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  return realpathSync(mkdtempSync(join(real, prefix)));
 }

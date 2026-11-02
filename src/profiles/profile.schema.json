@@ -188,6 +188,7 @@
     "unread_model": { "type": "string", "enum": ["launch"], "description": "optional: launch names no model read from the screen but the launch line's own, labelled (from launch)" },
     "quota": { "type": "array", "items": { "$ref": "#/$defs/quota" }, "minItems": 1 },
     "trust_answer": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/trustAnswer" } },
+    "question_answer": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/questionAnswer" } },
     "screen": { "$ref": "#/$defs/screen" },
     "screen_module": { "$ref": "#/$defs/screenModule" }
   },
@@ -208,6 +209,17 @@
     { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
   ],
   "$defs": {
+    "questionAnswer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "key", "from", "to"],
+      "properties": {
+        "kind": { "enum": ["question", "plan approval", "confirmation"], "description": "The dialog kind this record answers." },
+        "key": { "enum": ["escape", "ctrl+c"], "description": "The key the profile presses: one that dismisses the dialog, never one that picks a menu option." },
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1, "description": "Equal to from for one exact version, matched byte for byte; otherwise a closed range of whole versions." }
+      }
+    },
     "trustAnswer": {
       "type": "object",
       "additionalProperties": false,
@@ -270,20 +282,48 @@
         "turn_end": { "type": "string", "description": "optional: the row that ends a turn — the CLI's own completion line. A `live` rule's region is the newest turn above the composer, and a turn-end row closes the turn it ends: every transcript row above the last one is a turn the pane has already scrolled past, so an error a completion ended is history while an error after the completion is still current. The pattern must match the whole row: \"^…$\". Absent: the whole paragraph above the composer is the newest turn." },
         "unknown": { "$ref": "#/$defs/stage" },
         "trust": { "$ref": "#/$defs/stage" },
+        "plan_approval": { "$ref": "#/$defs/stage", "description": "A plan the agent wrote and waits to execute, drawn with the same numbered choice a permission dialog uses: read before permission." },
+        "confirmation": { "$ref": "#/$defs/stage", "description": "A confirmation the CLI or the agent raises before acting: read before permission for the same reason." },
         "permission": { "$ref": "#/$defs/stage" },
+        "login": { "$ref": "#/$defs/stage", "description": "The CLI's own login screen: read after permission so a shipped permission pattern keeps the reading it had, and never answered." },
         "exit_question": { "$ref": "#/$defs/stage" },
         "question": { "$ref": "#/$defs/stage" },
         "vendor_notice": { "$ref": "#/$defs/vendorNotice" },
         "provider_error": { "$ref": "#/$defs/stage" },
         "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
+        "question_text": { "$ref": "#/$defs/questionText" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
       }
     },
+    "questionText": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "any": { "$ref": "#/$defs/textSpec", "description": "The place every dialog kind takes when it has no entry of its own." },
+        "question": { "$ref": "#/$defs/textSpec" },
+        "plan_approval": { "$ref": "#/$defs/textSpec" },
+        "confirmation": { "$ref": "#/$defs/textSpec" }
+      }
+    },
+    "textSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inline": { "type": "string", "minLength": 1, "description": "The matched row is the question text." },
+        "after": { "type": "string", "minLength": 1, "description": "The rows below the matched row are the question text." },
+        "before": { "type": "string", "minLength": 1, "description": "The rows above the matched row are the question text." },
+        "until": { "type": "string", "minLength": 1, "description": "The row that ends the block — the dialog's options or its footer, tested against the raw row. A block still going when `rows` runs out is reported cut rather than read part-way." },
+        "rows": { "type": "integer", "minimum": 1, "description": "How many consecutive rows may be taken; the walk stops at the first row that is blank after the strips." },
+        "strip": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "description": "Patterns removed from each taken row before it is trimmed: a box border, the CLI's counter, the option number." }
+      },
+      "oneOf": [{ "required": ["inline"] }, { "required": ["after"] }, { "required": ["before"] }]
+    },
     "stage": {
       "oneOf": [
-        { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 },
         {
           "type": "object",
           "additionalProperties": false,
@@ -293,7 +333,7 @@
               "type": "boolean",
               "description": "Ignore ASCII case only: each letter matches its other case; no other character folds (a long s or a Kelvin sign reads as itself). The flag reaches every rule of the stage, the exceptions written beside a match included."
             },
-            "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
+            "rules": { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 }
           }
         }
       ]
@@ -328,7 +368,7 @@
           "type": "boolean",
           "description": "Ignore ASCII case only: each letter matches its other case; no other character folds. The flag reaches every rule of the stage, the exceptions written beside a match included."
         },
-        "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        "rules": { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 },
         "tested": {
           "type": "object",
           "additionalProperties": false,
@@ -342,6 +382,7 @@
     },
     "rule": {
       "type": "object",
+      "description": "A rule matches on one of these primitives: any, all, footer, below_last_rule, none_after, only_after, block, or without_rule: true. on_footer, live and at_composer narrow a match one of them makes, and reason labels a rate-limit match; none of them matches alone.",
       "additionalProperties": false,
       "anyOf": [
         { "required": ["any"] },
@@ -350,7 +391,8 @@
         { "required": ["below_last_rule"] },
         { "required": ["none_after"] },
         { "required": ["only_after"] },
-        { "required": ["block"] }
+        { "required": ["block"] },
+        { "required": ["without_rule"], "properties": { "without_rule": { "const": true } } }
       ],
       "if": { "required": ["block"] },
       "then": {
@@ -359,7 +401,7 @@
       },
       "allOf": [
         {
-          "if": { "required": ["live"] },
+          "if": { "required": ["live"], "properties": { "live": { "const": true } } },
           "then": {
             "anyOf": [{ "required": ["any"] }, { "required": ["all"] }],
             "not": {
@@ -426,6 +468,11 @@
         },
         "block": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/blockStep" } }
       }
+    },
+    "ruleWithoutReason": {
+      "description": "A rule outside a rate-limit stage: `reason` labels a rate-limit match alone, so the loader refuses it on any other stage's rule as an unknown key.",
+      "allOf": [{ "$ref": "#/$defs/rule" }],
+      "not": { "required": ["reason"] }
     },
     "blockStep": {
       "oneOf": [

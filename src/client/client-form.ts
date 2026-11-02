@@ -90,15 +90,14 @@ export function clientActor(run: ClientRun): string {
 }
 
 /**
- * The sentence a roster-changing client run (`add`, `remove`) ends with: the change is the owner's to
- * approve with the owner seat, and the approval record was not touched. An added seat is a new seat to the
- * signed fingerprints, so `up --client` for this team stops until the owner signs a fresh manager or developer grant;
- * a removed seat is no difference to them, so nothing else stops.
+ * The sentence a roster-changing client run (`add`, `remove`) ends with. An added seat is a new seat
+ * the signed grant does not cover, so `up --client` for this team stops until the owner signs a fresh
+ * manager or developer grant; a removed seat is no difference to it, so nothing else stops.
  */
-export function rosterApprovalText(op: 'add' | 'remove', seat: string, run: ClientRun): string {
+export function clientRosterText(op: 'add' | 'remove', seat: string, run: ClientRun): string {
   const verb = op === 'add' ? `added ${seat} to` : `removed ${seat} from`;
   const bundle = run.grant.bundle === 'developer' ? 'developer' : 'manager';
-  const base = `client grant ${run.grant.grantId} ${verb} the team file: the roster change is for the owner to approve with the owner seat; the approval record was not changed`;
+  const base = `client grant ${run.grant.grantId} ${verb} the team file`;
   return op === 'add'
     ? `${base}. \`up --client\` for this team stops until the owner signs a fresh ${bundle} grant for it (team grant --client ${run.grant.clientId} --entity <entity> --public-key <file> --team ${run.grant.up.project} --bundle ${bundle} --request, answered on the owner seat)`
     : base;

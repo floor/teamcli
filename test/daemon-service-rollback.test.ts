@@ -3,7 +3,7 @@
 // report the service removed. Every platform command goes to an injected runner, so no live
 // service manager runs and no unit is ever registered for real.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
@@ -21,7 +21,13 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-const PROGRAM: ServiceProgram = { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] };
+/** A program on disk: the adapter keeps the entry's own folder, so this is the whole program. */
+function programAt(home: string): ServiceProgram {
+  const folder = join(home, 'app');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'cli.js'), 'synthetic entry\n');
+  return { execPath: '/runtime/bin/node', entry: join(folder, 'cli.js'), roots: ['/repo'] };
+}
 
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 const FAILED: ServiceRunResult = { status: 1, stdout: '', stderr: 'refused' };
@@ -39,9 +45,9 @@ function scripted(answers: ServiceRunResult[]): ServiceRunner {
 describe('a refused registration rolls its unit back', () => {
   test('a registration the service manager refuses leaves no unit behind', () => {
     const home = scratchHome();
-    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, sleep: () => {} });
 
-    const result = manager.install(home, PROGRAM);
+    const result = manager.install(home, programAt(home));
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.why).not.toMatch(/launchctl|launchd|\.plist|launch agents/i);
@@ -52,9 +58,9 @@ describe('a refused registration rolls its unit back', () => {
   test('a refusal after the unload retry leaves no unit behind either', () => {
     const home = scratchHome();
     // The first registration is refused, the unload succeeds, the retry is refused again.
-    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501, sleep: () => {} });
 
-    const result = manager.install(home, PROGRAM);
+    const result = manager.install(home, programAt(home));
 
     expect(result.ok).toBe(false);
     expect(existsSync(manager.unitPath(home))).toBe(false);
@@ -65,7 +71,7 @@ describe('a stop that fails is never reported as a removal', () => {
   test('a failed stop is refused, and the unit stays for the retry', () => {
     const home = scratchHome();
     const manager = darwinServiceManager({ runner: scripted([OK]), uid: 501 });
-    expect(manager.install(home, PROGRAM).ok).toBe(true);
+    expect(manager.install(home, programAt(home)).ok).toBe(true);
     expect(existsSync(manager.unitPath(home))).toBe(true);
 
     const stopping = darwinServiceManager({ runner: scripted([FAILED]), uid: 501 });

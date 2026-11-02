@@ -1,14 +1,15 @@
 // The dev-mode scope, in one place. Kernel amendment 02 (§2.7, catalogue `dev-mode`): the
 // `dev-mode` policy, set at entity, project or team and never at a seat, lifts the "who may run
 // it" gate of the `DEV_MODE_OPERATIONS` commands — up, down, remove of an ordinary seat,
-// register, add, restart, init and reload — while it is `on` for the caller's level. It lifts
+// register, add, restart, init, reload, rename and peek — while it is `on` for the caller's level. It lifts
 // only that gate: the placement, CLI, record and scope checks stay.
 //
 // The owner's urgent widening adds a second, narrower admission: while dev mode
 // is `on`, a placed seat that is a team's orchestrator — the file's resolved lead, whether it
 // was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
-// grant, delegate, revoke, policy set/unset, `check --repair`, `remove --abandon`, `down
-// --abandon`, `broker`, `tempo` and the daemon's install, uninstall and fault-watch — and may
+// grant, delegate, revoke, policy set/unset, the team record's `config set`/`unset`/`edit` and a
+// seat's `settings set`/`unset`, `check --repair`, `remove --abandon`, `down --abandon`,
+// `broker`, `tempo` and the daemon's install, uninstall and fault-watch — and may
 // record an install under an unapproved `installer:` designation the live file validates — and
 // each admitted run prints the same `dev mode continues` warning and writes the same audit line
 // (the command, the caller, and dev mode's source). The
@@ -343,9 +344,14 @@ export type DevModeOwnerLift = {
   /** The caller the walk placed (a seat only when the lift was asked with a session). */
   caller: Caller;
   role: DevModeOwnerRole | null;
+  /** Writes the admission's audit line. It has already run when the lift was taken without
+   *  `audit: 'later'`; the record writers defer it because their admission precedes the
+   *  operation's own validation, and a refused or dry run must leave the folder as it was.
+   *  Calling it again writes nothing. */
+  audit: () => void;
 };
 
-const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null });
+const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null, audit: () => { /* nothing was admitted */ } });
 
 /**
  * Whether dev mode admits a caller to one owner-only command. The caller must be a placed seat:
@@ -355,7 +361,9 @@ const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning:
  * the caller's place. The owner is not this path's to admit — the command's own `isOwner`
  * answers first — and a no-terminal or unplaced caller never is. An admitted run logs the same
  * warning the folded caller gate logs, with the command and the caller, and the command prints
- * it to stderr.
+ * it to stderr. A record writer whose admission comes before its own validation asks for
+ * `audit: 'later'`: the returned `audit` writes that one line after the record write succeeded,
+ * so a refused or dry run never leaves an admission line for a write that did not happen.
  */
 export function devModeOwnerLift(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
@@ -368,6 +376,9 @@ export function devModeOwnerLift(
     root: string;
     dir: string;
     now?: Date;
+    /** When the audit line is written: with the admission (the sibling writers' `now`), or by
+     *  the caller through the returned `audit` once its own write succeeded (`later`). */
+    audit?: 'now' | 'later';
   },
 ): DevModeOwnerLift {
   const caller = callerOf(io, options.team.session);
@@ -381,8 +392,14 @@ export function devModeOwnerLift(
   const proof = roleAtTarget(caller, options) ?? roleElsewhere(io, options);
   if (proof === null) return NO_LIFT(caller);
   const warning = `warning: ${options.refusal}; dev mode continues${devModeLevelNote(state)}`;
-  logLine(options.dir, options.command, logTag(proof.caller), `${warning}; admitted as ${proof.role}`, options.now);
-  return { lifted: true, warning, caller: proof.caller, role: proof.role };
+  let written = false;
+  const audit = (): void => {
+    if (written) return;
+    written = true;
+    logLine(options.dir, options.command, logTag(proof.caller), `${warning}; admitted as ${proof.role}`, options.now);
+  };
+  if (options.audit !== 'later') audit();
+  return { lifted: true, warning, caller: proof.caller, role: proof.role, audit };
 }
 
 /**
@@ -393,7 +410,7 @@ export function devModeOwnerLift(
  */
 export function devModeOwnerLiftAtCwd(
   io: Io,
-  options: { command: string; refusal: string; home?: string; now?: Date },
+  options: { command: string; refusal: string; home?: string; now?: Date; audit?: 'now' | 'later' },
 ): DevModeOwnerLift | null {
   const walked = walkCaller(io);
   if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
@@ -430,6 +447,7 @@ export function devModeOwnerLiftAtCwd(
     root: loaded.root,
     dir: dirname(loaded.path),
     ...(options.now !== undefined ? { now: options.now } : {}),
+    ...(options.audit !== undefined ? { audit: options.audit } : {}),
   });
 }
 

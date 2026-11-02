@@ -14,7 +14,8 @@
 //
 // The fixture ('lyra') is this file's own. Cleanup uses the system trash per the standing rule:
 // no recursive rm.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import type { KeyObject } from 'node:crypto';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -86,7 +87,7 @@ type Fixture = { base: string; root: string; home: string; file: string; dir: st
 const made: string[] = [];
 afterAll(() => {
   const dirs = made.splice(0);
-  if (dirs.length > 0) spawnSync('trash', dirs, { stdio: 'ignore' });
+  if (dirs.length > 0) discardFixtures(dirs, { quiet: true });
 });
 
 function teamText(root: string, home: string): string {

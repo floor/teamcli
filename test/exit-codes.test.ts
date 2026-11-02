@@ -16,7 +16,7 @@ import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
 import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
-import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runAnswer, type AnswerHost, type PaneReading } from '../src/commands/answer.ts';
 import { runArchive, writeArchive } from '../src/commands/archive.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
@@ -27,16 +27,18 @@ import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
-import { actionApprovalsFolder } from '../src/client/team-create.ts';
+import { actionApprovalsFolder, actionRequestsFolder, teamCreateHash } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { FAULT_WHY, faultRequestPath, faultResultPath, writeFaultRequest } from '../src/daemon/fault.ts';
 import { daemonSocketPath } from '../src/daemon/paths.ts';
 import { routeId, routeOf } from '../src/daemon/routes.ts';
 import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
-import type { ServiceManager } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
+import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
@@ -68,6 +70,7 @@ import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
+import { runPeek, type PeekSources } from '../src/commands/peek.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
@@ -100,6 +103,7 @@ import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
@@ -116,6 +120,9 @@ import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { profileFor } from '../src/profiles/index.ts';
+import type { Profile } from '../src/profiles/profile.ts';
+import type { QuestionAnswerRecord } from '../src/profiles/question-answer.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
@@ -128,7 +135,7 @@ import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/w
 import { runImport } from '../src/commands/import.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
-import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -181,6 +188,32 @@ workspace:
   mode: shared
 seats:
 ${LEAD}${WORKER}`;
+
+/** The same team, of the `floor` entity: a nickname check reads the entity entry the file names. */
+const FLOOR = TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n');
+
+/** A seat whose written label names a person: the nickname another team's seat holds. */
+const CICERO = `  - role: implementer
+    name: reviewer
+    nickname: Cicero
+    label: Cicero · implementer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+/** A second team of the same entity, its seat already carrying Cicero. */
+const SITE = `format: 1
+project: site
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`;
 
 const BUDGET = `format: 1
 project: acme
@@ -273,6 +306,35 @@ function layout(repo: boolean): Place {
 
 function write(place: Place, text: string): void {
   writeFileSync(place.file, text);
+}
+
+/** A home where `floor` holds seat nicknames across the entity, and a registered `site` team of
+ *  that entity already carries Cicero: the state a newly set nickname is refused from. The
+ *  registry and its stored text are the scene's own, under its temp home. */
+function floorHoldingCicero(place: Place): void {
+  const entities = join(place.home, '.config', 'team', 'entities.yaml');
+  mkdirSync(dirname(entities), { recursive: true });
+  writeFileSync(entities, `floor:\n  roots:\n    - ${place.base}\n  names:\n    unique: entity\n`);
+  const root = join(place.base, 'site');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.agents', 'team.yaml'), SITE);
+  intoRegistry(root, place.home);
+  const parsed = validateTeamFile(SITE);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  // The record `team up` writes: the index the nickname scan reads, beside the stored text.
+  upsertTeam(place.home, teamIdOf(root), {
+    project: parsed.team.project,
+    session: parsed.team.session,
+    root,
+    entity: parsed.team.entity ?? null,
+    roster: parsed.team.seats.map((seat, at) => ({
+      agent: `agt_${String(at + 1).padStart(12, '0')}`,
+      seat: seat.name,
+      role: seat.role,
+    })),
+    at: NOW.toISOString(),
+  });
 }
 
 function approve(place: Place, text: string): void {
@@ -1129,9 +1191,10 @@ scene('check.herdr', async (place) => {
 });
 
 // The keygen scenes need a home outside the OS temp tree: the placement rule refuses a key
-// directory that overlaps it, and every other scene's place lives under mkdtemp's tree.
+// directory that overlaps it, and every other scene's place lives under mkdtemp's tree. The base
+// comes from the shared fixture root, so it also stays outside a checkout that sits in temp.
 function clientHome(label: string): string {
-  return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
+  return fixtureBase(`.client-exit-${label}-`);
 }
 
 function ranClient(place: Place, argv: string[], home: string = place.home, caller: Caller = owner): Ran {
@@ -1519,6 +1582,22 @@ scene('conformance-adapter.finished', async () => {
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
 });
 
+scene('development-mode.approval-requested', async (place) => {
+  // An injected store records the request and offers no Touch ID: synthetic signing only.
+  const store = seatOwner(place.home);
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--request'], io, { home: place.home, now: NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+    'owner-seat request',
+  );
+});
+scene('development-mode.approval-refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--approval', 'oa_nope'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'is not an owner-seat request id',
+  );
+});
 scene('development-mode.done', async (place) => {
   const io = testIo(place.root, other);
   return show(
@@ -1922,6 +2001,23 @@ scene('init.from-archive-invalid', async (place) => {
 scene('init.restored-archive', async (place) => {
   const dir = archiveIn(place, readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8'));
   return show(await initial(place, ['--from-archive', dir]), 'from an archive');
+});
+scene('init.name-taken', async (place) => {
+  // Every nickname the archive's file carries is newly set here: one another team of the entity
+  // already holds refuses the whole run, before anything is written.
+  floorHoldingCicero(place);
+  const dir = archiveIn(place, `format: 1
+project: newteam
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`);
+  const ran = show(await initial(place, ['--from-archive', dir]), 'seat nicknames are unique across entity "floor"');
+  expect(existsSync(place.file), 'nothing written').toBe(false);
+  return ran;
 });
 scene('init.skeleton', async (place) => {
   const root = join(place.base, 'a b');
@@ -2504,6 +2600,79 @@ scene('seats.not-yours', async (place) => {
   scene('config.written', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'seats.lead.label', 'boss']), 'set seats.lead.label');
+  });
+  scene('config.name-taken', async (place) => {
+    // The label names a person another team of the entity holds: refused before the record is
+    // touched, so the file still reads as it did.
+    write(place, FLOOR);
+    floorHoldingCicero(place);
+    const ran = show(
+      await recordRun(place, ['set', 'seats.lead.label', 'Cicero · coordinator']),
+      'seat nicknames are unique across entity "floor"',
+    );
+    expect(readFileSync(place.file, 'utf8'), 'nothing written').toBe(FLOOR);
+    return ran;
+  });
+
+  /** The owner's entities file in the place's home: `floor` writes the word, `material` has no
+   *  `names` map, and nothing else does. */
+  function entities(place: Place, word = 'project'): string {
+    const file = join(place.home, '.config', 'team', 'entities.yaml');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `floor:\n  roots:\n    - ~/Code\n  names:\n    unique: ${word}\nmaterial:\n  roots:\n    - ~/Work\n`);
+    return file;
+  }
+  async function entityRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runConfig([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('config.entity.unchanged', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'project']), 'nothing changed');
+  });
+  scene('config.entity.value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'floor.names.unique']), 'project');
+  });
+  scene('config.entity.written', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'team']), 'set floor.names.unique');
+  });
+  scene('config.entity.detached', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], detachedCaller), 'terminal');
+  });
+  scene('config.entity.general-refused', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.names.unique', 'off', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller),
+      'cannot be read as a general grant',
+    );
+  });
+  scene('config.entity.names-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'everywhere']), 'is not a names.unique word');
+  });
+  scene('config.entity.no-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'material.names.unique']), 'writes no names.unique');
+  });
+  scene('config.entity.not-owner', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], other), "only the owner, or a seat holding the owner's general grant");
+  });
+  scene('config.entity.path', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
+  });
+  scene('config.entity.unreadable', async (place) => {
+    entities(place);
+    writeFileSync(join(place.home, '.config', 'team', 'entities.yaml'), 'floor:\n\troots: x\n');
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off']), 'a tab in the indentation');
+  });
+  scene('config.entity.usage', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique']), 'a value is required');
   });
 }
 
@@ -3376,8 +3545,8 @@ scene('team.command-threw', async (place) => {
   return show(await entry(['init'], testIo(root, owner)), 'team:');
 });
 
-const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
-const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.14/trust.txt', import.meta.url), 'utf8');
+const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.14/idle.txt', import.meta.url), 'utf8');
 
 /** The owner's live grant, the way `team grant @team --capabilities dialogs.trust` writes it. */
 function trustGranted(home: string, root: string): void {
@@ -3415,6 +3584,39 @@ seats:
 `;
 }
 
+/** The same team with a stopped worker: the send path refuses a stopped receiving seat before
+ *  any leg, which is how a dismissal's owed decision line is made to fail. */
+function cursorTeamWithStoppedWorker(lobby: string, root: string, home: string): string {
+  trustGranted(home, root);
+  return `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+trust:
+  - ${lobby}
+  - ${root}
+seats:
+  - role: coordinator
+    name: lead
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+  - role: worker
+    name: worker
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+    stopped: true
+`;
+}
+
 function cursorBox(text: string): string {
   const lines = text.split('\n');
   const body = [`  → ${lines[0] ?? ''}`, ...lines.slice(1).map((line) => `    ${line}`)].join('\n');
@@ -3427,7 +3629,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
   let status = 'idle';
   const host: AnswerHost & { keys: string[] } = {
     keys: [],
-    version: () => opts.version ?? '2026.10.01-14929f9',
+    version: () => opts.version ?? '2026.10.14-0f9edde',
     agents: () => [{ name: 'lead', pane: 'w1:p1', workspace: 'w1' }],
     pane: () => text,
     sendKey: (_session, _pane, key) => {
@@ -3439,6 +3641,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
     rename: () => true,
     foreground: () => ['cursor-agent'],
     foregroundCwd: () => lobbyDir(place.home),
+    processInfo: () => ({ shell: 400, foreground: [400, 401] }),
     list: (dir) => listFolder(dir),
     status: () => status,
     type: (_session, _pane, value) => {
@@ -3465,7 +3668,38 @@ async function answered(place: Place, argv: string[], caller: Caller, host: Answ
   return { code, out: io.out, err: io.err };
 }
 
-scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust are required'));
+// The version the scene's host prints, so the scene's own record matches it: a record names one
+// printed version exactly, and the capture switch moved the fixture from 2026.10.01-14929f9.
+const QUESTION_VERSION = '2026.10.14-0f9edde';
+const QUESTION_TEXT = 'Which name do you want to use?';
+
+/** The question-answer records a shipped profile does not carry yet: the scene's own, on the
+ *  shipped profile's other fields. The answer seam is the one place a profile's reading and
+ *  records arrive. */
+function questionProfile(records: QuestionAnswerRecord[] = [{ kind: 'question', key: 'escape', from: QUESTION_VERSION, to: QUESTION_VERSION }]) {
+  return (cli: string): Profile | null => {
+    const shipped = profileFor(cli);
+    return shipped ? { ...shipped, questionAnswers: records } : null;
+  };
+}
+
+/** A seat waiting at a question dialog, on the pane the host lists it at. */
+function waitingQuestion(place: Place, seat: string, pane: string): void {
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = {
+      seats: { [seat]: { stage: 'launched', pane, launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'question' } } },
+      worktrees: {},
+    };
+  });
+}
+
+/** One fresh reading of a pane: the kind word the screen shows, the question dialog it reads or
+ *  none, and whether the profile read that block to its end. */
+function questionReading(kind: string, text: string | null, complete = true): PaneReading {
+  return { kind, dialog: text === null ? { dialog: null } : { dialog: 'question', text, complete } };
+}
+
+scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust or question are required'));
 scene('answer.configuration', async (place) => show(await answered(place, ['lead', 'trust', '--file', 'missing.yaml'], owner, answerHost(place, '')), 'no team file'));
 scene('answer.caller', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -3480,6 +3714,27 @@ scene('answer.file-owner', async (place) => {
 scene('answer.human', async (place) => {
   write(place, TWO.replace('    stopped: true\n', '    human: true\n'));
   return show(await answered(place, ['worker', 'trust'], owner, answerHost(place, '')), "worker: the pane is a human's");
+});
+scene('answer.identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'question' } } }, worktrees: {} };
+  });
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
+});
+scene('answer.trust-identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+  });
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'launched identity was not recorded');
 });
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -3525,7 +3780,7 @@ scene('answer.process', async (place) => {
       worktrees: {},
     };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   const host = answerHost(place, screen);
   host.processInfo = () => ({ shell: 400, foreground: [500] });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, host), 'not the one team launched');
@@ -3566,7 +3821,7 @@ scene('answer.version', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, CURSOR_TRUST, { version: '2026.10.02' })), 'no trust answer');
 });
@@ -3575,7 +3830,7 @@ scene('answer.screen', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, 'not a dialog\n')), 'not the trust dialog');
 });
@@ -3586,9 +3841,9 @@ scene('answer.label', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
 });
 scene('answer.folder', async (place) => {
@@ -3596,9 +3851,9 @@ scene('answer.folder', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
 });
 scene('answer.recovery', async (place) => {
@@ -3615,10 +3870,84 @@ scene('answer.ready', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
+});
+scene('answer.question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'answered question (question)');
+});
+scene('answer.delivery', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeamWithStoppedWorker(lobby, place.root, place.home));
+  waitingQuestion(place, 'worker', 'pane2');
+  const host = answerHost(place, '');
+  host.agents = () => [{ name: 'worker', pane: 'pane2', workspace: 'w1' }];
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['worker', 'question', '--file', place.file], owner, host), 'could not be delivered');
+});
+scene('answer.disagree', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  let reads = 0;
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', reads++ === 0 ? 'First name?' : 'Second name?');
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'do not agree');
+});
+scene('answer.permission', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('permission', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'permission prompt, which is never answered');
+});
+scene('answer.login', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('login', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'login prompt, which is never answered');
+});
+scene('answer.not-a-question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('idle', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'not at a question, plan approval or confirmation dialog');
+});
+scene('answer.incomplete', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', 'Which name should be used for the file we write, and which folder', false);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'runs past the rows this version reads');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data
@@ -4348,21 +4677,59 @@ type FakeDaemonService = ServiceManager & { calls: string[] };
 
 function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonService {
   const calls: string[] = [];
-  const unit = (home: string): string => join(home, 'unit.plist');
+  const place = (home: string): string => join(home, 'unit.plist');
   return {
     kind: 'system-service-manager',
-    unitPath: unit,
-    plan: (home, program) => ({ unitPath: unit(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
-    install: (home) => {
+    unitPath: place,
+    plan: (home, program) => ({ unitPath: place(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
+    // The record a manager holds for this test process: the start admission's scenes replay it
+    // with one field changed, so a refusal is always the check that scene names.
+    job: overrides.job ?? (() => thisProcessJobRecord()),
+    unit: overrides.unit ?? ((home) => thisProcessUnitRecord(place(home))),
+    install: overrides.install ?? ((home) => {
       calls.push('install');
-      return { ok: true, unitPath: unit(home) };
-    },
-    uninstall: (home) => {
+      return { ok: true, unitPath: place(home) };
+    }),
+    uninstall: overrides.uninstall ?? ((home) => {
       calls.push('uninstall');
-      return { ok: true, unitPath: unit(home), removed: true };
-    },
-    ...overrides,
+      return { ok: true, unitPath: place(home), removed: true };
+    }),
+    restart: overrides.restart ?? ((home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    }),
     calls,
+  };
+}
+
+/** A manager that answers a restart by loading the installed unit again; whether the daemon it
+ *  starts answers is the scene's health seam. */
+function restartingService(): FakeDaemonService {
+  return fakeDaemonService({
+    restart: (home) => {
+      const success: ServiceRestartSuccess = {
+        ok: true,
+        unitPath: join(home, 'unit.plist'),
+        undo: () => success,
+      };
+      return success;
+    },
+  });
+}
+
+/** A health reading whose daemon runs but does not answer the probe. */
+function unansweredHealth(): DaemonHealth {
+  const reading = answeringHealth();
+  return { ...reading, probe: { state: 'unanswered', at: reading.probe.at, reason: 'closed' } };
+}
+
+/** Answers from the Nth probe on, across the windows one command opens (a restart's own, then
+ *  its undo's), so a scene reaches the restored-daemon branch without sleeping for real waits. */
+function healthFrom(probe: number): () => Promise<DaemonHealth> {
+  let probes = 0;
+  return async () => {
+    probes += 1;
+    return probes >= probe ? answeringHealth() : unansweredHealth();
   };
 }
 
@@ -4376,6 +4743,28 @@ const daemonSnapshot: DaemonHealthSnapshot = {
   stuck: [],
   features: { broker: 'absent' },
 };
+
+/** The health reading the restored-daemon check needs: a daemon that answered its probe. */
+function answeringHealth(): DaemonHealth {
+  return {
+    daemon: 'teamcli',
+    socket: join('/synthetic', 'daemon.sock'),
+    state: 'running',
+    running: true,
+    pid: 42,
+    uid: 501,
+    since: '2026-10-20T10:00:00.000Z',
+    startedBy: 'service-manager',
+    version: 'test',
+    gitHead: null,
+    heartbeatAt: '2026-10-20T10:00:05.000Z',
+    features: { broker: 'absent' },
+    stuck: [],
+    roots: [],
+    probe: { state: 'answered', at: '2026-10-20T10:00:06.000Z' },
+    why: null,
+  };
+}
 
 function daemonSources(place: Place, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
   return {
@@ -4490,14 +4879,73 @@ scene('daemon.dry-run', async (place) => {
 scene('daemon.installed', async (place) => {
   write(place, TEAM);
   const service = fakeDaemonService();
-  const ran = await daemonRan(place, ['install'], owner, { service });
+  // The success line is printed only after the installed daemon answers its health probe.
+  const ran = await daemonRan(place, ['install'], owner, { service, health: async () => answeringHealth() });
   expect(service.calls).toEqual(['install']);
   return show(ran, 'team daemon: installed');
 });
 scene('daemon.not-owner', async (place) =>
   show(
     await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner installs or removes the machine daemon',
+    'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon',
+  ));
+scene('daemon.grant-refused', async (place) => {
+  // A grant recorded on the run that the command's own verification cannot admit: the command
+  // refuses it and names the failed check instead of falling back to the caller.
+  const io = testIo(place.root, detachedCaller);
+  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key'), grantId: 'gg_synthetic', clientId: 'synthetic-client' };
+  const code = await runDaemon(['install', '--dry-run'], io, daemonSources(place, { service: fakeDaemonService() }));
+  return show({ code, out: io.out, err: io.err }, 'cannot be read as a general grant');
+});
+scene('daemon.restart-dry-run', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would restart');
+});
+scene('daemon.restarted', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: async () => answeringHealth() });
+  return show(ran, 'team daemon: restarted');
+});
+scene('daemon.not-installed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({ ok: false, reason: 'not-installed', why: 'no user service unit is installed, so there is no daemon to restart', detail: null }),
+      }),
+    }),
+    'no user service unit is installed',
+  ));
+scene('daemon.restart-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({
+          ok: false,
+          reason: 'refused',
+          why: 'the system\'s service manager refused to start the installed daemon again',
+          detail: 'synthetic load refused',
+        }),
+      }),
+    }),
+    'no daemon is running',
+  ));
+scene('daemon.restart-rolled-back', async (place) => {
+  // The restarted daemon's own probe window stays unanswered; the daemon the undo starts
+  // answers in the second window, so the restart is reported as undone.
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: healthFrom(10), sleep: async () => {} });
+  return show(ran, 'the installed unit was started again and its daemon answers');
+});
+scene('daemon.restart-rollback-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: restartingService(),
+      health: async () => unansweredHealth(),
+      sleep: async () => {},
+    }),
+    'no daemon is running',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
 scene('daemon.run-root', async (place) =>
@@ -4521,17 +4969,90 @@ scene('daemon.install-failed', async (place) => {
   return show(
     await daemonRan(place, ['install'], owner, {
       service: fakeDaemonService({
-        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null }),
+        install: () => ({ ok: false, why: 'the system\'s service manager refused to start the daemon', detail: null, outcome: 'refused', kept: false }),
       }),
     }),
-    'the system service manager refused to start the daemon',
+    'the system\'s service manager refused to start the daemon',
+  );
+});
+scene('daemon.install-rolled-back', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back and its daemon started',
+          outcome: 'restored',
+          kept: true,
+        }),
+      }),
+      // The rollback is reported after the restored daemon answers, as the live command does.
+      health: async () => answeringHealth(),
+    }),
+    'the previous one was put back and started again',
+  );
+});
+scene('daemon.install-rollback-failed', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back, and the load exited 5: Input/output error',
+          outcome: 'lost',
+          kept: true,
+        }),
+      }),
+    }),
+    'no daemon was started',
   );
 });
 scene('daemon.run-not-owner', async (place) =>
   show(
     await daemonRan(place, ['run'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner or the system service manager runs the machine daemon',
+    "only the owner or the system's service manager runs the machine daemon",
   ));
+scene('daemon.service-managed.pid', async (place) => {
+  // A seat types the manager's start words and the unit is the daemon's own, but the manager's
+  // record names another process: the pid check refuses, and no process walk is consulted.
+  const service = fakeDaemonService({ job: () => ({ pid: process.pid + 1, program: process.execPath }) });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    'the record of the job does not name this process',
+  );
+});
+scene('daemon.service-managed.program', async (place) => {
+  // The record names this process and the unit is the daemon's own, but its words run another
+  // entry: the program check refuses before any start.
+  const service = fakeDaemonService({
+    unit: (home) => ({
+      ...thisProcessUnitRecord(join(home, 'unit.plist')),
+      programArguments: ['/synthetic/runtime', '/synthetic/entry.js', 'daemon', 'run'],
+    }),
+  });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    'the record and the unit do not run this executable with these words',
+  );
+});
+scene('daemon.service-managed.unit', async (place) => {
+  // No unit of this daemon's own can be read; the job record is never consulted, because a
+  // start must refuse closed on the first failed check rather than fall back.
+  const service = fakeDaemonService({
+    unit: () => null,
+    job: () => {
+      throw new Error("the job record must not be read when the unit is not the daemon's own");
+    },
+  });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    "the unit file is not this daemon's own",
+  );
+});
 scene('daemon.service-unavailable', async (place) =>
   show(
     await daemonRan(place, ['install'], owner, { service: null }),
@@ -4541,10 +5062,10 @@ scene('daemon.uninstall-failed', async (place) =>
   show(
     await daemonRan(place, ['uninstall'], owner, {
       service: fakeDaemonService({
-        uninstall: () => ({ ok: false, why: 'the system service manager refused to stop the daemon', detail: null }),
+        uninstall: () => ({ ok: false, why: 'the system\'s service manager refused to stop the daemon', detail: null }),
       }),
     }),
-    'the system service manager refused to stop the daemon',
+    'the system\'s service manager refused to stop the daemon',
   ));
 scene('daemon.status', async (place) => show(await daemonRan(place, ['status']), 'team daemon: not running'));
 scene('daemon.stopped', async (place) =>
@@ -4566,6 +5087,27 @@ scene('daemon.stopped', async (place) =>
       },
     }),
     'team daemon: stopped',
+  ));
+scene('daemon.fatal', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async (input) => {
+        // The endpoint supervisor gave up: the run reports the reason and exits non-zero so the
+        // system's service manager starts a fresh daemon instead of reading a stop.
+        input.onFatal?.('the send endpoint could not be kept alive');
+        return {
+          kind: 'serving',
+          daemon: {
+            socketPath: join(place.home, 'daemon.sock'),
+            roots: [],
+            routes: [],
+            health: () => daemonSnapshot,
+            close: async () => {},
+          },
+        };
+      },
+    }),
+    'the send endpoint could not be kept alive',
   ));
 scene('daemon.uninstalled', async (place) => {
   const service = fakeDaemonService();
@@ -4685,6 +5227,69 @@ scene('next.policy', async (place) => {
 `);
   recordLead(place);
   return show(await nexted(place), 'tasks.policy.omit must not name id or title, the record itself');
+});
+
+// `team peek`: the screen comes from a standing-in source, never from a terminal host, and the
+// state records the pane the seat stands on.
+function peekSource(screen: string | null): StatusSource {
+  return {
+    async waitStatus() {
+      return { outcome: 'timeout', at: NOW.getTime() };
+    },
+    screenText: () => screen,
+  };
+}
+
+async function peeked(place: Place, argv: string[], caller: Caller = owner, screen: string | null = 'hello\n'): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const sources: PeekSources = { home: place.home, now: () => NOW, source: peekSource(screen) };
+  const code = await runPeek(argv, io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+function recordPeek(place: Place, name: string, pane: string): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats[name] = { stage: 'ready', pane };
+  });
+}
+
+const PEEK_HUMAN = TEAM.replace('seats:\n', `seats:
+  - role: implementer
+    name: desk
+    label: desk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    human: true
+`);
+
+scene('peek.shown', async (place) => {
+  write(place, TEAM);
+  recordPeek(place, 'lead', 'pane1');
+  const ran = await peeked(place, ['lead']);
+  expect(ran.out).toBe('hello\n');
+  expect(ran.err).toBe('');
+  return ran;
+});
+scene('peek.unknown', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['ghost']), 'no seat named "ghost"');
+});
+scene('peek.owner-pane', async (place) => {
+  write(place, PEEK_HUMAN);
+  return show(await peeked(place, ['desk']), "is the owner's pane");
+});
+scene('peek.file', async (place) => show(await peeked(place, ['lead']), 'no team file'));
+scene('peek.invocation', async (place) => show(await peeked(place, []), 'a <seat> is required'));
+scene('peek.not-yours', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead'], other), 'this team is not yours to read');
+});
+scene('peek.no-screen', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead']), 'no screen is readable');
 });
 
 async function planned(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
@@ -4918,7 +5523,7 @@ function clientWorld(place: Place, options: { inbox?: boolean } = {}): {
   grantId: string;
   recipientId: string;
 } {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
+  const base = fixtureBase('.team-exit-client-');
   const home = join(base, 'home');
   mkdirSync(home, { recursive: true });
   const ownerKey = keyOf(home);
@@ -5220,6 +5825,69 @@ scene('send.configuration', async (place) =>
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
+});
+scene('send.grant-invalid', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  // The caller is the file's own lead, placed on the pane the registry records for it: a seat
+  // sends only from the seat its session says it stands in.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'launched', workspace: 'w1', pane: leadSeat.pane };
+  });
+  // The team the record's `to` names, registered and laid out the way `up` writes both: the
+  // registry record answers `builder-1@teamcli`, and its folder holds the file the send reads.
+  // The receiver is not that team's lead, so no rule admits the pair: only the grant can.
+  const outsideRoot = join(place.base, 'teamcli');
+  mkdirSync(join(outsideRoot, '.agents'), { recursive: true });
+  writeFileSync(
+    join(outsideRoot, '.agents', 'team.yaml'),
+    `format: 1\nproject: teamcli\ncoordinator: lead\noperator: lead\nworkspace:\n  mode: shared\nseats:\n${LEAD}  - role: builder\n    name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n`,
+  );
+  const outsideBuilder = registerAgent(place.home, {
+    name: 'builder-1',
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: 'teamcli', seat: 'builder-1', session: 'teamcli', pane: 'pane9', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(place.home, 'teamcli', {
+    project: 'teamcli',
+    entity: 'acme',
+    session: 'teamcli',
+    root: outsideRoot,
+    lobby: lobbyDir(place.home),
+    roster: [{ agent: outsideBuilder.id, seat: 'builder-1', role: 'builder' }],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  // The record the owner wrote before signatures were read: it names the pair and admits nothing,
+  // and the refusal names it and prints the exact line that re-issues it signed.
+  const folder = join(place.home, '.config', 'team', 'grants');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'old-grant.yaml'),
+    `send:\n  from: lead@acme\n  to: builder-1@teamcli\nexpires: "2027-06-01T00:00:00.000Z"\n`,
+  );
+  const plain = await sent(place, ['builder-1@teamcli', 'hello'], leadSeat, sendHost(place));
+  expect(plain.code).toBe(1);
+  expect(plain.err).toContain('not signed by the owner');
+  expect(plain.err).toContain('"old-grant"');
+  expect(plain.err).toContain(
+    "team grant --send --from 'lead@acme' --to 'builder-1@teamcli' --expires '2027-06-01T00:00:00.000Z' --name 'old-grant'",
+  );
+  // The same refusal in the structured form, so the id the contract row names is the one a caller
+  // reads off the machine path.
+  const structured = await sent(place, ['builder-1@teamcli', 'hello', '--json'], leadSeat, sendHost(place));
+  expect(structured.code).toBe(1);
+  expect((JSON.parse(structured.out) as { error: { id: string } }).error.id).toBe('send.grant-invalid');
+  return plain;
 });
 scene('send.brief-memory', async (place) => {
   // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
@@ -5852,6 +6520,16 @@ async function forgetRun(place: Place, argv: string[], caller: Caller = owner): 
 }
 scene('approvals.invocation', async (place) => show(await approvalsRun(place, []), 'a verb is required'));
 scene('approvals.listed', async (place) => show(await approvalsRun(place, ['list']), 'no always rules'));
+scene('approvals.details', async (place) => {
+  // A recorded team-create request, in the shape `createTeamCreateRequest` writes: the details
+  // print the record the card deliberately leaves out, without an owner seat or a signature.
+  const id = `tc_${'ab'.repeat(12)}`;
+  const params = { kind: 'team-create' as const, root: place.root, team: 'demo', head: null };
+  const record = { request_id: id, params, params_sha256: teamCreateHash(params), created: '2026-01-01T00:00:00.000Z', expires_at: '2026-01-01T00:15:00.000Z' };
+  mkdirSync(actionRequestsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionRequestsFolder(place.home), `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  return show(await approvalsRun(place, ['details', id]), `request ${id}`);
+});
 scene('approvals.revoked', async (place) => {
   const id = `oa_${'ab'.repeat(12)}`;
   mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
@@ -6025,7 +6703,13 @@ scene('restart.lead', async (place) => {
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
-  return show(await restarted(place, ['worker']), 'is signed off');
+  // A stopped seat is its own team's to revive: the owner and the team's lead clear it with
+  // `team restart`. A caller outside that rule is still refused, and under dev mode the caller
+  // gate folds — so the sign-off's own refusal is what the run says.
+  const io = testIo(place.root, other);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const code = await runRestart(['worker'], io, restartSources(place));
+  return show({ code, out: io.out, err: io.err }, 'is signed off');
 });
 scene('restart.herdr', async (place) => {
   write(place, ACTIVE_TWO);

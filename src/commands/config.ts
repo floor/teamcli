@@ -1,9 +1,11 @@
-// `team config` — two things. `keys` prints the settings registry above a seat (what may be set,
+// `team config` — three things. `keys` prints the settings registry above a seat (what may be set,
 // at which levels, under which policy); it reads no team. `get`, `set`, `unset` and `edit` read and
 // edit this team's own record — what `.agents/team.yaml` used to hold — wherever the team lives
 // (the registry under the registry source): one schema-validated editor in place of editing a
-// file by hand. Every write is validated by the team-file validator before it is stored, is the
-// owner's (as editing the file was), and the run names what the approval no longer covers.
+// file by hand. Every write is validated by the team-file validator before it is stored, and is
+// the owner's, as editing the file was. A path whose last segment is `names.unique` reads or
+// writes one word of the owner's entity record instead, and reads no team
+// (src/config/entity-edit.ts).
 
 import { readArgs } from '../args.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
@@ -23,7 +25,7 @@ export const USAGE = `Usage: team config keys [<level>] [--json]
        team config get <path> [--json]
        team config set <path> <value>
        team config unset <path>
-       team config set <path> <value> --request [--json]
+       team config set <path> <value> --request [--reason <text>] [--json]
        team config set <path> <value> --approval <request-id> [--json]
        team config set <path> <value> --general <grant.json> --key <client.key> [--json]
        team config unset <path> --general <grant.json> --key <client.key> [--json]
@@ -37,18 +39,28 @@ get, set, unset and edit read and edit this team's record. <path> is dotted keys
 index: watch.unread_after, seats.lead.model, seats.0.cli. <value> is read as YAML (a
 number, true, a one-line [list] or {map}), else as text. edit opens the record as YAML
 in $VISUAL or $EDITOR and writes it back once it validates. Every write is validated
-first and is the owner's (or, with --request, recorded for the owner seat to approve with Touch ID and applied with --approval <request-id> once signed); a change to an owner section is named as needing approval
-again. set and unset rewrite only the changed key's lines, so the record's comments, above,
+first and is the owner's (or, with --request, recorded for the owner seat to approve with Touch
+ID — --reason <text> is the short reason the card shows — and applied with --approval
+<request-id> once signed). set and unset rewrite only the changed
+key's lines, so the record's comments, above,
 beside and below the key, are kept byte for byte; a comment beside or inside a value the
 change removes stays as a comment line where it was. A key a line-by-line change cannot
 reach makes the command rewrite the record whole, which does not keep its comments; the
 command says so on stderr (comments_kept: false in --json). edit keeps the comments it
 leaves.
 
+A path whose last segment is names.unique names an entity's own word in the owner's entities
+file (<entity>.names.unique): how far apart seat nicknames stay — entity, project, team or off.
+A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
+only, so one that lists entities is refused until 0.5.11, and the grant's operations must admit
+config. A charter covers a folder and does not reach it. It edits an entry the file already
+declares, keeps every other line and writes nothing else; get is any caller's.
+
 Exits 0 when the registry or a value is printed or a change is written (or there was
-nothing to change), 1 when the path holds nothing, the caller is not the owner, or the
-change does not validate, 2 when the invocation is invalid, no team is found, or the
-editor fails.
+nothing to change), 1 when the path holds nothing, the caller is not the owner, the
+names.unique word is not one of the four, the entities file declares no such entity, or the
+change does not validate, 2 when the invocation is invalid, no team is found, the entities
+file cannot be read, or the editor fails.
 `;
 
 export const config: Command = (argv, io) => runConfig(argv, io);
@@ -70,9 +82,16 @@ export type ConfigSources = {
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'general', 'key', 'reason'], ['json', 'request']);
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
+    // A path whose last segment is `names.unique` is an entity's own record, not this team's:
+    // the entry lives in the owner's entities file, and no team is read (src/config/entity-edit.ts).
+    // The team's record has no key of that name, so nothing else can be meant.
+    if (verb !== 'edit' && (args.rest[1] ?? '').endsWith('.names.unique')) {
+      const { runEntityRecordEdit } = await import('../config/entity-edit.ts');
+      return runEntityRecordEdit(argv, rawIo, sources);
+    }
     const { runTeamRecordEdit } = await import('../config/edit.ts');
     return runTeamRecordEdit(argv, rawIo, sources);
   }

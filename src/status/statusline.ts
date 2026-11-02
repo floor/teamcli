@@ -126,15 +126,25 @@ export function wrapperSeat(seat: { cli: string; model: string; launch?: string;
   return foreignModelOnClaudeCode(seat) && launchProof(seat) === 'wrapper';
 }
 
-/** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
- *  one. This is a reading for a CLI the profile cannot show a model for. */
+/** The two lines of the CLI's welcome box the wrapper's id is drawn on, as the retained captures
+ *  draw them: ` ▐▛███▛█   Claude Code v2.1.291` and, directly under it, `▝▜██████▀  <id> · API
+ *  Usage Billing`. The box is the one surface a launch wrapper prints its provider id on; a
+ *  banner-shaped line anywhere else — quoted in the transcript, or an older box still in the
+ *  scrollback — is not this pane's current model. */
+const BANNER_HEADER = /^\s*▐▛███▛█\s+Claude Code v[0-9]+(?:\.[0-9]+)*\s*$/;
+const BANNER_MODEL = /^\s*▝▜██████▀\s+([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing\s*$/;
+
+/** The id on the launch wrapper's model line, under the pane's welcome header. This is a reading
+ *  for a CLI the profile cannot show a model for. A pane holding no header, or more than one — a
+ *  restarted CLI that did not clear its scrollback — names no current model: the reading is
+ *  ambiguous, and unread is never a mismatch. */
 export function bannerModel(screen: string | undefined): string | null {
   if (screen === undefined) return null;
-  for (const line of stripSgr(screen).split('\n')) {
-    const match = /([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing/.exec(line);
-    if (match) return match[1] ?? null;
-  }
-  return null;
+  const lines = stripSgr(screen).split('\n');
+  const headers = lines.flatMap((line, at) => (BANNER_HEADER.test(line) ? [at] : []));
+  if (headers.length !== 1) return null;
+  const match = BANNER_MODEL.exec(lines[headers[0]! + 1] ?? '');
+  return match?.[1] ?? null;
 }
 
 /** An id or a declaration as its tokens: lowercased, split where the id uses its own separators,

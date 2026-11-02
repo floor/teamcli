@@ -11,7 +11,7 @@ declaration governs, can lift; `off` beats them; and of the three machine modes,
 
 | Mode | What it does |
 | --- | --- |
-| `local-fast` | lifts the caller gates of nine operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, the designated installer's approval, and one untested Antigravity release in `team reload` |
+| `local-fast` | lifts the caller gates of ten operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, the designated installer's approval, and one untested Antigravity release in `team reload` |
 | `pr-per-change` | keeps the process half and lifts no gate at all |
 | `off` | lifts nothing, and beats every legacy source |
 
@@ -30,6 +30,20 @@ token never matches; the token is never logged and never written into the record
 binds the prior generation, a token shown for one switch never authorizes another — a switch that
 finds the generation moved refuses and says to show the fingerprint again.
 
+`set <mode> --request` is the owner-seat path, exactly as `team config set … --request` records a
+record change: it records one owner-seat request naming this switch — for `local-fast` the card
+reads `Turn on fast local development` / `Stop asking Touch ID for routine team changes on this
+Mac. OK?` / `This Mac · all teams`, and the other modes say their own lines — and writes nothing. The owner answers it on her owner page (a passkey or
+Touch ID signature), and `team development-mode set <mode> --approval <request-id>` applies the
+switch once that verified answer binds these words; when the owner seat's Touch ID signer is
+present at the request, the answer is taken then and the switch applies in the same run. The
+request is bound to the caller's repository, team, HEAD and words, and the mode named on the
+command is one of those words: an answer for `local-fast` does not apply `off`, and an approval
+for another request, another folder or another HEAD refuses. No charter admits this switch,
+because the setting is the machine's and not a folder's: only the owner's own answer stands for
+her. A request and `--show` are not combined: `--show` prints the fingerprint and writes nothing,
+and `--request` records the switch.
+
 A record the machine cannot trust is not applied: an unreadable or malformed record, an unknown
 field, a mode or scope this build does not know, an unreadable signing date or generation, a
 missing signature, a signature that does not verify under this machine's owner key, a missing
@@ -41,8 +55,9 @@ switch is the repair.
 
 With dev mode on, five lifts follow.
 
-**The caller gates of nine operations.** The caller gate of `up`, `down`, `remove` of an ordinary
-seat, `register`, `add`, `restart`, `init`, `reload` and `rename` folds. The run prints
+**The caller gates of ten operations.** The caller gate of `up`, `down`, `remove` of an ordinary
+seat, `register`, `add`, `restart`, `init`, `reload`, `rename` and `peek` folds. `peek` is the one
+lift that only reads a screen. The run prints
 `warning: <the refusal>; dev mode continues` — with the level appended when a policy or the
 machine record set it: `(dev-mode on at <level> level)`, or `(dev-mode on at machine level)` for
 the machine record — and goes on; the act it carries out is logged with the command and the
@@ -74,8 +89,8 @@ resolves as its lead, so a separate operator seat gains nothing.
 - `team check --repair`
 - `team remove --abandon`, `team down --abandon`
 - `team broker`, `team tempo`
-- `team daemon install`, `team daemon uninstall`, `team daemon fault-watch` — `team daemon run`
-  is not this gate, and no mode admits a seat to it
+- `team daemon install`, `team daemon restart`, `team daemon uninstall`, `team daemon fault-watch`
+  — `team daemon run` is not this gate, and no mode admits a seat to it
 
 **The installer designation.** `team queue install` normally records an install only while the
 file's `installer:` section is part of the approval in force. With dev mode on at the team's
@@ -122,8 +137,9 @@ the installer admission's is in the audit log alone.
   dev mode off. Dev mode never authorizes anything that leaves the machine — publishing a
   package or a release, tagging, pushing to a shared remote — and TeamCLI does not do those on a
   seat's behalf anyway.
-- **The switch itself.** `set` stays the owner's, or the matching owner-authorization token's; no
-  mode turns dev mode on or off by itself.
+- **The switch itself.** `set` stays the owner's, the matching owner-authorization token's, or the
+  owner's answer to a recorded request; no mode turns dev mode on or off by itself, and no charter
+  admits it.
 - **Every gate this page does not list.** A gate the page leaves out keeps its refusal: what this
   page lists is the whole of the widening it records.
 
@@ -131,6 +147,8 @@ the installer admission's is in the audit log alone.
 
     team development-mode [--json]
     team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+    team development-mode set <local-fast|pr-per-change|off> --request [--json]
+    team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
 `set` takes exactly one mode; `--show` and `--dry-run` mean the same thing on it. With no
 subcommand the setting is read. Any other word is an invocation error.
@@ -141,6 +159,8 @@ subcommand the setting is read. Any other word is an invocation error.
 | --- | --- | --- |
 | `--show` | — | on `set`: print the mode, the current setting and the authorization fingerprint; write nothing |
 | `--dry-run` | — | the same as `--show` |
+| `--request` | — | on `set`: record the switch as one owner-seat request; write no mode |
+| `--approval` | a request id | on `set`: apply the switch once the owner's verified answer binds these words |
 | `--json` | — | one `team.development_mode` document instead of the line |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -162,10 +182,11 @@ agree), or a refusal with its reason.
 
 | Call | Who |
 | --- | --- |
-| read, or `set … --show` / `--dry-run` | anyone; both are read-only |
+| read, `set … --show` / `--dry-run`, or `set … --request` | anyone; the first two are read-only, and the third records a request and writes no mode |
+| `set <mode> --approval <request-id>` | anyone holding the owner's verified answer to that request |
 | `set <mode>` | the owner, from a terminal outside herdr, or the same run carrying the owner-authorization token for exactly that switch |
 
-A caller who is not the owner and has no matching token is refused:
+A caller who is not the owner, has no matching token and no owner-seat answer is refused:
 `only the owner switches the machine development mode, from a terminal outside herdr, or with the
 owner-authorization token for this exact switch; this call is <placement>`.
 
@@ -185,13 +206,17 @@ owner.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| the setting is read (set or not set), shown, or changed | the line above | 0 |
+| the setting is read (set or not set), shown, changed, or a request is recorded | the line above | 0 |
 | a record that cannot be trusted is read | the refusal note | 1 |
 | the write is refused (not the owner, no matching token, no owner key, the generation moved, the record did not read back) | `team development-mode: <reason>` | 1 |
+| the approval is refused (not a request id, another switch's answer, unanswered, expired or already used) | `team development-mode: <reason>` | 1 |
 | the invocation is invalid | `team development-mode: <problem>`, with the usage | 2 |
 
 `--json` prints `{"schema": {"name": "team.development_mode", "version": 1}, "format": 1,
 "machine": true, "set": …, "mode": …, "since": …, "set_by": …, "generation": …,
 "caller_gates_lifted": …, "notice": …}`; a write adds `dry_run`, and a completed write `previous`
-and `token_authorized`, while `--show` adds `fingerprint`. A refusal prints the `team.error`
-document with `development-mode.refused` or `development-mode.invocation` as its id.
+and `token_authorized`, while `--show` adds `fingerprint`. A `--request` run prints the
+owner-seat request document (`status: "requested"`, the request id, its expiry and the command
+that applies it), as `team config … --request` does. A refusal prints the `team.error` document
+with `development-mode.refused`, `development-mode.approval-refused` or
+`development-mode.invocation` as its id.

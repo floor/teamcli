@@ -1,14 +1,15 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { admitGeneral, GENERAL_OPS, type GeneralOp, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant, SCOPED_GRANT_REFUSAL } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
+import { fixtureBase } from './helpers.ts';
 
 const homes: string[] = [];
 afterAll(() => { for (const h of homes) rmSync(h, { recursive: true, force: true }); });
 function world() {
-  const home = realpathSync(mkdtempSync(join(process.cwd(), '.gg-test-')));
+  const home = fixtureBase('.gg-test-');
   homes.push(home);
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
   const key = (name: string) => {

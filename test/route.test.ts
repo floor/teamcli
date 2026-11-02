@@ -8,7 +8,7 @@
 // no socket is ever opened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -21,6 +21,7 @@ import { PROJECT_RULE_SUMMARY, RULE_SUMMARY } from '../src/send/admit.ts';
 import { historyPath, parseHistoryLine } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { NATIVE_BODY_MARKER, routesPath } from '../src/send/routes.ts';
+import { INBOUND_STALE_REASON } from '../src/send/inbound.ts';
 import { ROUTE_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
@@ -359,6 +360,33 @@ describe('route: the address the native channel answers', () => {
     expect(code).toBe(0);
     expect(io.out).toContain(`socket ${address} (stale; do not dial it)`);
     expect(routeLines(routesPath('acme', w.root, w.home))[0]?.socket_state).toBe('stale');
+    expect(run.frames).toEqual([]);
+  });
+
+  test('a live socket older than its declaration reads stale, in the words a send would use', async () => {
+    // The seat's generated settings file declares `accept`, and the socket the pane carries was
+    // made before that file changed: a send passes the socket over, so the route must not call
+    // it live. Both commands read one helper, and the answer carries the sender's own reason.
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
+    const address = socketAt(w.sockets, 4242);
+    utimesSync(address, new Date('2026-10-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
+    const id = teamIdOf(w.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'lead-pane', address });
+    team(w.home, id, 'acme', 'acme', w.root, [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }]);
+    const hooks = join(w.root, '.agents', 'hooks', 'acme');
+    mkdirSync(hooks, { recursive: true, mode: 0o700 });
+    writeFileSync(join(hooks, 'lead.json'), '{"crossSessionInbound":"accept"}\n', { mode: 0o600 });
+    const io = testIo(w.root, OWNER);
+    const run = host(w, { processInfo: () => ({ shell: 111, foreground: [4242] }) });
+
+    const code = await runRoute(['lead'], io, run);
+
+    expect(code).toBe(0);
+    expect(io.out).toContain(`socket ${address} (stale; do not dial it (${INBOUND_STALE_REASON}))`);
+    expect(io.out).toContain(`lead: routed at ${address} (stale; do not dial it (${INBOUND_STALE_REASON}))`);
+    const [record] = routeLines(routesPath('acme', w.root, w.home));
+    expect(record?.socket).toBe(address);
+    expect(record?.socket_state).toBe('stale');
     expect(run.frames).toEqual([]);
   });
 

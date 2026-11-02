@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { auditClientRefusal, authorizeClientRun, clientFormProblem, rosterApprovalText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
@@ -38,7 +38,7 @@ import { resetCliHookState } from '../launch/cli-hook.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { plainText } from '../launch/plain.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readLaunchedTeam, readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export type RemoveSources = DownSources & {
   /** Foreground process names in the pane, or null when the pane can't be read. */
@@ -73,7 +73,7 @@ export const realSources: RemoveSources = {
   foregroundCwd: (session, pane) => paneForegroundCwd(pane, aim(session)),
 };
 
-export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]\n       team remove <name> --client <grant-file> --key <client-key> --team <team> [--json]\n\nThe --client form is for a client with no terminal that the owner signed a manager bundle grant carrying remove for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it removes a seat of that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --keep, --abandon, --file or --session. It never removes a human\'s pane, the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.\n\nExits 0 when the seat is removed (or stopped for a swap), 1 when removal is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]\n       team remove <name> --client <grant-file> --key <client-key> --team <team> [--json]\n\nThe --client form is for a client with no terminal that the owner signed a manager bundle grant carrying remove for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it removes a seat of that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --keep, --abandon, --file or --session. It never removes a human\'s pane, the orchestrator or the operator.\n\nExits 0 when the seat is removed (or stopped for a swap), 1 when removal is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 /** The gate's refusal as this command prints it: the verdict's own sentence behind the prefix,
  *  and the verdict's own contract row under `--json`. Both delegate branches print it — the
@@ -267,7 +267,16 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), ...(sources.home ? { home: sources.home } : {}) });
+  const readOptions = { ...(sources.home ? { home: sources.home } : {}) };
+  // A launched pointer names where this session was launched from, not a copy to read: the team
+  // is read where the edits write it, so a seat `team add` put into the registry's record is
+  // removed from that record, never missed over the file the session launched from. A `--file`
+  // names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     refuse(io, json, 'remove', {
@@ -872,7 +881,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     const what = temporary ? `removed temporary ${name}` : swap ? `stopped ${name} for a swap` : args.flags.has('keep') ? `stopped ${name}` : `removed ${name}`;
     logLine(dir, 'remove', who, what, sources.now());
     // A client's roster change is the owner's to approve: the run says so, and logs it.
-    const roster = clientRun !== null && copySeat !== undefined ? rosterApprovalText('remove', name, clientRun) : null;
+    const roster = clientRun !== null && copySeat !== undefined ? clientRosterText('remove', name, clientRun) : null;
     if (roster !== null) logLine(dir, 'remove', who, roster, sources.now());
     const closing0 = swap
       ? `${what}; the file still names it the ${name === team.orchestrator ? 'orchestrator' : 'operator'}: \`team add ${name}\` starts its new agent`

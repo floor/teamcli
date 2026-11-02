@@ -3,10 +3,11 @@ import { afterAll, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
+import { fixtureBase } from './helpers.ts';
 
 const subject = process.env.TEAM_GPT_SUBJECT_ROOT ?? resolve(import.meta.dir, '..');
 const load = (path: string) => import(pathToFileURL(join(subject, 'src', path)).href);
@@ -34,7 +35,7 @@ process.env.TEAM_CONFIG_SOURCE = 'file';
 afterAll(() => { if (configSource === undefined) delete process.env.TEAM_CONFIG_SOURCE; else process.env.TEAM_CONFIG_SOURCE = configSource; });
 // Real key hygiene is exercised: fixture homes sit outside the host's temporary directory and
 // outside the fixture checkout. No process HOME or real owner store is changed or read.
-const base = fs.realpathSync(fs.mkdtempSync(join(dirname(resolve(import.meta.dir, '..')), 'gpt-dev-fixtures-')));
+const base = fixtureBase('gpt-dev-fixtures-');
 let serial = 0;
 const modes = ['env-on', 'env-off', 'machine-on', 'machine-off'] as const;
 type Mode = typeof modes[number];

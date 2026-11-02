@@ -104,7 +104,7 @@ function teamText(spec: TeamSpec): string {
     .map(
       (seat) => `  - role: ${seat.role}
     name: ${seat.name}
-    label: ${seat.name}
+    label: ${seat.nickname ?? seat.name}
     cli: claude-code
     vendor: anthropic
     model: Test

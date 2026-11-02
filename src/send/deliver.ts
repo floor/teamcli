@@ -111,7 +111,8 @@ export function bindPane(native: NativePane, session: string): DeliverHost {
   };
 }
 
-const DIALOGS = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
+/** The screen kinds a send never types into: the box is the dialog's, and a message waits. */
+const DIALOGS = new Set(['question', 'plan approval', 'confirmation', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
 
 /** What the held-frame screen reports as its dialog kind: a cross-session frame held for a person
  *  blocks the box, but the screen is the CLI's own frame rather than one of `DIALOGS`. */
