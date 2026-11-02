@@ -127,7 +127,7 @@ An idle seat holding unsent text is restarted, not refused. The run, in order:
    ```
    <seat>: input box: holds unsent text, copied to <path> and pasted back once the new pane is ready
    <seat>: turn: not working (unsent)
-   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
+   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
    ```
 4. Closes the old workspace without typing into it — the copied text is what waits for the new
    pane, so no exit sequence is typed over it — and relaunches as usual.
@@ -159,8 +159,24 @@ Whenever `team restart` closes a running or exited pane, it first prints three l
 ```
 <seat>: input box: empty | holds unsent text | holds unsent text, copied to <path> and pasted back once the new pane is ready | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
-<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace without passing the old transcript
+<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
 ```
+
+`<launch>` is the line the relaunch runs, never the bare declaration: a conversation resume the
+run carried is already in it, so the line printed before the close, the line the new pane runs and
+the recipe the launch records are one and the same.
+
+`<resume words>` says what happens to the seat's recorded conversation, in the run's own plain
+words, so the terminal never shows a fresh start that was meant to be a resume:
+
+- `and resumes the recorded conversation <id>` when the run carries the conversation on the line.
+- `without passing the old transcript; no recorded conversation` when neither record binds one.
+- `without passing the old transcript; not resuming its recorded conversation (<why>)` when a
+  record exists and the run refused it — the same reason the refusal line gives.
+- `without passing the old transcript; its recorded conversation was dropped before the launch
+  (<why>)` when the record changed between the caller's read and the launch, so the id the caller
+  saw is no longer the one the records bind.
+- `without passing the old transcript; abandoned by the caller` under `--abandon`.
 
 If graceful exit on a `free` seat fails to return the pane to its shell or close the workspace, `team restart` aborts (`restart.busy`, exit 1) and never launches a second copy beside the still-open pane.
 

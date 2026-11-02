@@ -753,7 +753,7 @@ describe('bus verification checkpoint: verify only what came after the last veri
     expect(trimmed.events.map((event) => event.payload.seq)).toEqual([4]);
   });
 
-  test('a key change invalidates the checkpoint rather than trusting records checked under the old key', () => {
+  test('a missing key verifies the log in full, and the same key back matches its checkpoint again', () => {
     const { root, home } = makeScratch();
     expect(appendOne(root, home, 'm-1').ok).toBe(true);
     const first = readEvents('acme', root, home);
@@ -773,11 +773,14 @@ describe('bus verification checkpoint: verify only what came after the last veri
     expect(missing.unverified).toBe(1);
 
     writeFileSync(keyFile, saved, { mode: 0o600 });
+    // The key file is the key: the same one restored carries the same key print, and the
+    // checkpoint written beside the log covers these exact bytes, so the read leans on it again.
+    // A genuinely different key is a miss; bus-verify-checkpoint.test.ts runs that across processes.
     const restored = readEvents('acme', root, home);
     expect(restored.ok).toBe(true);
     if (!restored.ok) return;
-    expect(restored.full).toBe(true);
-    expect(restored.checked).toBe(1);
+    expect(restored.full).toBe(false);
+    expect(restored.checked).toBe(0);
     expect(restored.events.map((event) => event.payload.seq)).toEqual([1]);
   });
 });

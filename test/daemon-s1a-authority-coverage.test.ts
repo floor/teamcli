@@ -653,7 +653,7 @@ describe('the CLI proves the route, the daemon and the watch before one request'
     const io = seatIo(world, 'orchestrator', 'main:p1');
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await run(world, ['fault-watch', '--root', world.root, '--route', world.id], io, scene.sources)).toBe(0);
-    expect(io.err).toContain('warning: only the owner installs or removes the machine daemon; this call is orchestrator; dev mode continues');
+    expect(io.err).toContain('warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is orchestrator; dev mode continues');
     expect(io.out).toContain('faulted the hosted watch');
     const audit = readFileSync(join(world.root, '.agents', 'team.log'), 'utf8');
     expect(audit).toContain('daemon [orchestrator]');
@@ -726,7 +726,7 @@ describe('the CLI proves the route, the daemon and the watch before one request'
         expect(io.err).toContain('dev mode continues');
       } else {
         expect(code).toBe(1);
-        expect(io.err).toContain('team daemon: only the owner installs or removes the machine daemon');
+        expect(io.err).toContain('team daemon: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
       }
     }
   });

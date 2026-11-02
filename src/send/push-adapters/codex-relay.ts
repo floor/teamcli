@@ -1101,9 +1101,10 @@ export type CodexNativeDeliverOptions = {
   skipStage?: boolean;
   /**
    * Optional bounded (`<= 400ms`) live `thread/read` readiness probe (`true` to query the local
-   * app-server control socket, or a `CodexThreadReadProbe` function). When enabled, `would-hold`
-   * and `unavailable` outcomes abort before `codex queue` is spawned so the delivery walk can
-   * advance to the next route.
+   * app-server control socket, or a `CodexThreadReadProbe` function). When enabled, an idle
+   * thread that declines direct input and every `unavailable` outcome abort before `codex queue`
+   * is spawned so the delivery walk can advance to the next route. An active thread is a hold,
+   * not unavailability: its pointer is still handed to the queue under the same budget.
    */
   liveProbe?: boolean | CodexThreadReadProbe;
   /** Optional explicit control socket path for `liveProbe`. */
@@ -1418,7 +1419,14 @@ export async function deliverCodexNativeRoute(
       ...(typeof options.liveProbe === 'function' ? { liveProbe: options.liveProbe } : {}),
     });
 
-    if (live.status !== 'ready') {
+    // Hold is not unavailability. `codex queue` is the channel that hands a pointer to a thread
+    // between turns: an active thread — a running turn, a dialog, a question awaiting an answer —
+    // holds the pointer and reads it when the turn ends, so the attempt is made under the same
+    // bounded budget. The refusal stands for an idle thread that says it does not accept direct
+    // input (a queue would hold that pointer with no turn to end), and for every unreadable,
+    // refused or timed-out probe.
+    const holdsQueue = live.status === 'would-hold' && live.threadStatus === 'active';
+    if (live.status !== 'ready' && !holdsQueue) {
       const at = nowFn();
       const timedOut = live.status !== 'would-hold' && live.timedOut === true;
       const wouldHold = live.status === 'would-hold';
