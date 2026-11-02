@@ -570,4 +570,52 @@ signals:
       expect(errDoc.notice).toBe('dry run — no record is written');
     }
   });
+
+  test('an evidence file that does not parse is refused in fixed words, never quoting the file', async () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, 'workflow.yaml'),
+      `workflow: simple-two-step
+version: 1
+initial: draft
+states:
+  draft: {}
+  review: {}
+  merged: {}
+transitions:
+  - from: draft
+    to: review
+    on: pr-opened
+    role: builder
+  - from: review
+    to: merged
+    on: gate-passed
+    role: integrator
+`,
+    );
+    writeFileSync(
+      join(dir, 'script.yaml'),
+      `format: 1
+target: "project://simple"
+artifact:
+  kind: none
+inputs: {}
+settings: {}
+evidence: {}
+signals: []
+`,
+    );
+    const runIo = testIo(dir);
+    expect(await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml', '--json'], runIo)).toBe(0);
+    writeFileSync(join(dir, 'journal.json'), runIo.out);
+    // The marker is a bare token, so a parser's own message would quote it back into the refusal.
+    writeFileSync(join(dir, 'unparsed-evidence.json'), '{"step-1": EVIDENCE_PARSE_MARKER}\n');
+
+    for (const mode of [[], ['--json']]) {
+      const io = testIo(dir);
+      expect(await runWorkflow(['replay', 'workflow.yaml', 'journal.json', '--evidence', 'unparsed-evidence.json', ...mode], io)).toBe(1);
+      expect(io.out).toContain('the evidence file is not valid JSON');
+      expect(io.out).not.toContain('EVIDENCE_PARSE_MARKER');
+    }
+  });
 });
