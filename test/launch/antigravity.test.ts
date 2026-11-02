@@ -189,18 +189,20 @@ describe('Antigravity launch and captured screens', () => {
     };
     const commandOf = (launch: string, resume: { resume?: string; registry?: { launch: string; model: string; version: string; sessionId?: string } }): string => {
       const plan = upPlan({
-        root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+        root: '/work/acme', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
         seats: [{ ...seat, launch, ...resume }],
       });
       const step = plan.find((item) => item.do?.do === 'launch');
       return step?.do?.do === 'launch' ? step.do.command : '';
     };
+    // The seat's folder is trusted for the session, after the unattended flag and the resume.
+    const trust = `--settings '{"trustedWorkspaces":["/work/acme"]}'`;
     expect(commandOf('agy', { registry: { launch: 'agy', model: 'Gemini Flash', version: '3.8', sessionId: id } }))
-      .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
+      .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions ${trust}`);
     expect(commandOf('zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
+      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions ${trust}`);
     expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions`);
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions ${trust}`);
   });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({

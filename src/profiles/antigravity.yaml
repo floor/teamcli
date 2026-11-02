@@ -21,9 +21,47 @@ unattended:
   - --dangerously-skip-permissions
 rules:
   launch_prompt: --prompt-interactive
-# The delivery class a run measured: no MCP inbox is registered for this CLI and it has no event
-# adapter, so an idle seat cannot be woken; a message waits in its bus inbox.
-delivery: none
+# The trust dialog is pre-answered for the seat's own launch folder. A run on 1.4.12 measured,
+# in a fresh never-answered folder, that `--dangerously-skip-permissions` alone still draws
+# "Do you trust the contents of this project?", that `agy --help` has no trust flag, and that
+# `--settings '{"trustedWorkspaces":["<absolute path>"]}'` opens straight at the banner and
+# composer: no dialog. The value is one inline JSON object, session-only and never saved
+# (`--help` says "Settings for this session only, never saved"), and its validation is strict:
+# an array of absolute paths is accepted; `true` and an object map are refused. `{cwd}` is the
+# seat's absolute launch folder, filled by the launch.
+settings:
+  option: --settings
+  value: '{"trustedWorkspaces":["{cwd}"]}'
+# The inbox registers in the CLI's own user-level store (under the seat's HOME, which every team
+# on the machine shares), so the entry is named per seat — `{inbox}` is
+# team-inbox-<session>-<seat> — and never replaces another entry. A run on 1.4.12 measured:
+# `agy mcp add <name> ...` adds or updates exactly that entry and keeps every other one;
+# `agy mcp remove <name>` removes exactly that one and keeps the rest (the owner's
+# `floor-committee` entry stayed); removing a name that is not there exits 1 with
+# `Error: MCP server "<name>" not found`. The add's flags go before the name; arguments after
+# the command pass through unparsed, including `--seat`, `--session`, `--file` and `--epoch`.
+mcp_inbox:
+  add:
+    - mcp
+    - add
+    - '{inbox}'
+    - '{command}'
+    - '{entry}'
+    - mcp
+    - serve
+    - --seat
+    - '{seat}'
+    - --session
+    - '{session}'
+    - '{file}'
+    - '{epoch}'
+  remove:
+    - mcp
+    - remove
+    - '{inbox}'
+# The class the launch installs: the inbox above is read when the model takes a turn, so an idle
+# seat is pull-only (the class grok, cursor and gemini also declare).
+delivery: pull-on-turn
 login:
   check:
     - models

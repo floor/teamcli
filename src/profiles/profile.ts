@@ -111,6 +111,9 @@ export interface Profile {
   /** How the team inbox registers with this CLI, from the route a run measured. Null when no
    *  route is measured for this CLI: its seats stay on the drop and typed legs. */
   mcpInbox: InboxBlock | null;
+  /** A session-settings option the launch carries, with `{cwd}` filled from the seat's own
+   *  launch folder. Null when the CLI takes none. */
+  settings: SettingsBlock | null;
   /** How an idle seat of this CLI can be told it has a message, as the profile's own
    *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
    *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
@@ -201,13 +204,36 @@ export type InboxBlock = {
   /** A config file team writes itself, relative to the seat's folder. Null when team writes
    *  none: the CLI's own command writes it, or no file is involved. */
   file: string | null;
+  /** The CLI's own command that removes this seat's entry from its user-level store, run by
+   *  `team down` for a seat it closes. Null when the route leaves nothing behind to remove:
+   *  a project file, a launch-line argument, or a user-level route with no measured remove. */
+  remove: readonly string[] | null;
 };
+
+/** A session-settings option and the value it carries. `{cwd}` in the value is the seat's own
+ *  launch folder, escaped as the inside of a JSON string: Antigravity's `--settings` takes one
+ *  inline JSON object, and `trustedWorkspaces` there is an array of absolute paths. */
+export type SettingsBlock = { option: string; value: string };
 
 /** What a launch fills into the profile's `mcp_inbox` words. `command` and `entry` are this
  *  install's runner — the executable and its entry script — which reach the inbox server
  *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
  *  one: the server resolves the team from it, whatever folder it starts in. */
 export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string; epoch?: string };
+
+/**
+ * This seat's own entry name in a CLI's user-level MCP store: `team-inbox-<session>-<seat>`.
+ * A CLI whose store is shared by every team on the machine needs the session and the seat in
+ * the name, so two seats and two teams never overwrite each other's entry; the characters a
+ * team or seat name may not use are folded to `-`, so the name survives any store's parser.
+ */
+export function inboxEntryName(session: string, seat: string): string {
+  const slug = (value: string): string => {
+    const folded = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+    return folded === '' ? 'x' : folded;
+  };
+  return `team-inbox-${slug(session)}-${slug(seat)}`;
+}
 
 /** A profile word with the launch's own values filled in.
  *
@@ -227,10 +253,15 @@ export type InboxPlace = { seat: string; session: string; command: string; entry
  *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
  *  double-quoted string inside such a structured word, for the profile that supplies the
  *  quotes: a quote or a backslash in a path stays part of the value. The plain forms stay raw
- *  for argv words (`mcp add`), where no escaping belongs. */
+ *  for argv words (`mcp add`), where no escaping belongs.
+ *
+ *  `{inbox}` is this seat's own entry name in a CLI's user-level store
+ *  (`inboxEntryName`): the launch registers that entry, and `team down` removes it by the
+ *  same name. */
 export function fillInboxPlace(text: string, place: InboxPlace): string {
   const inside = (value: string): string => JSON.stringify(value).slice(1, -1);
   return text
+    .replaceAll('{inbox}', inboxEntryName(place.session, place.seat))
     .replaceAll('{seat}', place.seat)
     .replaceAll('{session}', place.session)
     .replaceAll('{command}', place.command)
@@ -297,6 +328,10 @@ export function launchCommand(
   displayName?: string,
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
   rulesLine?: string,
+  /** The seat's absolute launch folder, filled into a profile settings value's `{cwd}`. Absent:
+   *  a profile with settings contributes none, so a caller that launches nothing names no
+   *  folder. */
+  cwd?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = unattendedOptions(profile, launch);
@@ -315,6 +350,17 @@ export function launchCommand(
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
   if (place) {
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
+  }
+  // The CLI's session settings, with the seat's own folder filled in. Antigravity's
+  // `--settings` is one inline JSON object, taken for this session only and never saved (its
+  // `--help` says so; measured on 1.4.12), and `trustedWorkspaces` there is an array of
+  // absolute paths that pre-answers the trust dialog. A line that names its own `--settings`
+  // keeps it: the seat's file is the caller's, and nothing is appended.
+  if (profile.settings !== null && cwd !== undefined && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
+    options.push(
+      profile.settings.option,
+      profile.settings.value.replaceAll('{cwd}', JSON.stringify(cwd).slice(1, -1)),
+    );
   }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
     && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
@@ -732,7 +778,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -921,25 +967,32 @@ function startupReadsOf(entry: YamlEntry): readonly { path: string; directory: b
 
 /**
  * The value of `mcp_inbox`: the team inbox's measured registration for one CLI. One of three
- * routes, never two: launch-line arguments, the CLI's own `mcp add` with the file it writes,
- * or a config file team writes itself. Both file routes carry a relative path inside the seat's
- * folder, in the `lobby_files` grammar; the launch refuses it there when git tracks it.
+ * routes, never two: launch-line arguments, the CLI's own `mcp add`, or a config file team
+ * writes itself. With a `target`, the add writes a file inside the seat's folder — a relative
+ * path in the `lobby_files` grammar — and the launch refuses it there when git tracks it.
+ * Without one, the add writes the CLI's own user-level store, which belongs to no checkout;
+ * `remove` is then the same CLI's command that takes this seat's entry (`{inbox}`) out again
+ * on `team down`.
  */
 function inboxOf(entry: YamlEntry): InboxBlock {
   const entries = mapping(entry.value, 'mcp_inbox');
-  only(entries, ['launch_args', 'add', 'target', 'file']);
+  only(entries, ['launch_args', 'add', 'target', 'file', 'remove']);
   const launchArgsEntry = optional(entries, 'launch_args');
   const addEntry = optional(entries, 'add');
   const targetEntry = optional(entries, 'target');
   const fileEntry = optional(entries, 'file');
+  const removeEntry = optional(entries, 'remove');
   if (addEntry !== undefined && fileEntry !== undefined) {
     fail(fileEntry.line, '"mcp_inbox" registers with "add" or "file", not both');
   }
-  if (addEntry !== undefined && targetEntry === undefined) {
-    fail(addEntry.line, '"mcp_inbox" needs "target" beside "add": the file the command writes');
-  }
   if (targetEntry !== undefined && addEntry === undefined) {
     fail(targetEntry.line, '"mcp_inbox" needs "add" beside "target"');
+  }
+  if (removeEntry !== undefined && addEntry === undefined) {
+    fail(removeEntry.line, '"mcp_inbox" needs "add" beside "remove": the command its entries come from');
+  }
+  if (removeEntry !== undefined && targetEntry !== undefined) {
+    fail(removeEntry.line, '"mcp_inbox" removes an entry only from a route with no "target": a project file is left as it is');
   }
   if (launchArgsEntry === undefined && addEntry === undefined && fileEntry === undefined) {
     fail(entry.line, '"mcp_inbox" names launch_args, add or file');
@@ -949,6 +1002,21 @@ function inboxOf(entry: YamlEntry): InboxBlock {
     add: addEntry === undefined ? null : strings(addEntry.value, 'add'),
     target: targetEntry === undefined ? null : relativeFileOf(targetEntry, 'target'),
     file: fileEntry === undefined ? null : relativeFileOf(fileEntry, 'file'),
+    remove: removeEntry === undefined ? null : strings(removeEntry.value, 'remove'),
+  };
+}
+
+/**
+ * The value of `settings`: the option and the one value it carries, with `{cwd}` filled from
+ * the seat's launch folder. The value rides the launch as one shell-quoted argument, so the
+ * inline JSON a CLI takes there keeps its quotes and spaces.
+ */
+function settingsOf(node: YamlNode): SettingsBlock {
+  const entries = mapping(node, 'settings');
+  only(entries, ['option', 'value']);
+  return {
+    option: text(required(entries, 'option', node.line), 'option'),
+    value: text(required(entries, 'value', node.line), 'value'),
   };
 }
 
@@ -1137,6 +1205,7 @@ function launchOf(root: YamlNode): Shipped {
   const lobbyFilesEntry = optional(entries, 'lobby_files');
   const startupReadsEntry = optional(entries, 'startup_reads');
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
+  const settingsEntry = optional(entries, 'settings');
   const exitEntry = optional(entries, 'exit');
   const exitKeysEntry = optional(entries, 'exit_keys');
   const composeEntry = optional(entries, 'compose_module');
@@ -1181,6 +1250,7 @@ function launchOf(root: YamlNode): Shipped {
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
+      settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),

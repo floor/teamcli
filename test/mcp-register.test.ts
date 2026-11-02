@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { profileFor } from '../src/profiles/profile.ts';
-import { registerInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
+import { registerInbox, removeInbox, selfRunner, type InboxRun } from '../src/mcp/register.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 // Another team, for the scenes where the seat's folder and the launch name different teams.
@@ -57,6 +57,7 @@ describe('registerInbox', () => {
       add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{epoch}', '{file}'],
       target: '.gemini/settings.json',
       file: null,
+      remove: null,
     });
   });
 
@@ -67,6 +68,7 @@ describe('registerInbox', () => {
       add: ['mcp', 'add', '-s', 'project', 'team-inbox', '{command}', '--', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '{epoch}', '--session', '{session}', '{file}'],
       target: '.grok/config.toml',
       file: null,
+      remove: null,
     });
   });
 
@@ -234,10 +236,127 @@ describe('registerInbox', () => {
     expect(calls).toEqual([]);
   });
 
-  test('a CLI with no file route registers nothing', () => {
+  test('a CLI with no route at all registers nothing', () => {
     expect(registerInbox({ cli: 'codex', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
     expect(registerInbox({ cli: 'muse', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
-    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: 0 }) })).toBeNull();
+  });
+});
+
+describe('the antigravity user-level route', () => {
+  test('antigravity declares its own store command, one entry per seat, and the remove that follows', () => {
+    expect(profileFor('antigravity')?.mcpInbox).toEqual({
+      launchArgs: [],
+      add: ['mcp', 'add', '{inbox}', '{command}', '{entry}', 'mcp', 'serve', '--seat', '{seat}', '--session', '{session}', '{file}', '{epoch}'],
+      target: null,
+      file: null,
+      remove: ['mcp', 'remove', '{inbox}'],
+    });
+  });
+
+  test('the add names this team and this seat, and runs in the seat folder', () => {
+    const dir = folder();
+    const calls: { command: string; args: readonly string[]; cwd: string }[] = [];
+    const runner = selfRunner();
+    expect(registerInbox({
+      cli: 'antigravity',
+      seat: 'helper',
+      cwd: dir,
+      run: (command, args, cwd) => { calls.push({ command, args, cwd }); return { code: 0 }; },
+    })).toEqual({ ok: true });
+    expect(calls).toEqual([{
+      command: 'agy',
+      cwd: dir,
+      args: ['mcp', 'add', 'team-inbox-acme-web-helper', runner.command, runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+    }]);
+  });
+
+  test('a launch team file and its epoch reach the entry, whole', () => {
+    const project = folder();
+    const teamFile = join(project, '.agents', 'team.yaml');
+    const lobby = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(lobby);
+    const calls: { command: string; args: readonly string[] }[] = [];
+    expect(registerInbox({
+      cli: 'antigravity',
+      seat: 'helper',
+      cwd: lobby,
+      file: teamFile,
+      epoch: 'runtime-7',
+      run: (command, args) => { calls.push({ command, args }); return { code: 0 }; },
+    })).toEqual({ ok: true });
+    expect(calls[0]!.args.slice(-4)).toEqual(['--file', teamFile, '--epoch', 'runtime-7']);
+  });
+
+  test('no project file is written and no git exclude is touched: the store is the CLI\'s own', () => {
+    const dir = folder({ repo: 'plain' });
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, run: () => ({ code: 0 }) })).toEqual({ ok: true });
+    expect(() => statSync(join(dir, '.gemini'))).toThrow();
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).not.toContain('.gemini');
+  });
+
+  test('an add that exits is a refusal naming the command and its exit', () => {
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: 1 }) })).toEqual({
+      ok: false,
+      reason: '`agy mcp add` exited 1',
+    });
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: null }) })).toEqual({
+      ok: false,
+      reason: '`agy mcp add` exited without running',
+    });
+  });
+
+  test('the seat folder is still read for the team: no team file refuses and runs nothing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
+    dirs.push(dir);
+    let ran = false;
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, run: () => { ran = true; return { code: 0 }; } })).toEqual({
+      ok: false,
+      reason: 'no team file could be read from its folder',
+    });
+    expect(ran).toBe(false);
+  });
+});
+
+describe('removeInbox', () => {
+  test('it runs the CLI\'s own remove, naming only this seat\'s entry', () => {
+    const calls: { command: string; args: readonly string[] }[] = [];
+    expect(removeInbox({
+      cli: 'antigravity',
+      seat: 'helper',
+      session: 'acme-web',
+      run: (command, args) => { calls.push({ command, args }); return { code: 0 }; },
+    })).toEqual({ ok: true, removed: true });
+    expect(calls).toEqual([{ command: 'agy', args: ['mcp', 'remove', 'team-inbox-acme-web-helper'] }]);
+  });
+
+  test('a name the store does not hold is already gone: exit 1 is measured for exactly that', () => {
+    expect(removeInbox({ cli: 'antigravity', seat: 'helper', session: 'acme-web', run: () => ({ code: 1 }) }))
+      .toEqual({ ok: true, removed: false });
+  });
+
+  test('a command that did not run, or exited otherwise, is reported and the entry kept', () => {
+    expect(removeInbox({ cli: 'antigravity', seat: 'helper', session: 'acme-web', run: () => ({ code: null }) }))
+      .toEqual({ ok: false, reason: '`agy mcp remove` did not run' });
+    expect(removeInbox({ cli: 'antigravity', seat: 'helper', session: 'acme-web', run: () => ({ code: 2 }) }))
+      .toEqual({ ok: false, reason: '`agy mcp remove` exited 2' });
+  });
+
+  test('the session and seat are slugged the same way the add named the entry', () => {
+    const calls: string[][] = [];
+    removeInbox({
+      cli: 'antigravity',
+      seat: 'builder 4',
+      session: 'acme/web',
+      run: (_command, args) => { calls.push([...args]); return { code: 0 }; },
+    });
+    expect(calls).toEqual([['mcp', 'remove', 'team-inbox-acme-web-builder-4']]);
+  });
+
+  test('a route that leaves nothing in a shared store removes nothing', () => {
+    expect(removeInbox({ cli: 'gemini', seat: 'helper', session: 'acme-web', run: () => ({ code: 0 }) })).toBeNull();
+    expect(removeInbox({ cli: 'grok', seat: 'helper', session: 'acme-web', run: () => ({ code: 0 }) })).toBeNull();
+    expect(removeInbox({ cli: 'cursor', seat: 'helper', session: 'acme-web', run: () => ({ code: 0 }) })).toBeNull();
+    expect(removeInbox({ cli: 'codex', seat: 'helper', session: 'acme-web', run: () => ({ code: 0 }) })).toBeNull();
   });
 });
 
@@ -248,6 +367,7 @@ describe('the cursor file route', () => {
       add: null,
       target: null,
       file: '.cursor/mcp.json',
+      remove: null,
     });
   });
 

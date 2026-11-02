@@ -132,6 +132,20 @@ describe("the profiles' schema", () => {
     }
   });
 
+  test('session settings are one option and one value, and an inbox remove belongs to a user-level route', () => {
+    const doc = (extra: Record<string, unknown>): unknown => ({
+      format: 1, cli: 'sample', exit: 'bye', screen: { composer: COMPOSER }, ...extra,
+    });
+    expect(errors(doc({ settings: { option: '--settings', value: '{"trustedWorkspaces":["{cwd}"]}' } }))).toEqual([]);
+    expect(errors(doc({ settings: { option: '--settings' } })).length).toBeGreaterThan(0);
+    expect(errors(doc({ settings: { option: '--settings', value: 1 } })).length).toBeGreaterThan(0);
+    expect(errors(doc({ settings: { option: '--settings', value: 'x', extra: true } })).length).toBeGreaterThan(0);
+    // A user-level route: the add names the CLI's own store, and the remove takes back its entry.
+    expect(errors(doc({ mcp_inbox: { add: ['mcp', 'add', '{inbox}'], remove: ['mcp', 'remove', '{inbox}'] } }))).toEqual([]);
+    expect(errors(doc({ mcp_inbox: { remove: ['mcp', 'remove', '{inbox}'] } })).length).toBeGreaterThan(0);
+    expect(errors(doc({ mcp_inbox: { add: ['a'], target: '.gemini/settings.json', remove: ['r'] } })).length).toBeGreaterThan(0);
+  });
+
   test('unread_model takes launch alone, the loader’s one value', () => {
     const doc = (unreadModel: unknown): unknown => ({
       format: 1, cli: 'sample', exit: 'bye', unread_model: unreadModel,

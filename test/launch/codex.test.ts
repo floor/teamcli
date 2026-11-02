@@ -51,6 +51,7 @@ describe('Codex launch and captured screens', () => {
       add: null,
       target: null,
       file: null,
+      remove: null,
     });
     expect(
       launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, {
