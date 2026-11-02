@@ -2620,3 +2620,144 @@ describe('team restart machine atomicity', () => {
     expect(after?.pane).toBe('pane-new');
   });
 });
+
+// Independent checks of the --fresh flag, written for the independent test lane against the
+// flag's own claims rather than the author's scenes: the dry A/B in one world (a plain restart
+// still resumes; --fresh does not put the recorded id on the line), a real --fresh leaving the
+// old conversation's transcript bytes on disk while both records take the session the new pane
+// reports, and a signed-off seat revived by --fresh the way any restart revives it.
+describe('independent checks: restart --fresh', () => {
+  test('a dry plan in one world: plain restart resumes the recorded id, --fresh does not', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        agent_session: 'ses_keep',
+      };
+    });
+    registerAgent(fixture.home, {
+      name: 'worker',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: {
+        team: teamIdOf(fixture.root),
+        seat: 'worker',
+        session: 'acme',
+        pane: 'pane-old',
+        address: null,
+        agent_session: 'ses_keep',
+      },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    const { sources, did } = makeHarness(fixture, { workerSession: 'ses_keep' });
+
+    const plain = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--dry-run'], plain, sources)).toBe(0);
+    expect(plain.err).toBe('');
+    expect(plain.out).toContain('--resume ses_keep');
+
+    const fresh = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--fresh', '--dry-run'], fresh, sources)).toBe(0);
+    expect(fresh.err).toBe('');
+    // The fresh dry plan is the same plan without the recorded id: no resume anywhere, and the
+    // dry answer still decides nothing. (The fresh note itself is a real-run context line —
+    // the real-run test below asserts it there.)
+    expect(fresh.out).not.toMatch(/resume/);
+    expect(fresh.out).toContain('claude --model claude-opus-5-5');
+    expect(fresh.out).toContain('dry run: nothing was run');
+
+    expect(did.typed).toEqual([]);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  test('--fresh leaves the old conversation file on disk and both records take the new pane session', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        agent_session: 'ses_keep',
+      };
+    });
+    registerAgent(fixture.home, {
+      name: 'worker',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: {
+        team: teamIdOf(fixture.root),
+        seat: 'worker',
+        session: 'acme',
+        pane: 'pane-old',
+        address: null,
+        agent_session: 'ses_keep',
+      },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    // The old conversation's own file, where a CLI keeps it: the run may start a new
+    // conversation, and nothing it does may touch this file's bytes.
+    const sessionsDir = join(fixture.home, '.claude', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+    const transcript = join(sessionsDir, 'ses_keep.jsonl');
+    const bytes = 'line one of the old conversation\nline two\n';
+    writeFileSync(transcript, bytes);
+    const { sources, did } = makeHarness(fixture, { workerSession: 'ses_keep' });
+    sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const agents = sources.upLaunch.agents;
+    sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+      agent.pane.startsWith('pane-new') ? { ...agent, agent: 'claude-code', session: 'ses_minted' } : agent
+    ));
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--fresh'], io, sources)).toBe(0);
+    expect(io.err).toBe('');
+    expect(readFileSync(transcript, 'utf8')).toBe(bytes);
+    expect(did.runs.join('\n')).toContain('claude --model claude-opus-5-5');
+    expect(did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
+    // The new conversation's id is whatever the new pane reported — not the recorded one — and
+    // both records carry the SAME new id.
+    const minted = readState(fixture.dir).sessions.acme?.seats.worker?.agent_session;
+    expect(minted).toBeDefined();
+    expect(minted).not.toBe('ses_keep');
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe(minted);
+    expect(io.out).toContain('started fresh by the caller');
+  });
+
+  test('--fresh revives a signed-off seat the way a plain restart does', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const stored = storedTeam(fixture.root, fixture.home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    await underRegistry(async () => {
+      expect(writeTeamText(fixture.file, markStopped(readTeamText(fixture.file, { home: fixture.home }), 'worker'), { home: fixture.home, command: 'remove' }))
+        .toEqual({ ok: true, target: 'registry' });
+      const { sources, did } = makeHarness(fixture);
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--fresh'], io, sources), io.err).toBe(0);
+      expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'worker')).toBe(false);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+      expect(did.runs.join('\n')).not.toMatch(/resume/);
+    });
+  });
+});
