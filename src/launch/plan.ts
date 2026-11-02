@@ -3,7 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { cliWordList, launchCommand, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -878,6 +878,65 @@ export function upPlan(input: UpInput): Step[] {
       });
       continue;
     }
+    // The place's session is the herdr session this launch aims at. A file route binds the
+    // team file's own session instead (`mcp/register.ts`), read from the file this run read:
+    // the server refuses any other. A launch-line route names the same file to its server, so
+    // both resolve the team from it rather than from the seat's folder.
+    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
+    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
+      codexDaemon = codexDaemonForSeat({
+        home: input.home,
+        root: input.root,
+        ...(input.team !== undefined
+          ? { team: input.team }
+          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        seat: seat.name,
+        session,
+      });
+    }
+    // The id a proven conversation writes into the launch line: the state-agreeing record's
+    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
+    // form cannot carry either; the plan says so on the launch rather than losing it silently.
+    const resumeId = seat.registry?.sessionId ?? seat.resume;
+    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
+    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
+    const resumeGap = carried?.kind === 'refuse'
+      ? `its recorded conversation cannot be resumed: ${carried.why}`
+      : undefined;
+    // The rules line this launch gives `launchCommandOrRefusal`, and whether that call carries
+    // it: only a message-mode profile with a launch prompt carries one. Whether the built line
+    // really hands it to the CLI is read from the CLI's own decoded words — the same reader the
+    // placement proves — so a line whose shape this version cannot place reports no carry
+    // instead of writing the file on the assumption of one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command's text,
+    // which is shell-quoted there.
+    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
+    // The line is built before the steps that create or close a workspace: a refusal must come
+    // before any of them, and the warnings it produces are said on the launch step where they
+    // have always been said.
+    const launchWarnings: string[] = [];
+    const launcher = launchCommandOrRefusal(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
+      seat: seat.name,
+      session,
+      ...selfRunner(),
+      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
+      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+      // options after it; the seat says so on the launch step rather than losing the words.
+      launchWarnings.push(text);
+    }, wouldLaunch);
+    // A line the profile's words cannot be placed on is refused before any workspace is created
+    // or closed: its options would be read as prompt text, or its rules line lost.
+    if (launcher.refusal !== undefined) {
+      steps.push({
+        kind: 'skip',
+        text: `${seat.name}: would refuse: ${launcher.refusal}`,
+        do: { do: 'refuse', seat: seat.name, why: launcher.refusal },
+      });
+      continue;
+    }
+    const command = launcher.command;
     let notice: string | undefined;
     if (seat.budget?.kind === 'unknown') notice = seat.budget.text;
     else if (seat.budget?.kind === 'refuse') notice = seat.budget.why;
@@ -931,50 +990,9 @@ export function upPlan(input: UpInput): Step[] {
         do: { do: 'create', seat: seat.name, label: seat.label, cwd, repairLine: seat.repairLine, ...(seat.lobby ? { lobby: true as const } : {}), ...(said ? { notice: said } : {}), watcher },
       });
     }
-    // The place's session is the herdr session this launch aims at. A file route binds the
-    // team file's own session instead (`mcp/register.ts`), read from the file this run read:
-    // the server refuses any other. A launch-line route names the same file to its server, so
-    // both resolve the team from it rather than from the seat's folder.
-    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
-    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
-      codexDaemon = codexDaemonForSeat({
-        home: input.home,
-        root: input.root,
-        ...(input.team !== undefined
-          ? { team: input.team }
-          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
-        seat: seat.name,
-        session,
-      });
-    }
-    // The id a proven conversation writes into the launch line: the state-agreeing record's
-    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
-    // form cannot carry either; the plan says so on the launch rather than losing it silently.
-    const resumeId = seat.registry?.sessionId ?? seat.resume;
-    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
-    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
-    const resumeGap = carried?.kind === 'refuse'
-      ? `its recorded conversation cannot be resumed: ${carried.why}`
-      : undefined;
-    // The rules line this launch gives `launchCommand`, and whether that call carries it: only a
-    // message-mode profile with a launch prompt carries one. Whether the built line really hands
-    // it to the CLI is read from the CLI's own decoded words — the same reader the placement
-    // proves — so a line whose shape this version cannot place reports no carry instead of
-    // writing the file on the assumption of one. `execute.ts` writes the rules file before the
-    // command runs from this decision, never by searching the built command's text, which is
-    // shell-quoted there.
-    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
-    const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
-      seat: seat.name,
-      session,
-      ...selfRunner(),
-      ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
-      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
-      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
-      // options after it; the seat says so on the launch step rather than losing the words.
-      notice = notice ? `${notice}; ${text}` : text;
-    });
+    // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+    // options after it; the seat says so on the launch step rather than losing the words.
+    for (const text of launchWarnings) notice = notice ? `${notice}; ${text}` : text;
     // The launch carries the line exactly when the CLI's own decoded words end with it: a
     // message-mode CLI reads its initial prompt as its last positional word, and a line this
     // version could not place it on names no such word.

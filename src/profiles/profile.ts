@@ -10,6 +10,7 @@ import {
   appendPositionalOnLaunchLine,
   cliBodyOn,
   cliWordListOf,
+  lineDelimiterRisk,
   placedOnLaunchLine,
   plainBodyOf,
   shellScriptWordOf,
@@ -314,10 +315,14 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * takes the options before it, where the CLI still reads them as options, and
  * the line's own words after the delimiter keep their place. A line whose shape
  * this version cannot prove keeps 0.5.10's placement, the options after the
- * line, and says so through `warn`: it never refuses to launch a line 0.5.10
- * launched.
+ * line, and says so through `warn`. Two lines are refused rather than launched
+ * with the profile's words where the CLI does not read them: one this reader
+ * cannot read to its end that names, or may name, the CLI's delimiter
+ * (`lineDelimiterRisk`), because every word written after it would be prompt
+ * text; and one whose rules line cannot be placed inside it once its options
+ * have been. Every other line keeps the old placement with its notice.
  */
-export function launchCommand(
+export function launchCommandOrRefusal(
   profile: Profile,
   launch: string,
   rules: string,
@@ -327,7 +332,19 @@ export function launchCommand(
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
   rulesLine?: string,
   warn?: (text: string) => void,
-): string {
+  /** Whether the caller will launch this line. One that will not (a running seat's pane read)
+   *  takes 0.5.10's placement even where a launch would be refused: nothing runs it. */
+  launching = true,
+): { command: string; refusal?: string } {
+  // A line this reader cannot read to its end may name the CLI's delimiter in the part it
+  // cannot see. Words written after such a line reach the CLI as prompt text, not options, so
+  // the launch is refused rather than launched with its configuration misplaced.
+  if (launching && lineDelimiterRisk(launch)) {
+    return {
+      command: '',
+      refusal: 'its launch line cannot be read where it names, or may name, the CLI\'s delimiter; words added after it would be read as prompt text, not options',
+    };
+  }
   // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
   // inside a trailing quoted script counts exactly as one written on a plain line, and a quoted
   // flag name is the flag. A line this version cannot prove is asked 0.5.10's questions of the
@@ -388,6 +405,16 @@ export function launchCommand(
   const placed = positional.length === 0
     ? optioned
     : appendPositionalOnLaunchLine(optioned.line, positional.map(shellQuote).join(' '), profile.binary);
+  // Once the options were placed inside the line, a rules line that cannot be placed there too
+  // is refused: the fallback writes it after the line, where this launch's CLI does not read
+  // it, and a seat that carries rules must not launch without them. A line where the options
+  // themselves were not placed keeps 0.5.10's placement and says so below.
+  if (launching && addition !== '' && !optioned.uncertain && positional.length > 0 && placed.uncertain) {
+    return {
+      command: '',
+      refusal: 'its rules line cannot be placed inside its launch line after its profile options were, and the CLI would not read it',
+    };
+  }
   // Both are said when both are true: an unreadable line leaves the options after it and the
   // rules line there too, and the seat names each word it could not place.
   if (optioned.uncertain) {
@@ -396,7 +423,24 @@ export function launchCommand(
   if (positional.length > 0 && placed.uncertain) {
     warn?.('its launch line could not be read to its end; its rules line is after the line, where the CLI may not read it');
   }
-  return ['AGENT_UNATTENDED=1', placed.line].join(' ');
+  return { command: ['AGENT_UNATTENDED=1', placed.line].join(' ') };
+}
+
+/** The command alone, as 0.5.10 built it: for a caller that is not launching this line (a
+ *  running seat's pane read). A launch asks {@link launchCommandOrRefusal}, which reports a
+ *  line it must not launch instead. */
+export function launchCommand(
+  profile: Profile,
+  launch: string,
+  rules: string,
+  cliHook?: string | null,
+  place?: InboxPlace,
+  displayName?: string,
+  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  rulesLine?: string,
+  warn?: (text: string) => void,
+): string {
+  return launchCommandOrRefusal(profile, launch, rules, cliHook, place, displayName, runtimePolicies, rulesLine, warn, false).command;
 }
 
 /** True when the CLI loads a settings file named on its launch line, and that file may install

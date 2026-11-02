@@ -4,35 +4,19 @@
 // and every placement asks the same proof before it trusts a word (provenScriptWord), so they
 // refuse the same lines by construction. Nothing here refuses to launch: a line this reader
 // cannot prove keeps 0.5.10's placement and the caller says so.
-import { shellWords, type ShellWord } from './shell-words.ts';
-
-/** The words a shell reads on a launch line, each with the offset it starts at. A quoted run, an
- *  escaped character and a bare run join into one word, as the shell joins them. */
-const WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
-
-/** The word as the program receives it: quotes removed and their escapes resolved. */
-function unquote(word: string): string {
-  return (word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? [])
-    .map((part) => {
-      if (part.startsWith("'")) return part.slice(1, -1);
-      if (part.startsWith('"')) return part.slice(1, -1).replace(/\\(.)/g, '$1');
-      if (part.startsWith('\\')) return part.slice(1);
-      return part;
-    })
-    .join('');
-}
+import { readShellWords, shellWords, type ShellWord } from './shell-words.ts';
 
 /** A launch line split at its first positional delimiter, as the shell will parse it: `head`
  *  ends before the `--` word, `tail` begins at it and is empty when the line names none. The
- *  delimiter is the argv word, so `--`, `'--'` and `"--"` all split the line. */
+ *  delimiter is the argv word, so `--`, `'--'`, `"--"` and an ANSI-C `$'--'` all split the line.
+ *  A line this reader cannot read names no split; every caller asks only about a line it has
+ *  already read (`placementOf` refuses an unreadable one first). */
 export function splitAtDelimiter(line: string): { head: string; tail: string } {
-  for (const match of line.matchAll(WORD)) {
-    if (unquote(match[0]) === '--') {
-      const at = match.index;
-      return { head: line.slice(0, at), tail: line.slice(at) };
-    }
-  }
-  return { head: line, tail: '' };
+  const words = shellWords(line);
+  if (words === null) return { head: line, tail: '' };
+  const delimiter = words.find((word) => word.text === '--');
+  if (delimiter === undefined) return { head: line, tail: '' };
+  return { head: line.slice(0, delimiter.start), tail: line.slice(delimiter.start) };
 }
 
 /** The shells that take a command string. */
@@ -395,15 +379,61 @@ function placementOf(binary: string, command: string): Placement {
   return nestedPlacement(binary, trimmed, found.word, proof.layer) ?? { kind: 'uncertain' };
 }
 
+/**
+ * Whether a launch line that cannot be read whole may hand its CLI a `--` this tool cannot place
+ * words before. Words appended to such a line stand after it, where a plain line's program reads
+ * them; if the line names the delimiter before the part this reader cannot see, or the
+ * unreadable part could name one (an ANSI-C word's escape can spell `--`, and a word after a
+ * NUL byte is not read here), the added options would be prompt text instead. The caller refuses
+ * such a launch; a line whose unreadable part cannot name a standalone word — an unclosed quote
+ * takes the rest of the line into one word — keeps 0.5.10's placement with its notice.
+ */
+export function lineDelimiterRisk(command: string): boolean {
+  const line = command.trimEnd();
+  const read = readShellWords(line);
+  if (!('unreadable' in read)) return false;
+  if (read.words.some((word) => word.text === '--')) return true;
+  const rest = line.slice(read.at);
+  // A delimiter word among the words this reader never reached.
+  if (/(?:^|\s)--(?=\s|$)/.test(rest)) return true;
+  return ansiWordCouldBeDelimiter(/^\S+/.exec(rest)?.[0] ?? '');
+}
+
+/** One ANSI-C escape, or one literal character: `\nnn`, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, `\cX`,
+ *  and any other backslash pair, each stand for one character. */
+const ANSI_ITEM = /\\[0-7]{1,3}|\\x[0-9A-Fa-f]{1,2}|\\u[0-9A-Fa-f]{1,4}|\\U[0-9A-Fa-f]{1,8}|\\c[\s\S]|\\[\s\S]|[\s\S]/g;
+
+/** Whether an ANSI-C word this reader did not decode could be the CLI's delimiter itself. Its
+ *  escapes stand for one character each, any of which may be a hyphen; literal characters are
+ *  fixed. So the word can be `--` when every literal character is a hyphen and it has exactly
+ *  two characters once its escapes are read — or more, cut short where a shell reads a NUL
+ *  escape as the end of the argument. */
+function ansiWordCouldBeDelimiter(word: string): boolean {
+  const open = word.indexOf("$'");
+  if (open < 0) return false;
+  const prefix = word.slice(0, open);
+  if (!/^-*$/.test(prefix)) return false;
+  const close = word.indexOf("'", open + 2);
+  if (close < 0) return false;
+  const items = word.slice(open + 2, close).match(ANSI_ITEM) ?? [];
+  const needed = 2 - prefix.length;
+  if (needed < 0 || items.length < needed) return false;
+  if (items.slice(0, needed).some((item) => item !== '-' && !item.startsWith('\\'))) return false;
+  if (items.length === needed) return true;
+  return /^\\(?:0{1,3}|x00|u0000|U00000000|c@)$/i.test(items[needed] ?? '');
+}
+
 /** The script one nested shell runs, when that script runs the CLI: the outer body's source is
  *  normally exactly the text this reader decoded, so a position in the body is a position on the
  *  line. A line this tool has already written into no longer matches character for character —
- *  an addition inside a single-quoted inner script is spliced as `'\''` — but the inner script is
- *  the body's last word, so its closing quote is still the body's last character that is not
- *  whitespace: readable in the source when the outer quote is a double quote (a single quote is
- *  literal there) and that quote is not escaped (an odd backslash run before it). Deeper nesting,
- *  any other shell dialect, an inner double-quoted script and a body that is not one simple
- *  command are left to 0.5.10's placement. */
+ *  an addition is spliced as `'\''` when a single quote carries it and escaped when a double
+ *  quote does — but the inner script is the body's last word, so its closing quote is still the
+ *  body's last character that is not whitespace. That character is readable in the source when
+ *  the outer quote is a single quote (literal, and a splice never changes a quote inside it) and
+ *  when the outer quote is a double quote it is readable unless escaped (an odd backslash run
+ *  before it). Deeper nesting, any other shell dialect, an outer double quote around an inner
+ *  double-quoted script, and a body that is not one simple command are left to 0.5.10's
+ *  placement. */
 function nestedPlacement(
   binary: string,
   command: string,
@@ -426,12 +456,19 @@ function nestedPlacement(
       layers: [layer.quote, proof.layer.quote],
     };
   }
-  if (layer.quote !== 'double' || proof.layer.quote === 'double') return null;
   const tail = source.replace(/\s+$/, '');
-  if (!tail.endsWith("'")) return null;
-  let backslashes = 0;
-  for (let index = tail.length - 2; index >= 0 && tail[index] === '\\'; index -= 1) backslashes += 1;
-  if (backslashes % 2 === 1) return null;
+  if (layer.quote === 'double') {
+    // The inner script is a single-quoted word inside the double quotes: its closing quote is
+    // readable in the source when it is not escaped there.
+    if (proof.layer.quote === 'double' || !tail.endsWith("'")) return null;
+    let backslashes = 0;
+    for (let index = tail.length - 2; index >= 0 && tail[index] === '\\'; index -= 1) backslashes += 1;
+    if (backslashes % 2 === 1) return null;
+  } else if (proof.layer.quote !== 'double' || !tail.endsWith('"')) {
+    // The outer quote is single, so the source is literal: the inner script must be the
+    // double-quoted word whose closing quote is the source's last one.
+    return null;
+  }
   return {
     kind: 'script',
     at: outer.start + layer.openLen + tail.length - 1,
