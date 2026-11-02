@@ -2038,6 +2038,20 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.14/idle.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.14/unsent.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.302/exit.txt",
       "cli": "claude-code",
       "classify": "unknown",
@@ -2145,6 +2159,48 @@
     {
       "file": "cursor/2026.10.22/rules-unsent-reviewer-agent.txt",
       "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-idle-ansi.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "exit-typing/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-idle-ansi.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-ansi.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse-exit-independent/muse-unsent-newline-ansi.txt",
+      "cli": "muse",
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"
