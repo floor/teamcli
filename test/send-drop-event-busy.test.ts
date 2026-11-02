@@ -5,10 +5,14 @@
 // whole default budget (5000 ms) inside the send, between the drop attempt and the marker and
 // .pending writes.
 //
+// A crash between the append and the publication ledger leaves the marker's intent standing with
+// the event already in the log. The next pass re-appends the same deterministic record id, and
+// the log's own dedupe on (kind, record_id, session) keeps it one event without the ledger.
+//
 // The world is a synthetic team under a temp folder; the lock's holder is a real second process,
 // so the contention is the one a live send meets rather than a simulated flag.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { eventLogPath } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
@@ -101,6 +105,14 @@ function markerOf(made: World, messageId: string): Marker {
   return JSON.parse(readFileSync(join(dropDir(made.dir, 'iris'), `${messageId}.fallback.json`), 'utf8')) as Marker;
 }
 
+/** The episode's publication ledger files in the store: one per episode, written after the append
+ *  and never rotated. */
+function publicationLedgers(made: World): string[] {
+  return readdirSync(storeDirOf(made)).filter(
+    (name) => name.startsWith('fallback-published-') && name.endsWith('.jsonl'),
+  );
+}
+
 describe('a drop send never waits on the bus event lock', () => {
   test('an event lock held by another process leaves the intent standing; the sweep emits it once', async () => {
     const made = seatWorld();
@@ -176,6 +188,69 @@ describe('a drop send never waits on the bus event lock', () => {
     const marker = markerOf(made, MSG);
     expect(marker.status).toBe('all-failed');
     expect(marker.outbox).toBeUndefined();
+    expect(heldEventCount(made)).toBe(1);
+  });
+
+  test('a crash between the append and the publication ledger dedupes on the log alone', async () => {
+    const made = seatWorld();
+    const holder = holdEventLock(made);
+    await until(() => existsSync(holder.readyPath));
+
+    const io = owner(made.root);
+    const code = await runSend(['iris', 'the gate is green'], io, fake(made, { sendId: () => MSG }));
+    expect(code, io.err).toBe(0);
+    const path = join(dropDir(made.dir, 'iris'), `${MSG}.fallback.json`);
+    // The marker as a crash in the flush leaves it: the intent written, the append about to land.
+    const crashState = readFileSync(path, 'utf8');
+    const allFailedAt = markerOf(made, MSG).allFailedAt as string;
+    expect(markerOf(made, MSG).outbox?.kind).toBe('all-failed');
+
+    // The first pass appends the event and then records it in the publication ledger.
+    writeFileSync(holder.releasePath, 'release\n');
+    await holder.exit;
+    const at = new Date(Date.parse(allFailedAt) + 2000);
+    const swept = sweepFallbackEscalations({ home: made.home, roots: [made.root], now: () => at });
+    expect(swept.roots[0]!.why).toBeNull();
+    expect(heldEventCount(made)).toBe(1);
+    const ledgers = publicationLedgers(made);
+    expect(ledgers).toHaveLength(1);
+    // The deterministic record id the episode published under: the retry must reach the log
+    // under this same id, so the log's dedupe sees the event it already holds.
+    const published = JSON.parse(
+      readFileSync(join(storeDirOf(made), ledgers[0]!), 'utf8').trim(),
+    ) as { recordId: string; kind: string };
+    expect(published.kind).toBe('all-failed');
+    expect(published.recordId).not.toBe('');
+
+    // The crash lands between the two writes: the append is in the log, the ledger was never
+    // written, and the marker still carries its intent. Restoring the marker and removing the
+    // ledger is exactly that state.
+    rmSync(join(storeDirOf(made), ledgers[0]!), { force: true });
+    writeFileSync(path, crashState);
+
+    // The next pass has only the event log's own dedupe on (kind, record_id, session) to go on:
+    // it re-appends the same deterministic record id, the log answers duplicate rather than
+    // writing a second line, and the episode still stands as one event.
+    const recovered = sweepFallbackEscalations({ home: made.home, roots: [made.root], now: () => at });
+    expect(recovered.roots[0]!.why).toBeNull();
+    expect(recovered.roots[0]!.report!.refused).toHaveLength(0);
+    expect(heldEventCount(made)).toBe(1);
+    expect(markerOf(made, MSG).outbox).toBeUndefined();
+    // The retry reached the log under the same record id, and the log kept its one line for it.
+    const withId = eventLogText(made)
+      .split('\n')
+      .filter((line) => line.includes(`"record_id":"${published.recordId}"`));
+    expect(withId).toHaveLength(1);
+    // The ledger the crash never wrote is written now, from the record the log already holds.
+    const rewrote = publicationLedgers(made);
+    expect(rewrote).toHaveLength(1);
+    const recoveredLine = JSON.parse(readFileSync(join(storeDirOf(made), rewrote[0]!), 'utf8').trim()) as { recordId: string };
+    expect(recoveredLine.recordId).toBe(published.recordId);
+
+    // And a pass after that finds nothing left to do: the intent is gone and retention has not
+    // been asked to remember anything.
+    const settled = sweepFallbackEscalations({ home: made.home, roots: [made.root], now: () => at });
+    expect(settled.roots[0]!.why).toBeNull();
     expect(heldEventCount(made)).toBe(1);
   });
 });
