@@ -192,6 +192,7 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
     unit: (home) => thisProcessUnitRecord(path(home)),
     install: () => failure,
     uninstall: () => ({ ok: false, why: 'an uninstall is not part of this scene', detail: null }),
+    restart: () => ({ ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null }),
   };
 }
 
