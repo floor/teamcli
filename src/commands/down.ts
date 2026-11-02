@@ -46,6 +46,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
+import { removeInbox, type InboxRemoval } from '../mcp/register.ts';
 import { boxHoldsOther, boxHoldsText, boxHoldsTextAndEmptyRow, DRAW_WAIT_MS, EXIT_COMPLETION_SETTLE_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
@@ -106,6 +107,11 @@ export type DownSources = {
   codexEndpoint?: {
     stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   };
+  /** Removes a closed seat's own entry from its CLI's user-level MCP store. Tests record it;
+   *  the shipped command runs the profile's own remove route (a CLI with none has nothing to
+   *  remove). Absent: nothing is removed — the real command carries the shipped `removeInbox`,
+   *  so a test's fake sources never run a real CLI. */
+  inboxRemove?: (input: { cli: string; seat: string; session: string }) => InboxRemoval | null;
   /** The delegate gate. Tests hand in a verdict; the shipped command asks the real one. */
   gate?: typeof delegateGate;
   /** The gate's own fakes: the approval standing, the approved copy, state, herdr, placement. */
@@ -196,6 +202,7 @@ export const realSources: DownSources = {
   home: homedir(),
   launch: realLaunch,
   codexEndpoint: { stop: (input) => stopSeatCodexEndpoint(input) },
+  inboxRemove: removeInbox,
 };
 
 /** How long `--wait` gives a working seat, in seconds. */
@@ -1559,6 +1566,13 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         // The seat's own hook reading goes with its record: a `working` left by a turn the stop
         // interrupted must not answer for a seat that is no longer running.
         resetCliHookState(dir, session, [name]);
+        // The seat's own user-level inbox entry goes with the seat. Only the name the launch
+        // registered is removed; every other entry in the CLI's shared store is left as it is.
+        const cli = seats.find((seat) => seat.name === name)?.cli;
+        const removal = cli === undefined ? null : sources.inboxRemove?.({ cli, seat: name, session }) ?? null;
+        if (removal !== null && !removal.ok) {
+          io.stderr(`team down: ${name}: its team inbox entry was not removed: ${removal.reason}\n`);
+        }
         if (pane) forgetLaunchedPane(sources.home ?? homedir(), pane, session);
         // The registry: the seat's agent ends with its pane. A temporary seat is gone for good.
         if (sources.home !== undefined) {

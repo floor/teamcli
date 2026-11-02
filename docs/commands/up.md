@@ -138,8 +138,9 @@ or the project root (a seat that starts there), and for nothing else, in the rec
 reads: `projects[<folder>].hasTrustDialogAccepted` in `~/.claude.json` for Claude Code,
 `[projects."<folder>"] trust_level = "trusted"` in `~/.codex/config.toml` for Codex, the
 `trusted_folders.toml` table `grok --trust` writes, and the marker `cursor-agent --trust` writes. No
-key is ever typed into a pane for it. A CLI with no captured record (Antigravity) still starts, and
-its dialog waits for the owner as before.
+key is ever typed into a pane for it. Antigravity has no such record, so nothing is written for it:
+its launch carries the folder as trusted for that session only (`--settings`, never saved), and
+its dialog does not wait for the owner.
 
 ## A create-grant's seat
 

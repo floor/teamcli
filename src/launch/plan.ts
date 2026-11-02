@@ -965,7 +965,7 @@ export function upPlan(input: UpInput): Step[] {
       // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
       // options after it; the seat says so on the launch step rather than losing the words.
       notice = notice ? `${notice}; ${text}` : text;
-    });
+    }, cwd);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather

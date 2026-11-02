@@ -607,6 +607,63 @@ describe('team remove', () => {
     expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
   });
 
+  test('an antigravity seat takes its own user-level inbox entry with it', async () => {
+    // The entry is the name the launch registered, from the seat's own profile route: the
+    // removal is asked for that seat and that session, and nothing else is named.
+    writeFileSync(file, FILE.replace(
+      `    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  # stays above lead`,
+      `    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy
+  # stays above lead`,
+    ));
+    approveCurrent();
+    const made = world();
+    const removals: { cli: string; seat: string; session: string }[] = [];
+    made.sources.inboxRemove = (input) => {
+      removals.push(input);
+      return { ok: true, removed: true };
+    };
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(removals).toEqual([{ cli: 'antigravity', seat: 'worker', session: 'acme' }]);
+    expect(io.err).toBe('');
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
+  test('an inbox entry that cannot be removed is said, and the seat still goes', async () => {
+    // Cleanup never fails the removal: the seat's record and the file edit are done, and the
+    // line names what was left in the CLI's own store.
+    writeFileSync(file, FILE.replace(
+      `    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  # stays above lead`,
+      `    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy
+  # stays above lead`,
+    ));
+    approveCurrent();
+    const made = world();
+    made.sources.inboxRemove = () => ({ ok: false, reason: '`agy mcp remove` exited 2' });
+    const io = testIo(dir, owner);
+    expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(0);
+    expect(io.err).toContain('team remove: worker: its team inbox entry was not removed: `agy mcp remove` exited 2\n');
+    expect(readFileSync(file, 'utf8')).not.toContain('name: worker');
+  });
+
   test('--keep leaves the seat stopped', async () => {
     const made = world();
     expect(await runRemove(['worker', '--keep', '--file', file], testIo(dir, owner), made.sources)).toBe(0);

@@ -24,6 +24,10 @@ proof `team remove` uses, before its state record goes; a seat that started none
 A stop that cannot prove its process — or one that names no reason at all — signals nothing: the
 seat keeps its whole record, endpoint claim and presence binding included, and the run holds so a
 later cleanup can still account for the process.
+A seat whose CLI's inbox entry lives in that CLI's user-level store — one entry named for the
+seat, as `up` registered it — has exactly that entry removed as the seat's record goes, and
+nothing else in the store is touched; a removal that cannot be made is said and the teardown
+still proceeds.
 The event bus `team up` started is closed with the team: the workspace its record names is shut
 after the seats and before the session, and its state record is cleared when that close succeeds. A bus the
 owner runs in a terminal of their own is not in the state and is left running.

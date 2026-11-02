@@ -48,7 +48,9 @@ runs that CLI's own `mcp add -s project` in the seat's folder, naming the same r
 file the command writes is the CLI's own project settings (`.gemini/settings.json`,
 `.grok/config.toml`). A cursor seat's launch merges the server into the seat's own
 `.cursor/mcp.json` and carries `--approve-mcps`, so the CLI loads the server team registered
-for it. The server names the seat it launched for;
+for it. An antigravity seat's launch runs that CLI's own `mcp add` into its user-level store
+instead: the entry is named for the team and the seat, so no other entry there is replaced, and
+`team down` removes that entry when it closes the seat. The server names the seat it launched for;
 the session it serves is the team file's the launch read — the file the launch resolved and passed
 to the registration, which names it to the server too, so a seat whose folder is a lobby (it holds
 no team file of its own) serves the same team as every other seat. A server started without a

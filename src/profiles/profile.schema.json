@@ -157,17 +157,23 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "minItems": 1,
-          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch; {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise"
+          "description": "the CLI's own mcp add subcommand arguments, run in the seat's folder at launch; {inbox}, {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise; with a target the add writes that project file, without one it writes the CLI's own user-level store"
         },
         "target": {
           "type": "string",
           "minLength": 1,
-          "description": "the file add writes, relative to the seat's folder"
+          "description": "the file add writes inside the seat's folder, relative to it; absent, the add writes the CLI's own user-level store"
         },
         "file": {
           "type": "string",
           "minLength": 1,
           "description": "a config file team writes itself, relative to the seat's folder"
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the CLI's own command that removes this seat's user-level entry, run by team down and team remove for a seat they close; {inbox} is the entry name, team-inbox-<session>-<seat>-<hash>; it needs add and no target"
         }
       },
       "anyOf": [
@@ -177,9 +183,19 @@
       ],
       "allOf": [
         { "not": { "required": ["add", "file"] } },
-        { "if": { "required": ["add"] }, "then": { "required": ["target"] } },
-        { "if": { "required": ["target"] }, "then": { "required": ["add"] } }
+        { "if": { "required": ["target"] }, "then": { "required": ["add"] } },
+        { "if": { "required": ["remove"] }, "then": { "required": ["add"], "not": { "required": ["target"] } } }
       ]
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["option", "value"],
+      "description": "optional: a session-settings option the launch carries; {cwd} in the value is the seat's absolute launch folder, escaped as the inside of a JSON string",
+      "properties": {
+        "option": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "minLength": 1 }
+      }
     },
     "timeouts": {
       "type": "object",

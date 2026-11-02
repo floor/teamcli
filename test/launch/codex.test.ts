@@ -51,6 +51,7 @@ describe('Codex launch and captured screens', () => {
       add: null,
       target: null,
       file: null,
+      remove: null,
     });
     // A launch that names no file names its session: with two registered teams holding the seat
     // name, `mcp serve` exits 2 without `--session`. A file-bound line names the file instead

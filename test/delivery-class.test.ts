@@ -39,7 +39,7 @@ describe('the shipped profiles', () => {
       cursor: 'pull-on-turn',
       gemini: 'pull-on-turn',
       grok: 'pull-on-turn',
-      antigravity: 'none',
+      antigravity: 'pull-on-turn',
       muse: 'none',
       jules: 'none',
     };

@@ -574,7 +574,7 @@ describe('one seat\'s delivery', () => {
 describe("the inbox sentence follows the seat's CLI", () => {
   // The rules v0.5.0 wrote for this seat, byte for byte (that tag's rulesOf, on this fixture):
   // a seat whose CLI registers no inbox must keep getting exactly this text.
-  const V050_ANTIGRAVITY = [
+  const V050_WITHOUT_INBOX = [
     'Rules for this session, from the team file:',
     '- End every commit message and every pull request body with your signature, given below.',
     '- Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
@@ -589,15 +589,16 @@ describe("the inbox sentence follows the seat's CLI", () => {
     'These are standing rules, not a task: reply ready and wait for your brief.',
   ].join('\n');
 
-  test("an antigravity seat's rules are byte-identical to 0.5.0's", () => {
+  test("a CLI with no inbox route keeps 0.5.0's text, byte for byte", () => {
     const { team, seat } = codexSeat();
-    const agy = { ...seat, cli: 'antigravity' };
-    expect(rulesOf(team, agy, '/nowhere')).toBe(V050_ANTIGRAVITY);
+    // muse has no measured `mcp_inbox` route, and its rules are a first message like the fixture
+    // seat's: the one profile difference rulesOf reads is the inbox flag.
+    expect(rulesOf(team, { ...seat, cli: 'muse' }, '/nowhere')).toBe(V050_WITHOUT_INBOX);
   });
 
-  test("a codex seat's rules carry the inbox sentence, once, after the never-stop line", () => {
+  test.each(['codex', 'antigravity'])("a %s seat's rules carry the inbox sentence, once, after the never-stop line", (cli) => {
     const { team, seat } = codexSeat();
-    const lines = rulesOf(team, seat, '/nowhere').split('\n');
+    const lines = rulesOf(team, { ...seat, cli }, '/nowhere').split('\n');
     const sentence =
       '- If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.';
     expect(lines.indexOf(sentence)).toBe(3);

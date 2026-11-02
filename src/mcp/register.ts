@@ -24,15 +24,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readTeamConfig } from '../file/team-config.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
-import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
+import { fillInboxPlace, inboxEntryName, profileFor, type InboxPlace } from '../profiles/profile.ts';
 import { registeredRootOf, type RegisteredRoot } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
 export type InboxRegistration = { ok: true } | { ok: false; reason: string };
 
-/** One command run in the seat's folder. `code` is null when it did not run at all. */
-export type InboxRun = { code: number | null };
+/** One command run in the seat's folder. `code` is null when it did not run at all; `stderr` is
+ *  what the command wrote there, when the caller captured it — the remove route reads it to tell
+ *  a name the store does not hold from a failure that kept the entry. */
+export type InboxRun = { code: number | null; stderr?: string };
 
 const SERVER_NAME = 'team-inbox';
 
@@ -76,7 +78,7 @@ function runIn(cwd: string): (command: string, args: readonly string[]) => Inbox
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000,
     });
-    return { code: result.status ?? null };
+    return { code: result.status ?? null, stderr: typeof result.stderr === 'string' ? result.stderr : '' };
   };
 }
 
@@ -153,15 +155,41 @@ export function registerInbox(input: {
     ...selfRunner(),
   };
   const target = block.file ?? block.target;
-  if (target === null) return null;
+  const run = input.run ?? ((command, argv) => runIn(folder)(command, argv));
+  if (target === null) {
+    // The CLI's own user-level store: the entry belongs to no checkout, so there is no file in
+    // the seat's folder to protect or to read back. The command's own exit is the answer
+    // (measured on agy 1.4.12: `agy mcp add <name> ...` exits 0 and writes exactly that entry).
+    const result = run(profile.binary, addWords(block.add!, place), folder);
+    return result.code === 0 ? { ok: true } : { ok: false, reason: addRefusal(profile.binary, result.code) };
+  }
   const refused = ignoreProblem(folder, target);
   if (refused !== null) return { ok: false, reason: refused };
   if (block.file !== null) return writeConfigFile(folder, block.file, place);
-  // `{file}` is a whole word: it is the launch's `--file <path>` pair, and nothing at all when
-  // the launch named no file. `{epoch}` is the same for the runtime epoch, when this launch has
-  // a claim: the server is then bound to the delivery it was registered under.
+  const result = run(profile.binary, addWords(block.add!, place), folder);
+  if (result.code !== 0) {
+    // A JSON project file is the shape `writeConfigFile` already writes. When the CLI's own
+    // `mcp add` fails, write that file instead of leaving the seat without an inbox. A non-JSON
+    // target (a toml, for one) is still the CLI's to write, and the exit is reported.
+    if (target.endsWith('.json')) return writeConfigFile(folder, target, place);
+    return { ok: false, reason: addRefusal(profile.binary, result.code) };
+  }
+  const path = join(folder, block.target!);
+  try {
+    if (lstatSync(path).isFile()) return { ok: true };
+  } catch {
+    // The command said it wrote the file and did not: the client would start with no server.
+  }
+  return { ok: false, reason: `${block.target} was not written` };
+}
+
+/** The `mcp add` words with the launch's values filled in. `{file}` is a whole word: it is the
+ *  launch's `--file <path>` pair, and nothing at all when the launch named no file. `{epoch}`
+ *  is the same for the runtime epoch, when this launch has a claim: the server is then bound to
+ *  the delivery it was registered under. */
+function addWords(words: readonly string[], place: InboxPlace): string[] {
   const args: string[] = [];
-  for (const word of block.add!) {
+  for (const word of words) {
     if (word === '{file}') {
       if (place.file !== undefined) args.push('--file', place.file);
       continue;
@@ -172,22 +200,54 @@ export function registerInbox(input: {
     }
     args.push(fillInboxPlace(word, place));
   }
-  const run = input.run ?? ((command, argv) => runIn(folder)(command, argv));
-  const result = run(profile.binary, args, folder);
-  if (result.code !== 0) {
-    // A JSON project file is the shape `writeConfigFile` already writes. When the CLI's own
-    // `mcp add` fails, write that file instead of leaving the seat without an inbox. A non-JSON
-    // target (a toml, for one) is still the CLI's to write, and the exit is reported.
-    if (target.endsWith('.json')) return writeConfigFile(folder, target, place);
-    return { ok: false, reason: `\`${profile.binary} mcp add\` exited ${result.code === null ? 'without running' : result.code}` };
+  return args;
+}
+
+function addRefusal(binary: string, code: number | null): string {
+  return `\`${binary} mcp add\` exited ${code === null ? 'without running' : code}`;
+}
+
+/** A teardown's outcome: an entry removed, nothing to remove because the store did not hold the
+ *  name (the one failure a run measured), or the reason the command could not be run. */
+export type InboxRemoval = { ok: true; removed: boolean } | { ok: false; reason: string };
+
+/**
+ * Removes this seat's entry from its CLI's user-level store, for a seat `team down` closes.
+ * Null when the CLI's profile carries no user-level route with a measured remove: a project
+ * file or a launch-line argument leaves nothing behind. Only the seat's own entry — `{inbox}`,
+ * the name the launch registered — is named, and the CLI's command takes exactly that one name.
+ * The store is shared by every team on the machine, so no other entry is touched.
+ */
+export function removeInbox(input: {
+  cli: string;
+  seat: string;
+  session: string;
+  /** Runs a command; tests pass their own. Absent: the real one, in this process's folder. */
+  run?: (command: string, args: readonly string[]) => InboxRun;
+}): InboxRemoval | null {
+  const profile = profileFor(input.cli);
+  const block = profile?.mcpInbox;
+  if (!profile || !block || block.remove === null || block.add === null
+    || block.target !== null || block.file !== null) return null;
+  const place: InboxPlace = { seat: input.seat, session: input.session, ...selfRunner() };
+  const args = block.remove.map((word) => fillInboxPlace(word, place));
+  const entry = inboxEntryName(input.session, input.seat);
+  const run = input.run ?? ((command, argv) => runIn(process.cwd())(command, argv));
+  const result = run(profile.binary, args);
+  if (result.code === 0) return { ok: true, removed: true };
+  // agy 1.4.12's one measured remove failure is a name the store does not hold: exit 1 with
+  // `Error: MCP server "<name>" not found` on stderr. Only that message says the entry is
+  // already gone; an exit 1 for any other reason is a failure, and the entry is kept — the
+  // teardown still proceeds, and its line says what happened.
+  if (result.code === 1 && (result.stderr ?? '').includes(`MCP server "${entry}" not found`)) {
+    return { ok: true, removed: false };
   }
-  const path = join(folder, block.target!);
-  try {
-    if (lstatSync(path).isFile()) return { ok: true };
-  } catch {
-    // The command said it wrote the file and did not: the client would start with no server.
-  }
-  return { ok: false, reason: `${block.target} was not written` };
+  return {
+    ok: false,
+    reason: result.code === null
+      ? `\`${profile.binary} mcp remove\` did not run`
+      : `\`${profile.binary} mcp remove\` exited ${result.code}`,
+  };
 }
 
 /** Why the registry named no team for the seat, in the seat's line's words. */
