@@ -46,9 +46,7 @@ test('teamcli is the same version as team, and depends on that exact version', (
   expect(teamcli.publishConfig?.access).toBe('public');
   expect(teamcli.bin).toEqual({ teamcli: 'cli.js', team: 'cli.js' });
   expect(teamcli.version).toBe(root.version);
-  expect(teamcli.version).toBe('0.5.10');
   expect(teamcli.dependencies?.team).toBe(root.version);
-  expect(teamcli.dependencies?.team).toBe('0.5.10');
 });
 
 test('the teamcli tarball lists exactly the package manifest, the shim and the readme', () => {
