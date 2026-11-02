@@ -262,7 +262,7 @@ test('a restored seat is repainted from the record: both lines, nothing typed, n
   const dry = testIo(root, { kind: 'owner' });
   expect(await runUp(['--dry-run'], dry, sources(SESSION_ID).sources)).toBe(0);
   expect(dry.out).toContain('workspace rename w2 worker');
-  expect(dry.out).toContain("pane report-metadata w2:p1 --source team --display-agent 'GPT Sol 6.1 default'");
+  expect(dry.out).toContain(`pane report-metadata ${RECORD.pane} --source team --display-agent 'GPT Sol 6.1 default'`);
   expect(dry.out).toContain(`  skip ${SEAT}: ${RESTORED_LINE}`);
   expect(dry.out).not.toContain('codex -m gpt-6.1-sol');
 
@@ -271,7 +271,7 @@ test('a restored seat is repainted from the record: both lines, nothing typed, n
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
   expect(made.trace.renamed).toEqual([{ workspace: 'w2', label: 'worker' }]);
-  expect(made.trace.reported).toEqual([{ pane: 'w2:p1', text: 'GPT Sol 6.1 default' }]);
+  expect(made.trace.reported).toEqual([{ pane: RECORD.pane, text: 'GPT Sol 6.1 default' }]);
   expect(made.trace.runs.filter((line) => line.includes('codex -m gpt-6.1-sol'))).toEqual([]);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   expect(seatState()?.launched).toEqual({ shell: RESTORED.shell, cli: RESTORED.foreground });
