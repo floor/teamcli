@@ -6,7 +6,10 @@
 // machine, and a public service reads the whole body it is handed. And the body is read against
 // the machine's private lists before the CLI's session call: a hit is a route that did not take
 // the send — the walk falls through to the leg behind it, so the message still lands locally —
-// and the reason names the rule by its source, class and ordinal, never the matched text.
+// and the reason names the rule by its source, class and ordinal, never the matched text. The
+// session leg makes one more read before the call: the repository it would target must be
+// proven public, because the CLI clones it (src/send/repo-visibility.ts). That refusal is the
+// same kind of route — a reason, and the walk falls through.
 //
 // The list read is the pre-push gate's own (`src/check/private-names.ts`), with the diff scope:
 // text that leaves the machine. A list that is absent is no list — the machine has nothing

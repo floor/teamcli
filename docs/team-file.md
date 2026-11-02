@@ -461,10 +461,13 @@ this machine. The team's rules are never prepended to its briefs, and a send rea
 against the machine's private lists before the receiving CLI's own session call — a body that
 matches a rule is not handed to the service: the send names the rule by source, class and ordinal
 (never the text) and the walk falls through to the leg behind it, so the message still lands in
-the seat's own drop folder. A CLI whose whole service is hosted declares it for every seat of
-that CLI in its profile (`public_only: true` there); a seat's word can only add the guard, never
-remove it, and `public_only: false` reads as absent. The key is part of the seat's digest, and a
-record that marks no seat keeps every digest it had.
+the seat's own drop folder. The repository the session would target is proven public the same
+way, by one credential-free read of the forge's own record: a repository that is not public, a
+read that cannot be made, and a folder that names no repository all refuse the session call and
+fall through there too ([team send](commands/send.md)). A CLI whose whole service is hosted
+declares it for every seat of that CLI in its profile (`public_only: true` there); a seat's word
+can only add the guard, never remove it, and `public_only: false` reads as absent. The key is
+part of the seat's digest, and a record that marks no seat keeps every digest it had.
 
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the

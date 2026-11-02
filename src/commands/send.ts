@@ -40,6 +40,7 @@ import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.t
 import { appendHistory } from '../send/history.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
+import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
 import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
@@ -416,6 +417,10 @@ export type SendHost = {
    *  host), the machine's default paths are read; a test hands in its own files, so no send
    *  touches the machine's lists. */
   privateLists?: PrivateListPaths;
+  /** The repository read a public-only session leg makes on the repository it would target.
+   *  Absent (the real host), one credential-free read of the forge's own record; a test hands in
+   *  its own answer, so no send touches the network. */
+  repoVisibility?: RepoRead;
 };
 
 export const realHost: SendHost = {
@@ -1987,6 +1992,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
       }
+      const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      const repo = originRepoOf(seatCwd);
       // A public-only body leaves this machine for a service it does not run, so it is read
       // against the machine's private lists before any session call. A hit, or a list that is
       // configured and cannot be read, is a route that did not take the send: the reason names
@@ -2001,15 +2008,32 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
           continue;
         }
+        // The repository travels with the body: the CLI clones `owner/repo` from the forge, so a
+        // private one would hand the service the code the brief is about. Only a repository the
+        // forge answers as public takes the call; a folder that names none has no target the
+        // walk can prove, and a read that cannot be made proves nothing — all three refuse the
+        // leg and fall through, so the message still lands locally.
+        const read = host.repoVisibility ?? realRepoRead;
+        const visibility = repo === null ? 'unread' : await read(repo);
+        if (visibility !== 'public') {
+          const why = repo === null
+            ? "the seat's folder names no repository, so the session's target cannot be proved public; no session was created"
+            : visibility === 'not-public'
+              ? `the target repository ${repo} is not public; no session was created`
+              : `the target repository ${repo} could not be read for visibility; no session was created`;
+          failures.push(`session: ${why}`);
+          markLeg('session', 'skipped', why);
+          note(walkAttempt('session', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+          continue;
+        }
       }
       // The signed record is staged before the call: a session the CLI created and then failed to
       // report still leaves the seat a durable copy of what it was asked to do.
       await ensureEpisode();
-      const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
       const attempt = await createSession({
         spec: sessionCli,
         cwd: seatCwd,
-        repo: originRepoOf(seatCwd),
+        repo,
         body,
       });
       markLeg('session', 'attempted', attempt.outcome === 'created' ? undefined : attempt.reason);

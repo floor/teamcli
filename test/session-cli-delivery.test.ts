@@ -66,8 +66,10 @@ function scratchWithJules(answer: FakeJulesAnswer = {}): { dir: string; jules: F
 
 /** The team a session-leg scene sends into: acme's lead, and a jules seat declaring no order of
  *  its own. A CLI with no installed watcher takes the seat's shape word — the inbox and the typed
- *  wake — and the session call stands where that retired typed word stands. */
-function julesWorld(opts: { order?: readonly string[] | null; origin?: string; julesFields?: string } = {}): World {
+ *  wake — and the session call stands where that retired typed word stands. The seat's folder
+ *  names a GitHub repository by default, the way a project checkout does; a scene whose folder
+ *  names none passes `origin: null`, and one whose origin matters passes its own URL. */
+function julesWorld(opts: { order?: readonly string[] | null; origin?: string | null; julesFields?: string } = {}): World {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-session-cli-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -76,7 +78,8 @@ function julesWorld(opts: { order?: readonly string[] | null; origin?: string; j
   mkdirSync(sockets, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  if (opts.origin !== undefined) execFileSync('git', ['remote', 'add', 'origin', opts.origin], { cwd: root, stdio: 'ignore' });
+  const origin = opts.origin === undefined ? 'git@github.com:acme/site.git' : opts.origin;
+  if (origin !== null) execFileSync('git', ['remote', 'add', 'origin', origin], { cwd: root, stdio: 'ignore' });
   const order = opts.order ?? null;
   writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
 project: acme
@@ -127,9 +130,11 @@ function privateLists(made: World, entries: readonly string[] = ['Zephyrine Quil
   return { names, phrases: join(folder, 'phrases.txt') };
 }
 
-/** The scene's host with those lists: every send in this file goes through one. */
+/** The scene's host with those lists and a public target: every send in this file goes through
+ *  one, and the repository read answers public unless the scene hands its own answer, so no
+ *  scene touches the network. */
 function host(made: World, patch: Parameters<typeof fake>[1] = {}): ReturnType<typeof fake> {
-  return fake(made, { privateLists: privateLists(made), ...patch });
+  return fake(made, { privateLists: privateLists(made), repoVisibility: async () => 'public', ...patch });
 }
 
 function entries(made: World): Record<string, unknown>[] {
@@ -257,9 +262,8 @@ describe('a send to a seat whose CLI creates its own session', () => {
     expect(calls).toHaveLength(1);
     const call = calls[0];
     if (call === undefined) throw new Error('the session call was not made');
-    expect(call.argv).toHaveLength(2);
-    expect(call.argv[0]).toBe('new');
-    const body = call.argv[1] ?? '';
+    expect(call.argv.slice(0, 3)).toEqual(['new', '--repo', 'acme/site']);
+    const body = call.argv[3] ?? '';
     // The seat is public-only (its profile declares it): no rules are prepended, and the
     // sender header and the message are the whole body.
     expect(body).not.toContain('Never delete a Jules session.');
@@ -329,6 +333,103 @@ describe('a send to a seat whose CLI creates its own session', () => {
     expect(failed.join('\n')).not.toContain('Zephyrine');
     expect(io.err).not.toContain('Zephyrine');
     expect(io.out).not.toContain('Zephyrine');
+  });
+
+  test('a target repository that is not public refuses the session call: the drop keeps the message', async () => {
+    const made = julesWorld();
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+
+    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID, repoVisibility: async () => 'not-public' }));
+
+    expect(code).toBe(0);
+    expect(jules.calls()).toEqual([]);
+    expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
+    expect(existsSync(join(seatDropDir(made), SEND_ID))).toBe(true);
+    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
+    expect(failed).toEqual(expect.arrayContaining([
+      'session: the target repository acme/site is not public; no session was created',
+    ]));
+  });
+
+  test('a visibility read that cannot be made refuses the session call, with the reason', async () => {
+    const made = julesWorld();
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+
+    const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID, repoVisibility: async () => 'unread' }));
+
+    expect(code).toBe(0);
+    expect(jules.calls()).toEqual([]);
+    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
+    expect(failed).toEqual(expect.arrayContaining([
+      'session: the target repository acme/site could not be read for visibility; no session was created',
+    ]));
+  });
+
+  test('a folder that names no repository is not proved public: the session call is refused', async () => {
+    const made = julesWorld({ origin: null });
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+    const read: string[] = [];
+
+    const code = await runSend([SEAT, 'hello'], io, host(made, {
+      sendId: () => SEND_ID,
+      repoVisibility: async (repo) => {
+        read.push(repo);
+        return 'public';
+      },
+    }));
+
+    expect(code).toBe(0);
+    // There is no repository to read: the guard refuses without inventing a lookup.
+    expect(read).toEqual([]);
+    expect(jules.calls()).toEqual([]);
+    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
+    expect(failed).toEqual(expect.arrayContaining([
+      "session: the seat's folder names no repository, so the session's target cannot be proved public; no session was created",
+    ]));
+  });
+
+  test('a public target takes the call, and the read names the repository once', async () => {
+    const made = julesWorld();
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+    const read: string[] = [];
+
+    const code = await runSend([SEAT, 'hello'], io, host(made, {
+      repoVisibility: async (repo) => {
+        read.push(repo);
+        return 'public';
+      },
+    }));
+
+    expect(code).toBe(0);
+    expect(read).toEqual(['acme/site']);
+    expect(jules.calls()).toHaveLength(1);
+    expect(lastEntry(made)).toMatchObject({ outcome: 'delivered', via: 'session' });
+  });
+
+  test('a body that names a private entry refuses before the repository is read', async () => {
+    const made = julesWorld();
+    const jules = julesFirstOnPath({ status: 0, stdout: CREATED_LINE });
+    const io = owner(made.root);
+    const read: string[] = [];
+
+    await runSend([SEAT, 'notes for Zephyrine Quillfeather'], io, host(made, {
+      sendId: () => SEND_ID,
+      repoVisibility: async (repo) => {
+        read.push(repo);
+        return 'public';
+      },
+    }));
+
+    expect(read).toEqual([]);
+    expect(jules.calls()).toEqual([]);
+    expect(((lastEntry(made).failed as string[] | undefined) ?? []).join('\n')).toContain('the body matches a private rule');
   });
 
   test('a seat the team file marks public_only keeps the guard on', async () => {
