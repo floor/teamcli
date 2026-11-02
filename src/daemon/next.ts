@@ -17,6 +17,7 @@ import { DEADLINE, NOT_RUNNING, WRONG_ANSWER, type BrokerOutcome } from '../brok
 import type { BrokerRequest } from '../broker/protocol.ts';
 import { anotherPaneRefusal, callerVerdict, noPaneRefusal, standingOf, type Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
+import type { PaneProcesses } from '../herdr.ts';
 import { seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import { plainText } from '../launch/plain.ts';
 import { pauseText, readState, type State } from '../state.ts';
@@ -82,6 +83,10 @@ export type NextHandlerInput = {
    *  none proves no recorded address, and the classifier is then right to call a socket no
    *  evidence — the conservative reading, never a guess. */
   home?: string;
+  /** The claimed pane's process identity, when the host could read it: the proof a send makes
+   *  that the recorded socket is the pane's own. Absent (or null, a pane the terminal host could
+   *  not answer for) keeps the conservative rule. */
+  processes?: PaneProcesses | null;
 };
 
 export type NextHandlerDeps = {
@@ -147,6 +152,8 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
   }
   // The seat's delivery class, read from its launch records: a class nothing can wake while the
   // seat is idle is offered no time-bound record, because the deadline falls between its turns.
+  // The host hands in the claimed pane's processes, so a recorded socket the pane no longer
+  // carries is read as the walk would read it.
   const declaredSeat = team.seats.find((seat) => seat.name === caller.seat);
   const stateSeat = state?.sessions[route.session]?.seats[caller.seat];
   const delivery = seatDeliveryClass({
@@ -157,6 +164,7 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
     ...(declaredSeat === undefined ? {} : { declared: declaredSeat }),
     ...(stateSeat === undefined ? {} : { state: stateSeat }),
     ...(input.home === undefined ? {} : { home: input.home }),
+    ...(input.processes === undefined ? {} : { processes: input.processes }),
   }).class;
   const tasks = team.tasks ?? LOCAL_TASKS;
   if (tasks.source === 'linear') return nextFromBroker(input, tasks, deps, delivery);

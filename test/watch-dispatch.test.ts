@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import type { HostedLoop } from '../src/watch/hosted.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
@@ -464,6 +465,127 @@ describe('a seat nothing can wake while it is idle', () => {
     const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
     expect(calls.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
+  });
+  test('a recorded socket the pane’s processes no longer carry is no wake, though the file stands', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    // Both workers' settings declare accept and their records name the socket a session names by
+    // its pid, and the files stand: everything the record alone can prove. The pass reads each
+    // pane's processes as a send does, and that reading decides whether the address is the pane's.
+    const scene = live();
+    const pidOf: Record<string, number> = { 'worker-1': 731001, 'worker-2': 731002 };
+    for (const agent of scene.agents) {
+      const seat = agent.name ?? '';
+      mkdirSync(join(root, '.agents', 'hooks', 'crew'), { recursive: true });
+      writeFileSync(join(root, '.agents', 'hooks', 'crew', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
+      const socket = join(base, `${String(pidOf[seat])}.sock`);
+      writeFileSync(socket, '');
+      registerAgent(home, {
+        name: seat,
+        signing: { model: 'Test', version: '1', role: 'builder' },
+        lab: 'test-lab',
+        cli: 'claude-code',
+        launcher: null,
+        launch: 'claude',
+        reach: {
+          team: teamIdOf(root), seat, session: 'crew',
+          pane: seat === 'worker-1' ? 'fixture-pane-1' : 'fixture-pane-2',
+          address: socket,
+        },
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      });
+    }
+    const processesWith = (foreground: (seat: string) => number[]) => Object.fromEntries(
+      scene.agents.map((agent) => [
+        agent.pane,
+        { shell: 1, foreground: foreground(agent.name ?? '') },
+      ]),
+    );
+    // Each pane runs a process other than the one its record names: the old sockets still stand,
+    // but the walk through this read would not dial them, so the class is pull-on-turn and the
+    // pass spends no attempt.
+    const replaced = await dispatchIdleWork(input({
+      push, team: teamOf(PULL_CREW),
+      live: { ...scene, processes: processesWith((seat) => [pidOf[seat]! + 9]) },
+    }));
+    expect(calls).toEqual([]);
+    expect(replaced.pushed).toEqual([]);
+    expect(replaced.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+    // The panes' own processes carry the recorded sockets: the same records are push-class again.
+    const owned = await dispatchIdleWork(input({
+      push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN),
+      live: { ...scene, processes: processesWith((seat) => [pidOf[seat]!]) },
+    }));
+    expect(owned.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
+  });
+  test('an accepted socket whose box held the last frame is no wake either, until its declaration is re-confirmed', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    // Both workers' settings declare accept, their records name a socket, and the sockets stand:
+    // the push-class seats the pass spends an attempt on. The send dialed each once and the box
+    // held the frame, under a declaration nothing has re-confirmed since — so the walk would not
+    // dial again, and the class a dispatch reads must not call the seat wakeable.
+    const settings: string[] = [];
+    for (const seat of ['worker-1', 'worker-2']) {
+      mkdirSync(join(root, '.agents', 'hooks', 'crew'), { recursive: true });
+      const file = join(root, '.agents', 'hooks', 'crew', `${seat}.json`);
+      settings.push(file);
+      writeFileSync(file, '{"crossSessionInbound":"accept"}\n');
+      const socket = join(base, `${seat}.sock`);
+      writeFileSync(socket, '');
+      registerAgent(home, {
+        name: seat,
+        signing: { model: 'Test', version: '1', role: 'builder' },
+        lab: 'test-lab',
+        cli: 'claude-code',
+        launcher: null,
+        launch: 'claude',
+        reach: { team: teamIdOf(root), seat, session: 'crew', pane: seat === 'worker-1' ? 'fixture-pane-1' : 'fixture-pane-2', address: socket },
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      });
+      recordHeldSocket(
+        heldSocketPath(join(root, '.agents'), 'crew', seat),
+        declaredInboundOf({ dir: join(root, '.agents'), root, session: 'crew', seat, launch: 'claude' }),
+        new Date(NOW),
+      );
+    }
+    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    expect(calls).toEqual([]);
+    expect(result.pushed).toEqual([]);
+    expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+    // A restarted launch re-confirms the declaration — the settings rewritten, the sockets newer
+    // still — and the mark no longer stands: the same records are push-class again.
+    const rewrote = new Date(Math.max(Date.now(), NOW) + 2000);
+    for (const file of settings) {
+      writeFileSync(file, '{"crossSessionInbound":"accept"}\n');
+      utimesSync(file, rewrote, rewrote);
+    }
+    for (const seat of ['worker-1', 'worker-2']) {
+      const fresh = new Date(rewrote.getTime() + 1000);
+      utimesSync(join(base, `${seat}.sock`), fresh, fresh);
+    }
+    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
 });
 

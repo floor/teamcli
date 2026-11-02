@@ -759,6 +759,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // The registry home this daemon was started with: the one the route's team was read in,
         // and the one the handler reads the seat's agent record from.
         home,
+        // The verified pane's process identity, read the way this host reads a pane for a watch
+        // authority: the handler's class then knows whether the recorded socket is the pane's
+        // own. A pane the terminal host cannot answer for reads null, the conservative rule.
+        processes: paneProcesses(verdict.pane, route.session),
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
