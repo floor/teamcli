@@ -56,6 +56,12 @@
 // Two publishes are not sites: `process.exitCode = code` in the `.then` callback of `main`, and
 // `process.exitCode = reportFailure(...)` for the declaration in `src/cli.ts`.
 //
+// One form leaves with a code this command did not choose: `process.exit(<parameter>)`, where the
+// identifier names a parameter of the function that contains the call and every row marked on that
+// site has `"inherits": true`. The row's code is the fallback — the code the command leaves when
+// the process it waited on gave none (a signal ended it) — and the page says the site leaves with
+// the child's code. An inherited row on any other site, or a fixed row on this one, is an error.
+//
 // A `throw` with its own marker is a row. An unmarked `throw` a run function can reach outside
 // a try that catches it is covered by `team.command-threw`.
 //
@@ -75,6 +81,8 @@ export type ExitRow = {
   code: number;
   command: string;
   id: string;
+  /** The site leaves with a code a child handed it; `code` is the fallback when the child gave none. */
+  inherits?: true;
   meaning: string;
   trigger: string;
 };
@@ -86,6 +94,8 @@ export type ExitSite = {
   command: string;
   file: string;
   ids: string[];
+  /** The exit's argument is a parameter of the enclosing function: a code handed in, not chosen here. */
+  inherited?: true;
   line: number;
 };
 
@@ -251,6 +261,23 @@ function numericArgument(expression: ts.Expression): number | null {
   if (!ts.isNumericLiteral(expr)) return null;
   const code = Number(expr.text);
   return Number.isInteger(code) ? code : null;
+}
+
+/** Whether `call` exits with a parameter of the function that contains it. The nearest enclosing
+ *  function must name the identifier itself: a local that reads outer scope is not this form. */
+function inheritedExit(call: ts.CallExpression): boolean {
+  const arg = call.arguments[0];
+  if (!arg) return false;
+  const expr = unwrap(arg);
+  if (!ts.isIdentifier(expr)) return false;
+  let current: ts.Node | undefined = call.parent;
+  while (current) {
+    if (isFunc(current)) {
+      return current.parameters.some((param) => ts.isIdentifier(param.name) && param.name.text === expr.text);
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 const UNREADABLE = "exit expression the contract can't read: return a marked literal or a covered call";
@@ -916,6 +943,8 @@ export function analyze(files?: ReadonlyMap<string, string>): Analysis {
         const code = arg ? numericArgument(arg) : null;
         if (arg && code !== null) {
           sites.push({ command, file, line: lineOf(source, node), codes: [code], ids: attachedIds(source, node) });
+        } else if (arg && inheritedExit(node)) {
+          sites.push({ command, file, line: lineOf(source, node), codes: [], ids: attachedIds(source, node), inherited: true });
         } else {
           reject(file, source, node);
         }
@@ -1132,7 +1161,13 @@ export function render(rows: readonly ExitRow[]): string {
     '',
     '| Id | Command | Code | Meaning | Example |',
     '| --- | --- | --- | --- | --- |',
-    ...sorted.map((row) => `| \`${row.id}\` | \`${row.command}\` | ${row.code} | ${row.meaning.replaceAll('|', '\\|')} | \`${row.trigger.replaceAll('|', '\\|')}\` |`),
+    ...sorted.map((row) => `| \`${row.id}\` | \`${row.command}\` | ${row.code}${row.inherits ? '*' : ''} | ${row.meaning.replaceAll('|', '\\|')} | \`${row.trigger.replaceAll('|', '\\|')}\` |`),
+    ...(sorted.some((row) => row.inherits)
+      ? [
+          '',
+          '`*` the command leaves with the code the process it waited on exited with. The code listed is the fallback: what it leaves when that process gave none, because a signal ended it.',
+        ]
+      : []),
     '',
   ];
   return lines.join('\n');
@@ -1143,6 +1178,7 @@ function canonical(contract: Contract): string {
     code: row.code,
     command: row.command,
     id: row.id,
+    ...(row.inherits ? { inherits: true as const } : {}),
     meaning: row.meaning,
     trigger: row.trigger,
   }));
@@ -1219,6 +1255,7 @@ export function problems(input: CheckInput = {}): string[] {
     if (seen.has(row.id)) out.push(`contract/exit-codes.json: ${row.id} is listed twice`);
     seen.add(row.id);
     if (!Number.isInteger(row.code) || row.code < 0) out.push(`contract/exit-codes.json: ${row.id} has a bad code`);
+    if (row.inherits !== undefined && row.inherits !== true) out.push(`contract/exit-codes.json: ${row.id} has a bad inherits value`);
     if (!row.meaning || !row.trigger) out.push(`contract/exit-codes.json: ${row.id} needs a meaning and a trigger`);
   }
   if (render(contract.rows) !== page) out.push('docs/reference/exit-codes.md: differs from the contract');
@@ -1248,6 +1285,14 @@ export function problems(input: CheckInput = {}): string[] {
         continue;
       }
       if (row.command !== site.command) out.push(`${where}: ${id} is marked on ${site.command}, the row says ${row.command}`);
+      if (site.inherited) {
+        if (!row.inherits) out.push(`${where}: ${id} is on an inherited exit, the row names code ${row.code}`);
+        continue;
+      }
+      if (row.inherits) {
+        out.push(`${where}: ${id} is an inherited row, the site returns ${site.codes.join(' or ')}`);
+        continue;
+      }
       if (!site.codes.includes(row.code)) {
         out.push(`${where}: ${id} says code ${row.code}, the site returns ${site.codes.join(' or ')}`);
       }

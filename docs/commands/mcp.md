@@ -21,7 +21,8 @@ placed on the pane the team's state records for that seat, in the team's own ses
 same reading every command makes of its caller — and that the seat's current claim, when it has
 one, is carried by the server's `--epoch`. Both proofs run again on every tool call and every
 channel push, so a seat stopped, moved or relaunched while an old process lives is served nothing
-by it: no list, no body and no receipt, and no push marker.
+by it: no list, no body and no receipt, and no push marker. One window remains: a declaration
+that changes between that last look and the body or notification it guards.
 
 When the seat's own launch carries the development-channels flag naming this server
 (`--dangerously-load-development-channels server:team-inbox`), `serve` also declares the

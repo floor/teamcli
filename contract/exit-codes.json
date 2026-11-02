@@ -5513,6 +5513,14 @@
     {
       "code": 1,
       "command": "team",
+      "id": "team.mcp-serve-replacement-ended",
+      "inherits": true,
+      "meaning": "the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it)",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 1,
+      "command": "team",
       "id": "team.mcp-serve-restart-failed",
       "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
       "trigger": "team mcp serve"

@@ -6,7 +6,7 @@
 // one. Fixtures only: a synthetic team, homes and listener markers this test writes; no live
 // session or pane is touched, and no process is spawned (the reload's start is driven through its
 // hooks).
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -357,6 +357,125 @@ describe('the fresh server a reload starts', () => {
     });
     expect(exits).toEqual([1]);
     expect(said).toEqual(['team mcp serve: the fresh server could not start; the next launch reloads\n']);
+  });
+});
+
+describe('a shutdown aimed at the waiting parent', () => {
+  /** A signal host the scene can deliver through; no real process is signalled. */
+  function fakeSignals(): {
+    watch: { on(signal: NodeJS.Signals, listener: () => void): void; off(signal: NodeJS.Signals, listener: () => void): void };
+    send(signal: NodeJS.Signals): void;
+    held(): number;
+  } {
+    const listening = new Map<NodeJS.Signals, Set<() => void>>();
+    return {
+      watch: {
+        on: (signal, listener) => {
+          const set = listening.get(signal) ?? new Set();
+          set.add(listener);
+          listening.set(signal, set);
+        },
+        off: (signal, listener) => {
+          listening.get(signal)?.delete(listener);
+        },
+      },
+      send: (signal) => {
+        for (const listener of [...(listening.get(signal) ?? [])]) listener();
+      },
+      held: () => [...listening.values()].reduce((count, set) => count + set.size, 0),
+    };
+  }
+
+  function killedChild(kills: NodeJS.Signals[]): EventEmitter & { unref(): void; kill(signal?: NodeJS.Signals): boolean } {
+    const child = new EventEmitter() as EventEmitter & { unref(): void; kill(signal?: NodeJS.Signals): boolean };
+    child.unref = () => {};
+    child.kill = (signal?: NodeJS.Signals) => {
+      kills.push(signal ?? 'SIGTERM');
+      return true;
+    };
+    return child;
+  }
+
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    test(`a ${signal} reaches the fresh server and the parent leaves with its result`, () => {
+      const kills: NodeJS.Signals[] = [];
+      const exits: number[] = [];
+      const child = killedChild(kills);
+      const signals = fakeSignals();
+      restartSelf({
+        spawnChild: (() => child) as unknown as Spawn,
+        exit: (code) => exits.push(code),
+        say: () => {},
+        signals: signals.watch,
+      });
+      child.emit('spawn');
+      signals.send(signal);
+      // The shutdown is the fresh server's to finish: the parent has carried it, not left first.
+      expect(kills).toEqual([signal]);
+      expect(exits).toEqual([]);
+      child.emit('exit', 3, null);
+      expect(exits).toEqual([3]);
+      // No listener outlives the wait.
+      expect(signals.held()).toBe(0);
+    });
+  }
+
+  test('a signal is carried even before the child reports that it started', () => {
+    const kills: NodeJS.Signals[] = [];
+    const exits: number[] = [];
+    const child = killedChild(kills);
+    const signals = fakeSignals();
+    restartSelf({
+      spawnChild: (() => child) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+      signals: signals.watch,
+    });
+    signals.send('SIGTERM');
+    expect(kills).toEqual(['SIGTERM']);
+    expect(exits).toEqual([]);
+    child.emit('spawn');
+    child.emit('exit', 0, null);
+    expect(exits).toEqual([0]);
+  });
+
+  test('a fresh server that fails to start leaves no signal listener behind', () => {
+    const kills: NodeJS.Signals[] = [];
+    const exits: number[] = [];
+    const said: string[] = [];
+    const child = killedChild(kills);
+    const signals = fakeSignals();
+    restartSelf({
+      spawnChild: (() => child) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: (line) => said.push(line),
+      signals: signals.watch,
+    });
+    child.emit('error', new Error('spawn team ENOENT'));
+    expect(exits).toEqual([1]);
+    expect(said).toEqual(['team mcp serve: the fresh server could not start; the next launch reloads\n']);
+    expect(signals.held()).toBe(0);
+    signals.send('SIGTERM');
+    expect(kills).toEqual([]);
+  });
+
+  test('the default exit hook reports the code the fresh server ended with', () => {
+    const child = killedChild([]);
+    const signals = fakeSignals();
+    const codes: unknown[] = [];
+    const stop = spyOn(process, 'exit').mockImplementation((code) => {
+      codes.push(code);
+      return undefined as never;
+    });
+    try {
+      restartSelf({ spawnChild: (() => child) as unknown as Spawn, say: () => {}, signals: signals.watch });
+      child.emit('spawn');
+      signals.send('SIGINT');
+      child.emit('exit', 7, null);
+      expect(codes).toEqual([7]);
+    } finally {
+      stop.mockRestore();
+    }
   });
 });
 

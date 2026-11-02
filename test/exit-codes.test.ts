@@ -7266,7 +7266,7 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
   return analyzed;
 }
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-replacement-ended', 'team.mcp-serve-restart-failed',
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
@@ -7415,7 +7415,14 @@ function canon(rows: readonly ExitRow[]): string {
   const sorted = [...rows].sort((a, b) => a.command.localeCompare(b.command) || a.code - b.code || a.id.localeCompare(b.id));
   return `${JSON.stringify({
     format: 1,
-    rows: sorted.map((row) => ({ code: row.code, command: row.command, id: row.id, meaning: row.meaning, trigger: row.trigger })),
+    rows: sorted.map((row) => ({
+      code: row.code,
+      command: row.command,
+      id: row.id,
+      ...(row.inherits ? { inherits: true as const } : {}),
+      meaning: row.meaning,
+      trigger: row.trigger,
+    })),
   }, null, 2)}\n`;
 }
 
@@ -7513,6 +7520,61 @@ analyzerTest('process.exit with no argument fails the check', () => {
 analyzerTest('a module-level process.exit fails the check', () => {
   const files = withDoctor('', "if (process.env.GATE_PROBE === '1') process.exit(17);\n");
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
+});
+
+// The inherited exit: a command that leaves with the code a process it waited on exited with.
+// The argument must be a parameter of the enclosing function, and every row marked on that site
+// must say it inherits; the row's own code is only the fallback when the child gave none.
+const INHERITED_PROBE: ExitRow = {
+  code: 1,
+  command: 'doctor',
+  id: 'doctor.inherited-probe',
+  inherits: true,
+  meaning: 'the process doctor waited on ended and doctor left with its exit code',
+  trigger: 'team doctor',
+};
+
+function inheritedProbe(body: string, row?: ExitRow): ReturnType<typeof problems> {
+  const files = withDoctor("  if (argv[0] === '--gate-probe') inheritExit(7);\n", body);
+  const rows = row ? [...contract.rows, row] : contract.rows;
+  return problems({ files, contractText: canon(rows), page: render(rows) });
+}
+
+analyzerTest('an inherited exit whose row says so is a clean site', () => {
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found).toEqual([]);
+});
+
+analyzerTest('an inherited exit under a fixed row fails the check', () => {
+  const found = inheritedProbe('function inheritExit(code: number): void {\n  // exit: doctor.clear\n  process.exit(code);\n}\n');
+  expect(found.some((line) => line.includes('doctor.clear') && line.includes('inherited'))).toBe(true);
+});
+
+analyzerTest('an inherited row on a fixed exit fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  // exit: doctor.inherited-probe\n  process.exit(1);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('doctor.inherited-probe') && line.includes('inherited row'))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is not a parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  const code = 7;\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is an outer parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  const nested = (): void => {\n    // exit: doctor.inherited-probe\n    process.exit(code);\n  };\n  nested();\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
 });
 
 analyzerTest('a default call that is not the command table fails the check', () => {

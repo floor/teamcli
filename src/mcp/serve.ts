@@ -103,12 +103,24 @@ function installChanged(running: BuildIdentity, onDisk: InstallIdentity): boolea
   return running.version !== onDisk.version || (running.head ?? null) !== onDisk.head;
 }
 
+/** The signals a client's shutdown arrives as. The process waiting on a fresh server is the one
+ *  a session or service manager stops, and the fresh server is the one that must receive it. */
+const SHUTDOWN_SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+
+/** Where shutdown signals are listened for. The launch passes none; a scene supplies a fake so it
+ *  can deliver a signal without sending one to a real process. */
+export type SignalWatch = {
+  on: (signal: NodeJS.Signals, listener: () => void) => unknown;
+  off: (signal: NodeJS.Signals, listener: () => void) => unknown;
+};
+
 /** The spawn and exit `restartSelf` uses. The launch passes none; a scene supplies them so it can
  *  drive the child's events without spawning a process or ending the suite. */
 export type RestartHooks = {
   spawnChild?: typeof spawn;
   exit?: (code: number) => void;
   say?: (line: string) => void;
+  signals?: SignalWatch;
 };
 
 /** Starts a fresh server from the entry this process loaded and leaves this one. The new process
@@ -122,7 +134,9 @@ export type RestartHooks = {
  *  and it would be refused at start or on its next call. The parent link is the proof the kernel
  *  keeps — a handoff record could not stand in for it, because every seat on this home can read
  *  the key such a record would carry. This process reads nothing more and writes nothing; it
- *  leaves when the fresh server does, with a code that says how that server ended.
+ *  leaves when the fresh server does, with that server's own exit code (1 when a signal ended
+ *  it). A shutdown signal aimed at the client's session is carried to the fresh server, whose
+ *  exit is then what ends this process.
  *
  *  A start that fails reports `error` on the child after `spawn` has already returned, so the
  *  failure cannot be caught around the call: this process leaves only after the child's `error`
@@ -130,31 +144,61 @@ export type RestartHooks = {
  *  the fresh server had taken over. */
 export function restartSelf(hooks: RestartHooks = {}): void {
   const start = hooks.spawnChild ?? spawn;
+  const say = hooks.say ?? ((line: string) => process.stderr.write(line));
+  // A replacement that never started has no code of its own to leave with: the failure is this
+  // process's, and it leaves 1. A scene's `exit` sees the same call it always did.
+  const failed = (): void => {
+    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    if (hooks.exit) {
+      hooks.exit(1);
+      return;
+    }
+    // exit: team.mcp-serve-restart-failed
+    process.exit(1);
+  };
   const exit = hooks.exit ?? ((code: number): void => {
     if (code === 0) {
       // exit: team.mcp-serve-handed-over
       process.exit(0);
     }
-    // exit: team.mcp-serve-restart-failed
-    process.exit(1);
+    // exit: team.mcp-serve-replacement-ended
+    process.exit(code);
   });
-  const say = hooks.say ?? ((line: string) => process.stderr.write(line));
+  const signals = hooks.signals ?? process;
   const { command, entry } = selfRunner();
   let child: ChildProcess;
   try {
     child = start(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' });
   } catch {
-    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
-    exit(1);
+    failed();
     return;
   }
+  // The client's shutdown is aimed at the server that serves it. This process carries the signal
+  // to the fresh server instead of ending beside it, and then leaves with that server's result.
+  const listening = SHUTDOWN_SIGNALS.map((signal) => {
+    const forward = (): void => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The fresh server is already gone; its exit or error is what ends this process.
+      }
+    };
+    signals.on(signal, forward);
+    return [signal, forward] as const;
+  });
+  const forget = (): void => {
+    for (const [signal, forward] of listening) signals.off(signal, forward);
+  };
   child.once('spawn', () => {
     // The fresh server's proof runs through this process, so this one must not leave first.
-    child.once('exit', (code) => exit(code ?? 1));
+    child.once('exit', (code) => {
+      forget();
+      exit(code ?? 1);
+    });
   });
   child.once('error', () => {
-    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
-    exit(1);
+    forget();
+    failed();
   });
 }
 
@@ -342,6 +386,12 @@ function watchChannel(
       seen.delete(id);
       return;
     }
+    // The declaration is looked at again after the record verified and before the reservation:
+    // a seat stopped, dropped or moved while its record was read pushes nothing and writes no
+    // marker. The last look is before the notification itself; if it refuses there, the marker
+    // stands (it is a reservation, not an exposure) and the body does not leave.
+    const beforeMarker = serving.alive?.();
+    if (beforeMarker !== undefined && beforeMarker !== null) return;
     // The marker is the reservation: it is written exclusively before the notification, so a
     // sender's held marker that lands after the check above wins the name and this server
     // never pushes the id; a marker this server cannot write means no push at all.
@@ -358,6 +408,10 @@ function watchChannel(
       status: CHANNEL_PUSH_STATUS,
     });
     if (!reserved) return;
+    // The body leaves here: the declaration is asked one last time, after the reservation, so a
+    // seat that lost its place during the marker write receives no notification.
+    const beforeWrite = serving.alive?.();
+    if (beforeWrite !== undefined && beforeWrite !== null) return;
     write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
   };
   /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
@@ -434,6 +488,10 @@ function ackTool(args: unknown, serving: Serving): unknown {
   }
   if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
+  // The record is verified now; the declaration is looked at again immediately before the receipt
+  // is written, so a seat stopped while its record was being read acknowledges nothing.
+  const staleNow = serving.alive?.();
+  if (staleNow !== undefined && staleNow !== null) return toolError(staleNow);
   const outcome = publishRecordRead({
     dropDir: serving.dropDir,
     id,
@@ -490,6 +548,10 @@ function callTool(params: unknown, serving: Serving): unknown {
       id,
       serving.home,
       serving.brief,
+      // Read again by the reader itself, after the record is verified and before its receipt is
+      // written, and once more before the body is handed back: the declaration that was true
+      // when the call started can change while a signed record is read.
+      () => serving.alive?.() ?? null,
     );
     if (!read.ok) {
       // A drop an earlier build wrote is refused like any file that is not a record, but it is not
