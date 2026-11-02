@@ -58,6 +58,7 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 | [`team seats`](https://github.com/floor/teamcli/blob/main/docs/commands/seats.md) | each seat's state, and where it was read |
 | [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) | one message to one seat, with a delivery report |
 | [`team drops`](https://github.com/floor/teamcli/blob/main/docs/commands/drops.md) | the messages waiting for this seat |
+| [`team waits`](https://github.com/floor/teamcli/blob/main/docs/commands/waits.md) | who waits on whom, and since when |
 | [`team watch`](https://github.com/floor/teamcli/blob/main/docs/commands/watch.md) | reports idle seats and nudges the operator |
 | [`team register`](https://github.com/floor/teamcli/blob/main/docs/commands/register.md) | writes the record for a seat that is already running |
 | [`team next`](https://github.com/floor/teamcli/blob/main/docs/commands/next.md) | claims the next task; `team plan` shows the queue |

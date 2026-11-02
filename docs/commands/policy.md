@@ -18,7 +18,8 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
-`swap-wait-seconds`, `client-bundles`, `client-grant-max-duration`).
+`swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `client-bundles`,
+`client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -35,6 +36,13 @@ shorten (`none` is the loosest); a chain that cannot be verified refuses a new g
     team policy unset entity client-grant-max-duration --entity floor
 
 See [How long a client grant lasts](../concepts/client-grant-duration.md).
+
+`daemon.fallback-backlog-above` and `daemon.fallback-backlog-limit` are the machine daemon's
+fallback-store retirement knobs: above the first many eligible finished episodes, one retirement
+pass takes up to the second instead of the steady 256, so a store that was never retired before
+empties over a few passes. The defaults are 256 and 500. A higher threshold and a smaller bulk
+limit are the tighter words. The daemon reads both for each hosted root; a chain that cannot be
+read keeps the release defaults and says which word it could not read.
 
 The seven `event-*` policies are the owner's event thresholds: how long an unanswered thread
 stays open (72 hours by default), how many records a thread may hold (50), how many days the
@@ -58,6 +66,14 @@ rule — and the watch and `team check` carry it out in every team of the entity
 `swap-wait-seconds` is how long a queued model swap may wait for its boundary: 1800 seconds
 (30 minutes) when nothing declares it, a shorter word being the tighter one, and a broken seat
 swaps at once.
+
+The two `watch-read-*` policies bound one pass of the watch's reads. `watch-read-budget-ms` is
+how long one pass may spend reading panes and the machine before the panes it did not reach are
+left unread and read on the next pass; `watch-read-timeout-ms` is the longest one read may take
+before its child process is killed. Both default to 2000 milliseconds, take a whole number of
+milliseconds from 100 to 30000, and take the entity, project and team levels; a shorter value is
+the tighter one. A chain that cannot be read leaves both defaults in force, and the watch holds
+its automated work on the unreadable pace as it always does.
 
 `brief-transport` says how a general seat brief reaches its seat. `file`, the default, writes the
 claim and the signed drop and nothing else; `message` sends the whole brief as a real send body

@@ -1,4 +1,10 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
+import { resolveForgeShim } from './settings/forge-shim.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -38,6 +44,16 @@ function run(args: string[], session?: string): unknown {
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
+/** What one async read takes: the child's own kill after `timeoutMs`, and the loop's stop. */
+export type HerdrReadOptions = ChildOptions;
+
+async function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+  if (customRun) return customRun(args, session);
+  const full = session ? ['--session', session, ...args] : args;
+  const out = await execText('herdr', full, options);
+  return (JSON.parse(out) as { result?: unknown }).result;
+}
+
 // The agent session herdr reported, as the id alone. Herdr 0.7.1 sends an object —
 // `{agent, kind, source, value}` with `kind: 'id'` — where older builds sent the id string.
 // Only a non-empty string, or that object's non-empty string `value` under `kind: 'id'`, is a
@@ -52,24 +68,37 @@ function agentSessionOf(value: unknown): string | undefined {
   return typeof reported.value === 'string' && reported.value !== '' ? reported.value : undefined;
 }
 
+// The agents a `agent list` result names, in its order. One parser for the sync and async reads.
+function agentsOf(result: unknown): HerdrAgent[] {
+  return (((result as { agents?: Record<string, unknown>[] })?.agents) ?? []).map((agent) => {
+    const session = agentSessionOf(agent.agent_session);
+    const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
+    return {
+      name: typeof agent.name === 'string' && agent.name ? agent.name : null,
+      agent: typeof agent.agent === 'string' ? agent.agent : null,
+      pane: String(agent.pane_id),
+      workspace: String(agent.workspace_id),
+      status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
+      cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
+      ...(session ? { session } : {}),
+      ...(displayAgent ? { displayAgent } : {}),
+    };
+  });
+}
+
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
   try {
-    const result = run(['agent', 'list'], session) as { agents?: Record<string, unknown>[] };
-    return (result.agents ?? []).map((agent) => {
-      const session = agentSessionOf(agent.agent_session);
-      const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
-      return {
-        name: typeof agent.name === 'string' && agent.name ? agent.name : null,
-        agent: typeof agent.agent === 'string' ? agent.agent : null,
-        pane: String(agent.pane_id),
-        workspace: String(agent.workspace_id),
-        status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
-        cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
-        ...(session ? { session } : {}),
-        ...(displayAgent ? { displayAgent } : {}),
-      };
-    });
+    return agentsOf(run(['agent', 'list'], session));
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function agentListAsync(session: string | undefined, options: HerdrReadOptions = {}): Promise<HerdrAgent[] | null> {
+  try {
+    return agentsOf(await runAsync(['agent', 'list'], session, options));
   } catch {
     return null;
   }
@@ -172,15 +201,48 @@ export function paneProcesses(pane: string, session?: string): PaneProcesses | n
   }
 }
 
+/**
+ * One `pane process-info` result, untouched: the page both the pane's process identity and its
+ * foreground names are read from, so a pass asks the terminal host once for the pane.
+ */
+export function paneProcessInfo(pane: string, session?: string): unknown | null {
+  try {
+    return run(['pane', 'process-info', '--pane', pane], session);
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function paneProcessInfoAsync(pane: string, session: string | undefined, options: HerdrReadOptions = {}): Promise<unknown | null> {
+  try {
+    return await runAsync(['pane', 'process-info', '--pane', pane], session, options);
+  } catch {
+    return null;
+  }
+}
+
 export type HerdrWorkspace = { id: string; label: string };
+
+function workspacesOf(result: unknown): HerdrWorkspace[] {
+  return (((result as { workspaces?: Record<string, unknown>[] })?.workspaces) ?? []).map((workspace) => ({
+    id: String(workspace.workspace_id),
+    label: typeof workspace.label === 'string' ? workspace.label : '',
+  }));
+}
 
 export function workspaceList(session?: string): HerdrWorkspace[] | null {
   try {
-    const result = run(['workspace', 'list'], session) as { workspaces?: Record<string, unknown>[] };
-    return (result.workspaces ?? []).map((workspace) => ({
-      id: String(workspace.workspace_id),
-      label: typeof workspace.label === 'string' ? workspace.label : '',
-    }));
+    return workspacesOf(run(['workspace', 'list'], session));
+  } catch {
+    return null;
+  }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function workspaceListAsync(session: string | undefined, options: HerdrReadOptions = {}): Promise<HerdrWorkspace[] | null> {
+  try {
+    return workspacesOf(await runAsync(['workspace', 'list'], session, options));
   } catch {
     return null;
   }
@@ -230,6 +292,28 @@ export type HerdrSession = {
 // `{"id":"cli:agent:list","result":{"agents":[],"type":"agent_list"}}` before any seat is named;
 // after `agent rename` the one agent carried `name`, `agent_status` (`unknown` for that new seat),
 // `cwd`, `pane_id` and `workspace_id`.
+// A `session list --json` body as sessions, or null when the document is not that list. One
+// parser for the sync and async reads.
+function sessionsOf(out: string): HerdrSession[] | null {
+  const body = JSON.parse(out) as { sessions?: unknown };
+  // A missing list is no sessions. Anything else that is not an array is not this document.
+  if (body.sessions === undefined || body.sessions === null) return [];
+  if (!Array.isArray(body.sessions)) return null;
+  const listed: HerdrSession[] = [];
+  for (const entry of body.sessions) {
+    if (!entry || typeof entry !== 'object') continue;
+    const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown; socket_path?: unknown };
+    if (typeof session.name !== 'string' || session.name === '') continue;
+    listed.push({
+      name: session.name,
+      running: session.running === true,
+      sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
+      socketPath: typeof session.socket_path === 'string' ? session.socket_path : null,
+    });
+  }
+  return listed;
+}
+
 export function sessionList(): HerdrSession[] | null {
   try {
     const out = execFileSync('herdr', ['session', 'list', '--json'], {
@@ -237,26 +321,27 @@ export function sessionList(): HerdrSession[] | null {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     });
-    const body = JSON.parse(out) as { sessions?: unknown };
-    // A missing list is no sessions. Anything else that is not an array is not this document.
-    if (body.sessions === undefined || body.sessions === null) return [];
-    if (!Array.isArray(body.sessions)) return null;
-    const listed: HerdrSession[] = [];
-    for (const entry of body.sessions) {
-      if (!entry || typeof entry !== 'object') continue;
-      const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown; socket_path?: unknown };
-      if (typeof session.name !== 'string' || session.name === '') continue;
-      listed.push({
-        name: session.name,
-        running: session.running === true,
-        sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
-        socketPath: typeof session.socket_path === 'string' ? session.socket_path : null,
-      });
-    }
-    return listed;
+    return sessionsOf(out);
   } catch {
     return null;
   }
+}
+
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function sessionListAsync(options: HerdrReadOptions = {}): Promise<HerdrSession[] | null> {
+  try {
+    return sessionsOf(await execText('herdr', ['session', 'list', '--json'], options));
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the named session runs, awaited. Null when herdr can't be reached. */
+export async function sessionRunningAsync(name: string, options: HerdrReadOptions = {}): Promise<boolean | null> {
+  const sessions = await sessionListAsync(options);
+  if (sessions === null) return null;
+  const found = sessions.find((session) => session.name === name);
+  return found === undefined ? false : found.running;
 }
 
 // Whether a session exists and runs. A stopped session stays listed with running false; a deleted
@@ -311,16 +396,196 @@ function resultOf(args: string[], session?: string): unknown | null {
 
 const SERVER_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'LANG'] as const;
 
-// Starts a session's server in a clean environment. Refuses unless the session is absent: a
-// second server for a session that already runs has been seen to drop it.
+/** The forge CLI a credential helper calls by name. The session's shim has to carry that name:
+ *  it is the CLI's, not ours. */
+const FORGE_CLI = 'gh';
+
+/** The shim's one refusal line, on stderr. It names no value and reads none: the check below
+ *  tests whether the variable holds a value, never what it holds. */
+export const NO_SEAT_TOKEN = 'team: no seat token in this environment; the account login stored on this machine is not used from a seat';
+
+/** `<home>/.config/team/bin`, the session server's own programs, ahead of every other folder. */
+export function sessionBinDir(home: string): string {
+  return join(home, '.config', 'team', 'bin');
+}
+
+/** The first executable of that name on a PATH value, skipping `skip` — the shim's own folder,
+ *  so a server started from inside another session never chooses the shim as the real CLI. A
+ *  folder of that name is not it: the helper runs a program. */
+function forgeOnPath(pathValue: string | undefined, skip: string): string | null {
+  if (pathValue === undefined) return null;
+  for (const dir of pathValue.split(':')) {
+    // Only an absolute folder names a program this process can point at by path: an empty entry
+    // is the working folder, and a relative one resolves against a folder the shim never bound.
+    if (!isAbsolute(dir) || dir === skip) continue;
+    const candidate = join(dir, FORGE_CLI);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // not here; the next folder
+    }
+  }
+  return null;
+}
+
+function shimQuote(path: string): string {
+  return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+/** The shim's text. It runs the real CLI only when the seat-token variable holds a non-empty
+ *  value, and it never
+ *  expands, prints or forwards the value: the real CLI execs with the environment as it is. Without
+ *  a token the helper reaches no stored login, so a seat cannot inherit the shared account's
+ *  broader access by pushing without one. */
+export function forgeShimText(real: string): string {
+  return [
+    '#!/bin/sh',
+    "# Written by team for this session's server.",
+    '# The forge CLI runs only with a seat token in the environment; without one this refuses,',
+    '# so no credential helper and no command reaches the account login stored on this machine.',
+    '# The value is never read, printed or forwarded: the real CLI execs with the environment as',
+    '# it is.',
+    'case ${GH_TOKEN:+x} in',
+    `  '') echo "${NO_SEAT_TOKEN}" >&2; exit 1 ;;`,
+    'esac',
+    `exec ${shimQuote(real)} "$@"`,
+    '',
+  ].join('\n');
+}
+
+/** Writes the shim when it is absent or names another real CLI: a fresh file created executable
+ *  and renamed into place, so no reader ever sees half of it. Only a real folder and a real file
+ *  are the shim's own: a linked folder would put the program outside it, and a linked file — even
+ *  one holding matching text — is not the file this folder holds. The temporary name is fresh and
+ *  created exclusively, so a pre-created link cannot be followed. False when it could not be
+ *  written; the caller then closes the fallback rather than leaving the environment as it was. */
+export function writeForgeShim(dir: string, real: string): boolean {
+  const file = join(dir, FORGE_CLI);
+  const text = forgeShimText(real);
+  try {
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+  } catch (error) {
+    // Only a folder that is not there yet is made below; any other answer is not ours to write to.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  try {
+    if (lstatSync(file).isFile() && readFileSync(file, 'utf8') === text) return true;
+  } catch {
+    // absent or unreadable: write it
+  }
+  let temp: string | null = null;
+  let handle: number | null = null;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+    temp = join(dir, `${FORGE_CLI}.${randomUUID()}.tmp`);
+    handle = openSync(temp, 'wx', 0o755);
+    writeFileSync(handle, text);
+    fchmodSync(handle, 0o755);
+    closeSync(handle);
+    handle = null;
+    renameSync(temp, file);
+    temp = null;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        // the descriptor is already gone
+      }
+    }
+    if (temp !== null) {
+      try {
+        unlinkSync(temp);
+      } catch {
+        // nothing was created, or the rename took it
+      }
+    }
+  }
+}
+
+/** Whether the folder holds an executable forge CLI. A folder that cannot be inspected proves
+ *  nothing, and is not kept. */
+function holdsForge(dir: string): boolean {
+  try {
+    if (!statSync(join(dir, FORGE_CLI)).isFile()) return false;
+    accessSync(join(dir, FORGE_CLI), constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The absolute system folders a shell finds its own tools in. A server that cannot keep the
+ *  shim keeps only the ones proven free of the forge CLI. */
+const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'] as const;
+
+/** The PATH a server may keep when the shim cannot stand first: absolute folders only — never
+ *  the working folder (an empty entry) and never a relative one, which a shell resolves against
+ *  a folder the shim does not control — and no folder that holds an executable forge CLI. When
+ *  no folder is kept, the system folders are tried instead. `null` is the refusal: an empty
+ *  PATH is not a denial, because a shell reads it as the working folder, so the caller must not
+ *  start the server at all. `holds` is injected so a test can prove the refusal without making
+ *  every system folder hold a CLI. */
+export function failClosedPath(pathValue: string, holds: (dir: string) => boolean = holdsForge): string | null {
+  const kept = pathValue.split(':').filter((dir) => isAbsolute(dir) && !holds(dir));
+  if (kept.length > 0) return kept.join(':');
+  const safe = SYSTEM_PATH.filter((dir) => !holds(dir));
+  return safe.length > 0 ? safe.join(':') : null;
+}
+
+/** The session server's environment: the clean allowlist, the SSH agent when the owner has one,
+ *  and the session's own folder first on PATH. When that PATH also holds the real forge CLI and
+ *  the machine's `forge-shim` setting is on (its default), the shim is written into the folder
+ *  first on it; a PATH without the CLI is left unchanged, because the helper's own call fails
+ *  there anyway. The setting is a mechanism, not a wall: `off` leaves the environment as it was. */
+export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const name of SERVER_ENV) {
+    const value = env[name];
+    if (value !== undefined) clean[name] = value;
+  }
+  if (env.SSH_AUTH_SOCK) clean.SSH_AUTH_SOCK = env.SSH_AUTH_SOCK;
+  if (!resolveForgeShim({ home, env }).on) return clean;
+  const dir = sessionBinDir(home);
+  const real = forgeOnPath(env.PATH, dir);
+  if (real === null) return clean;
+  if (writeForgeShim(dir, real)) {
+    clean.PATH = clean.PATH === undefined ? dir : `${dir}:${clean.PATH}`;
+    return clean;
+  }
+  // Fail closed: the shim cannot stand first, so no folder that holds the real CLI stays on the
+  // server's PATH — and never an empty or relative one, which a shell reads as the working
+  // folder. When no folder is proven free of the CLI, no environment is safe to start in, and
+  // the throw is the refusal `startServer` turns into a plain "it did not start".
+  const safe = failClosedPath(clean.PATH ?? '');
+  if (safe === null) {
+    throw new Error('the forge shim could not be installed and no PATH folder is free of the forge CLI; the session server was not started');
+  }
+  clean.PATH = safe;
+  return clean;
+}
+
+// Starts a session's server in a clean environment, with the session's own folder first on PATH
+// so the forge shim stands ahead of the machine's CLI (see `seatServerEnv`). Refuses unless the
+// session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
   if (sessionState(session) !== 'absent') return false;
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of SERVER_ENV) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    // No safe environment can be built: a server started with an empty or forge-bearing PATH
+    // would hand the seat the fallback the shim exists to close. The caller says it did not start.
+    return false;
   }
-  if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
   try {
     const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
@@ -461,8 +726,12 @@ export const PANE_WINDOW = 14;
 // styled call and is read by the exact call main makes today — no flag at all — where
 // unstyled text can never read as dim and the placeholder list alone decides. A herdr that
 // hangs is not asked twice: one timeout reads null.
+function paneReadArgs(pane: string, lines: number, session?: string): string[] {
+  return [...(session ? ['--session', session] : []), 'pane', 'read', pane, '--source', 'visible', '--lines', String(lines)];
+}
+
 export function paneRead(pane: string, lines: number, session?: string): string | null {
-  const full = [...(session ? ['--session', session] : []), 'pane', 'read', pane, '--source', 'visible', '--lines', String(lines)];
+  const full = paneReadArgs(pane, lines, session);
   let styled: string;
   try {
     styled = paneExec([...full, '--format', 'ansi']);
@@ -478,6 +747,34 @@ export function paneRead(pane: string, lines: number, session?: string): string 
     }
   }
   return styled.replace(/\r\n/g, '\n').replace(/\r$/, '');
+}
+
+/**
+ * The same read, awaited. The fallback to an herdr without `--format` is made only on a refusal:
+ * a child the timeout killed or the loop's stop aborted is not asked twice, the same rule the
+ * synchronous read makes for its own timeout.
+ */
+export async function paneReadAsync(
+  pane: string,
+  lines: number,
+  session: string | undefined,
+  options: HerdrReadOptions = {},
+): Promise<string | null> {
+  const full = paneReadArgs(pane, lines, session);
+  try {
+    return foldPaneLines(await execText('herdr', [...full, '--format', 'ansi'], options));
+  } catch (error) {
+    if (wasKilled(error) || wasAborted(error)) return null;
+    try {
+      return foldPaneLines(await execText('herdr', full, options));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function foldPaneLines(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r$/, '');
 }
 
 // The words to type for a herdr command, for a repair line.

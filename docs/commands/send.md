@@ -14,15 +14,16 @@ its screens — a profile with a compose module — still gets the record, but i
 refused before anything is typed, so the seat reads the message through its inbox or its drop
 folder like any other. The receiving seat's
 delivery order decides the channel: with no declaration it is `mcp-inbox`, then `typed`, then
-`drop`; `socket`, `channel`, `native` and `headless-resume` join it only where a default below or
-a declared word adds one. Each leg in
+`drop`; `socket`, `channel`, `native`, `headless-resume` and `session` join it only where a
+default below or a declared word adds one. Each leg in
 turn either takes the send, which ends the walk, or
 definitely cannot take it, which hands the send to the next leg and is recorded as a failure —
 the history line names the channel the send went by and the legs that failed before it. The walk
 filters typing legs out before it runs anything, so a `typed` word contributes no leg wherever it
 stands in the order: where a declared order put it for a Claude seat, the seat's own event
-adapters stand in its place — the live channel, then the socket its launch accepts — and for a
-Codex seat its runtime queue stands there while its `codex-daemon` policy is on. The drop leg
+adapters stand in its place — the live channel, then the socket its launch accepts — for a Codex
+seat its runtime queue stands there while its `codex-daemon` policy is on, and for a CLI that
+creates its own session its session call stands there. The drop leg
 ends the walk: a seat no event adapter took keeps the message in its bus inbox, and the command
 says `queued, no event adapter` on stderr.
 
@@ -105,6 +106,45 @@ after the redelivery settles the marker as read and types nothing more. A wait t
 inside its two seconds wrote a record nothing pushed: the marker is cleared and the walk moves on
 with `failed: channel: no push receipt within <n> ms`, because this leg took nothing and no later
 pass may redeliver a send whose own run is still walking the order.
+
+The `session` leg is another implied default outside a declared word, and it belongs to a
+receiving CLI whose profile declares its own session call: where a word declares `typed`, the
+session call stands at that word instead, and with no level of its chain declaring
+an order, the walk runs the CLI's own session-creating call first, in the seat's own folder, with
+the whole body — the rules, the sender header and the message — as ONE argument after the
+profile's own words, never through a shell string. When the folder's `origin` names a repository,
+`--repo <owner>/<repo>` follows the profile's words and the body comes last. Nothing is typed
+and no pane is read. The send is delivered only when the CLI printed its own session line with an
+id: the console says `<seat>: delivered (session <id>)` (exit 0, `via: session`), and the
+history line records the id as `session`. Every other ending — the CLI could not run, exited
+non-zero, or exited 0 without its session line — records `session: <reason>` among the failed
+legs and hands the send to the leg behind it. A seat whose CLI declares no session call records
+`session: <cli> has no session-creating command in this build` and moves on. The send never pulls
+the remote session's result: that is the operator's own call, `team worktree pull <task>
+--remote-session <id>`, which runs the CLI's own pull into the worktree it belongs in
+([team worktree](worktree.md)).
+
+A public-only seat — its CLI's profile declares `public_only: true`, as a hosted CLI's does, or
+the team file marks the seat — never receives the team's rules: no rules text is prepended to its
+body. Its body is read against the machine's private lists, the names and phrases files the
+pre-push gate reads, before the session call. A body that matches a rule is a leg that did not
+take the send: the failed leg reads `session: the body matches a private rule (names entry 1); no
+session was created` (source, class and ordinal — never the text), the walk falls through to the
+leg behind it, and the message still lands in the seat's own drop folder. A list that is present
+and cannot be read refuses the body the same way; a machine with neither list has nothing
+configured to protect, and the send proceeds.
+
+The repository travels with the body: the CLI clones `owner/repo` from the forge, so a private
+one would hand the service the code the brief is about. Before the session call, the repository
+the seat's folder names as its `origin` is proven public by one credential-free read of the
+forge's own record — no header of any kind, no redirect followed, and only a 200 that marks the
+repository public counts (`src/send/repo-visibility.ts`). A repository that is not public, a read
+that cannot be made, and a folder that names no repository all refuse the leg the same way a
+private-list hit does — `session: the target repository owner/repo is not public; no session was
+created`, `session: the target repository owner/repo could not be read for visibility; no session
+was created`, or `session: the seat's folder names no repository, so the session's target cannot
+be proved public; no session was created` — and the walk falls through to the leg behind it, so
+the message still lands locally. A read the walk cannot make must not pass a message.
 
 A listener that runs another install is no route for the channel or the `mcp-inbox` leg: the
 marker names the version, the entry build and the packed commit the server started from, and a

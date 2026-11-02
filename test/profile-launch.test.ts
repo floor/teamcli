@@ -129,7 +129,9 @@ const differences: [string, string, (launch: string) => { model: string; version
 
 const commands: [string, string, string, string][] = [
   ['claude-code', 'claude --model claude-opus-5-5 ', "Don't stop.\n- two", "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt 'Don'\\''t stop.\n- two'"],
-  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'],
+  // Codex seats pin one feature set on every launch: the shared background server refuses a
+  // front end whose settings differ.
+  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false'],
   ['cursor', 'cursor-agent', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled'],
   ['cursor', 'cursor-agent --model grok-4.7-high', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled'],
   ['antigravity', 'agy --model gemini-3.8-flash-high', 'Rules.', 'AGENT_UNATTENDED=1 agy --model gemini-3.8-flash-high --dangerously-skip-permissions'],
@@ -499,7 +501,7 @@ describe('the resume line a launch appends', () => {
     const profile = profileFor('grok');
     if (!profile) throw new Error('grok has no profile');
     expect(launchCommand(profile, `grok -r ${id}`, 'Rules.'))
-      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)' --rules Rules.`);
   });
 
   test('a Grok line that already names a session keeps its own choice', () => {

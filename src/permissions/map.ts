@@ -571,6 +571,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-change',
       why: 'the owner, the orchestrator\'s seat or the operator\'s seat creates a worktree; --session and --file are the owner\'s',
     },
+    'worktree:pull': {
+      kind: 'team-change',
+      why: 'the owner, the orchestrator\'s seat or the operator\'s seat pulls a remote session\'s result into a worktree; --session and --file are the owner\'s',
+    },
     'worktree:remove': {
       kind: 'team-change',
       why: 'the owner, the orchestrator\'s seat or the operator\'s seat removes a worktree; --session and --file are the owner\'s',

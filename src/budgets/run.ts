@@ -4,6 +4,7 @@
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { budgetsInForceOf } from '../approve/approval.ts';
+import { execText, type ChildOptions } from '../child.ts';
 import type { BudgetAccount, TeamFile } from '../file/types.ts';
 import type { WindowName } from '../profiles/quota.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
@@ -113,7 +114,60 @@ export function readCheck(account: BudgetAccount, path: string, now: number, tim
   return text === null ? null : parseOutput(account, text, now);
 }
 
+/**
+ * The same command, awaited: the run's empty environment (PATH and HOME, § 5), its own kill at
+ * `timeoutMs` and the loop's stop, so a check never blocks the pass's event loop. Null on any
+ * failure, exactly as the synchronous run reads.
+ */
+export async function runCommandAsync(path: string, options: ChildOptions = {}): Promise<string | null> {
+  try {
+    return await execText(path, [], {
+      timeoutMs: options.timeoutMs ?? 10_000,
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** One account's reading, awaited. Null when the command fails, times out, or breaks its contract. */
+export async function readCheckAsync(account: BudgetAccount, path: string, now: number, options: ChildOptions = {}): Promise<CheckReading | null> {
+  const text = await runCommandAsync(path, options);
+  return text === null ? null : parseOutput(account, text, now);
+}
+
 export type CheckRunner = (account: BudgetAccount, path: string, now: number) => CheckReading | null;
+
+/** One account of a pass, as the shared decision list holds it: run it, or it is not run. */
+type CheckStep =
+  | { kind: 'unapproved'; account: string }
+  | { kind: 'run'; account: string; entry: BudgetAccount; path: string };
+
+/**
+ * The one decision list both the synchronous and the awaited checks read: which accounts run,
+ * with which approved path, and which are not run at all (§ 5: an account whose check is
+ * changed, missing or unapproved is never run). One list, so the two paths cannot disagree
+ * about an account.
+ */
+function checkSteps(budgets: TeamFile['budgets'], approved: Record<string, ApprovedCheck> | undefined): CheckStep[] {
+  const may = new Map(checkReadings(budgets, approved).map((one) => [one.account, one.state === 'approved']));
+  const steps: CheckStep[] = [];
+  for (const { account } of checkCommands(budgets)) {
+    const entry = budgets.accounts[account];
+    const known = approved?.[account];
+    if (entry === undefined || known === undefined || may.get(account) !== true) {
+      steps.push({ kind: 'unapproved', account });
+      continue;
+    }
+    steps.push({ kind: 'run', account, entry, path: known.path });
+  }
+  return steps;
+}
+
+function outcomeOf(account: string, reading: CheckReading | null): CheckOutcome {
+  return reading === null ? { account, state: 'unreadable' } : { account, state: 'read', reading };
+}
 
 /**
  * What each checked account reads this pass: its reading, or that it has none
@@ -129,17 +183,34 @@ export function checkOutcomes(
   run: CheckRunner,
   now: number,
 ): CheckOutcome[] {
-  const may = new Map(checkReadings(budgets, approved).map((one) => [one.account, one.state === 'approved']));
+  return checkSteps(budgets, approved).map((step) => step.kind === 'unapproved'
+    ? { account: step.account, state: 'unapproved' }
+    : outcomeOf(step.account, run(step.entry, step.path, now)));
+}
+
+/** The awaited runner: the same account, path and time, with the child's deadline and stop. */
+export type AsyncCheckRunner = (account: BudgetAccount, path: string, now: number, options: ChildOptions) => Promise<CheckReading | null>;
+
+/**
+ * The same outcomes, awaited, in the same order and from the same decision list. A stop that
+ * lands between two commands ends the list there: the accounts after it are not run and report
+ * nothing this pass, so a stopped loop never claims a check failed.
+ */
+export async function checkOutcomesAsync(
+  budgets: TeamFile['budgets'],
+  approved: Record<string, ApprovedCheck> | undefined,
+  run: AsyncCheckRunner,
+  now: number,
+  options: ChildOptions = {},
+): Promise<CheckOutcome[]> {
   const outcomes: CheckOutcome[] = [];
-  for (const { account } of checkCommands(budgets)) {
-    const entry = budgets.accounts[account];
-    const known = approved?.[account];
-    if (entry === undefined || known === undefined || may.get(account) !== true) {
-      outcomes.push({ account, state: 'unapproved' });
+  for (const step of checkSteps(budgets, approved)) {
+    if (step.kind === 'unapproved') {
+      outcomes.push({ account: step.account, state: 'unapproved' });
       continue;
     }
-    const reading = run(entry, known.path, now);
-    outcomes.push(reading === null ? { account, state: 'unreadable' } : { account, state: 'read', reading });
+    if (options.signal?.aborted === true) break;
+    outcomes.push(outcomeOf(step.account, await run(step.entry, step.path, now, options)));
   }
   return outcomes;
 }
@@ -155,6 +226,18 @@ export function checkOutcomes(
 export function runChecksOf(standing: Standing, team: TeamFile, now: number, run: CheckRunner = readCheck): CheckOutcome[] {
   const approved = standing.kind === 'verified' ? standing.record.approval.checks : undefined;
   return checkOutcomes(budgetsInForceOf(standing, team), approved, run, now);
+}
+
+/** `runChecksOf`, awaited: the same standing, the same decided accounts, bounded children. */
+export async function runChecksOfAsync(
+  standing: Standing,
+  team: TeamFile,
+  now: number,
+  options: ChildOptions = {},
+  run: AsyncCheckRunner = readCheckAsync,
+): Promise<CheckOutcome[]> {
+  const approved = standing.kind === 'verified' ? standing.record.approval.checks : undefined;
+  return checkOutcomesAsync(budgetsInForceOf(standing, team), approved, run, now, options);
 }
 
 /** `runChecksOf` as a standalone caller uses it: one read of its own, then the outcomes. */

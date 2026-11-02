@@ -3,6 +3,7 @@ import { afterEach, expect, spyOn, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { testIo } from './helpers.ts';
 const NOW = new Date('2026-11-01T16:00:00Z');
 const bases: string[] = [];
-afterEach(() => { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned, { timeout: 20_000 }); }, 30_000);
+afterEach(() => { const owned = bases.splice(0); if (owned.length) discardFixtures(owned); }, 30_000);
 function signerStore() {
   const keys = new Map<string, { privateKey: KeyObject; publicKey: string }>(); const pins = new Map<string, string>();
   let refuse = false; let signatures = 0;

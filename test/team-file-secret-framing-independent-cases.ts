@@ -2,7 +2,7 @@
 // is loaded. Directory probes stay in owned scratch paths, and fixture parity denies all lstat.
 import { afterEach, expect, test } from 'bun:test';
 import { assertIndependentHome } from './independent-home-fixture.ts';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { join } from 'node:path';
@@ -34,9 +34,10 @@ const noFs: FsReader = { ...defaultFs, lstat: () => { throw Object.assign(new Er
 const found = (text: string, reader = noFs) => findSecrets(parseYaml(text), reader);
 const channel = (value: string) => baseTeam + `tools:\n  chat:\n    kind: slack\n    channel: ${JSON.stringify(value)}\n`;
 const made: string[] = [];
-afterEach(() => { for (const path of made.splice(0)) execFileSync('trash', [path]); });
+const FIXTURE_ROOT = '/tmp/teamcli-sf-fixtures';
+afterEach(() => { for (const path of made.splice(0)) discardFixtures([path], { roots: [FIXTURE_ROOT] }); });
 function world() {
-  const base = fs.realpathSync(fs.mkdtempSync('/tmp/sf-')); made.push(base);
+  fs.mkdirSync(FIXTURE_ROOT, { recursive: true }); const base = fs.realpathSync(fs.mkdtempSync(join(FIXTURE_ROOT, 'sf-'))); made.push(base);
   const directory = join(base, PREFIXES[0]! + BODY), file = join(base, PREFIXES[1]! + BODY);
   fs.mkdirSync(directory); fs.writeFileSync(file, 'synthetic file\n');
   const target = join(base, 'real'); fs.mkdirSync(target); fs.mkdirSync(join(target, PREFIXES[0]! + BODY)); fs.mkdirSync(join(target, 'child'));

@@ -143,7 +143,9 @@ repair names the file the table already shows:
 The unsupported difference is a record the message key signed that this version cannot read: its
 signed fields are not all ones this version knows (`the signed record carries fields this version
 does not read: <names>`), or a known field is not the shape it writes. The signature holds, so it
-is refused on the schema's ground, not the key's — and its fields are never acted on.
+is refused on the schema's ground, not the key's — and its fields are never acted on. A known
+field carrying a value this version does not know is not this difference: a message kind from a
+newer writer is dropped, and the record is served as the plain message it is.
 
 A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
 place of the record's path, and its shape refusal reads `the record is not a message`.

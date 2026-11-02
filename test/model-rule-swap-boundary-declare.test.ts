@@ -10,7 +10,8 @@
 // launch seams faked at their documented types and synthetic temporary homes, so what is pinned
 // is the command's own behavior, not a reading of its source. The fixture ('lyra') is this
 // file's own. Cleanup uses the system trash per the standing rule: no recursive rm.
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,7 +78,7 @@ type Fixture = { base: string; root: string; home: string; file: string; dir: st
 
 const made: string[] = [];
 afterEach(() => {
-  for (const dir of made.splice(0)) spawnSync('trash', [dir], { stdio: 'ignore' });
+  for (const dir of made.splice(0)) discardFixtures([dir], { quiet: true });
 });
 
 function teamText(root: string, home: string): string {

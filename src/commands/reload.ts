@@ -51,7 +51,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
@@ -424,6 +424,33 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     else out.stdout(`team reload: ${said}\n`);
     logLine(dir, 'reload', who, said, now());
   };
+  // A seat already running what the file declares is not relaunched, but its hook settings file
+  // is still this run's to refresh: the command a launch would install today, written over the
+  // file its process already has, with the presence binding it was launched with and the
+  // declaration time kept when its inbound word did not change. The refresh itself refuses to
+  // name a runtime copy this run would be writing from (`refreshCliHooks`), and a seat with no
+  // file gains none its running process never loaded.
+  const refreshHookFile = (): void => {
+    const refresh = refreshCliHooks(dir, session, [{
+      name: seat.name,
+      cli: seat.cli,
+      launch: seat.launch,
+      ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
+    }], home === undefined ? undefined : { project: team.project, root, home });
+    if (refresh.refused !== undefined) {
+      sayBrief(`${seat.name}: its hook settings file was not refreshed: ${refresh.refused}`);
+      return;
+    }
+    if (refresh.failed.includes(seat.name)) {
+      sayBrief(`${seat.name}: its hook settings file was not written`);
+      return;
+    }
+    if (refresh.rewritten.includes(seat.name)) {
+      sayBrief(refresh.kept.includes(seat.name)
+        ? `${seat.name}: its hook settings file was rewritten; its declaration time stands`
+        : `${seat.name}: its hook settings file was rewritten`);
+    }
+  };
   // The general seat brief goes to the seat on every path this command reaches it: the check
   // names `team reload <seat>` as a repair, so a reload must deliver the brief even when nothing
   // else drifts. A relaunch path attributes the seat and gets a fresh delivery lifetime. The two
@@ -467,6 +494,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
     }
     await deliverBrief(false);
+    refreshHookFile();
     const summary = `team reload: ${seat.name} is already running what the file declares`;
     if (json) {
       writeJson(io, 'team.reload', {
@@ -512,6 +540,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       });
       const summary = `team reload: ${seat.name}: its launch record held no model; recorded ${mentioned(shown, compared, recorded)}; it is already running what the file declares`;
       await deliverBrief(false);
+      refreshHookFile();
       if (json) {
         writeJson(io, 'team.reload', {
           format: 1 as const,
@@ -816,9 +845,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           const prior = current.seats[next] ?? { stage: patch.stage };
           const { waiting: written, effort, createdWorkspace: _created, ...rest } = patch;
           const stored: SeatState = { ...prior, ...rest };
-          // The record keeps the file's own launch line, never the executed one: the state hooks'
-          // `--settings` rides on the command the pane runs, not on what the seat declared.
-          const launch_line = (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
+          // The record keeps the file's own launch line (with the profile's pinned features the
+          // launch appends), never the executed one: the state hooks' `--settings` rides on the
+          // command the pane runs, not on what the seat declared.
+          const launch_line = patch.launch_line ?? (next === seat.name ? seat.launch : undefined) ?? prior.launch_line;
           if (launch_line) stored.launch_line = launch_line;
           if (written === null) delete stored.waiting;
           else if (written) stored.waiting = written;

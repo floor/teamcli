@@ -12,6 +12,8 @@ import type { WatchSources } from '../src/commands/watch.ts';
 import { routeOf, type HostedRoute } from '../src/daemon/routes.ts';
 import { createHostedBeat, createHostedWatch, type HostedBeat, type HostedWatch } from '../src/daemon/watch.ts';
 import { hostedWatchAuthority } from '../src/daemon/watch-authority.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../src/watch/authority.ts';
 import { WATCH_AUTHORITY_MAX_AGE_MS } from '../src/watch/epoch.ts';
@@ -221,6 +223,17 @@ describe('the beat between hosted routes', () => {
         return fine;
       },
     };
+    // This pass spans 21 s of the scene's own clock. The team's read budget is declared at the
+    // widest word the policy allows, so the scene measures the beat between routes; the pass
+    // cut at the default 2000 ms has its own scene (test/watch-async-budget.test.ts).
+    const budget = writePolicySet(a.home, {
+      level: 'team',
+      target: teamIdOf(a.root),
+      teamRoot: a.root,
+      name: 'watch-read-budget-ms',
+      value: 30_000,
+    }, { now: new Date(NOW) });
+    expect(budget.ok).toBe(true);
     const buildA = hostedWatchAuthority({
       route: routeA,
       teamFile: a.teamFile,

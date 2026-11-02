@@ -16,9 +16,12 @@
 // because a retained copy that was changed must never be run.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync,
+  renameSync, rmSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DAEMON_LABEL, daemonLogPath, machineConfigDir } from './paths.ts';
+import { DAEMON_LABEL, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
 import type {
   ServiceInstallFailure,
   ServiceInstallResult,
@@ -33,6 +36,10 @@ import type {
   ServiceUnitRecord,
   ServiceUninstallResult,
 } from './service.ts';
+
+/** `O_NOFOLLOW` is POSIX: a platform without it gets 0, and the `lstat` check before every open
+ *  is what refuses a link; the flag makes the open itself refuse one that appeared after it. */
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 const realRunner: ServiceRunner = (command, args): ServiceRunResult => {
   const result = spawnSync(command, args, { encoding: 'utf8' });
@@ -64,9 +71,6 @@ function sha256(bytes: Buffer | string): string {
  *  mode is part of the copy's identity: an executable that lost its execute bit is not the same
  *  program, so a folder whose files drifted from it is refused rather than run. */
 type RuntimeFile = { relative: string; source: string; mode: number };
-
-/** The one name every runtime folder lives under, inside the machine config folder. */
-const RUNTIME_DIR = 'daemon-runtime';
 
 /** A file's mode as the copy keeps it: no group or world write, and the owner can read it. */
 function keptMode(mode: number): number {
@@ -259,7 +263,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const ownUid = (): number => (typeof process.getuid === 'function' ? process.getuid() : uid);
 
   /** Where a home's retained runtime copies live: `<home>/.config/team/daemon-runtime`. */
-  const runtimeRoot = (home: string): string => join(machineConfigDir(home), RUNTIME_DIR);
+  const runtimeRoot = (home: string): string => daemonRuntimeRoot(home);
 
   /**
    * The folder the retained copies live in, made or checked before anything is written there.
@@ -498,9 +502,11 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   /**
    * Removes runtime folders this tool made that neither the unit on disk nor the unit a rollback
    * may restore names. Only a folder whose name is a content hash is ours; anything else in the
-   * runtime folder is left alone. Best effort.
+   * runtime folder is left alone. `keepAll` prunes nothing, for a caller that could not prove
+   * which copies a seat still needs. Best effort.
    */
-  const cleanRuntime = (home: string, keep: readonly (string | null)[]): void => {
+  const cleanRuntime = (home: string, keep: readonly (string | null)[], keepAll = false): void => {
+    if (keepAll) return;
     const root = runtimeRoot(home);
     let names: string[];
     try {
@@ -517,6 +523,93 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
         // Best effort; the next install tries again.
       }
     }
+  };
+
+  /** The hook tree this tool writes is shallow and small; a tree past these bounds is not one it
+   *  made, and the install keeps every copy rather than guess that it read the tree whole. */
+  const MAX_HOOK_BYTES = 262_144;
+  const MAX_HOOK_ENTRIES = 4_096;
+  const MAX_HOOK_DEPTH = 8;
+  /** A runtime copy's folder name as a hook command embeds it: the command shell-quotes the whole
+   *  path, but the name itself is plain text inside the quote. */
+  const HOOK_COPY = /daemon-runtime\/([0-9a-f]{64})(?![0-9a-f])/g;
+
+  /**
+   * Every runtime copy named by a hook file of any root this install hosts. A seat's hook command
+   * runs this tool's entry, and a settings file written from a runtime copy names that copy: the
+   * copy is a program a seat still needs after this install returns, even when no unit names it.
+   * The walk reads every file under `<root>/.agents/hooks` without following a link; a file it
+   * cannot read or parse refuses the whole answer, so the install prunes nothing and says why
+   * instead of deleting a copy it could not prove unneeded.
+   */
+  const hookedCopies = (roots: readonly string[]): { hashes: string[]; fault: string | null } => {
+    const found = new Set<string>();
+    let entries = 0;
+    const walk = (folder: string, depth: number): string | null => {
+      let names;
+      try {
+        names = readdirSync(folder, { withFileTypes: true });
+      } catch (error) {
+        // A checkout with no hooks folder hosts no hook; any other fault refuses the whole read.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        return `the hook files under ${folder} could not be listed`;
+      }
+      for (const name of names) {
+        // This tool never writes a hidden entry under the hooks folder, and skipping them keeps
+        // an unrelated browser file from refusing every later install.
+        if (name.name.startsWith('.')) continue;
+        if (++entries > MAX_HOOK_ENTRIES) return 'the hook files are more than this install reads';
+        const path = join(folder, name.name);
+        if (name.isSymbolicLink()) return `the hook file ${path} is a symbolic link`;
+        if (name.isDirectory()) {
+          if (depth >= MAX_HOOK_DEPTH) return `the hook files under ${folder} are nested deeper than this install reads`;
+          const fault = walk(path, depth + 1);
+          if (fault !== null) return fault;
+          continue;
+        }
+        if (!name.isFile()) return `the hook file ${path} is not a regular file`;
+        let held;
+        try {
+          held = lstatSync(path);
+        } catch {
+          return `the hook file ${path} could not be read`;
+        }
+        if (!held.isFile() || held.isSymbolicLink()) return `the hook file ${path} is not a regular file`;
+        if (held.size > MAX_HOOK_BYTES) return `the hook file ${path} is larger than this install reads`;
+        let fd;
+        try {
+          fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+        } catch {
+          return `the hook file ${path} could not be read`;
+        }
+        let text: string;
+        try {
+          const buffer = Buffer.alloc(held.size);
+          const read = readSync(fd, buffer, 0, buffer.length, 0);
+          if (read !== buffer.length) return `the hook file ${path} could not be read whole`;
+          text = buffer.toString('utf8');
+        } catch {
+          return `the hook file ${path} could not be read`;
+        } finally {
+          closeSync(fd);
+        }
+        try {
+          JSON.parse(text);
+        } catch {
+          return `the hook file ${path} does not parse`;
+        }
+        for (const match of text.matchAll(HOOK_COPY)) {
+          const hash = match[1];
+          if (hash !== undefined) found.add(hash);
+        }
+      }
+      return null;
+    };
+    for (const root of roots) {
+      const fault = walk(join(root, '.agents', 'hooks'), 0);
+      if (fault !== null) return { hashes: [], fault };
+    }
+    return { hashes: [...found].sort(), fault: null };
   };
 
   /**
@@ -778,11 +871,26 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       // machine this install must never leave.
       const undo = (): ServiceInstallFailure => rollback(home, path, prior, sha);
       const succeeded = (): ServiceInstallResult => {
-        // The copy the new unit runs and the copy the earlier unit names both stay: the health
-        // gate may still ask for the undo, which restores the earlier unit text and needs that
-        // program. A folder from an older install that no unit names any more is removed.
-        cleanRuntime(home, [sha, prior === null ? null : namedRuntime(home, prior.text)]);
-        return { ok: true, unitPath: path, program: words, undo, ...(droppedAuthorization ? { droppedAuthorization: true } : {}) };
+        // The copy the new unit runs, the copy the earlier unit names, and every copy a hosted
+        // root's hook file names all stay: the health gate may still ask for the undo, which
+        // restores the earlier unit text and needs that program, and a hook command names a copy
+        // a seat still runs. A folder from an older install that none of them names is removed.
+        // Hook files this install cannot read whole keep every copy and say why.
+        const hooked = hookedCopies(program.roots);
+        cleanRuntime(
+          home,
+          [sha, prior === null ? null : namedRuntime(home, prior.text), ...hooked.hashes],
+          hooked.fault !== null,
+        );
+        return {
+          ok: true,
+          unitPath: path,
+          program: words,
+          undo,
+          ...(hooked.hashes.length > 0 ? { hookedRuntime: hooked.hashes } : {}),
+          ...(hooked.fault !== null ? { runtimeKeepFault: hooked.fault } : {}),
+          ...(droppedAuthorization ? { droppedAuthorization: true } : {}),
+        };
       };
       const first = run('launchctl', ['bootstrap', domain, path]);
       if (first.status === 0) return succeeded();

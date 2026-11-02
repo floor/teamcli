@@ -1,6 +1,6 @@
 // Synthetic loopback listeners, signed drops and HOME only; no terminal or service calls.
 import { afterEach, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from '../fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,7 +29,7 @@ afterEach(() => {
         }
       }; walk(base);
     }
-  } finally { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned); }
+  } finally { const owned = bases.splice(0); if (owned.length) discardFixtures(owned); }
 });
 const EVENT: SignedEventRecord = { payload: {
   v: 1, seq: 7, ts: '2026-11-01T00:00:00.000Z', kind: 'message.arrived',
@@ -102,10 +102,15 @@ async function deliver(w: World, hook: Hook = w.hook, extra: Partial<Parameters<
     ...{ root: w.root }, policy: { timeoutMs: 500, attempts: 1, backoffMs: [0] },
     report: text => reports.push(text), ...extra });
 }
+/** The record is never consumed or rewritten. The delivery holds a claim beside it and leaves the
+ *  `posted` note a 2xx ends it as — bookkeeping about the delivery, not the record, and the same
+ *  two names the adapter and the reconciler skip by design. */
 function unchanged(drop: ReturnType<typeof signedDrop>) {
   expect(fs.readFileSync(drop.path).equals(drop.bytes)).toBe(true);
   expect(fs.statSync(drop.path).ino).toBe(drop.ino);
-  expect(fs.readdirSync(join(drop.path, '..'))).toEqual(drop.names);
+  const id = drop.signed.payload.id;
+  const beside = fs.readdirSync(join(drop.path, '..')).filter((name) => name !== `${id}.posting` && name !== `${id}.posted`);
+  expect(beside).toEqual(drop.names);
 }
 for (const header of ['X-Routine-Key', 'Authorization', '__proto__', 'constructor', 'prototype']) {
   test('configured header ' + header + ' sends the secret line verbatim', async () => {

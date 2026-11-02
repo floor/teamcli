@@ -5,7 +5,7 @@
 // exercised exactly as the daemon uses them, and nothing here reaches a live herdr.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
@@ -266,6 +266,29 @@ describe('the daemon restore sweep for one route', () => {
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
   });
 
+  test('a healthy pass that launches no seat leaves the running seat\'s hook file untouched', async () => {
+    recordSeat();
+    await approve();
+    // The settings file a launch installed earlier, as this build would not write it now. The
+    // pass finds the seat healthy and launches nothing, so the file is not its to rewrite: its
+    // mtime is the seat's declaration, and a running session must not be made stale by a pass
+    // that repaired nothing.
+    const hooks = join(stateDir, 'hooks', 'sweep');
+    mkdirSync(hooks, { recursive: true, mode: 0o700 });
+    const settings = join(hooks, 'worker.json');
+    writeFileSync(settings, '{"hooks":{},"crossSessionInbound":"accept"}\n', { mode: 0o600 });
+    const declaredAt = new Date('2026-10-20T09:00:00Z');
+    utimesSync(settings, declaredAt, declaredAt);
+    const before = statSync(settings).mtimeMs;
+    const made = world();
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made) });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(readFileSync(settings, 'utf8')).toBe('{"hooks":{},"crossSessionInbound":"accept"}\n');
+    expect(statSync(settings).mtimeMs).toBe(before);
+  });
+
   test('a refusal on a seat whose record says ready is held, and its record is left as it is', async () => {
     recordSeat();
     writeFileSync(teamFile, budgetText());
@@ -412,5 +435,45 @@ describe('a route whose team lives in the registry', () => {
     // `no-recorded-session`. The registry names "sweep", whose recorded seat is judged.
     const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
     expect(result).toEqual({ kind: 'not-running', state: 'absent' });
+  });
+
+  test('restores its recorded seats when the registry is the only copy of the team', async () => {
+    recordSeat();
+    intoRegistry(root, home);
+    rmSync(teamFile);
+    const made = world();
+    // The daemon-shaped call names no file. Its pass reads the team from the registry, and the
+    // run it hands the plan to must resolve the same way: naming the conventional path would
+    // stop `up` on a file that does not exist, with exit 2, and restore nothing.
+    const result = await underRegistry(async () => {
+      const approved = await runApprove([], testIo(root, { kind: 'owner' }), {
+        ask: async () => '5',
+        waiting: () => 'empty',
+        now: () => NOW,
+        home,
+      });
+      expect(approved).toBe(0);
+      return runRestoreSweepForRoute({ home, root, sources: sources(made) });
+    });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(result.failed).toBe(false);
+    expect(made.starts).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+  });
+
+  test('a root with neither a registry record nor a file is reported with the reason, never launched', async () => {
+    recordSeat();
+    rmSync(teamFile);
+    const made = world();
+    const result = await underRegistry(() => runRestoreSweepForRoute({ home, root, sources: sources(made) }));
+    expect(result.kind).toBe('unreadable');
+    if (result.kind !== 'unreadable') return;
+    expect(result.reason).toContain('no team is registered');
+    expect(made.starts).toBe(0);
+    expect(made.runs).toEqual([]);
+    expect(made.creates).toEqual([]);
   });
 });

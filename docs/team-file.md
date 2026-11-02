@@ -225,10 +225,16 @@ before relaunching. Other unrecognised layouts stay unknown.
 The Jules profile is tested with CLI 0.1.42 to 0.1.42 (`jules`). Its ready screen is the session
 table, whose input line reads ` > Search sessions or type / to use`; its task box asks
 `What do you want Jules to work on?`. The TUI has no standing session, so rules are prepended to
-every brief, and a brief is typed through the CLI's own screens — `/`, the repo chooser, the task
-box, the create confirmation — with the CLI's `Session created:` line as the delivery proof. A send
-names only the repo of the seat's own folder: the module proves the chooser collapsed on it before
-it types, and refuses when the account's list does not hold it. One `ctrl+c` at the table quits,
+every brief. A send does not use those screens: the profile declares the CLI's own session call
+(`jules new`), and a send to a jules seat runs it with the whole body — rules, sender header and
+message — as ONE argument, in the seat's own folder, with no shell string and no pane touched.
+When that folder is a checkout whose `origin` names a repository, the call names it too
+(`--repo <owner>/<repo>`); otherwise the CLI chooses from its working folder. The CLI's
+`Session created:` line with its id is the delivery proof, the id is recorded on the send's
+delivery record, and no read receipt follows. A session's result lands locally only when the
+operator pulls it: `team worktree pull <task> --remote-session <id>` runs the profile's own
+`jules remote pull --session <id> --apply` in the named worktree and publishes nothing — no
+commit, no branch, no pull request. One `ctrl+c` at the table quits,
 and the profile sends no other exit key; it never sends the table's `ctrl+d` delete, and the rules
 every jules seat receives carry `Never delete a Jules session.` herdr reports a jules pane as no
 agent, and its status unknown, so the profile says `herdr_status: unreliable`: readiness is read
@@ -458,6 +464,19 @@ there is no wake to retry, and a word other than the two is refused under the se
 the drop-file wake for that seat — the send-time typed wake is unaffected. The key is part of the
 seat's digest, and a record that writes none keeps every digest it had.
 
+`public_only` is optional on a seat: `public_only: true` says its briefs go to a service outside
+this machine. The team's rules are never prepended to its briefs, and a send reads the whole body
+against the machine's private lists before the receiving CLI's own session call — a body that
+matches a rule is not handed to the service: the send names the rule by source, class and ordinal
+(never the text) and the walk falls through to the leg behind it, so the message still lands in
+the seat's own drop folder. The repository the session would target is proven public the same
+way, by one credential-free read of the forge's own record: a repository that is not public, a
+read that cannot be made, and a folder that names no repository all refuse the session call and
+fall through there too ([team send](commands/send.md)). A CLI whose whole service is hosted
+declares it for every seat of that CLI in its profile (`public_only: true` there); a seat's word
+can only add the guard, never remove it, and `public_only: false` reads as absent. The key is
+part of the seat's digest, and a record that marks no seat keeps every digest it had.
+
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
@@ -485,12 +504,17 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a record that writes none reads as the default order.
-Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
-`headless-resume` is ever in that default. A Codex receiver with no declared order has an
+Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; none of `native`,
+`headless-resume` or `session` is ever in that default. A receiving CLI whose profile declares
+its own session call walks that call wherever an order's `typed` word stands — the call is the
+one route such a CLI has that reaches an agent at all — and walks it first while no level of its
+chain declares an order. A Codex receiver with no declared order
+has an
 implicit runtime queue first while its signed `codex-daemon` setting is on, then the typed wake,
 then the inbox and remaining default legs. If that setting is off or unavailable, the typed wake
 leads so an idle Codex inbox is not left unread. A declared `delivery_order` is followed as
-written. Only a declared word can add `native` or `headless-resume` to the general order. A typed leg
+written. Only a declared word can add `native`, `headless-resume` or `session` to the general
+order. A `typed` word contributes no typing — the seat's own wake stands where it stands. A typed leg
 that finds no live agent types nothing and
 hands the send to the leg behind it, recording `typed: <reason>`; a walk reaches `drop` when
 the legs before it did not take the send, or when the order puts `drop` before `typed`.
@@ -499,14 +523,15 @@ the legs before it did not take the send, or when the order puts `drop` before `
 delivery_order: [typed]
 ```
 
-- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop` and
-  `headless-resume`, each at most once, in the order a send tries them. A written key with no
+- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`
+  and `session`, each at most once, in the order a send tries them. A written key with no
   legs is `delivery_order needs at least one leg:
-  socket, native, mcp-inbox, typed, drop, headless-resume` — the default order is the absence of
+  socket, native, mcp-inbox, typed, drop, headless-resume, session` — the default order is the
+  absence of
   the key. A word outside
-  the six is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume`; a
+  the seven is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session`; a
   repeated one is `delivery_order names "<word>" twice`.
-- The six legs: `socket` is this build's own frame on the receiving Claude session's
+- The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
   explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
@@ -521,15 +546,22 @@ delivery_order: [typed]
   own read writes the receipt; `headless-resume` is the seat's own CLI resumed for one turn
   without a TUI pane, which no default names and this build cannot take yet, so a walk that
   reaches it records `headless-resume: this build carries no headless resume runtime` and moves
-  on. `delivery_order: [drop]` takes the drop leg alone, for a receiver
+  on; `session` is the receiving CLI's own session-creating call, run in the seat's own folder
+  with the whole body — the rules, the sender header and the message — as one argument after the
+  profile's own words and, when the folder's `origin` names a repository, `--repo
+  <owner>/<repo>`. A send is delivered on that leg only when the CLI printed its own session
+  line with an id; the id is recorded as `session` on the history line, and every other ending
+  hands the send to the leg behind it with `session: <reason>` among the failed legs. A seat
+  whose CLI declares no session call records `session: <cli> has no session-creating command in
+  this build` and moves on. `delivery_order: [drop]` takes the drop leg alone, for a receiver
   that watches its own drop folder and for a pane that must never receive typing; a seat the
   file marks `human` walks `drop` alone, whatever its order holds.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in
   `projects.yaml`, written `[typed]` the same way. Each level may drop legs from the order in
-  force or put the legs it keeps in a different order, and may add `native` or
-  `headless-resume`, or place `socket` where the order in force lacks it: a word naming any
+  force or put the legs it keeps in a different order, and may add `native`,
+  `headless-resume` or `session`, or place `socket` where the order in force lacks it: a word naming any
   other leg the order in force does not have is set aside, and the
   order in force stands. A word equal to the order in force is no word at all.
 - A seat's word is written on the seat, and is part of the seat's digest — writing or changing

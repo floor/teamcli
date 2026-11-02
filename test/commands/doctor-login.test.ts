@@ -102,8 +102,10 @@ describe('checkLogin with fake command results', () => {
       binary: 'custom',
       tested: { from: '1.0', to: '1.0' },
       unattended: [],
+      features: [],
       rulesOption: null,
       rulesMode: 'message', rulesPrompt: null,
+      publicOnly: false,
       standingRules: [],
       herdrStatus: 'reliable',
       loginCheck: null,
@@ -115,6 +117,7 @@ describe('checkLogin with fake command results', () => {
       exitCompletion: false,
       input: null,
       compose: null,
+      sessionCli: null,
       lobbyFiles: [],
       startupReads: [],
       mcpInbox: null,
@@ -133,6 +136,8 @@ describe('checkLogin with fake command results', () => {
       modelFlag: () => ({ option: '--model', id: null }),
       answers: [],
       questionAnswers: [],
+      vendors: [],
+      credentials: null,
     };
     let ran = false;
     expect(checkLogin(noCheckProfile, () => { ran = true; return { status: 0, stdout: '' }; })).toBeNull();

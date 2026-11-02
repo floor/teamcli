@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, readEvents, type EventPayload } from '../src/bus/log.ts';
 import { OWNER_MAILBOX, OwnerDelivery } from '../src/bus/owner.ts';
-import { reconcilePass } from '../src/bus/reconcile.ts';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
@@ -49,6 +50,33 @@ function makeScratch(): { root: string; home: string } {
   return { root, home };
 }
 
+/** One message record as a send writes it into the seat's drop folder. */
+function dropRecord(
+  at: { root: string; home: string },
+  seat: string,
+  id: string,
+  options: { from?: string; ts?: string; thread?: string } = {},
+): void {
+  const dir = join(at.root, '.agents', 'send-drops', 'acme', seat);
+  mkdirSync(dir, { recursive: true });
+  const from = options.from ?? 'clerk';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: at.root,
+    session: 'acme',
+    at: options.ts ?? '2026-10-18T12:00:00.000Z',
+    body: `from ${from} — admitted by: lead\n\nhello ${id}`,
+    from,
+    from_id: null,
+    rule: 'a synthetic admission',
+    thread: options.thread ?? id,
+  };
+  dropMessage(dir, id, `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`);
+}
+
 afterEach(() => {
   while (dirs.length > 0) {
     const dir = dirs.pop()!;
@@ -62,14 +90,14 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
     mkdirSync(seatDir, { recursive: true });
 
-    // 1. Plain drop file written by a tool that crashed before publishing to the bus.
-    dropMessage(seatDir, 'drop-1', 'from the file\'s seat clerk — admitted by: lead\n\nhello drop 1');
+    // 1. Signed drop record written by a tool that crashed before publishing to the bus.
+    dropRecord({ root, home }, 'worker-1', 'drop-1', { ts: '2026-10-18T12:00:00.000Z' });
     dropMessage(seatDir, 'drop-1.delivered', '{"ok":true}');
     dropMessage(seatDir, 'drop-1.read', '{"ok":true}');
     dropMessage(seatDir, 'drop-1.replied', '{"ok":true}');
 
     // 2. Held send with `.pending` marker past held_threshold_seconds (15m old >= 600s).
-    dropMessage(seatDir, 'drop-2', 'from the owner — admitted by: the owner\n\nheld drop 2');
+    dropRecord({ root, home }, 'worker-1', 'drop-2', { from: 'owner', ts: '2026-10-18T11:55:00.000Z' });
     markPending(seatDir, {
       id: 'drop-2',
       from: 'owner',
@@ -79,7 +107,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     });
 
     // 3. Fresh held send with `.pending` marker before held_threshold_seconds (2m old < 600s).
-    dropMessage(seatDir, 'drop-3', 'from the owner — admitted by: the owner\n\nfresh held drop 3');
+    dropRecord({ root, home }, 'worker-1', 'drop-3', { from: 'owner', ts: '2026-10-18T12:08:00.000Z' });
     markPending(seatDir, {
       id: 'drop-3',
       from: 'owner',
@@ -142,7 +170,8 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const { root, home } = makeScratch();
     const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
     mkdirSync(seatDir, { recursive: true });
-    dropMessage(seatDir, 'drop-9', "from the file's seat clerk — admitted by: lead\n\nhello");
+    // The record itself is signed, as a send writes it; only the side files are raw.
+    dropRecord({ root, home }, 'worker-1', 'drop-9');
     // The bookkeeping the watch, the channel push and a thread close leave beside the record.
     // Their names match a record's shape, but none of them is a message any seat was sent.
     for (const side of ['drop-9.wake', 'drop-9.reported', 'drop-9.channel-push.json', 'drop-9.closed.json']) {
@@ -176,9 +205,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
       });
       expect(appended.ok).toBe(true);
     }
-    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
-    mkdirSync(seatDir, { recursive: true });
-    dropMessage(seatDir, 'drop-1', "from the file's seat clerk — admitted by: lead\n\nhello");
+    dropRecord({ root, home }, 'worker-1', 'drop-1');
 
     const first = reconcilePass({
       project: 'acme',
@@ -222,7 +249,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(quiet.raised).toHaveLength(0);
 
     // A new durable record is raised, and the pass that follows it is the one that checks it.
-    dropMessage(seatDir, 'drop-2', "from the file's seat clerk — admitted by: lead\n\nhello again");
+    dropRecord({ root, home }, 'worker-1', 'drop-2', { ts: '2026-10-18T12:13:00.000Z' });
     const raised = reconcilePass({
       project: 'acme',
       root,
@@ -272,7 +299,8 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const sig = signDomain(RECEIPT_DOMAIN, receiptPayload, messageKeyOf(home));
     writeFileSync(receiptFile(root, 'worker-1', 'msg-signed-1'), JSON.stringify({ payload: receiptPayload, signature: sig }));
 
-    // History entry in messages.jsonl.
+    // History entry in messages.jsonl, backed by the signed drop record it names.
+    dropRecord({ root, home }, 'worker-2', 'hist-1', { ts: '2026-10-18T12:02:00.000Z' });
     appendHistory('acme', root, home, {
       ts: '2026-10-18T12:02:00.000Z',
       from: 'clerk',
@@ -324,6 +352,67 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(again.ok).toBe(true);
     if (!again.ok) return;
     expect(again.raised.length).toBe(0);
+  });
+
+  test('history lines with no verifying drop record raise nothing and are refused once', () => {
+    const { root, home } = makeScratch();
+    // A key is held, so each refusal below is about the record the line names, not a missing key.
+    mkdirSync(home, { recursive: true });
+    messageKeyOf(home);
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-2');
+    mkdirSync(seatDir, { recursive: true });
+    // A line whose record was never written, and one whose record does not verify.
+    const unbacked = appendHistory('acme', root, home, {
+      ts: '2026-10-18T12:02:00.000Z',
+      from: 'clerk',
+      to: 'worker-2',
+      body: 'a line with nothing behind it',
+      id: 'hist-unbacked',
+      outcome: 'delivered (read)',
+      via: 'mcp-inbox',
+    });
+    expect(unbacked.ok).toBe(true);
+    writeFileSync(join(seatDir, 'hist-tampered'), '{"payload":{"id":"hist-tampered"},"signature":"bad"}\n');
+    const tampered = appendHistory('acme', root, home, {
+      ts: '2026-10-18T12:02:00.000Z',
+      from: 'clerk',
+      to: 'worker-2',
+      body: 'a line whose record does not verify',
+      id: 'hist-tampered',
+      outcome: 'delivered',
+      via: 'mcp-inbox',
+    });
+    expect(tampered.ok).toBe(true);
+
+    const refusals: { where: string; reason: string }[] = [];
+    const state = createReconcileState();
+    const pass = (now: string) => reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date(now),
+      state,
+      onRefused: (refusal) => refusals.push(refusal),
+    });
+    const first = pass('2026-10-18T12:05:00.000Z');
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const raisedKeys = first.raised.map((e) => `${e.payload.kind}:${e.payload.record_id}`);
+    expect(raisedKeys).not.toContain('message.arrived:hist-unbacked');
+    expect(raisedKeys).not.toContain('message.arrived:hist-tampered');
+    expect(raisedKeys).not.toContain('message.delivered:hist-unbacked:delivered');
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-unbacked (history)')).toHaveLength(1);
+    expect(refusals.find((only) => only.where === 'worker-2/hist-unbacked (history)')?.reason)
+      .toBe('the history line names no signed drop record this checkout can verify');
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-tampered (history)')).toHaveLength(1);
+
+    const again = pass('2026-10-18T12:06:00.000Z');
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.raised.length).toBe(0);
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-unbacked (history)')).toHaveLength(1);
+    expect(refusals.filter((only) => only.where === 'worker-2/hist-tampered (history)')).toHaveLength(1);
   });
 
   test('a digest record raises no message.arrived, so repeated passes over one owner record write exactly one digest', () => {

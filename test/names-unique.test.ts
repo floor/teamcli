@@ -360,7 +360,7 @@ describe('the other doors', () => {
       entities: ['*'],
       ops: ['config'],
       mayIssue: true,
-      expires: new Date(NOW.getTime() + 86_400_000),
+      expires: new Date(Date.now() + 86_400_000),
     });
     if (!grant.ok) throw new Error(grant.why);
     const root = world.roots.site!;
@@ -430,7 +430,7 @@ describe('the word is set through team config', () => {
       entities: ['floor'],
       ops: ['config'],
       mayIssue: true,
-      expires: new Date(NOW.getTime() + 86_400_000),
+      expires: new Date(Date.now() + 86_400_000),
     });
     if (!grant.ok) throw new Error(grant.why);
     const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
@@ -452,7 +452,7 @@ describe('the word is set through team config', () => {
       entities: ['*'],
       ops: ['config'],
       mayIssue: true,
-      expires: new Date(NOW.getTime() + 86_400_000),
+      expires: new Date(Date.now() + 86_400_000),
     });
     if (!grant.ok) throw new Error(grant.why);
     const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });

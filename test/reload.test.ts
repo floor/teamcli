@@ -2,7 +2,7 @@
 // seat that `up` leaves alone keeps the launch record, including a lead.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -314,6 +314,39 @@ describe('team reload', () => {
     const code = await runReload(['worker'], io, sources);
     expect({ code, err: io.err, closed, log: logText() }).toEqual({ code: 0, err: '', closed: [], log: '' });
     expect(io.out).toContain('already running what the file declares');
+  });
+
+  test('a matching record still rewrites a hook file that names a runtime copy, and keeps its declaration time', async () => {
+    remember('worker', 'high');
+    // The seat accepts frames, so its settings declare the word; the file an earlier install
+    // wrote by running from inside a daemon runtime copy names that copy's CLI.
+    approve(teamYaml(['reload']).replaceAll(
+      '    launch: claude --model claude-opus-5-5\n',
+      '    launch: claude --model claude-opus-5-5\n    inbound: accept\n',
+    ));
+    const settings = join(dir, 'hooks', 'alpha', 'worker.json');
+    mkdirSync(dirname(settings), { recursive: true, mode: 0o700 });
+    const copy = 'e'.repeat(64);
+    writeFileSync(settings, `${JSON.stringify({
+      hooks: {
+        UserPromptSubmit: [{
+          hooks: [{ type: 'command', command: `node /gone/daemon-runtime/${copy}/dist/cli.js drops --read --seat worker --session alpha` }],
+        }],
+      },
+      crossSessionInbound: 'accept',
+    }, null, 2)}\n`, { mode: 0o600 });
+    const declared = new Date('2020-01-01T00:00:00Z');
+    utimesSync(settings, declared, declared);
+    const { sources, closed } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect({ code, err: io.err, closed }).toEqual({ code: 0, err: '', closed: [] });
+    expect(io.out).toContain('its hook settings file was rewritten; its declaration time stands');
+    expect(io.out).toContain('already running what the file declares');
+    const text = readFileSync(settings, 'utf8');
+    expect(text).not.toContain('daemon-runtime');
+    expect((JSON.parse(text) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+    expect(statSync(settings).mtimeMs).toBe(declared.getTime());
   });
 
   test('a ready seat with no recorded model records what its screen shows and closes nothing', async () => {

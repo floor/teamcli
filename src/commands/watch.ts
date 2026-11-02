@@ -5,7 +5,8 @@ import { readArgs } from '../args.ts';
 import { budgetsInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, overlayReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
-import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
+import { runChecksOf, runChecksOfAsync, type CheckOutcome } from '../budgets/run.ts';
+import type { ChildOptions } from '../child.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
@@ -13,7 +14,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -21,8 +22,9 @@ import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { emptySession, liveHold, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
-import { readMachine, readingsText } from '../watch/machine.ts';
+import { readMachine, readMachineAsync, readingsText, unreadMachine } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
+import { watchReadLimits, type ReadLimits } from '../watch/read-limits.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
 import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
@@ -75,7 +77,7 @@ import {
   type BusSubscribeOutcome,
 } from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
-import { realSources, standingSource } from './status.ts';
+import { liveAsync, realSources, standingSource, type AsyncLiveOptions, type AsyncLiveRead } from './status.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { queueRuleBreaches } from '../swap/auto.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
@@ -138,6 +140,16 @@ export type WatchSources = {
   // What each checked account reads this pass (RFC 0003 § 5). Runs outside the pass, like the
   // machine figures: a command's raw output never leaves this call, and a failure reads unknown.
   readChecks(standing: Standing, team: TeamFile, now: number): CheckOutcome[];
+  // The same reads, awaited: each takes the per-call deadline and the loop's stop, so a loop
+  // that must not hold its process's event loop (the machine daemon's hosted watch) reads
+  // without blocking another route. A loop uses these only when the source supplies them; the
+  // synchronous source is the CLI's and every test seam's, and stays.
+  liveAsync?(session: string, team: TeamFile, options: AsyncLiveOptions): Promise<AsyncLiveRead>;
+  machineAsync?(root: string, options: ChildOptions): Promise<Machine>;
+  readChecksAsync?(standing: Standing, team: TeamFile, now: number, options: ChildOptions): Promise<CheckOutcome[]>;
+  screenAsync?(pane: string, session: string, options: ChildOptions): Promise<string | null>;
+  foregroundAsync?(pane: string, session: string, options: ChildOptions): Promise<string[] | null>;
+  processesAsync?(pane: string, session: string, options: ChildOptions): Promise<PaneProcesses | null>;
   // The operator's screen, read again just before a nudge is typed.
   screen(pane: string, session: string): string | null;
   // The operator's status, asked again with its screen.
@@ -262,18 +274,113 @@ async function prefetchBrokerWork(
   }
 }
 
+/** How many consecutive cut passes get the short retry before the loop goes back to its interval. */
+const CUT_RETRY_PASSES = 3;
+/** The short retry's ceiling, in seconds: never longer than the watch's own interval. */
+const CUT_RETRY_SECONDS = 5;
+
+/**
+ * One pass's read budget: the moment its read phase started and what is left of the team's
+ * budget. `take` returns the options a read is called with — the per-call deadline, shortened
+ * by what is left, and the loop's stop — or null when the budget is spent or the loop stopped:
+ * the read is skipped and its figure is unread. The clock is the watch's own, so a scene drives
+ * a cut with its fake clock and measures no wall time.
+ */
+type ReadGate = {
+  /** What is left of the pass's budget, in ms, never below zero. */
+  left(): number;
+  /** The pass's deadline on the same clock `take` measures against. */
+  until(): number;
+  take(): ChildOptions | null;
+  /** A read that stopped at its own cut (a partial whole-session read) marks the pass cut too. */
+  noteCut(): void;
+  readonly cut: boolean;
+};
+
+function readGate(clock: () => number, limits: ReadLimits, signal: AbortSignal | undefined): ReadGate {
+  const started = clock();
+  let cut = false;
+  const left = () => Math.max(0, limits.budgetMs - (clock() - started));
+  return {
+    left,
+    until: () => clock() + left(),
+    take() {
+      if (signal?.aborted === true) {
+        cut = true;
+        return null;
+      }
+      const remaining = left();
+      if (remaining <= 0) {
+        cut = true;
+        return null;
+      }
+      return {
+        timeoutMs: Math.min(limits.timeoutMs, remaining),
+        ...(signal === undefined ? {} : { signal }),
+      };
+    },
+    noteCut() {
+      cut = true;
+    },
+    get cut() {
+      return cut;
+    },
+  };
+}
+
+/** The wait after a pass: the short retry while the cuts are young, the interval after. */
+function readWait(interval: number, cut: boolean, cutPasses: number): number {
+  return cut && cutPasses >= 1 && cutPasses <= CUT_RETRY_PASSES ? Math.min(CUT_RETRY_SECONDS, interval) : interval;
+}
+
+/** One extra screen read inside the pass, bounded by what is left of its budget. */
+async function screenRead(sources: WatchSources, gate: ReadGate, pane: string, session: string): Promise<string | null> {
+  const call = gate.take();
+  if (call === null) return null;
+  return sources.screenAsync !== undefined
+    ? await sources.screenAsync(pane, session, call)
+    : sources.screen(pane, session);
+}
+
+/** A pane's foreground names, awaited when the source supplies the bounded read, else read
+ *  synchronously; null when the budget is spent or the pane can't be read. */
+async function foregroundRead(sources: WatchSources, gate: ReadGate, pane: string, session: string): Promise<string[] | null> {
+  const call = gate.take();
+  if (call === null) return null;
+  return sources.foregroundAsync !== undefined
+    ? await sources.foregroundAsync(pane, session, call)
+    : sources.foreground(pane, session);
+}
+
+/** A pane's process identity, read the same way; null when the budget is spent or herdr can't tell. */
+async function processesRead(sources: WatchSources, gate: ReadGate, pane: string, session: string): Promise<PaneProcesses | null> {
+  const call = gate.take();
+  if (call === null) return null;
+  return sources.processesAsync !== undefined
+    ? await sources.processesAsync(pane, session, call)
+    : (sources.processes?.(pane, session) ?? null);
+}
+
 export const realWatchSources: WatchSources = {
   // The status live read, handed no state: the watch compares each live pane's process with its
   // seat's record itself, through `processes` below — only `status` needs the panes the state
   // recorded for seats no agent is listed under, so none is read here.
   live: (session, team) => realSources.live(session, team, emptySession()),
+  // The awaited whole-session read: one `pane process-info` per pane answers both the process
+  // identity and the foreground names, and its panes rotate from the cursor a cut left.
+  liveAsync: (session, team, options) => liveAsync(session, team, options),
   machine: readMachine,
+  machineAsync: (root, options) => readMachineAsync(root, options),
   standing: standingSource(homedir()),
   readChecks: (standing, team, now) => runChecksOf(standing, team, now),
+  readChecksAsync: (standing, team, now, options) => runChecksOfAsync(standing, team, now, options),
   screen: (pane, session) => paneRead(pane, PANE_WINDOW, session),
+  screenAsync: (pane, session, options) => paneReadAsync(pane, PANE_WINDOW, session, options),
   status: agentStatus,
   foreground: (pane, session) => paneForeground(pane, session),
+  foregroundAsync: async (pane, session, options) => foregroundArgv0(await paneProcessInfoAsync(pane, session, options)),
   processes: (pane, session) => paneProcesses(pane, session),
+  processesAsync: async (pane, session, options) => paneProcessesOf(await paneProcessInfoAsync(pane, session, options)),
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
   // The one exception is the profile-gated typed wake below, whose own module reads the box
   // twice and presses Enter only into the line it typed (src/send/typed-wake.ts).
@@ -623,6 +730,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     hosted?.beat?.();
   };
 
+  // Whether the host has stopped this loop. A call, not an inline comparison, so the flow
+  // analysis never treats one check as proof about the next: a stop can land at any await.
+  const stopped = (): boolean => hosted !== undefined && hosted.signal.aborted;
+
   const memory = newMemory();
   const told = new Set<string>();
   // The owner-addressed texts this process has already told: an event raised from one of them
@@ -641,6 +752,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let paneGoneOnce = false;
   // The agents and panes of the last whole read: what the label sweep between passes works on.
   let lastLive: Live | null = null;
+  // Where the awaited whole-session read resumes its pane rotation after a cut: one cursor per
+  // watch process, so one per root. A read that took every pane leaves it at the start.
+  let readCursor = 0;
+  // Consecutive passes whose read phase was cut short by its budget: the short retry counts up
+  // to the cap, then the watch goes back to its interval.
+  let cutPasses = 0;
   let statusEngine: SeatStatusEngine | undefined;
   /** The current pass's native hold, replaced before the status engine, the pass and every
    *  automatic typed path read it. Empty until the first pass has read the store. */
@@ -765,15 +882,43 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // a second read would count as a second pass to a caller that records the calls.
       const own = sources.ownPane?.(session, sources.pid);
       const ownPane = own && own !== 'gone' ? own.pane : null;
+      // The pass's read limits: the team's policies, resolved to `team` like the idle window and
+      // the pace, and the gate that spends them. The budget is per pass and per root: once it is
+      // spent, the panes not reached stay unread for this pass, and the awaited read resumes at
+      // its cursor next pass.
+      const limits = watchReadLimits(team, root, sources.home, sources.now());
+      const gate = readGate(() => sources.now().getTime(), limits, hosted?.signal);
       // Before the one whole-session read: a beat overdue from the last pass lands here, so the
       // other hosted routes are renewed going into a call that can hold the loop for seconds.
       yieldBeat();
-      const live = sources.live(session, team);
+      const liveCall = gate.take();
+      let live: Live | null = null;
+      let liveSkipped = false;
+      if (liveCall === null) {
+        // The budget was spent (or the loop stopped) before the session read: nothing is said
+        // and nothing is forgotten; the next pass starts again at its cursor.
+        liveSkipped = true;
+      } else if (sources.liveAsync !== undefined) {
+        const reading = await sources.liveAsync(session, team, {
+          ...liveCall,
+          cursor: readCursor,
+          until: gate.until(),
+          now: () => sources.now().getTime(),
+        });
+        live = reading.live;
+        readCursor = reading.next;
+        if (reading.cut) gate.noteCut();
+      } else {
+        live = sources.live(session, team);
+      }
       lastLive = live;
       yieldBeat();
+      // A stop that landed while the read was in flight ends the pass here: the children it was
+      // waiting on are killed with the signal the read was given.
+      if (stopped()) break;
       if (!live) {
-        if (!silent) tell('herdr doesn\'t answer; the watch keeps trying', true);
-        silent = true;
+        if (!liveSkipped && !silent) tell('herdr doesn\'t answer; the watch keeps trying', true);
+        if (!liveSkipped) silent = true;
       } else {
         silent = false;
         // `human: true` seats have zero screen reads and zero keys typed (`workspace-adapters` §6).
@@ -840,8 +985,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             const hasSidebarLabel = Boolean(memory.seatLabels[seat.name]?.title);
             const readScreenNow = shouldReadScreenForStatus(seat, agent.status, hasSidebarLabel);
             const liveScreen = live.screens[agent.pane];
+            // The fallback read is the same bounded, awaited call when the source supplies one:
+            // a pane whose screen the whole-session read could not take is asked once more,
+            // never with the pass's budget already spent.
+            const extra = readScreenNow && (liveScreen === undefined || liveScreen === '')
+              ? await screenRead(sources, gate, agent.pane, session)
+              : undefined;
             const rawScreen = readScreenNow
-              ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (sources.screen(agent.pane, session) ?? liveScreen))
+              ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (extra ?? liveScreen))
               : undefined;
             if (rawScreen !== undefined && rawScreen !== '') {
               live.screens[agent.pane] = rawScreen;
@@ -880,47 +1031,70 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
         if (checksAt === null || now - checksAt >= budget.checkEvery * 1000) {
           yieldBeat();
-          checksAt = now;
-          outcomes = sources.readChecks(standing, team, now);
-          // A check command is synchronous and can run for its own timeout: the beat it displaced
-          // lands as soon as it returns.
-          yieldBeat();
-          // The money a spend check counted is kept, like the pass's screen readings: the launch
-          // gate of `up` and `add` reads it later, and one that is stale by then reads unknown
-          // (§ 5). An account whose check did not run keeps its stored reading.
-          if (!foreign) saveSpendReadings(dir, spendOf(outcomes));
-          for (const outcome of outcomes) {
-            const key = `check:${outcome.account}`;
-            if (outcome.state === 'read') {
-              told.delete(key);
-              continue;
+          const checkCall = gate.take();
+          // A pass whose budget is spent before the checks leaves `checksAt` where it is, so the
+          // next pass runs them rather than skipping a whole cadence. A stop between two check
+          // commands ends the list inside the awaited runner.
+          if (checkCall !== null) {
+            checksAt = now;
+            outcomes = sources.readChecksAsync !== undefined
+              ? await sources.readChecksAsync(standing, team, now, checkCall)
+              : sources.readChecks(standing, team, now);
+            // A check command is awaited (or synchronous) and can run for its own timeout: the
+            // beat it displaced lands as soon as it returns.
+            yieldBeat();
+            // The money a spend check counted is kept, like the pass's screen readings: the launch
+            // gate of `up` and `add` reads it later, and one that is stale by then reads unknown
+            // (§ 5). An account whose check did not run keeps its stored reading.
+            if (!foreign) saveSpendReadings(dir, spendOf(outcomes));
+            for (const outcome of outcomes) {
+              const key = `check:${outcome.account}`;
+              if (outcome.state === 'read') {
+                told.delete(key);
+                continue;
+              }
+              if (told.has(key)) continue;
+              told.add(key);
+              say(outcome.state === 'unreadable'
+                ? `${outcome.account}: its check is unreadable`
+                : `the check for ${outcome.account} is unapproved; that account reads unknown`, false);
             }
-            if (told.has(key)) continue;
-            told.add(key);
-            say(outcome.state === 'unreadable'
-              ? `${outcome.account}: its check is unreadable`
-              : `the check for ${outcome.account} is unapproved; that account reads unknown`, false);
           }
         }
         // Herdr's process list per pane, read with the screen: a figure is only read off a pane
         // where herdr reports the seat's CLI. A pane it can't read is null, and a null is not a
-        // CLI: no figure.
+        // CLI: no figure. One `pane process-info` per pane answers both figures, and the awaited
+        // whole-session read already took it: the maps it returned are this pass's reading. A
+        // seam whose live read does not carry them keeps the per-pane read, still bounded by the
+        // same budget; a pane the budget did not reach is left out of the maps — unread, which
+        // the pass reports as unknown, never as gone.
         const foreground: Record<string, string[] | null> = {};
-        // The pane's process identity, read with the same screen: a pane that no longer holds
-        // the process team launched for its seat is not the seat, and the restored check says so.
         const processes: Record<string, PaneProcesses | null> = {};
-        for (const agent of live.agents) {
-          // Between seats: two synchronous herdr reads each, one per process figure.
-          yieldBeat();
-          foreground[agent.pane] = sources.foreground(agent.pane, session);
-          processes[agent.pane] = sources.processes?.(agent.pane, session) ?? null;
+        if (live.foreground !== undefined && live.processes !== undefined) {
+          Object.assign(foreground, live.foreground);
+          Object.assign(processes, live.processes);
+        } else {
+          for (const agent of live.agents) {
+            // Between seats: the process read, one per figure when the seam has no whole-session
+            // map to offer.
+            yieldBeat();
+            foreground[agent.pane] = await foregroundRead(sources, gate, agent.pane, session);
+            processes[agent.pane] = await processesRead(sources, gate, agent.pane, session);
+          }
         }
         // The machine's own readings, written to the log at the slow rate: the same figures the
         // pass below reads, whether or not anything is wrong, so the night the incident was is
         // on record in the tool's own files. `unread` where a figure couldn't be read; the gate
-        // that acts on these figures is elsewhere and unchanged.
-        const machine = sources.machine(root);
+        // that acts on these figures is elsewhere and unchanged. Awaited when the source supplies
+        // the child-bounded read; a pass whose budget is spent before it reads the unread shape.
+        const machineCall = gate.take();
+        const machine = machineCall === null
+          ? unreadMachine()
+          : sources.machineAsync !== undefined
+            ? await sources.machineAsync(root, machineCall)
+            : sources.machine(root);
         yieldBeat();
+        if (stopped()) break;
         if (readingsAt === null || now - readingsAt >= READINGS_EVERY * 1000) {
           readingsAt = now;
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
@@ -1325,6 +1499,21 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         paneGoneOnce = place === 'end';
         beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
+      // The pass's read outcome: a cut pass retries shortly (up to the cap), then the watch goes
+      // back to its interval; a pass that read every pane it meant to clears both the count and
+      // the line, so a later cut is a new episode. The retry repeats no report: every line a
+      // pass prints is deduplicated by `told`, and the cut line is one of them.
+      if (gate.cut) {
+        cutPasses += 1;
+        if (!told.has('read-cut')) {
+          told.add('read-cut');
+          say(`the read pass ran out of its ${limits.budgetMs} ms budget; the panes it did not reach are read on the next pass`, false);
+        }
+      } else {
+        cutPasses = 0;
+        told.delete('read-cut');
+      }
+      const waitSeconds = readWait(inForce.interval, gate.cut, cutPasses);
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes
       // the last live read named — the same memory, so the two cannot disagree — and the next
@@ -1332,7 +1521,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // A hosted watch has no sidebar and no pane line: the label sweep would only write
       // refusals to the daemon's log, so its wait carries no sweep.
       if (hosted !== undefined) {
-        if (!(await sources.wait(inForce.interval))) break;
+        if (!(await sources.wait(waitSeconds))) break;
         continue;
       }
       const sweep = () => {
@@ -1347,7 +1536,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         });
         for (const seat of failed) say(`${seat.name}: its display was not reported`, false);
       };
-      if (!(await sources.wait(inForce.interval, sweep))) break;
+      if (!(await sources.wait(waitSeconds, sweep))) break;
     }
   } finally {
     statusWaiters?.stop();

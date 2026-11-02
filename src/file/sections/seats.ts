@@ -101,6 +101,7 @@ export const seats: Section = {
           enum: ['on', 'off'],
           $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
         },
+        public_only: { type: 'boolean', $comment: 'the seat\'s briefs go to a service outside this machine: the team\'s rules are never prepended, and a send reads the body against the machine\'s private lists and falls through on a match; a hosted CLI\'s profile is public-only on its own, and a seat can only add the guard' },
         inbound: {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
@@ -159,7 +160,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -243,6 +244,11 @@ function readSeats(
       check.fail(watchWakeField?.value.line ?? line, `${at}: watch_wake "on" needs a CLI profile that declares typed_wake, and "${String(cli)}" declares none`);
       watchWake = undefined;
     }
+    // The seat's briefs go to a service outside this machine. A field of the built seat like
+    // `human`, omitted when the file marks none — every file that marks no seat keeps the digest
+    // it had. A written `false` reads as absent, so a team file can only add the guard a hosted
+    // CLI's profile already declares, never take it away.
+    const publicOnly = check.flag(fields.get('public_only'), `${at}: public_only`);
     // The seat's own word on cross-session socket frames. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
@@ -312,6 +318,8 @@ function readSeats(
         ...(human ? { human: true as const } : {}),
         // Omitted when the file writes no watch_wake word, for the same reason.
         ...(watchWake !== undefined ? { watchWake } : {}),
+        // Omitted when the file marks no public-only seat, for the same reason.
+        ...(publicOnly ? { publicOnly: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
         // Omitted when the file configures no webhook adapter, for the same reason.

@@ -1,6 +1,6 @@
 // Load HOME-sensitive modules only in a child whose HOME this suite creates itself.
 import { expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -57,6 +57,6 @@ export async function independentHomeSuite(suite: string, loadCases: () => Promi
       process.stdout.write(out); process.stderr.write(err);
       expect(code).toBe(0); expect(process.env.HOME).toBe(parentHome);
       expect(lstatSync(home).isSymbolicLink()).toBe(false);
-    } finally { execFileSync('trash', [base]); }
+    } finally { discardFixtures([base]); }
   }, 120_000);
 }

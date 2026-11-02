@@ -1,6 +1,6 @@
 // The HOME-sensitive modules are loaded only in a fresh process with an owned HOME.
 import { expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdtempSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +30,6 @@ if (process.env[flag] === import.meta.path) {
       expect(secretAbsent).toBe(true);
       if (secretAbsent) { process.stdout.write(stdout); process.stderr.write(stderr); }
       expect(code).toBe(0);
-    } finally { execFileSync('trash', [base]); }
+    } finally { discardFixtures([base]); }
   }, 60_000);
 }

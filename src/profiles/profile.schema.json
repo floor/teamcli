@@ -20,6 +20,11 @@
       }
     },
     "unattended": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "features": {
+      "type": "array", "minItems": 1,
+      "description": "optional: the one feature set every seat's launch pins, as name=true or name=false; each pair rides the launch as a trailing -c features.<pair>, so the CLI's last-wins config rule makes it the seat's effective value",
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+=(true|false)$" }
+    },
     "rules": {
       "oneOf": [
         { "const": "first-message" },
@@ -70,6 +75,40 @@
       "description": "the keys that exit the CLI from its idle screen, in order, for a CLI that takes no exit text; a profile carries this or exit, never both"
     },
     "compose_module": { "$ref": "#/$defs/screenModule" },
+    "session_cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "created", "pull"],
+      "description": "optional: the CLI's own session-creating and session-pulling calls, as a run measured them — the whole body rides the creating call as one argument; absent, its seats have no session leg",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words; the task argument follows them"
+        },
+        "repo_flag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the option a repository is passed as, before the task; absent when the CLI takes none and chooses from its working folder"
+        },
+        "created": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the line prefix the CLI prints once a session exists; the session id follows it"
+        },
+        "pull": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the binary and its own subcommand words for pulling one session's result; --session <id> --apply follow them"
+        }
+      }
+    },
+    "public_only": {
+      "type": "boolean",
+      "description": "optional: whether every seat of this CLI is public-only — the team's rules are never prepended to its briefs, and a send scans the whole body against the machine's private lists before the CLI's session call, refusing a body that matches one; absent reads as false, and a hosted CLI whose sessions run on another service sets true"
+    },
     "exit_clear": {
       "type": "string",
       "enum": ["ctrl+c", "ctrl+u", "escape", "backspace"],
@@ -217,6 +256,57 @@
       }
     },
     "models": { "$ref": "#/$defs/models" },
+    "vendors": {
+      "type": "array",
+      "minItems": 1,
+      "description": "optional: the vendors this CLI can run for with no launcher script — each vendor's env words ({credential} and {model} fill them), the credential item this machine must hold, and the model ids it offers; declared together with credentials",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "credential", "env", "models"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "credential": { "type": "string", "minLength": 1, "description": "the item this machine's credential store must hold before a seat may move to this vendor" },
+          "env": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "minItems": 1,
+            "description": "the shell words the launch line sets before the CLI: each sets one variable, and {model} is the model id and {credential} the item"
+          },
+          "models": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "model", "version", "display"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "model": { "type": "string", "minLength": 1 },
+                "version": { "type": "string", "minLength": 1 },
+                "display": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "add", "missing_status"],
+      "description": "optional: how this machine's store is asked whether it holds a vendor's item — the attribute-only lookup, the one-time add command a refusal prints, and the status the store answers for an absent item; declared together with vendors",
+      "properties": {
+        "check": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the lookup, without the secret: nothing here asks for the item's value"
+        },
+        "add": { "type": "string", "minLength": 1, "pattern": "\\{item\\}", "description": "the one-time command that adds a missing item; {item} is its name, and the command asks the store for the secret itself" },
+        "missing_status": { "type": "integer", "description": "the exit status that means the store holds no such item" }
+      }
+    },
     "status_model": { "type": "array", "items": { "$ref": "#/$defs/statusModelRule" }, "minItems": 1, "description": "optional: absent, the CLI's screen doesn't show its model" },
     "last_used_model": { "type": "boolean", "description": "optional: the CLI starts on its last-used model when a launch names none" },
     "unread_model": { "type": "string", "enum": ["launch"], "description": "optional: launch names no model read from the screen but the launch line's own, labelled (from launch)" },
@@ -240,7 +330,9 @@
     }
   ],
   "allOf": [
-    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] }
+    { "oneOf": [{ "required": ["exit"] }, { "required": ["exit_keys"] }] },
+    { "if": { "required": ["vendors"] }, "then": { "required": ["credentials"] } },
+    { "if": { "required": ["credentials"] }, "then": { "required": ["vendors"] } }
   ],
   "$defs": {
     "questionAnswer": {

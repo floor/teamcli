@@ -83,7 +83,8 @@
                 "mcp-inbox",
                 "typed",
                 "drop",
-                "headless-resume"
+                "headless-resume",
+                "session"
               ]
             }
           },

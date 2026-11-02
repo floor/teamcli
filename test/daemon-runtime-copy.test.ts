@@ -69,8 +69,21 @@ function programOnDisk(home: string, name: string, entryBytes = 'import "./modul
   return join(folder, 'cli.js');
 }
 
-function programOf(entry: string): ServiceProgram {
-  return { execPath: '/runtime/bin/node', entry, roots: ['/repo'] };
+function programOf(entry: string, roots: string[] = ['/repo']): ServiceProgram {
+  return { execPath: '/runtime/bin/node', entry, roots };
+}
+
+/** A hook settings file under a checkout's own hooks folder, as this tool writes one: a JSON
+ *  document whose command names the CLI the hook runs. */
+function hookFile(root: string, session: string, seat: string, command: string): string {
+  const folder = join(root, '.agents', 'hooks', session);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  const path = join(folder, `${seat}.json`);
+  writeFileSync(
+    path,
+    `${JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command }] }] } }, null, 2)}\n`,
+  );
+  return path;
 }
 
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
@@ -407,6 +420,114 @@ test('a successful install removes a copy no unit names and keeps the one in use
 
   expect(copies(home)).toEqual([sha!]);
   expect(existsSync(stale)).toBe(false);
+});
+
+describe('a hosted root\'s hook files keep the runtime copies they name', () => {
+  test('a copy a hosted root\'s hook file names survives a refresh, with the new and prior copies', () => {
+    const { root, home } = scratch();
+    const other = join(root, '..', 'root-2');
+    mkdirSync(join(other, '.agents'), { recursive: true });
+
+    const firstEntry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    const first = manager.install(home, programOf(firstEntry, [root, other]));
+    expect(first.ok, first.ok ? '' : first.why).toBe(true);
+    const [priorSha] = copies(home);
+    expect(priorSha).toBeDefined();
+
+    // Two copies no unit names, one named by each hosted root's hook file.
+    const byFirst = 'b'.repeat(64);
+    const byOther = 'd'.repeat(64);
+    for (const name of [byFirst, byOther]) {
+      mkdirSync(join(copyRoot(home), name), { recursive: true, mode: 0o700 });
+    }
+    hookFile(root, 'acme', 'worker-1', `/usr/bin/node ${join(copyRoot(home), byFirst, 'cli.js')} drops --read`);
+    hookFile(other, 'acme', 'worker-2', `/usr/bin/node ${join(copyRoot(home), byOther, 'cli.js')} drops --read`);
+
+    const secondEntry = programOnDisk(home, 'v2', 'import "./module.js"; // refresh\n');
+    const refreshed = manager.install(home, programOf(secondEntry, [root, other]));
+    expect(refreshed.ok, refreshed.ok ? '' : refreshed.why).toBe(true);
+    if (!refreshed.ok) return;
+
+    const added = dirname(manager.plan(home, programOf(secondEntry, [root, other])).program[1]!);
+    expect(existsSync(join(copyRoot(home), priorSha!))).toBe(true);
+    expect(existsSync(added)).toBe(true);
+    expect(copies(home)).toContain(byFirst);
+    expect(copies(home)).toContain(byOther);
+    expect(refreshed.hookedRuntime).toEqual([byFirst, byOther]);
+    expect(refreshed.runtimeKeepFault).toBeUndefined();
+  });
+
+  test('an unnamed copy is pruned, and a hook of a root this install does not host keeps nothing', () => {
+    const { root, home } = scratch();
+    const unhosted = join(root, '..', 'root-unhosted');
+    mkdirSync(join(unhosted, '.agents'), { recursive: true });
+    const firstEntry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(firstEntry, [root])).ok).toBe(true);
+
+    const named = 'b'.repeat(64);
+    const stale = 'c'.repeat(64);
+    const unhostedCopy = 'e'.repeat(64);
+    for (const name of [named, stale, unhostedCopy]) {
+      mkdirSync(join(copyRoot(home), name), { recursive: true, mode: 0o700 });
+    }
+    hookFile(root, 'acme', 'worker-1', `node ${join(copyRoot(home), named, 'cli.js')} drops --read`);
+    hookFile(unhosted, 'acme', 'worker-1', `node ${join(copyRoot(home), unhostedCopy, 'cli.js')} drops --read`);
+
+    const secondEntry = programOnDisk(home, 'v2', 'import "./module.js"; // refresh\n');
+    const refreshed = manager.install(home, programOf(secondEntry, [root]));
+    expect(refreshed.ok, refreshed.ok ? '' : refreshed.why).toBe(true);
+    if (!refreshed.ok) return;
+
+    expect(copies(home)).toContain(named);
+    expect(copies(home)).not.toContain(stale);
+    expect(copies(home)).not.toContain(unhostedCopy);
+    expect(refreshed.hookedRuntime).toEqual([named]);
+  });
+
+  test('a hook file that does not parse prunes nothing, and the install says why', () => {
+    const { root, home } = scratch();
+    const firstEntry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(firstEntry, [root])).ok).toBe(true);
+    const stale = 'c'.repeat(64);
+    mkdirSync(join(copyRoot(home), stale), { recursive: true, mode: 0o700 });
+    const folder = join(root, '.agents', 'hooks', 'acme');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    writeFileSync(join(folder, 'worker-1.json'), 'this is not a settings document\n');
+
+    const secondEntry = programOnDisk(home, 'v2', 'import "./module.js"; // refresh\n');
+    const refreshed = manager.install(home, programOf(secondEntry, [root]));
+    expect(refreshed.ok, refreshed.ok ? '' : refreshed.why).toBe(true);
+    if (!refreshed.ok) return;
+
+    expect(copies(home)).toContain(stale);
+    expect(refreshed.hookedRuntime).toBeUndefined();
+    expect(refreshed.runtimeKeepFault).toContain('does not parse');
+  });
+
+  test('a hook file that is a symbolic link prunes nothing, and the install says why', () => {
+    const { root, home } = scratch();
+    const firstEntry = programOnDisk(home, 'v1');
+    const manager = managerIn([]);
+    expect(manager.install(home, programOf(firstEntry, [root])).ok).toBe(true);
+    const stale = 'c'.repeat(64);
+    mkdirSync(join(copyRoot(home), stale), { recursive: true, mode: 0o700 });
+    const folder = join(root, '.agents', 'hooks', 'acme');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const elsewhere = join(root, 'elsewhere.json');
+    writeFileSync(elsewhere, '{"hooks":{}}\n');
+    symlinkSync(elsewhere, join(folder, 'worker-1.json'));
+
+    const secondEntry = programOnDisk(home, 'v2', 'import "./module.js"; // refresh\n');
+    const refreshed = manager.install(home, programOf(secondEntry, [root]));
+    expect(refreshed.ok, refreshed.ok ? '' : refreshed.why).toBe(true);
+    if (!refreshed.ok) return;
+
+    expect(copies(home)).toContain(stale);
+    expect(refreshed.runtimeKeepFault).toContain('symbolic link');
+  });
 });
 
 describe('a dry run plans the retained copy and writes nothing', () => {

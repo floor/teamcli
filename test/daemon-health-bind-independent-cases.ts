@@ -1,6 +1,7 @@
 // In-process host and owned machine socket only; send, bus, presence and restore seams are inert.
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import type { PresenceIngestResult } from '../src/daemon/presence/ingest.ts';
 import type { DaemonHost } from '../src/send/daemon.ts';
 import { assertIndependentHome } from './independent-home-fixture.ts';
 const NOW = new Date('2026-11-01T10:30:00.000Z');
+const FIXTURE_ROOT = '/tmp/teamcli-hbi-fixtures';
 const owned: string[] = [];
 const pending: { release(): void; started: Promise<StartMachineDaemonResult> }[] = [];
 const mocks: { mockRestore(): void }[] = [];
@@ -22,7 +24,7 @@ afterEach(async () => {
     for (const one of pending.splice(0)) { const result = await one.started; if (result.kind === 'serving') await result.daemon.close(); }
   } finally {
     for (const mock of mocks.splice(0)) mock.mockRestore();
-    for (const dir of owned.splice(0)) execFileSync('trash', [dir]);
+    for (const dir of owned.splice(0)) discardFixtures([dir], { roots: [FIXTURE_ROOT] });
   }
 });
 const golden: { base: string; rows: Record<string, string> } = JSON.parse(fs.readFileSync(new URL('./fixtures/daemon-health-bind-independent-parity.json', import.meta.url), 'utf8'));
@@ -50,7 +52,7 @@ seats:
     launch: claude
 `;
 function world(count = 1) {
-  const base = fs.realpathSync(fs.mkdtempSync('/tmp/hbi-')); owned.push(base);
+  fs.mkdirSync(FIXTURE_ROOT, { recursive: true }); const base = fs.realpathSync(fs.mkdtempSync(join(FIXTURE_ROOT, 'hbi-'))); owned.push(base);
   const home = join(base, 'h'); fs.mkdirSync(home);
   const roots = Array.from({ length: count }, (_, i) => {
     const root = join(base, 'r' + i); fs.mkdirSync(join(root, '.agents'), { recursive: true });

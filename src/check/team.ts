@@ -68,9 +68,10 @@ import {
 } from '../output/index.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
-import { herdrUnreliable } from '../profiles/index.ts';
+import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { featureMismatch } from '../launch/features.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
-import { displayEffort } from '../profiles/profile.ts';
+import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
   readProjectPolicySource,
@@ -442,6 +443,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
+    ...featureDifferences(team, state),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     // A team file left beside a registry team that says something else: never silent.
@@ -1358,6 +1360,31 @@ function labelDrifts(team: TeamFile, state: SessionState, live: Live): LabelDrif
   return out;
 }
 
+// A running seat whose recorded launch line does not carry the one feature set its profile
+// pins. Every seat of such a CLI joins one background server; a front end whose settings differ
+// is refused until its owner chooses "run without daemon", which costs the seat the route its
+// drops arrive on. The reading is the RECORDED launch line in team's own state, never a running
+// process's command line, and a record that holds no line says unknown rather than a guess. The
+// repair is the relaunch that writes the pinned line; a seat the state does not record was not
+// left running by this session and is not named.
+function featureDifferences(team: TeamFile, state: SessionState): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.stopped) continue;
+    const features = profileFor(seat.cli)?.features ?? [];
+    if (features.length === 0) continue;
+    const held = state.seats[seat.name];
+    if (!held) continue;
+    // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
+    // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
+    // than as carrying a pin written after a script the CLI never receives.
+    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    if (said === null) continue;
+    out.push({ what: `${seat.name}: ${said}`, repair: `team restart ${seat.name}` });
+  }
+  return out;
+}
+
 /**
  * The drifts as differences, one per line: the repair is `team register <seat>`, which re-applies
  * both lines from the file without a relaunch.
@@ -1718,6 +1745,8 @@ function socketSkippedDeliveries(
       order = deliveryOrder(chain);
       declaredOrder = Object.values(chain).some((word) => word !== undefined && word.length > 0);
     } catch {
+      // A project registry or policy record this reader cannot read is named once by
+      // `registryDifferences`; this seat's socket reading never guesses an order around it.
       continue;
     }
     // A declared order that names neither the socket nor `typed` — whose wake the socket stands

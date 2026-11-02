@@ -1122,6 +1122,50 @@ function appendIndexOf(
  *  number (`seq = newestSeq + 1`). When `deduplicate` is true (the default), if a verified event
  *  with the same `(kind, record_id, session)` is already present in the retained log, returns it
  *  with `duplicate: true` without writing a second record. */
+/** The payload one append writes for an input at a sequence, validated: null when any field
+ *  would make the record unreadable. Shared with `signEventRecord`, so an envelope signed for a
+ *  POST carries exactly the fields an append would have written for the same input and sequence. */
+function eventPayloadOf(input: EventAppendInput, seq: number): EventPayload | null {
+  const candidate: EventPayload = {
+    v: 1,
+    seq,
+    ts: input.ts,
+    kind: input.kind,
+    session: input.session,
+    record_id: input.record_id,
+  };
+  for (const field of OPTIONAL_STRING_FIELDS) {
+    if (input[field] !== undefined && input[field] !== '') {
+      candidate[field] = input[field];
+    }
+  }
+  for (const field of OPTIONAL_SEQUENCE_FIELDS) {
+    if (input[field] !== undefined) {
+      candidate[field] = input[field];
+    }
+  }
+  return parseEventPayload(candidate);
+}
+
+/** Signs one event record without appending it: the envelope a send posts to a seat's webhook
+ *  adapter, which needs the bus's body even when no bus is there to append the arrival. The
+ *  record never enters the log — the bus stays the only appender — so its sequence is the
+ *  caller's to name, and the caller names one that cannot be mistaken for a log position.
+ *  Null when the payload or the message key is unusable. */
+export function signEventRecord(
+  input: EventAppendInput,
+  seq: number,
+  home: string,
+): SignedEventRecord | null {
+  const payload = eventPayloadOf(input, seq);
+  if (payload === null) return null;
+  try {
+    return { payload, signature: signDomain(EVENT_DOMAIN, payload as unknown as Json, messageKeyOf(home)) };
+  } catch {
+    return null;
+  }
+}
+
 export function appendEvent(
   project: string,
   root: string,
@@ -1183,25 +1227,7 @@ export function appendEvent(
   // If the current file rotated earlier and `newestSeq` is null, start at 1; otherwise strictly
   // increment from the highest sequence seen across the retained files.
   const nextSeq = options.seqOverride ?? ((indexed.index.newestSeq ?? 0) + 1);
-  const candidate: EventPayload = {
-    v: 1,
-    seq: nextSeq,
-    ts: input.ts,
-    kind: input.kind,
-    session: input.session,
-    record_id: input.record_id,
-  };
-  for (const field of OPTIONAL_STRING_FIELDS) {
-    if (input[field] !== undefined && input[field] !== '') {
-      candidate[field] = input[field];
-    }
-  }
-  for (const field of OPTIONAL_SEQUENCE_FIELDS) {
-    if (input[field] !== undefined) {
-      candidate[field] = input[field];
-    }
-  }
-  const validated = parseEventPayload(candidate);
+  const validated = eventPayloadOf(input, nextSeq);
   if (validated === null) return { ok: false, reason: 'the event payload is invalid' };
 
   let signature: string;

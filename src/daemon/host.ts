@@ -28,7 +28,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcesses } from '../herdr.ts';
+import { paneProcesses, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
@@ -36,7 +36,7 @@ import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
-import { sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
@@ -237,6 +237,13 @@ export type StartMachineDaemonInput = {
    * with no verifier, so the two seams are only ever open together.
    */
   nextHandler?: NextDispatchHandler;
+  /**
+   * The verified pane's process identity for a `next` request's delivery class: the proof that
+   * a recorded socket is the pane's own. The default asks the terminal host; a test injects its
+   * own so a synthetic listener scene makes no terminal-host call. A reader that cannot answer
+   * returns null, the conservative rule.
+   */
+  paneProcesses?: (pane: string, session: string) => PaneProcesses | null;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
@@ -762,7 +769,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // The verified pane's process identity, read the way this host reads a pane for a watch
         // authority: the handler's class then knows whether the recorded socket is the pane's
         // own. A pane the terminal host cannot answer for reads null, the conservative rule.
-        processes: paneProcesses(verdict.pane, route.session),
+        processes: (input.paneProcesses ?? paneProcesses)(verdict.pane, route.session),
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
@@ -1872,10 +1879,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       roots: sweepRoots,
       now,
       ...(housekeeping
-        ? { retire: { limit: FALLBACK_STORE_PASS_LIMIT, lockWaitMs: 0 } }
+        ? {
+            retire: {
+              limit: FALLBACK_STORE_PASS_LIMIT,
+              // The backlog knobs are the team's word, read for each hosted root: above the
+              // threshold one pass takes the bulk limit instead of the steady one, so a store
+              // that was never retired before empties over a few passes. A root whose chain
+              // cannot be read keeps the release defaults and says why below.
+              backlogLimitsFor: (entry: SweepRoot) => storeBacklogLimits(entry.team, entry.root, home, now()),
+              lockWaitMs: 0,
+            },
+          }
         : {}),
     });
     for (const entry of swept.roots) {
+      if (entry.note !== null) logLine(`fallback sweep ${entry.root}: ${entry.note}`);
       if (entry.why !== null) {
         logLine(`fallback sweep ${entry.root}: ${entry.why}`);
         continue;

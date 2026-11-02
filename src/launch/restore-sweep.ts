@@ -7,6 +7,7 @@
 // session's run lock for the whole pass and hands it to `runUp` through its internal seam, so a
 // concurrent manual `team up` refuses rather than launching over the sweep.
 import { dirname } from 'node:path';
+import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { SessionState } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -149,7 +150,11 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
       stderr: (text) => err.push(text),
     };
     const seen: { report: Report | null } = { report: null };
-    const exit = await runUp(['--file', loaded.path], io, sources, {
+    // The file the route was loaded from, never the path a registry read carries: a registry
+    // team's `path` is the conventional filename that need not exist, and `up --file` reads only
+    // the file it names. With no file, `up` resolves this root the way this pass did.
+    const launchFile = launchTeamFile(loaded);
+    const exit = await runUp(launchFile === undefined ? [] : ['--file', launchFile], io, sources, {
       caller: OWNER,
       lockHeld: true,
       nonInteractive: true,

@@ -11,7 +11,7 @@ import {
   symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow } from '../src/commands/seats.ts';
 import { plantRecord } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -26,13 +26,15 @@ import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyRece
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import {
-  cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
+  cliHookSettings, cliHookSettingsPath, cliHookStatePath, dropReadRunner, hookRunnerFor, installCliHooks,
+  namesRuntimeCopy, plannedCliHooks, readCliHook, refreshCliHooks, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
+import { recordInstalledProgram, stableHookPath } from '../src/daemon/runtime-entry.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
 import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
-import { emptySession, type SessionState } from '../src/state.ts';
+import { emptySession, readState, updateState, type SessionState } from '../src/state.ts';
 import type { Comparison, Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -144,6 +146,23 @@ describe('what a run plans and what it installs', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
   });
 
+  test('a rewrite whose command paths moved keeps the declaration time', () => {
+    // The bytes change for a reason that is not the declaration: this run resolved the CLI a
+    // hook command runs to a different entry, and every presence and drop command names it. The
+    // top-level word is the same (none), so the file is the same declaration and its times stay
+    // the seat's declaredAt — a running session does not become stale for a moved command path.
+    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    const path = landed.worker!;
+    const declaredAt = new Date('2026-10-21T06:46:42Z');
+    utimesSync(path, declaredAt, declaredAt);
+    const before = statSync(path).mtimeMs;
+    expect(installCliHooks(dir, SESSION, [seat('worker')], undefined, join(base), '/opt/team/dist/cli.js'))
+      .toEqual({ worker: path });
+    const text = readFileSync(path, 'utf8');
+    expect(text).toContain('/opt/team/dist/cli.js drops --read');
+    expect(statSync(path).mtimeMs).toBe(before);
+  });
+
   test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
     // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
     // cross-session frames in the team file launches the seat able to take them.
@@ -182,6 +201,65 @@ describe('what a run plans and what it installs', () => {
   test('the install is silent when no seat is served', () => {
     expect(installCliHooks(dir, SESSION, [seat('codex-seat', 'codex', 'codex')])).toEqual({});
     expect(existsSync(join(dir, 'hooks'))).toBe(false);
+  });
+});
+
+describe('the CLI a hook command names', () => {
+  const COPY = 'a'.repeat(64);
+
+  /** A retained runtime copy of this program under a synthetic home, and the installed program
+   *  it was made from: two folders, each with the two files the hook resolvers name. */
+  function copyAndInstalled(): { home: string; copy: string; installed: string } {
+    const home = join(base, 'home');
+    const copy = join(home, '.config', 'team', 'daemon-runtime', COPY);
+    mkdirSync(join(copy, 'src', 'launch'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(copy, 'src', 'cli.ts'), '// the retained copy\n');
+    const installed = join(base, 'installed');
+    mkdirSync(join(installed, 'src', 'launch'), { recursive: true });
+    writeFileSync(join(installed, 'src', 'cli.ts'), '// the installed program\n');
+    writeFileSync(join(installed, 'src', 'launch', 'command-guard-hook.ts'), '// the installed guard\n');
+    return { home, copy, installed };
+  }
+
+  test('a run from a retained runtime copy names the installed program, never the copy', () => {
+    // The daemon's restore pass installs hooks in-process, from the private copy the service
+    // manager runs. A command naming that copy breaks on the next refresh; the installed
+    // program the copy was made from is the one that outlives it.
+    const { home, copy, installed } = copyAndInstalled();
+    expect(recordInstalledProgram(home, { entry: join(installed, 'src', 'cli.ts'), root: installed })).toBe(true);
+    const here = join(copy, 'src', 'launch', 'cli-hook.ts');
+    const runner = hookRunnerFor(here, home);
+    expect(runner).not.toBeNull();
+    expect(runner).toContain(join(installed, 'src', 'cli.ts'));
+    expect(runner).not.toContain('daemon-runtime');
+    expect(stableHookPath(join(copy, 'src', 'launch', 'command-guard-hook.ts'), home))
+      .toBe(join(installed, 'src', 'launch', 'command-guard-hook.ts'));
+  });
+
+  test('a copy with no recorded origin, or a twin that is gone, names no CLI at all', () => {
+    // A command naming the copy is worse than no command: the settings file keeps its state
+    // hooks and its declaration, and the seat outlives a later refresh's cleanup.
+    const { home, copy, installed } = copyAndInstalled();
+    const here = join(copy, 'src', 'launch', 'cli-hook.ts');
+    expect(hookRunnerFor(here, home)).toBeNull();
+    expect(stableHookPath(join(copy, 'src', 'launch', 'command-guard-hook.ts'), home)).toBeNull();
+    expect(recordInstalledProgram(home, { entry: join(installed, 'src', 'cli.ts'), root: installed })).toBe(true);
+    rmSync(join(installed, 'src', 'cli.ts'));
+    expect(hookRunnerFor(here, home)).toBeNull();
+    const settings = JSON.parse(cliHookSettings('/state/worker.json', { seat: 'worker', session: 'sweep' }, undefined, 'accept', undefined, null)) as {
+      crossSessionInbound?: string;
+      hooks: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    expect(settings.crossSessionInbound).toBe('accept');
+    expect(settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toContain('"state":"working"');
+    expect(JSON.stringify(settings)).not.toContain('drops --read');
+  });
+
+  test('an install whose own entry is already stable names it as it stands', () => {
+    // A checkout or a package install runs its own CLI; no record is read and nothing is
+    // rewritten to a different program.
+    const here = join(base, 'pkg', 'src', 'launch', 'cli-hook.ts');
+    expect(hookRunnerFor(here, join(base, 'home'))).toContain(join(base, 'pkg', 'src', 'cli.ts'));
   });
 });
 
@@ -278,7 +356,9 @@ seats:
   test('the install adds the read to the same turn start, run by this install’s own CLI', () => {
     const landed = install();
     const command = dropCommand(landed);
-    expect(command).toContain(dropReadRunner());
+    const runner = dropReadRunner();
+    expect(runner).not.toBeNull();
+    expect(command).toContain(runner!);
     expect(command).toContain(`--seat ${SEAT}`);
     expect(command).toContain(`--session ${SESSION}`);
     // The receipt is the signed status receipt the inbox writes; no shell marker of its own.
@@ -929,5 +1009,105 @@ describe('a registry row reads the state file', () => {
   test('no session given: the hook is not read', () => {
     writeState(`{"state":"working","since":"${ago(5)}"}\n`);
     expect(row({ stateDir: dir })).toMatchObject({ state: 'unknown', state_source: 'none' });
+  });
+});
+
+// A running seat is not relaunched by a refresh: the file its process already has is rewritten
+// with the command a launch installs today (through installCliHooks), the presence binding is
+// the one it was launched with, and the declaration time stands unless the inbound word moved —
+// the send walk compares that time with the seat's socket (`src/send/inbound.ts`).
+describe('a running seat\'s hook file, refreshed without a restart', () => {
+  const SESSION = 'teamcli';
+  const COPY = 'f'.repeat(64);
+  const OLD = new Date('2020-01-01T00:00:00Z');
+  const seat = (name: string) => ({ name, cli: 'claude-code', launch: CLAUDE });
+  const writeOld = (path: string, document: unknown, mode = 0o600): void => {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, { mode });
+    // `writeFileSync`'s mode is masked by the umask; the scene pins the file's own.
+    chmodSync(path, mode);
+    utimesSync(path, OLD, OLD);
+  };
+  const oldDocument = (word?: 'accept'): unknown => ({
+    hooks: {
+      UserPromptSubmit: [{
+        hooks: [{ type: 'command', command: `node /gone/daemon-runtime/${COPY}/dist/cli.js drops --read --seat worker --session ${SESSION}` }],
+      }],
+    },
+    ...(word === undefined ? {} : { crossSessionInbound: word }),
+  });
+
+  test('the command a launch installs today is written over the file, and no file is created', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.failed).toEqual([]);
+    const text = readFileSync(path, 'utf8');
+    expect(text).not.toContain('daemon-runtime');
+    expect(text).toContain(dropReadRunner()!);
+    // A seat handed to the refresh that has no file keeps none: its running process never loaded
+    // one, and a file created now would declare a time newer than the seat's socket.
+    const other = cliHookSettingsPath(dir, SESSION, 'other')!;
+    expect(refreshCliHooks(dir, SESSION, [seat('other')]))
+      .toEqual({ rewritten: [], unchanged: [], failed: [], kept: [] });
+    expect(existsSync(other)).toBe(false);
+  });
+
+  test('a rewrite whose inbound word did not change keeps the declaration time', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual(['worker']);
+    // The atime is asserted before this test reads the file: reading it moves the atime.
+    expect(statSync(path).atimeMs).toBe(OLD.getTime());
+    expect(statSync(path).mtimeMs).toBe(OLD.getTime());
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
+  test('a word that changed is a new declaration: the time advances', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument());
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual([]);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(OLD.getTime());
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
+  test('a file that already holds the text and mode is left untouched', () => {
+    const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    const before = statSync(landed.worker!).mtimeMs;
+    expect(refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]))
+      .toEqual({ rewritten: [], unchanged: ['worker'], failed: [], kept: [] });
+    expect(statSync(landed.worker!).mtimeMs).toBe(before);
+  });
+
+  test('a wider file is tightened and declared again', () => {
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'), 0o644);
+    const refresh = refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(refresh.rewritten).toEqual(['worker']);
+    expect(refresh.kept).toEqual([]);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(OLD.getTime());
+  });
+
+  test('the presence binding is the one the running process was launched with', () => {
+    updateState(dir, (state) => {
+      (state.sessions[SESSION] ??= emptySession()).seats.worker = { stage: 'ready', presence_binding: 'prs_abc123def456' };
+    });
+    const path = cliHookSettingsPath(dir, SESSION, 'worker')!;
+    writeOld(path, oldDocument('accept'));
+    refreshCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' as const }]);
+    expect(readFileSync(path, 'utf8')).toContain('--binding prs_abc123def456');
+    expect(readState(dir).sessions[SESSION]?.seats.worker?.presence_binding).toBe('prs_abc123def456');
+  });
+
+  test('a runtime copy is recognised by its folder, and a stable path is not', () => {
+    expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY}/dist/cli.js`)).toBe(true);
+    expect(namesRuntimeCopy('/opt/homebrew/lib/node_modules/team/dist/cli.js')).toBe(false);
+    expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY.slice(1)}/dist/cli.js`)).toBe(false);
   });
 });

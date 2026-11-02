@@ -132,6 +132,56 @@ status_model:
     # The families the capture knows, as `Claude {1}` spells them; the versions `{2}` can carry.
     yields: [Claude Opus, Claude Sonnet, Claude Haiku, Claude Fable]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
+# The providers this CLI can run on, as one CLI: the env words it reads for the provider, the
+# credential item the machine must hold, and the model ids the provider offers. The naming of the
+# credential store belongs to this adapter and to no other part of the tool: a profile that does
+# not declare these blocks moves between providers only by copying a seat, and `team swap` says
+# so. `{model}` is the model id the swap runs, `{credential}` the item beside it.
+vendors:
+  - name: deepseek
+    credential: deepseek-api-key
+    env:
+      - 'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic'
+      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_MODEL={model}'
+    models:
+      - id: deepseek-flash
+        model: DeepSeek Flash
+        version: '4.0'
+        display: DeepSeek Flash 4.0
+  - name: zai
+    credential: glm-api-key
+    env:
+      - 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic'
+      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_MODEL={model}'
+    models:
+      - id: glm-5.3
+        model: GLM
+        version: '5.3'
+        display: GLM 5.3
+  - name: moonshot
+    credential: kimi-api-key
+    env:
+      - 'ANTHROPIC_BASE_URL=https://api.kimi.ai/coding/'
+      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_MODEL={model}'
+    models:
+      - id: kimi-k2.5
+        model: Kimi K2.5
+        version: '2.5'
+        # The team file requires the version as a token of its own, and `K2.5` is one word.
+        display: Kimi K2.5 2.5
+# The store those items live in: an attribute-only lookup (`find-generic-password` without `-w`,
+# so the secret never reaches a process's arguments) and the one-time command a refusal prints.
+# The add command asks the store for the secret itself — no stdin, no history — and `{item}` is
+# filled with the missing item's name; its status is what the store answers for an absent item.
+credentials:
+  check:
+    - /usr/bin/security
+    - find-generic-password
+  add: '/usr/bin/security add-generic-password -s {item} -a "$USER" -w'
+  missing_status: 44
 screen:
   # The completion row a finished turn draws before the next prompt (working.txt's
   # `✻ Cogitated for 3s · done 11:36 PM · 1 shell still` and unsent-multiline's

@@ -80,6 +80,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   workflow: () => import('./commands/workflow.ts'),
   agents: () => import('./commands/agents.ts'),
   fallback: () => import('./commands/fallback.ts'),
+  waits: () => import('./commands/waits.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one

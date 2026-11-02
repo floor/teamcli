@@ -1,12 +1,14 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import * as child from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { WatchSources } from '../src/commands/watch.ts';
 import type { UpSources } from '../src/commands/up.ts';
 import type { HostedWatch } from '../src/daemon/watch.ts';
 
 // Guards precede production imports. No process is launched or signalled by a scene.
+const fixturePrefix = join(realpathSync(tmpdir()), 'o3registry-');
 const forbidden: string[] = [];
 const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: any) => {
   if (pid === process.pid && signal === 0) return true;
@@ -14,7 +16,7 @@ const kill = spyOn(process, 'kill').mockImplementation(((pid: number, signal: an
 }) as typeof process.kill);
 const realExec = child.execFileSync;
 const exec = spyOn(child, 'execFileSync').mockImplementation(((command: any, args: any, options: any) => {
-  if (command === 'git' && options?.cwd?.startsWith('/private/tmp/o3registry-')) return realExec(command, args, options);
+  if (command === 'git' && options?.cwd?.startsWith(fixturePrefix)) return realExec(command, args, options);
   if (command === 'ps') return ''; // Synthetic unavailable ancestry; never run a process reader.
   forbidden.push(String(command)); throw Error('independent scene refused an external command');
 }) as typeof child.execFileSync);
@@ -61,7 +63,7 @@ seats:
     launch: claude
 `;
 function world(stale: boolean) {
-  const folder = mkdtempSync('/private/tmp/o3registry-');
+  const folder = realpathSync(mkdtempSync(fixturePrefix));
   const root = join(folder, 'checkout'), home = join(folder, 'home'), dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true }); mkdirSync(home);
   child.execFileSync('git', ['init', '-q'], { cwd: root });
