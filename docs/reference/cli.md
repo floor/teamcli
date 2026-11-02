@@ -195,6 +195,7 @@ Hidden: no
 Usage:
 
     team approvals list [--json]
+    team approvals details <id> [--json]
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
@@ -215,6 +216,34 @@ Usage:
 ### Positionals
 
 None.
+
+### `details`
+
+Hidden: no
+
+Usage:
+
+    team approvals details <id> [--json]
+
+#### Who may run it
+
+`any-caller` — the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
 
 ### `list`
 

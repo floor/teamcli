@@ -16,8 +16,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-link.ts';
 import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { actionRequestsFolder, approveTeamCreate, teamCreateSummary, type TeamCreateParams } from '../client/team-create.ts';
-import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, ownerActionSummary, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
+import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCreateDetails } from '../client/approval-card.ts';
+import { actionRequestsFolder, approveTeamCreate, type TeamCreateParams } from '../client/team-create.ts';
+import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
 import { approveAsOwnerSeat, GRANT_REQUEST_ID_PATTERN, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { openRequestLink } from '../client/request-link.ts';
@@ -42,33 +43,24 @@ type Assertion = { credentialId: string; authenticatorData: string; clientDataJS
 
 export type OwnerPageOptions = { home: string; store: OwnerSeatKeyStore; port?: number; token?: string; now?: () => Date };
 
-/** Card titles for every owner-seat action. The posted answer word is unchanged. */
-const ACTION_TITLES: Record<OwnerAction, string> = {
-  'team-create': 'Create a team',
-  'team-import': 'Import a team file',
-  'team-migrate': 'Migrate a team',
-  'team-add': 'Add a seat',
-  'team-up': 'Start the team',
-  'team-send': 'Send a message',
-  'team-down': 'Stop the team',
-  'team-bus': 'Start the bus',
-  'team-revoke-approval': 'Revoke an approval rule',
-  'team-forget': 'Forget a team record',
-  'team-config': "Change the team's record",
-  'team-general-grant': 'Issue a general grant',
-};
-
 const MIGRATION_ACTIONS = new Set<OwnerAction>(['team-migrate']);
 
 export type OwnerPageRequest = {
   id: string;
-  /** The inbox line. The page shows `title` and `description` instead of this prompt. */
+  /** The inbox line. The page shows the card instead of this prompt. */
   text: string;
+  /** The card's title line, in plain words: `TeamCLI: change the team's record`. */
   title: string;
+  /** The card's question, one sentence. */
   description: string;
+  /** The card's third line, when the kind has one: who asked and what the answer covers. */
+  scope?: string;
   /** Approve once and Deny only. Migrations, and grants a standing rule cannot cover. */
   onceOnly: boolean;
-  /** For a grant: the full permission list, shown folded under the short prompt line. */
+  /**
+   * The record, folded under the card: request id, repository, HEAD, bound arguments, hashes. It
+   * is never a card line; the card carries at most three plain lines.
+   */
   details?: string;
 };
 
@@ -82,7 +74,11 @@ function strippedPrompt(text: string): string {
 }
 
 function isOwnerAction(summary: unknown): summary is OwnerActionParams {
-  return typeof summary === 'object' && summary !== null && (summary as { kind?: string }).kind === 'owner-action' && Array.isArray((summary as { actions?: unknown }).actions);
+  if (typeof summary !== 'object' || summary === null) return false;
+  const s = summary as { kind?: unknown; actions?: unknown };
+  // Every action must be one this build knows, or its card has no words: such a message gets the
+  // generic card instead of an exception while the page renders.
+  return s.kind === 'owner-action' && Array.isArray(s.actions) && s.actions.length > 0 && s.actions.every((action) => typeof action === 'string' && (OWNER_ACTIONS as readonly string[]).includes(action));
 }
 
 function isTeamCreate(summary: unknown): summary is TeamCreateParams {
@@ -95,39 +91,46 @@ function isGrantCard(summary: unknown): summary is GrantCard {
   return typeof summary === 'object' && summary !== null && typeof (summary as { text?: unknown }).text === 'string';
 }
 
-/** English title, description and once/always choice for one inbox card. */
-export function ownerPageRequest(message: { request_id: string; text?: string; kind?: string; summary?: unknown }, grantPrompt: string | null = null): OwnerPageRequest {
+/**
+ * The card for one inbox message: title, question, and at most one scope line, all from the
+ * message catalog, plus the record folded into `details`. A message with no readable summary
+ * (one written by an older build) gets the generic card and its text in the details; nothing
+ * recorded is dropped, and nothing recorded is printed on the card.
+ */
+export function ownerPageRequest(message: { request_id: string; text?: string; kind?: string; summary?: unknown; params_sha256?: unknown }, grantPrompt: string | null = null): OwnerPageRequest {
   const id = message.request_id;
   const text = typeof message.text === 'string' ? message.text : '';
   const kind = message.kind ?? '';
   const summary = message.summary;
+  const hash = typeof message.params_sha256 === 'string' ? message.params_sha256 : undefined;
+  const unknown = (what: string): OwnerPageRequest => ({
+    id, text, title: msg('card.title.approval'), description: msg('card.question.approval'), onceOnly: false,
+    details: [msg('card.details.request', { id }), what].join('\n'),
+  });
   if (kind === 'owner-action-confirmation' || isOwnerAction(summary)) {
-    const params = isOwnerAction(summary) ? summary : null;
-    const actions = params?.actions ?? [];
-    const onceOnly = actions.some((action) => MIGRATION_ACTIONS.has(action));
-    const title = actions.length === 0 ? 'Approval' : actions.map((action) => ACTION_TITLES[action] ?? action).join(', then ');
-    const described = params === null ? strippedPrompt(text) : ownerActionSummary(params);
-    const description = onceOnly ? `${described} This migration needs a one-time approval.`.trim() : described;
-    return { id, text, title, description, onceOnly };
+    if (!isOwnerAction(summary)) return unknown(strippedPrompt(text));
+    const params = summary;
+    const card = ownerActionCard(params);
+    const onceOnly = params.actions.some((action) => MIGRATION_ACTIONS.has(action));
+    const details = ownerActionDetails({ request_id: id, params, ...(hash === undefined ? {} : { params_sha256: hash }) });
+    return { id, text, title: card.title, description: card.question, ...(card.scope === undefined ? {} : { scope: card.scope }), onceOnly, details: details.join('\n') };
   }
   if (kind === 'team-create-confirmation' || isTeamCreate(summary)) {
-    const description = isTeamCreate(summary) ? teamCreateSummary(summary) : strippedPrompt(text);
-    return { id, text, title: 'Create a team', description, onceOnly: false };
+    if (!isTeamCreate(summary)) return unknown(strippedPrompt(text));
+    const card = teamCreateCard(summary);
+    const details = teamCreateDetails({ request_id: id, params: summary, ...(hash === undefined ? {} : { params_sha256: hash }) });
+    return { id, text, title: card.title, description: card.question, ...(card.scope === undefined ? {} : { scope: card.scope }), onceOnly: false, details: details.join('\n') };
   }
   if (kind === 'grant-confirmation' || id.startsWith('gr_')) {
     const grant = isGrantCard(summary) ? summary : null;
     const onceOnly = grant !== null && (grant.master === true || grant.up != null || grant.expires === null);
-    const title = grant?.master === true ? msg('page.title.master') : grant?.up != null ? msg('page.title.team') : msg('page.title.grant');
-    const full = grant?.text ?? strippedPrompt(text);
     const prompt = grantPrompt ?? (typeof (summary as { prompt?: unknown } | null)?.prompt === 'string' ? (summary as { prompt: string }).prompt : null);
-    if (prompt !== null) {
-      const description = onceOnly ? msg('page.once_only', { prompt }) : prompt;
-      return { id, text, title, description, onceOnly, details: full };
-    }
-    const description = onceOnly ? msg('page.once_only', { prompt: full }).trim() : full;
-    return { id, text, title, description, onceOnly };
+    const card = grantCard({ prompt: prompt ?? msg('card.grant.question'), ...(grant?.master === true ? { master: true } : {}), ...(grant?.up != null ? { up: true } : {}) });
+    const full = grant?.text ?? strippedPrompt(text);
+    const details = [msg('card.details.request', { id }), full].join('\n');
+    return { id, text, title: card.title, description: card.question, ...(onceOnly ? { scope: msg('card.scope.once') } : {}), onceOnly, details };
   }
-  return { id, text, title: 'Approval', description: strippedPrompt(text), onceOnly: false };
+  return unknown(strippedPrompt(text));
 }
 
 export function ownerPageHandler(options: OwnerPageOptions & { port: number; token: string }) {
@@ -365,7 +368,7 @@ export const OWNER_PAGE_HTML = `<!doctype html>
 <style>body{font:16px -apple-system,system-ui,sans-serif;max-width:640px;margin:2em auto;padding:0 1em;color:#222}
 button{font-size:16px;padding:.6em 1em;margin:.3em .3em .3em 0;border-radius:8px;border:1px solid #888;background:#f4f4f4}
 .relaxed{color:#b00;font-weight:600}.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}
-.hint{color:#555;font-size:14px;margin:.6em 0}.card p{margin:.4em 0}#log{color:#555;white-space:pre-wrap}</style></head>
+.hint{color:#555;font-size:14px;margin:.6em 0;white-space:pre-wrap}.card p{margin:.4em 0}#log{color:#555;white-space:pre-wrap}</style></head>
 <body><h1>Owner seat</h1><p id="profile"></p><div id="cards"></div><p id="log"></p>
 <script>
 const t = new URLSearchParams(location.search).get('t');
@@ -400,7 +403,7 @@ let stamp = '';
 async function load() {
   if (busy) return;
   const next = await api('GET', '/api/state');
-  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.details || '') + '\\n' + r.text), next.seat]);
+  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + (r.scope || '') + '\\n' + (r.details || '') + '\\n' + r.text), next.seat]);
   S = next;
   if (mark === stamp) return;
   stamp = mark;
@@ -415,19 +418,22 @@ async function load() {
   if (hasPasskey && S.requests.length === 0) card('<p class="hint">${msg('page.no_pending')}</p>');
   for (const r of S.requests) {
     if (!hasPasskey) break;
+    // The card is at most three plain lines; the record is only in the fold. The request id is
+    // in the fold too, never beside the title.
+    const scope = r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '';
     if (r.id.startsWith('gr_')) {
       const always = r.onceOnly ? '' : '<button data-w="always">${msg('page.always_allow')}</button>';
-      const details = r.details ? '<details><summary>${msg('page.details')}</summary><p class="hint">' + esc(r.details) + '</p></details>' : '';
-      const d = card('<b>' + esc(r.title || '${msg('page.title.grant')}') + '</b> <span class="hint">' + esc(r.id) + '</span><p>' + esc(r.description) + '</p>' + details + '<button data-w="oui">${msg('page.approve_once')}</button>' + always + '<button data-w="non">${msg('page.deny')}</button>');
+      const details = '<details><summary>${msg('page.details')}</summary><p class="hint">' + esc(r.details || '') + '</p></details>';
+      const d = card('<b>' + esc(r.title || '${msg('page.title.grant')}') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<button data-w="oui">${msg('page.approve_once')}</button>' + always + '<button data-w="non">${msg('page.deny')}</button>');
       d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
       continue;
     }
-    const description = esc(r.description || String(r.text || '').replace(/\\s*Authorized\\?[\\s\\S]*$/, ''));
     const hint = r.onceOnly
       ? 'This needs a one-time approval. Choose Approve once.'
       : 'Approve once is a one-time approval. A migration needs that. Always allow also permits later runs of the same action in this folder.';
+    const details = r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '';
     const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
-    const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + description + '</p><p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>');
+    const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>');
     d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
   }
 }
@@ -442,7 +448,7 @@ export const REQUEST_PAGE_HTML = `<!doctype html>
 <meta name="referrer" content="no-referrer"><title>TeamCLI – one request</title>
 <style>body{font:16px -apple-system,system-ui,sans-serif;max-width:640px;margin:2em auto;padding:0 1em;color:#222}
 button{font-size:16px;padding:.6em 1em;margin:.3em .3em .3em 0;border-radius:8px;border:1px solid #888;background:#f4f4f4}
-.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}.hint{color:#555;font-size:14px}#log{color:#555;white-space:pre-wrap}</style></head>
+.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}.hint{color:#555;font-size:14px;white-space:pre-wrap}#log{color:#555;white-space:pre-wrap}</style></head>
 <body><h1>Owner approval</h1><div id="card"></div><p id="log"></p>
 <script>
 const id = location.pathname.split('/').pop();
@@ -471,7 +477,8 @@ async function answer(word) {
   const r = S.request;
   const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
   const d = document.getElementById('card'); d.className = 'card';
-  d.innerHTML = '<b>' + esc(r.title) + '</b> <span class="hint">' + esc(r.id) + '</span><p>' + esc(r.description) + '</p>' + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>';
+  const scope = r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '';
+  d.innerHTML = '<b>' + esc(r.title) + '</b><p>' + esc(r.description) + '</p>' + scope + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>';
   d.querySelectorAll('button').forEach(b => b.onclick = () => answer(b.dataset.w).catch(e => log('Refused: ' + e.message)));
 })().catch(e => log(e.message));
 </script></body></html>

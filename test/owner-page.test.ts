@@ -165,11 +165,12 @@ describe('owner page', () => {
     if (!made.ok) throw new Error(made.why);
     const id = made.record.request_id;
     const state = await s.call('GET', '/api/state');
-    const shown = state.body.requests as Array<{ id: string; text: string; title: string; description: string; onceOnly: boolean }>;
+    const shown = state.body.requests as Array<{ id: string; text: string; title: string; description: string; scope?: string; onceOnly: boolean }>;
     expect(shown.map((r) => r.id)).toEqual([id]);
     expect(shown[0]!.text).toContain('seat:iris asks to create the team, then start the team');
-    expect(shown[0]).toMatchObject({ title: 'Create a team, then Start the team', onceOnly: false });
-    expect(shown[0]!.description).toContain('seat:iris asks to create the team, then start the team');
+    expect(shown[0]).toMatchObject({ title: 'TeamCLI: create a team, then start the team', onceOnly: false });
+    expect(shown[0]!.description).toBe('Allow seat:iris to create a team, then start the team for team "demo"?');
+    expect(shown[0]!.scope).toBe('One-time change.');
     expect(shown[0]!.description).not.toContain('oui');
     const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
     expect(ch.status).toBe(200);
@@ -267,18 +268,18 @@ describe('owner page', () => {
 
   test('a migration card asks for a one-time approval and every action kind has an English title', async () => {
     const titles: Record<string, string> = {
-      'team-create': 'Create a team',
-      'team-import': 'Import a team file',
-      'team-migrate': 'Migrate a team',
-      'team-add': 'Add a seat',
-      'team-up': 'Start the team',
-      'team-send': 'Send a message',
-      'team-down': 'Stop the team',
-      'team-bus': 'Start the bus',
-      'team-revoke-approval': 'Revoke an approval rule',
-      'team-forget': 'Forget a team record',
-      'team-config': "Change the team's record",
-      'team-general-grant': 'Issue a general grant',
+      'team-create': 'TeamCLI: create a team',
+      'team-import': 'TeamCLI: import the team file',
+      'team-migrate': 'TeamCLI: migrate the team',
+      'team-add': 'TeamCLI: add a seat',
+      'team-up': 'TeamCLI: start the team',
+      'team-send': 'TeamCLI: send a message',
+      'team-down': 'TeamCLI: stop the team',
+      'team-bus': 'TeamCLI: start the bus',
+      'team-revoke-approval': 'TeamCLI: revoke an approval rule',
+      'team-forget': 'TeamCLI: forget a team record',
+      'team-config': "TeamCLI: change the team's record",
+      'team-general-grant': 'TeamCLI: issue a general grant',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
@@ -306,20 +307,25 @@ describe('owner page', () => {
         requested_by: 'seat:iris',
       },
     });
-    expect(migration.title).toBe('Migrate a team');
+    expect(migration.title).toBe('TeamCLI: migrate the team');
     expect(migration.onceOnly).toBe(true);
-    expect(migration.description).toContain('migrate team "demo"');
-    expect(migration.description).toContain('2 seats');
-    expect(migration.description).toContain('canonical record deadbeef');
-    expect(migration.description).toContain('This migration needs a one-time approval.');
+    expect(migration.description).toBe('Migrate team "demo"?');
+    expect(migration.scope).toBe('One-time change. seat:iris asked.');
+    // The record — id, project, seat count, canonical record, HEAD — is in the fold, never the card.
+    expect(migration.details).toContain('team-migrate: team=demo id=demo-id project=Demo seats=2 record=deadbeef');
+    expect(migration.details).toContain('request oa_cdcdcdcdcdcdcdcdcdcdcdcd');
+    expect(migration.details).toContain('head abc123abc123');
+    expect(migration.description).not.toContain('deadbeef');
     const created = ownerPageRequest({
       request_id: `tc_${'ab'.repeat(12)}`,
       kind: 'team-create-confirmation',
       text: 'Authorized? reply oui/approved, always, or non/deny',
       summary: { kind: 'team-create', root: '/tmp/docs', team: 'docs', head: null },
     });
-    expect(created).toMatchObject({ title: 'Create a team', onceOnly: false });
-    expect(created.description).toBe('Create team "docs" in /tmp/docs.');
+    expect(created).toMatchObject({ title: 'TeamCLI: create a team', onceOnly: false });
+    expect(created.description).toBe('Create team "docs"?');
+    expect(created.scope).toBe('One-time change.');
+    expect(created.details).toContain('root /tmp/docs');
     expect(created.description).not.toContain('oui');
     const grant = ownerPageRequest({
       request_id: `gr_${'ab'.repeat(12)}`,
@@ -327,24 +333,25 @@ describe('owner page', () => {
       text: 'Grant request gr_x: Grant for iris. Authorized? reply oui/approved, always, or non/deny',
       summary: { text: 'Grant for iris: send to orchestrator@demo (entity demo) for 30 days.', master: false, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(grant).toMatchObject({ title: 'Grant', onceOnly: false });
-    expect(grant.description).toBe('Grant for iris: send to orchestrator@demo (entity demo) for 30 days.');
+    expect(grant).toMatchObject({ title: 'TeamCLI: grant', onceOnly: false });
+    expect(grant.description).toBe('Approve this grant?');
+    expect(grant.details).toContain('Grant for iris: send to orchestrator@demo (entity demo) for 30 days.');
     const master = ownerPageRequest({
       request_id: `gr_${'cd'.repeat(12)}`,
       kind: 'grant-confirmation',
       text: 'Authorized? oui',
       summary: { text: 'MASTER grant for iris: grant to orchestrator@demo (entity demo) for 30 days.', master: true, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(master.title).toBe('Master grant');
+    expect(master.title).toBe('TeamCLI: master grant');
     expect(master.onceOnly).toBe(true);
-    expect(master.description).toContain('This grant needs a one-time approval.');
+    expect(master.scope).toBe('One-time change.');
     const teamGrant = ownerPageRequest({
       request_id: `gr_${'ef'.repeat(12)}`,
       kind: 'grant-confirmation',
       text: 'Authorized? oui',
       summary: { text: 'Up grant for iris: run team up for team demo.', master: false, up: { project: 'demo' }, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(teamGrant).toMatchObject({ title: 'Team grant', onceOnly: true });
+    expect(teamGrant).toMatchObject({ title: 'TeamCLI: team grant', onceOnly: true });
     const open = ownerPageRequest({
       request_id: `gr_${'aa'.repeat(12)}`,
       kind: 'grant-confirmation',
@@ -352,7 +359,7 @@ describe('owner page', () => {
       summary: { text: 'Grant for iris: send to orchestrator@demo.', master: false, expires: null },
     });
     expect(open.onceOnly).toBe(true);
-    expect(open.description).toContain('one-time approval');
+    expect(open.scope).toBe('One-time change.');
 
     const s = await setup();
     const root = join(s.base, 'migrate-repo');
@@ -368,11 +375,15 @@ describe('owner page', () => {
     expect(made.ok).toBe(true);
     if (!made.ok) return;
     const state = await s.call('GET', '/api/state');
-    const card = (state.body.requests as Array<{ id: string; title: string; description: string; onceOnly: boolean }>).find((item) => item.id === made.record.request_id);
-    expect(card).toMatchObject({ title: 'Migrate a team', onceOnly: true });
-    expect(card?.description).toContain('1 seat');
-    expect(card?.description).toContain('This migration needs a one-time approval.');
+    const card = (state.body.requests as Array<{ id: string; title: string; description: string; scope?: string; details?: string; onceOnly: boolean }>).find((item) => item.id === made.record.request_id);
+    expect(card).toMatchObject({ title: 'TeamCLI: migrate the team', onceOnly: true });
+    expect(card?.description).toBe('Migrate team "demo"?');
+    expect(card?.scope).toBe('One-time change. seat:iris asked.');
+    expect(card?.details).toContain('seats=1');
+    expect(card?.details).toContain(made.record.request_id);
     expect(card?.description).not.toContain('oui');
+    expect(card?.title).not.toContain(made.record.request_id);
+    expect(card?.scope).not.toContain(made.record.request_id);
   });
 
   test('a request from another Host is refused even with the token', async () => {
