@@ -14,13 +14,46 @@ export function pinnedWords(features: readonly string[]): string[] {
   return features.flatMap((pair) => ['-c', `features.${pair}`]);
 }
 
-/** A base recipe with the profile's pins appended, as the launch record stores it. The pins ride
- *  after every word the seat's line carries, which is where the launch puts them, so a repeated
- *  config key resolves to the pin: measured on codex-cli 0.161.0 in a scratch CODEX_HOME, a
- *  duplicated `-c` for one key took the last value in both orders. */
+/** The words a shell reads on a launch line, each with the offset it starts at. A quoted run, an
+ *  escaped character and a bare run join into one word, as the shell joins them. */
+const WORD = /(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g;
+
+/** The word as the program receives it: quotes removed and their escapes resolved. */
+function unquote(word: string): string {
+  return (word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? [])
+    .map((part) => {
+      if (part.startsWith("'")) return part.slice(1, -1);
+      if (part.startsWith('"')) return part.slice(1, -1).replace(/\\(.)/g, '$1');
+      if (part.startsWith('\\')) return part.slice(1);
+      return part;
+    })
+    .join('');
+}
+
+/** A launch line split at its first positional delimiter, as the shell will parse it: `head`
+ *  ends before the `--` word, `tail` begins at it and is empty when the line names none. The
+ *  delimiter is the argv word, so `--`, `'--'` and `"--"` all split the line. */
+export function splitAtDelimiter(line: string): { head: string; tail: string } {
+  for (const match of line.matchAll(WORD)) {
+    if (unquote(match[0]) === '--') {
+      const at = match.index;
+      return { head: line.slice(0, at), tail: line.slice(at) };
+    }
+  }
+  return { head: line, tail: '' };
+}
+
+/** A base recipe with the profile's pins inserted, as the launch record stores it. The pins ride
+ *  after every option word the seat's line carries and before its first positional delimiter,
+ *  which is where the launch puts them, so a repeated config key resolves to the pin: measured
+ *  on codex-cli 0.161.0 in a scratch CODEX_HOME, a duplicated `-c` for one key took the last
+ *  value in both orders. A line with a `--` keeps its positional words after the delimiter. */
 export function pinnedLine(line: string, features: readonly string[]): string {
   const words = pinnedWords(features);
-  return words.length === 0 ? line : `${line.trimEnd()} ${words.join(' ')}`;
+  if (words.length === 0) return line;
+  const { head, tail } = splitAtDelimiter(line);
+  const pinned = [head.trimEnd(), ...words].filter((word) => word !== '').join(' ');
+  return tail === '' ? pinned : `${pinned} ${tail}`;
 }
 
 /** One feature name's effective value on a launch line, read the way the CLI reads its own
@@ -30,17 +63,10 @@ export function pinnedLine(line: string, features: readonly string[]): string {
  *  as it does for the CLI: a word after it is positional, and a config-shaped prompt word
  *  names no feature. */
 export function featureSettings(line: string): Map<string, boolean> {
-  const words = line.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  // Every word is read as the shell will hand it over: a quoted `--` is the delimiter word, and
+  // a quoted `-c` and its value name a feature the same way bare ones do.
+  const words = [...line.matchAll(WORD)].map((match) => unquote(match[0]));
   const settings = new Map<string, boolean>();
-  const unquote = (word: string): string =>
-    (word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? [])
-      .map((part) => {
-        if (part.startsWith("'")) return part.slice(1, -1);
-        if (part.startsWith('"')) return part.slice(1, -1).replace(/\\(.)/g, '$1');
-        if (part.startsWith('\\')) return part.slice(1);
-        return part;
-      })
-      .join('');
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
     if (word === '--') break;
@@ -48,7 +74,7 @@ export function featureSettings(line: string): Map<string, boolean> {
     const value = word === '-c' || word === '--config' ? words[i + 1] : inline?.[1];
     if (value === undefined) continue;
     if (word === '-c' || word === '--config') i++;
-    const pair = /^features\.([A-Za-z0-9_]+)=(true|false)$/.exec(unquote(value).trim());
+    const pair = /^features\.([A-Za-z0-9_]+)=(true|false)$/.exec(value.trim());
     if (pair !== null) settings.set(pair[1]!, pair[2] === 'true');
   }
   return settings;

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
-import { pinnedWords } from '../launch/features.ts';
+import { pinnedWords, splitAtDelimiter } from '../launch/features.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
 import type { ComposeProfile } from './compose.ts';
@@ -325,12 +325,24 @@ export function launchCommand(
   // the one background server they share.
   options.push(...pinnedWords(profile.features));
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
-  // is never typed into the pane.
+  // is never typed into the pane. It is positional: it stays after the line's own `--`, where a
+  // message-mode CLI reads its prompt, never among the options before the delimiter.
+  const positional: string[] = [];
   if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
-    if (profile.rulesPrompt !== '') options.push(profile.rulesPrompt);
-    options.push(rulesLine);
+    if (profile.rulesPrompt !== '') positional.push(profile.rulesPrompt);
+    positional.push(rulesLine);
   }
-  return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
+  // The profile's options are options: when the seat's own line names a positional delimiter,
+  // they stand before it, so no pin or launch flag is read as prompt text. The line's words
+  // after the delimiter keep their place, and the rules line stays the last positional word.
+  const { head, tail } = splitAtDelimiter(launch.trim());
+  return [
+    'AGENT_UNATTENDED=1',
+    head.trimEnd(),
+    ...options.map(shellQuote),
+    ...(tail === '' ? [] : [tail]),
+    ...positional.map(shellQuote),
+  ].join(' ');
 }
 
 /** True when the CLI loads a settings file named on its launch line, and that file may install

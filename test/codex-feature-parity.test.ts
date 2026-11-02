@@ -145,6 +145,29 @@ describe('the launch line carries the pin', () => {
     expect(command).toContain('-c features.mcp_oauth_refresh_coordination=true');
     expect(command.lastIndexOf('features.mcp_oauth_refresh_coordination')).toBe(command.indexOf(`-c ${PIN}`) + 3);
   });
+
+  test('a positional delimiter keeps the pin an option, in every spelling', () => {
+    const profile = profileFor('codex');
+    if (!profile) throw new Error('codex profile must exist');
+    for (const delimiter of ['--', "'--'", '"--"']) {
+      const command = launchCommand(
+        profile,
+        `codex -m gpt-6.1-sol ${delimiter} 'an existing prompt'`,
+        'Rules.',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'Read /x/rules.md; reply ready.',
+      );
+      // The shell drops the quotes: the delimiter is the same word after parsing, and the pin
+      // must stand before it to stay a config option rather than prompt text. The existing
+      // prompt follows the delimiter; the rules line stays the last positional word.
+      expect(command.indexOf(`-c ${PIN}`)).toBeLessThan(command.indexOf('an existing prompt'));
+      expect(command.indexOf('an existing prompt')).toBeLessThan(command.indexOf('Read /x/rules.md'));
+      expect(command).toContain('Read /x/rules.md; reply ready.');
+    }
+  });
 });
 
 describe('the plan and the record keep the pinned base recipe', () => {

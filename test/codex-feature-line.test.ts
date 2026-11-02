@@ -14,8 +14,10 @@ describe('featureSettings reads -c and --config words', () => {
     expect(featureSettings('codex --config=features.x=true').get('x')).toBe(true);
   });
 
-  test('a bare -- ends option parsing', () => {
+  test('a bare -- ends option parsing, in every spelling the shell accepts', () => {
     expect(featureSettings('codex -- -c features.x=true').size).toBe(0);
+    expect(featureSettings("codex '--' -c features.x=true").size).toBe(0);
+    expect(featureSettings('codex "--" -c features.x=true').size).toBe(0);
   });
 
   test('non-feature config words are ignored', () => {
@@ -32,6 +34,14 @@ describe('pinnedWords and pinnedLine', () => {
     expect(pinnedLine('codex -m gpt-6.1-sol', ['x=false'])).toBe('codex -m gpt-6.1-sol -c features.x=false');
     expect(pinnedLine('codex -m gpt-6.1-sol', [])).toBe('codex -m gpt-6.1-sol');
   });
+
+  test('a positional delimiter takes the pins before it, in every spelling', () => {
+    for (const delimiter of ['--', "'--'", '"--"']) {
+      expect(pinnedLine(`codex -m gpt-6.1-sol ${delimiter} 'a prompt'`, ['x=false'])).toBe(
+        `codex -m gpt-6.1-sol -c features.x=false ${delimiter} 'a prompt'`,
+      );
+    }
+  });
 });
 
 describe('featureGaps compares only the profile pins', () => {
@@ -46,6 +56,12 @@ describe('featureGaps compares only the profile pins', () => {
   test('a matching pin is no gap, and the line’s own other features are ignored', () => {
     expect(featureGaps('codex -c features.x=false', ['x=false'])).toEqual([]);
     expect(featureGaps('codex -c features.other=true -c features.x=false', ['x=false'])).toEqual([]);
+  });
+
+  test('a config word after a positional delimiter names no feature, in every spelling', () => {
+    for (const delimiter of ['--', "'--'", '"--"']) {
+      expect(featureGaps(`codex ${delimiter} -c features.x=false`, ['x=false'])).toEqual(['x=false']);
+    }
   });
 });
 
