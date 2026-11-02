@@ -55,6 +55,9 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
+import type { ReminderSpec } from '../reminder/run.ts';
+import { readRemindersState } from '../reminder/state.ts';
+import { reminderStatus, type ReminderReading } from '../reminder/status.ts';
 import { pidAlive } from '../state.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
@@ -120,6 +123,13 @@ export type DaemonCommandSources = {
   faultPollMs?: number;
   /** Injected for tests: the wait between result reads, so a scene never sleeps for real. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The configured reminders `status --json` reports, read through the same parser the daemon
+   * runs. Absent, the reading carries no `reminders` field at all; a reader that throws is named
+   * in `remindersError` and the daemon's own health still prints. Internal, like the daemon's
+   * own `reminders` input; not a setting and not printed by the one-line status.
+   */
+  reminders?: () => readonly ReminderSpec[];
 };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
@@ -685,6 +695,28 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
 }
 
 /**
+ * The reminder reading `status --json` carries: none at all when the command was given no config
+ * reader, the named failure when the reader throws, and otherwise one entry per configured
+ * reminder read from the same state record the tick writes. A state record that cannot be read
+ * is named in `error`, and the entries then carry no results. The one-line status never changes.
+ */
+function remindersForStatus(
+  reader: (() => readonly ReminderSpec[]) | undefined,
+  home: string,
+  now: (() => Date) | undefined,
+): { reminders: ReminderReading[]; error: string | null } | null {
+  if (reader === undefined) return null;
+  let specs: readonly ReminderSpec[];
+  try {
+    specs = reader();
+  } catch (error) {
+    return { reminders: [], error: error instanceof Error ? error.message : String(error) };
+  }
+  const reading = reminderStatus(specs, readRemindersState(home), now === undefined ? new Date() : now());
+  return { reminders: reading.reminders, error: reading.unreadable };
+}
+
+/**
  * The install's steps, in the neutral words the dry run prints before anything runs: a refresh
  * stops the daemon the service manager holds, the new one is started with a bounded, growing
  * retry, and a start that still fails puts the previous unit back and starts it again. The live
@@ -1013,7 +1045,17 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       ...(sources.now !== undefined ? { now: sources.now } : {}),
     });
     if (parsed.json) {
-      writeJson(io, 'team.daemon-status', { format: 1, daemon: health });
+      const reminders = remindersForStatus(sources.reminders, home, sources.now);
+      writeJson(io, 'team.daemon-status', {
+        format: 1,
+        daemon: health,
+        ...(reminders === null
+          ? {}
+          : {
+              reminders: reminders.reminders,
+              ...(reminders.error === null ? {} : { remindersError: reminders.error }),
+            }),
+      });
     } else {
       io.stdout(`${statusLine(health)}\n`);
     }
