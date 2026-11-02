@@ -138,7 +138,7 @@ function receiver(): { posts: Post[]; url: string } {
 
 function host(place: Place): SendHost {
   return {
-    agents: () => [{ name: 'lead', pane: 'w1:p1' }],
+    agents: () => [{ name: 'lead', pane: 'pane-live' }],
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: join(place.base, 'sockets'),
     deliver: async () => ({ ok: true }),
