@@ -98,18 +98,48 @@ export function declaredDeliveryClass(cli: string): DeliveryClass {
  *  claiming a wake it did not make. */
 export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus takes it';
 
+/** What a typed wake did, when the run made one. `attempted` is false for a wake the run did
+ *  not reach — a pane it refused to type into, a trigger over the line, an order that leaves the
+ *  typed leg out — and true once the wake itself ran, delivered or not. `reason` is the wake's
+ *  own word for what it saw. */
+export type WakeOutcome = { attempted: boolean; reason?: string };
+
+/** The facts a class's sentence needs beyond the class itself: a person's pane is never typed, a
+ *  CLI whose profile declares `typed_wake: screen` can take one line at send time, and a wake
+ *  this run made says what it saw. */
+export type DeliveryWordsContext = {
+  human?: boolean;
+  /** The seat's profile declares a typed wake (src/send/typed-wake.ts). */
+  typedWake?: boolean;
+  /** The typed wake this run made. */
+  wake?: WakeOutcome;
+};
+
 /** The class in plain words, for a console line after the leg's own word. Never a bare
- *  "unconfirmed": each sentence says what happens to the message next. */
-export function deliveryWords(cls: DeliveryClass, seat: string): string {
+ *  "unconfirmed": each sentence says what happens to the message next, including the one fact a
+ *  class alone cannot say — whether anything gives the seat a turn. A typed wake's own outcome is
+ *  the run's, never inferred from the profile: a wake that ran and did not deliver says so, and
+ *  one the run never reached says that instead. */
+export function deliveryWords(cls: DeliveryClass, seat: string, context: DeliveryWordsContext = {}): string {
+  const { human = false, typedWake = false, wake } = context;
+  const wakeLine = wake === undefined
+    ? ''
+    : wake.attempted
+      ? `the typed wake failed (${wake.reason ?? 'no reason was recorded'})`
+      : `the typed wake did not run (${wake.reason ?? 'no reason was recorded'})`;
+  const lead = (rest: string): string => (wakeLine === '' ? `queued; ${rest}` : `queued; ${wakeLine}; ${rest}`);
   switch (cls) {
     case 'push':
       return 'woken through its event adapter';
     case 'between-turns':
       return 'woken through its runtime queue';
     case 'pull-on-turn':
-      return `queued; ${seat} reads it at its next turn (pull-only)`;
+      return lead(`${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
     case 'none':
-      return `queued; ${seat} has no way to be woken while idle`;
+      if (human) return lead(`${seat} has no way to be woken while idle`);
+      return lead(typedWake
+        ? `nothing wakes ${seat} while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn`
+        : `nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
   }
 }
 
@@ -137,6 +167,10 @@ export type DeliveryEvidence = {
   /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
+  /** The CLI's profile declares `typed_wake: screen`: a send may type one line into a composer
+   *  it saw empty twice (src/send/typed-wake.ts, the rule's one exemption). It is not an event
+   *  adapter, so it never changes the class — only what the words and a repair may promise. */
+  typedWake: boolean;
   /** Whether the seat's webhook adapter can post right now: its two files read, and the secret
    *  file is the owner's own 0600 file. False when the seat configures none or cannot deliver. */
   webhook: boolean;
@@ -297,10 +331,14 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     ...(webhook ? { webhook: true } : {}),
   };
   const cls = effectiveDeliveryClass(facts);
+  const typedWake = !human && (profileFor(cli)?.typedWake ?? null) !== null;
   return {
     seat: input.seat,
     class: cls,
-    words: deliveryWords(cls, input.seat),
+    words: deliveryWords(cls, input.seat, {
+      ...(human ? { human: true } : {}),
+      ...(typedWake ? { typedWake: true } : {}),
+    }),
     evidence: {
       cli,
       declared: declaredClass,
@@ -312,6 +350,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       endpointRecorded,
       endpoint,
       human,
+      typedWake,
       webhook,
       webhookReason,
     },

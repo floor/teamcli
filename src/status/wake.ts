@@ -46,6 +46,19 @@ export type SeatWakeInput = SeatDeliveryInput & { now: Date };
  * is called unread from a receipt it could not check.
  */
 export function seatWakeOf(input: SeatWakeInput): SeatWake {
+  return seatWakeReadingOf(input).wake;
+}
+
+/** One seat's wake reading with the class's own sentence (`deliveryWords`), for a caller that
+ *  prints a note about it: both come from one `seatDeliveryClass` read, so the row's cell and
+ *  the note cannot split between two readings taken at different instants. */
+export type SeatWakeReading = {
+  wake: SeatWake;
+  /** The class in plain words, without a run's wake outcome: a reading, not a send. */
+  words: string;
+};
+
+export function seatWakeReadingOf(input: SeatWakeInput): SeatWakeReading {
   const delivery = seatDeliveryClass(input);
   const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
   const listener = inboxLive(dropDir, input.root, input.session, input.seat).live;
@@ -59,12 +72,15 @@ export function seatWakeOf(input: SeatWakeInput): SeatWake {
     }
   }
   return {
-    class: delivery.class,
-    wakeable: wakeableWhileIdle(delivery.class),
-    conversation: delivery.evidence.conversation,
-    endpoint: delivery.evidence.endpointRecorded,
-    listener,
-    oldest_unread_seconds: oldest,
+    wake: {
+      class: delivery.class,
+      wakeable: wakeableWhileIdle(delivery.class),
+      conversation: delivery.evidence.conversation,
+      endpoint: delivery.evidence.endpointRecorded,
+      listener,
+      oldest_unread_seconds: oldest,
+    },
+    words: delivery.words,
   };
 }
 

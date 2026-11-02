@@ -405,16 +405,17 @@ receipt `watch.unread_after` after it landed — ten minutes by default — gets
 the wake stops before the pane. One wake serves every message due for that seat, and a message a
 retry owns is not woken twice: the retry's marker is the claim. A wake is reserved on disk before
 it is attempted, and the reservation is the attempt's whole claim: no later pass wakes the same
-message again, and an attempt the pane turned away keeps its reservation rather than giving it
-back. At twice `watch.unread_after` a message
+message again; a definite not-delivered outcome (`held` or `not-submitted`), and any delivery that
+wrote nothing to the pane, gives the reservation back so a later pass may wake, and only an attempt
+that wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. At twice `watch.unread_after` a message
 still unread is reported once: a signed Runtime mailbox record for its sender under
 `.agents/messages/`, and a signed send-drop for the team's lead under
 `.agents/send-drops/<session>/<lead>` that `team drops --read` serves — never by typing into a
 pane — after a report reservation of its own, so a crash between a report and its marker neither
 drops it nor writes it twice, and a record or drop already there is left byte for byte. The
-words keep the wake states apart: an attempted wake
-says it was reserved at that instant and its outcome is unconfirmed, and one never attempted says
-no wake line was typed.
+words keep the wake states apart: a standing reserved wake says `a wake was attempted at <at> and
+its outcome is unconfirmed`, one never attempted says no wake line was typed, and one that was sent
+says when.
 `--no-nudge` skips the wake but still writes the report.
 
 The report's sender mailbox is resolved through the signed record's agent id and the agent and

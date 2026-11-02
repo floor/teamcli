@@ -1,14 +1,15 @@
-// The one typed wake this build allows. A profile that declares `typed_wake: screen` lets a send
-// type one trigger line into a composer two reads showed as the empty idle prompt; Enter is
-// pressed only while the box still holds exactly that line, and the send is delivered only when
-// the profile's own working screen shows. Nothing else is typed: no draft is moved, cleared or
-// pasted, and a wake that cannot deliver leaves the message where it already is, in the bus
-// inbox. Every other messaging path still refuses to type (src/send/no-pane-messaging.ts), and
-// this module is the single exemption the scan in test/no-pane-messaging.test.ts names.
+// The typed wake: one line, one guarded Enter, one acknowledgement. A profile that declares
+// `typed_wake: screen` lets a send type one trigger line into a composer two reads showed as the
+// empty idle prompt; Enter is pressed only while the box still holds exactly that line, and the
+// send is delivered only when the profile's own working screen shows. Nothing else is typed: no
+// draft is moved, cleared or pasted, and a wake that cannot deliver leaves the message where it
+// already is, in the bus inbox. Every other messaging path still refuses to type
+// (src/send/no-pane-messaging.ts), and this module is the single exemption the scan in
+// test/no-pane-messaging.test.ts names.
 //
-// The screens are the CLI's own captured frames (`test/fixtures/muse/`): `idle` is the empty
-// box between its two rules, `unsent` is the box holding the line, and the profile's `working`
-// rule (Muse's `◇ … esc to interrupt` row) is the acknowledgement.
+// The screens are the CLI's own captured frames (`test/fixtures/muse/` and
+// `test/fixtures/cursor/2026.10.22/`): `idle` is the empty box, `unsent` is the box holding the
+// line, and the profile's `working` rule is the acknowledgement.
 import { paneRead, pressEnter, typeText } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { readScreen } from '../watch/screen.ts';

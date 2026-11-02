@@ -81,11 +81,19 @@ minutes when the file omits it — is one difference for the seat,
 `; <m> more unread` when other messages are due and the oldest named. The sender is the verified
 record's own `from`; a record that does not verify is named `an unverified message` and keeps
 its age, its id and its count, never the word beside it — that marker is unsigned and lends no
-sender, owner or seat. The repair is the seat's next turn, or `team drops --read --seat <seat>`
-when the seat's record says no turn-start reader is installed; the watch's unread wake types
-nothing into an idle seat in this build — its wake attempt is refused before the pane, and the
-reservation it took records the attempt — so a message still unread at twice the window is
-reported to its sender's mailbox and the team's lead instead. The general seat brief keeps its
+sender, owner or seat. The repair is the seat's delivery class, read on the check's own pass: for
+a seat whose record names a turn-start reader, `a wake route stands for <seat> and the message is
+still unread; team drops --read --seat <seat> reads it now` when something can wake the seat while
+it is idle, and otherwise `nothing gives <seat> a turn while it is idle; team drops --read --seat
+<seat> reads it now, or a person or a restart must give it a turn` — with `nothing wakes <seat>
+while it is idle except a send-time typed wake into an empty composer` in place of the first
+clause when the seat's profile declares the typed wake. A seat whose record says no turn-start
+reader is installed earns `team drops --read --seat <seat> reads it now; no turn-start reader is
+installed, so team reload <seat> installs the launch's hooks` instead. The watch's
+unread wake attempts the delivery and reaches no pane in this build, and an attempt that wrote
+nothing gives its reservation back, so the message keeps its one wake; a still-reserved marker at
+twice the window is reported as a wake that was attempted and whose outcome is unconfirmed, to its
+sender's mailbox and the team's lead. The general seat brief keeps its
 own read difference and is not counted twice. A person's drop is read by a person and is never asked for a receipt. The
 check writes nothing here either.
 
@@ -320,9 +328,9 @@ $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
-note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 no differences
 exit 0
@@ -339,9 +347,9 @@ $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
-note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
-note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — claude-beacon reads it at its next turn, and nothing here gives it one (pull-only)
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn — worker reads it at its next turn, and nothing here gives it one (pull-only)
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper

@@ -263,7 +263,9 @@ describe('team check names a live seat whose socket a send would skip', () => {
     const { code, out } = check(w, liveOn([seat]));
     // The wrapper's own `--settings` suppresses this build's hook, so the class is `none`; the
     // note names it and the exit does not move.
-    expect(out).toContain(`note: wrapped: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is none, and nothing wakes it while idle`);
+    expect(out).toContain(
+      `note: wrapped: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is none — nothing wakes wrapped while it is idle; a person or a restart must give it a turn`,
+    );
     expect(out).not.toContain(NOT_SOCKET);
     expect(code).toBe(0);
   });
@@ -363,7 +365,7 @@ describe('team check names a live seat whose socket a send would skip', () => {
       processes: { [PANE_ONE]: { shell: OTHER_PID, foreground: [OTHER_PID + 1] } },
     });
     expect(out).toContain(
-      `note: replaced: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn`,
+      `note: replaced: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is pull-on-turn — replaced reads it at its next turn, and nothing here gives it one (pull-only)`,
     );
     expect(out).not.toContain(NOT_SOCKET);
     expect(code).toBe(0);

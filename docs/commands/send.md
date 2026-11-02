@@ -630,11 +630,22 @@ the message:
 woken through its event adapter                        an event adapter wakes the seat
 woken through its runtime queue                        the runtime holds the message between turns
 queued; its webhook fires when the bus takes it        the seat's webhook adapter is its route: the bus posts it after the send returns
-queued; <seat> reads it at its next turn (pull-only)   the seat reads its inbox when it takes a turn
-queued; <seat> has no way to be woken while idle       a person, or a launch with no route at all
+queued; <seat> reads it at its next turn, and nothing here gives it one (pull-only)
+                                                       the seat reads its inbox when it takes a turn
+queued; nothing wakes <seat> while it is idle; a person or a restart must give it a turn
+                                                       a seat with no route at all
+queued; nothing wakes <seat> while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn
+                                                       a seat with no route but the typed wake its profile declares
+queued; <seat> has no way to be woken while idle       a person
 ```
 
-`<delivery>` below stands for one of those five sentences. It is read from the seat's launch as
+A send that reached for the typed wake inserts what the wake saw after `queued; `, before the
+class's own words: `the typed wake failed (<reason>)` when the send attempted it and it did not
+deliver, `the typed wake did not run (<reason>)` when the send stopped before the attempt — no
+live agent carried the seat's name, its pane could not be told apart, it was back at its shell,
+or the trigger outgrew the measured line.
+
+`<delivery>` below stands for one of those sentences. It is read from the seat's launch as
 the send runs — the watched endpoint, the channel, a webhook adapter the bus posts, the socket
 route the send itself admits (its cross-session declaration, the team file's own `inbound` word,
 and the address the seat's launch recorded that still stands), the watcher — and a delivered
@@ -806,7 +817,7 @@ receipt, which a running watch records as one `delivered (read)` history line.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn (pull-only)
+claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
 exit 0
 ```
 
@@ -818,7 +829,7 @@ like any other:
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team send: operator-b: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn (pull-only)
+operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)
 exit 0
 ```
 
@@ -993,7 +1004,7 @@ own read hands it the message. The receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn (pull-only)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only)
 exit 0
 ```
 

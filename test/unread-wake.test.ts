@@ -285,7 +285,7 @@ function leadReportBody(dir: string, sourceId: string, seat = 'lead', session = 
 }
 
 describe('wakeUnreadDrops', () => {
-  test('a message unread past the window takes one wake reservation, and a second pass spends nothing', async () => {
+  test('a refused wake attempt leaves no reservation, so a second pass may still try', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
@@ -295,19 +295,19 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    // The wake is one reservation on disk, and nothing is typed into the pane.
+    // The binding refuses before any key: nothing is typed, and nothing is reserved. An attempt
+    // that wrote nothing must not spend the message's one wake.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
-    const reserved = readFileSync(wakePath(dropDir, UNREAD_A), 'utf8');
-    expect(JSON.parse(reserved)).toEqual({ id: UNREAD_A, at: NOW.toISOString(), state: 'reserved' });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
 
-    // A second pass sees the marker and spends nothing more: no line, same reservation.
+    // A second pass is free to try again: still no line, still no reservation.
     await wakeUnreadDrops(scene, { unreadAfter: N });
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
-    expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(reserved);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a message read after the listing is not woken', async () => {
@@ -358,13 +358,13 @@ describe('wakeUnreadDrops', () => {
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
 
-    // With the hold lifted the same unread message wakes exactly as before.
+    // With the hold lifted the pass tries again, and the refused delivery still writes nothing:
+    // no line, and no reservation held against the message.
     scene.nativeHeld = new Set();
     await wakeUnreadDrops(scene, { unreadAfter: N });
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwaiting' }) as string;
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a wake names the signed sender of a registered seat, and a forged body line cannot change it', async () => {
@@ -378,14 +378,10 @@ describe('wakeUnreadDrops', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
     // The wake line is the retired typed leg's: nothing is typed, so the forged body line moves
-    // nothing. The signed record still earns its one reservation.
+    // nothing, and the refused attempt leaves no reservation behind.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a foreign seat wake names the seat with its own team', async () => {
@@ -496,20 +492,16 @@ describe('wakeUnreadDrops', () => {
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
     // The stale receipt is still on disk and the message is still listed unread: the receipt
-    // was no read, and the wake it could not hide is one reservation on disk, with no keystroke.
+    // was no read, and the refused wake leaves no keystroke and no reservation.
     expect(existsSync(receiptPath(dropDir, record.id))).toBe(true);
     const still = listUnread(dropDir, { to: 'lead', root: realpathSync(made.root), session: 'acme' }, made.home);
     expect(still.map((message) => message.id)).toContain(record.id);
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, record.id), 'utf8'))).toEqual({
-      id: record.id,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, record.id))).toBe(false);
   });
 
-  test('a wake whose trigger never runs writes no receipt: the message stays unread and its reservation stands', async () => {
+  test('a wake whose trigger never runs writes no receipt: the message stays unread and no reservation is spent', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nread at once', new Date(NOW.getTime() - 11 * MIN));
@@ -528,17 +520,13 @@ describe('wakeUnreadDrops', () => {
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
     // The trigger that would have written the receipt is the retired typed leg: no receipt
-    // exists, the listing still holds the message, and the attempt is one reservation.
+    // exists, the listing still holds the message, and the refused attempt spent no reservation.
     expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(false);
     const still = listUnread(dropDir, { to: 'lead', root: realpathSync(made.root), session: 'acme' }, made.home);
     expect(still.map((message) => message.id)).toContain(UNREAD_A);
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a message a held send\'s retry still owns is not woken here', async () => {
@@ -570,17 +558,13 @@ describe('wakeUnreadDrops', () => {
     await retired;
 
     // Draft movement lived in the retired typed leg: the box is exactly as it was, and the
-    // message still earns its reservation without a keystroke.
+    // refused attempt leaves the message with its wake unspent.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(one.keys).toEqual([]);
     expect(one.screen).toBe(claudeBox(draft));
     expect(said).toEqual([]);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a message younger than the window is left alone', async () => {
@@ -597,7 +581,7 @@ describe('wakeUnreadDrops', () => {
     expect(said).toEqual([]);
   });
 
-  test('a wake attempt leaves the reservation marker later passes confirm, and spends nothing more', async () => {
+  test('a refused wake attempt leaves no marker for a later pass to confirm, and spends nothing', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\ntaken', new Date(NOW.getTime() - 11 * MIN));
@@ -612,15 +596,14 @@ describe('wakeUnreadDrops', () => {
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
-    const marker = readFileSync(wakePath(dropDir, UNREAD_A), 'utf8');
-    expect(JSON.parse(marker)).toEqual({ id: UNREAD_A, at: NOW.toISOString(), state: 'reserved' });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
 
-    // The later pass finds the marker and confirms it: no line and no second reservation.
+    // The later pass finds no marker to confirm, and writes none of its own: still no line.
     await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
-    expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(marker);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a human seat is never typed into and never reported', async () => {
@@ -756,15 +739,12 @@ describe('reportUnreadDrops', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, said, { now: woke }), { unreadAfter: N });
 
     // The "wake line was sent" words and the sender's mailbox notice live on the retired typed
-    // delivery: this pass only reserves the wake, and nothing claims a line was sent.
+    // delivery: this pass types nothing, claims nothing, and leaves no reservation the report
+    // could read as an attempt.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
     expect(said).toEqual([]);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: woke.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(existsSync(join(made.root, '.agents', 'messages', 'helper', `unread-${UNREAD_A}.json`))).toBe(false);
   });
 
@@ -1180,7 +1160,7 @@ describe('the lead report aggregates a pass', () => {
 });
 
 describe('crash-safe reservations', () => {
-  test('a wake attempt reserves on disk, and no line is typed', async () => {
+  test('a refused wake attempt reserves nothing on disk, and no line is typed', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nbefore', new Date(NOW.getTime() - 11 * MIN));
@@ -1198,15 +1178,12 @@ describe('crash-safe reservations', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
     await retired;
 
-    // The typed seam is never reached; the reservation is the whole on-disk trace.
+    // The typed seam is never reached, and the refusal gives back the reservation it took: no
+    // trace on disk, and the message keeps its one wake for a later pass.
     expect(held).toBe(false);
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a reservation left by a crash is never typed over, and the report says its outcome is unconfirmed', async () => {
@@ -1226,7 +1203,7 @@ describe('crash-safe reservations', () => {
     reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
 
     const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
-    expect(owner.body).toContain(`a wake was reserved at ${at} and its outcome is unconfirmed`);
+    expect(owner.body).toContain(`a wake was attempted at ${at} and its outcome is unconfirmed`);
     expect(owner.body).not.toContain('its wake line was sent');
   });
 
@@ -1242,10 +1219,11 @@ describe('crash-safe reservations', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    // The line was typed for the message behind the spent one, whose reservation is untouched.
+    // The attempted message behind the spent one was refused, so its reservation went back too:
+    // the spent marker is untouched, and the message after it is still free to wake.
     expect(one.typed).toEqual([]);
     expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(spent);
-    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(false);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a held delivery gives its reservation back, and a later pass wakes', async () => {
@@ -1258,15 +1236,11 @@ describe('crash-safe reservations', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, [], { sources: scripts(one) }), { unreadAfter: N });
     await retired;
 
-    // The held exit is the retired typed leg's: no box is read and nothing is typed, so the
-    // unreachable attempt keeps its reservation (the live contract below).
+    // The held exit is the retired typed leg's: nothing is typed, the delivery writes nothing,
+    // and its reservation goes back with it.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a not-submitted line gives its reservation back, and the retry submits the line already in the box', async () => {
@@ -1279,18 +1253,14 @@ describe('crash-safe reservations', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
     await retired;
 
-    // not-submitted existed only on the typed leg: nothing is typed here, and the uncertain
-    // attempt keeps its reservation rather than giving it back.
+    // not-submitted existed only on the typed leg: nothing is typed here, and a delivery that
+    // wrote nothing gives its reservation back.
     expect(one.typed).toEqual([]);
     expect(one.enters).toBe(0);
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toEqual({
-      id: UNREAD_A,
-      at: NOW.toISOString(),
-      state: 'reserved',
-    });
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
-  test('an unreachable delivery keeps its reservation, because the attempt is uncertain', async () => {
+  test('an unreachable delivery that typed nothing gives its reservation back', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nunreadable', new Date(NOW.getTime() - 11 * MIN));
@@ -1308,7 +1278,7 @@ describe('crash-safe reservations', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
 
     expect(one.typed).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('a report reservation already on disk publishes nothing', () => {
@@ -1365,7 +1335,7 @@ function watchSources(directory: string, one: Pane, typed: string[], clock: numb
 }
 
 describe('team watch wakes an unread seat', () => {
-  test('the watch pass reserves the seat\'s drop read once the unread window passes, and types nothing', async () => {
+  test('the watch pass types nothing and leaves no wake reservation when its bindings refuse', async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-unread-watch-')));
     base = directory;
     execFileSync('git', ['init', '-q'], { cwd: directory });
@@ -1383,12 +1353,9 @@ describe('team watch wakes an unread seat', () => {
     expect(await runWatch(['--file', file], io, watchSources(directory, one, typed, clock))).toBe(0);
     expect(typed).toEqual([]);
     expect(one.enters).toBe(0);
-    // The wake is the reservation the pass leaves; the typed trigger it stood for is retired.
-    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_B), 'utf8'))).toEqual({
-      id: UNREAD_B,
-      at: new Date(clock).toISOString(),
-      state: 'reserved',
-    });
+    // The pass attempts the wake and the binding refuses before any key: the message keeps its
+    // one wake, and no reservation stands to describe an attempt that wrote nothing.
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(false);
   });
 
   test('--no-nudge types nothing and still reports a message unread at twice the window', async () => {
@@ -1432,7 +1399,7 @@ describe('an acknowledged message is not woken or reported', () => {
     const said: string[] = [];
     await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(false);
     expect(one.typed).toHaveLength(0);
 
     reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });

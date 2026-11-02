@@ -1576,7 +1576,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       state: seat,
     });
     expect(delivery.class).toBe('pull-on-turn');
-    expect(delivery.words).toBe('queued; worker reads it at its next turn (pull-only)');
+    expect(delivery.words).toBe('queued; worker reads it at its next turn, and nothing here gives it one (pull-only)');
     expect(delivery.evidence.endpoint).toBe(false);
     expect(delivery.evidence.conversation).toBe(false);
     // The run says which read proved nothing, so a reader can tell an unreadable endpoint from a

@@ -170,7 +170,7 @@ describe('the sending paths never dial while the socket is off', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     expect(host.typed).toEqual([]);

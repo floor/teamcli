@@ -292,9 +292,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       });
       // `held` left the box as it was, and `not-submitted` left the trigger in it for the next
       // Enter: neither put a line the seat could act on, so their reservations go back and a later
-      // pass inside the window may still wake. `unreachable` keeps them: the delivery may have
-      // typed before it stopped, and an uncertain attempt is spent rather than repeated.
-      if (result.outcome === 'held' || result.outcome === 'not-submitted') {
+      // pass inside the window may still wake. A delivery that wrote nothing to the pane is the
+      // same: its bindings refused before any key, so it spent nothing and the message keeps its
+      // one wake. `unreachable` keeps the reservation only when something was typed — an attempt
+      // the seat may have acted on is spent rather than repeated.
+      if (result.outcome === 'held' || result.outcome === 'not-submitted' || result.typed !== true) {
         for (const id of reserved) release(wakePath(dropDir, id));
         continue;
       }
@@ -552,7 +554,9 @@ type DueReport = {
  * why a watch without nudges runs this too. The sender's mailbox is the one its signed `from_id`
  * resolves to through this home's registries; a sender they cannot pin is reported to the lead
  * only, and the reason is said there and in the line. The words keep the three wake states
- * apart: a message with a wake marker says its wake line was sent; one without says none was
+ * apart: a sent marker says its wake line was sent, a still-reserved one says a wake was
+ * attempted and its outcome is unconfirmed (a refused attempt's reservation is given back, so a
+ * standing reservation is never a delivery that wrote nothing), and no marker says none was
  * typed. The reservations are linked before the lead's write; a write the lead's mailbox refuses
  * releases every reservation the pass took, and a later pass aggregates the same messages again —
  * the sender records are write-once, so the retry publishes each name once. A lead drop's id is
@@ -602,7 +606,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       const wakeWords = woke === null
         ? 'no wake line was typed'
         : woke.state === 'reserved'
-          ? `a wake was reserved at ${woke.at} and its outcome is unconfirmed`
+          ? `a wake was attempted at ${woke.at} and its outcome is unconfirmed`
           : `its wake line was sent at ${woke.at}`;
       const where = `the drop is at ${join(dropDir, message.id)}`;
       const text = unresolved === null

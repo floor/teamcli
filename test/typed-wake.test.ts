@@ -151,12 +151,13 @@ describe('the typed wake: one line into an empty idle box', () => {
 });
 
 describe('the typed wake is a profile word', () => {
-  test('the word is closed and only Muse declares it', () => {
+  test('the word is closed, and only Muse and Cursor declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
     expect(typedWakeKey('cli: muse')).toBeNull();
     expect(() => typedWakeKey('typed_wake: typing')).toThrow(/typed_wake/);
     expect(profileFor('muse')?.typedWake).toBe('screen');
-    for (const cli of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'jules']) {
+    expect(profileFor('cursor')?.typedWake).toBe('screen');
+    for (const cli of ['claude-code', 'codex', 'antigravity', 'grok', 'gemini', 'jules']) {
       expect(profileFor(cli)?.typedWake, cli).toBeNull();
     }
   });
@@ -214,7 +215,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; muse reads it at its next turn (pull-only)\n');
+    expect(io.out).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn\n');
     expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
