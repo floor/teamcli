@@ -17,7 +17,7 @@ import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
-import { markStopped } from '../src/file/lines.ts';
+import { markStopped, seatIsStopped } from '../src/file/lines.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
@@ -934,7 +934,7 @@ describe('team restart <seat>', () => {
     expect(replaced.did.created).toBe(0);
   });
 
-  test('refuses unknown, temporary, signed-off seats, and held run-lock; supports --dry-run', async () => {
+  test('refuses unknown and temporary seats, and a held run-lock; supports --dry-run', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -949,10 +949,6 @@ describe('team restart <seat>', () => {
     const ioTemp = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker-tmp-1'], ioTemp, sources)).toBe(1);
     expect(ioTemp.err).toBe('team restart: worker-tmp-1 is a temporary copy; use team remove worker-tmp-1 then team add --temporary --like worker\n');
-
-    const ioStopped = testIo(fixture.root, { kind: 'owner' });
-    expect(await runRestart(['parked-seat'], ioStopped, sources)).toBe(1);
-    expect(ioStopped.err).toBe('team restart: parked-seat is signed off; the owner takes the sign-off off in the file and runs team up\n');
 
     // Dry run
     const ioDry = testIo(fixture.root, { kind: 'owner' });
@@ -971,12 +967,11 @@ describe('team restart <seat>', () => {
   });
 
   // `remove --keep` writes the sign-off into the registry's record when the team lives there, and
-  // leaves `.agents/team.yaml` as it was. A seat restarting another from its own pane is handed
-  // that file as the session's launched pointer; read as a plain file it misses the mark the stop
-  // just wrote, relaunches the seat, and leaves send and register refusing it. The pointer is read
-  // through the seam instead: the registry's record is the team, and the refusal is the file
-  // seats' own, id and words.
-  test('refuses a registry team\'s signed-off seat from a launched pane, never the file it launched from', async () => {
+  // leaves `.agents/team.yaml` as it was. A seat that leads the team restarts the stopped seat
+  // from its own pane: the run reads the launched pointer through the seam, so the mark it
+  // clears is the registry's own — in the same write that records the launch — and the stale
+  // file beside it is left exactly as it was launched.
+  test('a team\'s lead revives a registry team\'s stopped seat, clearing the registry mark the pointer leads to', async () => {
     const fixture = makeFixture();
     intoRegistry(fixture.root, fixture.home);
     const stored = storedTeam(fixture.root, fixture.home);
@@ -998,22 +993,26 @@ describe('team restart <seat>', () => {
 
       const { sources, did } = makeHarness(fixture);
       const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-      expect(await runRestart(['worker'], io, sources)).toBe(1);
-      expect(io.err).toBe('team restart: worker is signed off; the owner takes the sign-off off in the file and runs team up\n');
-      expect(did.closed).toEqual([]);
-      expect(did.created).toBe(0);
-
-      const ioJson = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-      expect(await runRestart(['worker', '--json'], ioJson, sources)).toBe(1);
-      assertJsonErrorShape(ioJson.out, { id: 'restart.signed-off', messageContains: 'worker is signed off' });
-      expect(did.closed).toEqual([]);
-      expect(did.created).toBe(0);
+      expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+      expect(io.err).toBe('');
+      expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+      // The mark the restart cleared is the registry's, and the stale file is untouched.
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'worker')).toBe(false);
+      // The write cleared that seat's mark and no other: the fixture's own signed-off seat stands.
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'parked-seat')).toBe(true);
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+      expect(did.typed).toEqual(['/exit']);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+      const after = readState(fixture.dir).sessions.acme?.seats.worker;
+      expect(after?.stage).toBe('ready');
+      expect(after?.pane).toBe('pane-new');
     });
   });
 
   // The owner's own terminal carries no launched pointer: the same mark is read from the registry
-  // itself, and refuses the same way.
-  test('refuses a registry team\'s signed-off seat from the owner\'s own terminal', async () => {
+  // itself, and the owner's restart clears and relaunches the seat the same way.
+  test('the owner revives a registry team\'s stopped seat from the owner\'s own terminal', async () => {
     const fixture = makeFixture();
     intoRegistry(fixture.root, fixture.home);
     const stored = storedTeam(fixture.root, fixture.home);
@@ -1023,11 +1022,83 @@ describe('team restart <seat>', () => {
         .toEqual({ ok: true, target: 'registry' });
       const { sources, did } = makeHarness(fixture);
       const io = testIo(fixture.root, { kind: 'owner' });
-      expect(await runRestart(['worker'], io, sources)).toBe(1);
-      expect(io.err).toBe('team restart: worker is signed off; the owner takes the sign-off off in the file and runs team up\n');
-      expect(did.closed).toEqual([]);
-      expect(did.created).toBe(0);
+      expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+      expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+      expect(seatIsStopped(storedTeam(fixture.root, fixture.home)?.text ?? '', 'worker')).toBe(false);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
     });
+  });
+
+  // A stopped seat is its own team's to revive: the owner, or a seat that leads this team on its
+  // own recorded pane. The run clears `stopped: true` in the same write that records the launch,
+  // then relaunches. Every scene below runs with dev mode off, except where it says otherwise.
+  test('a team\'s lead restarts its own team\'s stopped seat: the mark is cleared in the run that launches it', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
+    expect(readFileSync(fixture.file, 'utf8')).not.toContain('stopped: true');
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    const after = readState(fixture.dir).sessions.acme?.seats['parked-seat'];
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
+  });
+
+  // A worker is not `leads`, whatever pane it stands on: the caller gate refuses it as it always
+  // has, and nothing is cleared or launched.
+  test('a worker is refused the stopped seat, naming the caller, and nothing is written', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is worker\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // A seat leading another team is placed, but not as a lead of this one: the placement alone is
+  // no admission.
+  test('another team\'s lead is refused this team\'s stopped seat, and nothing is written', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats['rival-lead'] = { stage: 'ready', pane: 'pane-rival', workspace: 'ws-rival' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'rival-lead', pane: 'pane-rival', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is rival-lead\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // Dev mode folds the caller gate into a warning; it does not lift the sign-off. The refusal
+  // still stands, and names the command that does work.
+  test('a worker is still refused the stopped seat with dev mode on, naming `team restart`', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' });
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
+    expect(io.err).toContain('team restart: parked-seat is signed off; a `leads` seat of its own team clears it with `team restart parked-seat`\n');
+    expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
   });
 
   // The stop is a session mutation, so a restart stands aside while another run mutates the

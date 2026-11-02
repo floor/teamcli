@@ -23,7 +23,7 @@ stops the record instead.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out, and `team add <name>` starts it again. On the orchestrator's or the operator's seat it is a swap: the file is not edited, the state records the swap, and `team add <name>` starts the new agent |
+| `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out; `team restart <name>` brings it back, clears the mark and launches it again (the owner, or the team's `leads` seat), and `team add <name>` also starts it again. On the orchestrator's or the operator's seat it is a swap: the file is not edited, the state records the swap, and `team add <name>` starts the new agent |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
