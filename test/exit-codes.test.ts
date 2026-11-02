@@ -4862,7 +4862,7 @@ scene('daemon.installed', async (place) => {
 scene('daemon.not-owner', async (place) =>
   show(
     await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner installs or removes the machine daemon',
+    'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon',
   ));
 scene('daemon.grant-refused', async (place) => {
   // A grant recorded on the run that the command's own verification cannot admit: the command

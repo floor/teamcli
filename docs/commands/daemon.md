@@ -195,8 +195,10 @@ verifies them again, so a grant whose chain, key or ops no longer verify `daemon
 (`daemon.grant-refused`) instead of falling back to the caller. The grant and the key admit the
 run and are never written into the unit.
 
-A caller who is not the owner and holds no such grant is refused with `only the owner installs or
-removes the machine daemon; this call is <placement>` (`daemon.not-owner`). The service-manager start is the one
+A caller who is not the owner, holds no such grant and is not a lead the dev-mode lift admits is
+refused with `only the owner, a general grant naming daemon, or a lead in development mode
+installs, restarts or removes the machine daemon; this call is <placement>` (`daemon.not-owner`).
+The service-manager start is the one
 no-terminal start admitted; every other no-terminal caller is refused (`daemon.run-not-owner`), and
 a start that names `service-manager` without the manager's record to back it is refused under
 `daemon.service-managed.unit`, `.pid` or `.program`.
@@ -210,7 +212,7 @@ a start that names `service-manager` without the manager's record to back it is 
 | `run` finds one already serving | `team daemon: already running (pid <pid>)` | 0 |
 | `install --dry-run` | the plan, the steps a refresh takes, and `nothing was written` | 0 |
 | `install` writes and registers the unit, and the daemon it started answers the health reading | `team daemon: installed for <n> checkout(s); …` | 0 |
-| `install` refused after a refresh: the service manager would not start the new unit, or its daemon never answered the health reading | `team daemon: <reason>`, naming whether the previous daemon was put back and confirmed answering or no daemon is running; a failure leaving none running adds the owner-runs rerun command and where a kept unit is | 1 |
+| `install` refused after a refresh: the service manager would not start the new unit, or its daemon never answered the health reading | `team daemon: <reason>`, naming whether the previous daemon was put back and confirmed answering or no daemon is running; a failure leaving none running adds the owner-or-grant-holder rerun command and where a kept unit is | 1 |
 | `restart --dry-run` | the plan, the steps a restart takes, and `nothing is written` | 0 |
 | `restart` stops the installed unit's daemon and starts that same unit again, and the daemon it started answers the health reading | `team daemon: restarted; the system's service manager runs the installed unit again` | 0 |
 | `restart` refused: no installed unit, the manager would not start the installed unit again, the restarted daemon never answered and was stopped again, or the daemon started again did not answer either | `team daemon: <reason>`, naming the install command that starts a daemon when none is running | 1 |
@@ -239,7 +241,8 @@ daemon is running; a restart answers `daemon.not-installed`, `daemon.restart-fai
 `daemon.restart-rolled-back` or `daemon.restart-rollback-failed`, and an unverified grant
 `daemon.grant-refused`. A rollback whose daemon the manager accepted but that never answers counts as
 no daemon running, not as a restored one. The two install rows that leave no daemon running set
-`repair` to the owner-runs sentence naming that rerun — `the owner runs` followed by the exact
+`repair` to the owner-or-grant-holder sentence naming that rerun — `the owner or a general-grant
+holder runs` followed by the exact
 `team daemon install --root <folder> …` command, carrying the roots and opt-ins the failed
 install recorded; `daemon.install-rolled-back` leaves `repair` null because a daemon is running
 again. `daemon.not-installed`, `daemon.restart-failed` and `daemon.restart-rollback-failed` set
