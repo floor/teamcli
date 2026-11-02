@@ -97,6 +97,10 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        watch_wake: {
+          enum: ['on', 'off'],
+          $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
+        },
         inbound: {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',

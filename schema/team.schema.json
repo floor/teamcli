@@ -628,6 +628,13 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "watch_wake": {
+            "enum": [
+              "on",
+              "off"
+            ],
+            "$comment": "the watch's typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake"
+          },
           "inbound": {
             "enum": [
               "accept",
@@ -663,6 +670,12 @@
                   "inbox"
                 ],
                 "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
+              },
+              "timeout_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 60000,
+                "$comment": "how long one POST waits for the routine's answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice"
               }
             },
             "required": [
