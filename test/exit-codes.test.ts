@@ -27,7 +27,7 @@ import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
-import { actionApprovalsFolder } from '../src/client/team-create.ts';
+import { actionApprovalsFolder, actionRequestsFolder, teamCreateHash } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -36,7 +36,7 @@ import { daemonSocketPath } from '../src/daemon/paths.ts';
 import { routeId, routeOf } from '../src/daemon/routes.ts';
 import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
-import type { ServiceManager } from '../src/daemon/service.ts';
+import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
@@ -1582,6 +1582,22 @@ scene('conformance-adapter.finished', async () => {
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
 });
 
+scene('development-mode.approval-requested', async (place) => {
+  // An injected store records the request and offers no Touch ID: synthetic signing only.
+  const store = seatOwner(place.home);
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--request'], io, { home: place.home, now: NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+    'owner-seat request',
+  );
+});
+scene('development-mode.approval-refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--approval', 'oa_nope'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'is not an owner-seat request id',
+  );
+});
 scene('development-mode.done', async (place) => {
   const io = testIo(place.root, other);
   return show(
@@ -3711,6 +3727,15 @@ scene('answer.identity', async (place) => {
   host.reading = () => questionReading('question', QUESTION_TEXT);
   return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
 });
+scene('answer.trust-identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+  });
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'launched identity was not recorded');
+});
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
@@ -3796,7 +3821,7 @@ scene('answer.version', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, CURSOR_TRUST, { version: '2026.10.02' })), 'no trust answer');
 });
@@ -3805,7 +3830,7 @@ scene('answer.screen', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, 'not a dialog\n')), 'not the trust dialog');
 });
@@ -3816,7 +3841,7 @@ scene('answer.label', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
@@ -3826,7 +3851,7 @@ scene('answer.folder', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
@@ -3845,7 +3870,7 @@ scene('answer.ready', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
@@ -4669,7 +4694,42 @@ function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonS
       calls.push('uninstall');
       return { ok: true, unitPath: place(home), removed: true };
     }),
+    restart: overrides.restart ?? ((home) => {
+      calls.push('restart');
+      return { ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null };
+    }),
     calls,
+  };
+}
+
+/** A manager that answers a restart by loading the installed unit again; whether the daemon it
+ *  starts answers is the scene's health seam. */
+function restartingService(): FakeDaemonService {
+  return fakeDaemonService({
+    restart: (home) => {
+      const success: ServiceRestartSuccess = {
+        ok: true,
+        unitPath: join(home, 'unit.plist'),
+        undo: () => success,
+      };
+      return success;
+    },
+  });
+}
+
+/** A health reading whose daemon runs but does not answer the probe. */
+function unansweredHealth(): DaemonHealth {
+  const reading = answeringHealth();
+  return { ...reading, probe: { state: 'unanswered', at: reading.probe.at, reason: 'closed' } };
+}
+
+/** Answers from the Nth probe on, across the windows one command opens (a restart's own, then
+ *  its undo's), so a scene reaches the restored-daemon branch without sleeping for real waits. */
+function healthFrom(probe: number): () => Promise<DaemonHealth> {
+  let probes = 0;
+  return async () => {
+    probes += 1;
+    return probes >= probe ? answeringHealth() : unansweredHealth();
   };
 }
 
@@ -4827,7 +4887,65 @@ scene('daemon.installed', async (place) => {
 scene('daemon.not-owner', async (place) =>
   show(
     await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner installs or removes the machine daemon',
+    'only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon',
+  ));
+scene('daemon.grant-refused', async (place) => {
+  // A grant recorded on the run that the command's own verification cannot admit: the command
+  // refuses it and names the failed check instead of falling back to the caller.
+  const io = testIo(place.root, detachedCaller);
+  io.general = { grant: join(place.home, 'missing-grant.json'), key: join(place.home, 'missing.key'), grantId: 'gg_synthetic', clientId: 'synthetic-client' };
+  const code = await runDaemon(['install', '--dry-run'], io, daemonSources(place, { service: fakeDaemonService() }));
+  return show({ code, out: io.out, err: io.err }, 'cannot be read as a general grant');
+});
+scene('daemon.restart-dry-run', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would restart');
+});
+scene('daemon.restarted', async (place) => {
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: async () => answeringHealth() });
+  return show(ran, 'team daemon: restarted');
+});
+scene('daemon.not-installed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({ ok: false, reason: 'not-installed', why: 'no user service unit is installed, so there is no daemon to restart', detail: null }),
+      }),
+    }),
+    'no user service unit is installed',
+  ));
+scene('daemon.restart-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: fakeDaemonService({
+        restart: () => ({
+          ok: false,
+          reason: 'refused',
+          why: 'the system\'s service manager refused to start the installed daemon again',
+          detail: 'synthetic load refused',
+        }),
+      }),
+    }),
+    'no daemon is running',
+  ));
+scene('daemon.restart-rolled-back', async (place) => {
+  // The restarted daemon's own probe window stays unanswered; the daemon the undo starts
+  // answers in the second window, so the restart is reported as undone.
+  const service = restartingService();
+  const ran = await daemonRan(place, ['restart'], owner, { service, health: healthFrom(10), sleep: async () => {} });
+  return show(ran, 'the installed unit was started again and its daemon answers');
+});
+scene('daemon.restart-rollback-failed', async (place) =>
+  show(
+    await daemonRan(place, ['restart'], owner, {
+      service: restartingService(),
+      health: async () => unansweredHealth(),
+      sleep: async () => {},
+    }),
+    'no daemon is running',
   ));
 scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
 scene('daemon.run-root', async (place) =>
@@ -6402,6 +6520,16 @@ async function forgetRun(place: Place, argv: string[], caller: Caller = owner): 
 }
 scene('approvals.invocation', async (place) => show(await approvalsRun(place, []), 'a verb is required'));
 scene('approvals.listed', async (place) => show(await approvalsRun(place, ['list']), 'no always rules'));
+scene('approvals.details', async (place) => {
+  // A recorded team-create request, in the shape `createTeamCreateRequest` writes: the details
+  // print the record the card deliberately leaves out, without an owner seat or a signature.
+  const id = `tc_${'ab'.repeat(12)}`;
+  const params = { kind: 'team-create' as const, root: place.root, team: 'demo', head: null };
+  const record = { request_id: id, params, params_sha256: teamCreateHash(params), created: '2026-01-01T00:00:00.000Z', expires_at: '2026-01-01T00:15:00.000Z' };
+  mkdirSync(actionRequestsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionRequestsFolder(place.home), `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+  return show(await approvalsRun(place, ['details', id]), `request ${id}`);
+});
 scene('approvals.revoked', async (place) => {
   const id = `oa_${'ab'.repeat(12)}`;
   mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
@@ -6575,7 +6703,13 @@ scene('restart.lead', async (place) => {
 });
 scene('restart.signed-off', async (place) => {
   write(place, TWO);
-  return show(await restarted(place, ['worker']), 'is signed off');
+  // A stopped seat is its own team's to revive: the owner and the team's lead clear it with
+  // `team restart`. A caller outside that rule is still refused, and under dev mode the caller
+  // gate folds — so the sign-off's own refusal is what the run says.
+  const io = testIo(place.root, other);
+  io.env = { TEAMCLI_DEV_MODE: '1' };
+  const code = await runRestart(['worker'], io, restartSources(place));
+  return show({ code, out: io.out, err: io.err }, 'is signed off');
 });
 scene('restart.herdr', async (place) => {
   write(place, ACTIVE_TWO);

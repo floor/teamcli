@@ -98,12 +98,13 @@ export type Host = {
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
-   * launch command. `teamFile` is the team file the launch read: the seat's folder may be a
-   * lobby with none. Null when the profile carries no file route, and absent on a host whose
-   * commands never launch. A refusal is said in one line under the seat's record, and the seat
-   * still launches: the inbox is one delivery leg, not the launch.
+   * launch command. `session` is the launch's own, which narrows the registry to the team the
+   * seat is on; `teamFile` is the team file the launch read, absent for a registry team whose
+   * launch names no file. Null when the profile carries no file route, and absent on a host
+   * whose commands never launch. A refusal is retried once, then leaves the seat out: a seat
+   * that runs with no inbox receives nothing, which is what this registration exists to prevent.
    */
-  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+  registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
@@ -1164,7 +1165,12 @@ export async function executePlan(
       }
       case 'launch': {
         reportProgress(op.seat, 'launching');
-        if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
+        if (op.notice) {
+          hold(op.seat, `${op.seat}: ${op.notice}\n`);
+          // The plan's fallback placement is said once here, and `team.log` keeps the same
+          // words: a seat that lacks its rules must be explainable after the scrollback is gone.
+          host.log(op.seat, op.notice);
+        }
         const why = host.allow(op.seat);
         if (why) {
           dropped.add(op.seat);
@@ -1172,11 +1178,22 @@ export async function executePlan(
           break;
         }
         // The seat's inbox is registered before its command runs, in the folder the command
-        // starts in, from the team file this launch read (a lobby folder holds none). A refusal
-        // costs the seat its inbox leg and nothing else.
+        // starts in, for the session this launch serves and from the team file it read, when it
+        // read one. A refused registration is retried once — a CLI's own add can fail
+        // transiently — and a refusal that stands leaves the seat out loudly: a seat running
+        // with no inbox receives nothing at all, which is the defect, not the repair.
         if (op.cli !== undefined && op.cwd !== undefined) {
-          const inbox = host.registerInbox?.(op.cli, op.seat, op.cwd, op.teamFile);
-          if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
+          const cli = op.cli;
+          const cwd = op.cwd;
+          const register = (): InboxRegistration | null | undefined =>
+            host.registerInbox?.(cli, op.seat, cwd, session, op.teamFile);
+          let inbox = register();
+          if (inbox && !inbox.ok) inbox = register();
+          if (inbox && !inbox.ok) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: `the team inbox was not registered: ${inbox.reason}` });
+            break;
+          }
         }
         const here = place(op.seat, op.pane);
         // The rules line rides this launch: its file is written before anything starts, so the
@@ -1222,20 +1239,32 @@ export async function executePlan(
         // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
         // the pane at its shell: the seat is launched fresh instead, and says so.
         const resumeTarget = namedResumeTarget(op.cli ?? '', command);
+        let freshFrom: string | undefined;
         if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
           const fresh = withoutResume(op.cli ?? '', command);
           if (fresh !== null) {
-            hold(op.seat, `${op.seat}: its recorded conversation ${resumeTarget} is not on disk; launched a fresh one\n`);
+            freshFrom = resumeTarget;
             command = fresh;
           }
         }
         // The session id is minted here, not in the plan: the plan's command stays the
-        // deterministic line a dry run prints, and each launch gets its own id.
+        // deterministic line a dry run prints, and each launch gets its own id. An id that could
+        // not be placed where the CLI reads it is not recorded, and the run says so.
         const launch = withLaunchSession(op.cli ?? '', command);
+        if (launch.notice !== undefined) {
+          hold(op.seat, `${op.seat}: ${launch.notice}\n`);
+          host.log(op.seat, launch.notice);
+        }
         launchedCommands.set(op.seat, launch.command);
         if (op.recordLine !== undefined) recordLines.set(op.seat, op.recordLine);
         launchedThisRun.add(op.seat);
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
+          // The fresh-start fallback is logged with its real outcome, never as a launch that
+          // did not happen: the terminal's scrollback loses this, so the log keeps the truth.
+          if (freshFrom !== undefined) {
+            hold(op.seat, `${op.seat}: its recorded conversation ${freshFrom} is not on disk; the fresh launch did not run\n`);
+            host.log(op.seat, `its recorded conversation ${freshFrom} is not on disk; the fresh launch did not run: the pane did not take its line`);
+          }
           // A server this call started was never attached: it is this run's to stop, so a pane
           // that did not run leaves no endpoint behind.
           if (startedEndpoint && op.codexEndpoint !== undefined) {
@@ -1247,6 +1276,11 @@ export async function executePlan(
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
+        }
+        if (freshFrom !== undefined) {
+          hold(op.seat, `${op.seat}: its recorded conversation ${freshFrom} is not on disk; launched a fresh one\n`);
+          // The fallback is also evidence the terminal's scrollback loses: the log keeps it.
+          host.log(op.seat, `its recorded conversation ${freshFrom} is not on disk; launched a fresh one`);
         }
         const knownSession = launch.sessionId ?? (namedResumeTarget(op.cli ?? '', launch.command) || undefined);
         if (knownSession !== undefined) launchSessions.set(op.seat, knownSession);
@@ -1437,8 +1471,15 @@ export async function executePlan(
             if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
               freshAfterMissing = true;
               const relaunch = withLaunchSession(op.cli ?? '', fresh);
+              if (relaunch.notice !== undefined) {
+                hold(op.seat, `${op.seat}: ${relaunch.notice}\n`);
+                host.log(op.seat, relaunch.notice);
+              }
               if (host.paneRun(session, here.pane, relaunch.command)) {
                 hold(op.seat, `${op.seat}: its recorded conversation was not found by the CLI; launched a fresh one\n`);
+                // The runtime refusal is logged too: the pane's own error text never reaches the
+                // log, so this line is the log's only record that the resume fell back.
+                host.log(op.seat, 'its recorded conversation was not found by the CLI; launched a fresh one');
                 launchedCommands.set(op.seat, relaunch.command);
                 if (relaunch.sessionId !== undefined) launchSessions.set(op.seat, relaunch.sessionId);
                 else launchSessions.delete(op.seat);

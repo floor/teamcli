@@ -102,18 +102,20 @@ describe('a line without permission flags receives the complete defaults', () =>
     );
   });
 
+  // The defaults are options: they stand before the delimiter, where the CLI reads them, and
+  // the line's own word after it stays positional.
   test('an argument after -- is positional and does not suppress defaults', () => {
     expect(launched(codex, 'codex -- -a on-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -- -a on-request -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -a on-request',
     );
   });
 
   test('an attached-looking word after -- does not suppress the defaults either', () => {
     expect(launched(codex, 'codex -- -sdanger-full-access')).toBe(
-      'AGENT_UNATTENDED=1 codex -- -sdanger-full-access -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -sdanger-full-access',
     );
     expect(launched(codex, 'codex -- -anever -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -- -anever -sworkspace-write -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -anever -sworkspace-write',
     );
   });
 });

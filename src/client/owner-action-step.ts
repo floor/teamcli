@@ -7,9 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
-import { callerLabel, callerOf } from '../caller.ts';
+import { callerLabel, callerOf, isOwner, type Caller } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, boundWords, canonicalRoot, createOwnerActionRequest, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
+import { isSameOrInside } from '../grant.ts';
+import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, auditRuleAdmission, boundWords, canonicalRoot, createOwnerActionRequest, listOwnerActionRules, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
 import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -54,20 +55,25 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client' | 'development-mode',
   action: OwnerAction,
   argv: readonly string[],
-  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },
+  ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean; reason?: string },
   io: Io,
   sources: OwnerSeatSources,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
-  const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block') {
-    refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
-    return { kind: 'refused' };
+  // The charter admits routine operations in the folder it covers. The machine's development
+  // mode is not one of them: it is the machine's, so only the owner's own answer admits it, even
+  // when the caller's folder lies inside a signed charter.
+  if (command !== 'development-mode') {
+    const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
+    if (gate.kind === 'block') {
+      refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
+      return { kind: 'refused' };
+    }
+    if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
   }
-  if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
   if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const now = sources.now?.() ?? new Date();
   const refused = (message: string): OwnerSeatStep => {
@@ -81,7 +87,15 @@ export function ownerSeatStep(
   const head = headOf(root);
   const words = boundWords(argv);
   if (ask.request) {
-    const made = createOwnerActionRequest(home, { actions: [action], root, team, head, args: { [action]: words }, requestedBy: callerLabel(callerOf(io)) }, now);
+    const made = createOwnerActionRequest(home, {
+      actions: [action],
+      root,
+      team,
+      head,
+      args: { [action]: words },
+      requestedBy: callerLabel(callerOf(io)),
+      ...(ask.reason === undefined ? {} : { reason: ask.reason }),
+    }, now);
     if (!made.ok) return refused(made.why);
     // The same honest delivery `grant --request` uses: the owner seat's Touch ID signer is asked to
     // sign this request's answer, with the card as the prompt. A verified signature is the approval,
@@ -131,6 +145,42 @@ export function ownerSeatRuleAdmits(action: OwnerAction, cwd: string, dry: boole
 export function ownerSeatRuleFolder(cwd: string): string | null {
   const root = findRoot(cwd);
   return root === null ? null : dirname(canonicalRoot(root));
+}
+
+export type OwnerRecordAdmission =
+  | { ok: true; via: 'owner' }
+  | { ok: true; via: 'rule'; ruleId: string; signer: string; ruleFolder: string }
+  | { ok: false; kind: 'caller'; caller: Caller }
+  | { ok: false; kind: 'target'; caller: Caller; ruleFolder: string | null; targets: readonly string[] | null };
+
+/**
+ * The one check for changing an approval record: removing a standing rule or spending a pending
+ * grant (`team approvals revoke`, `team init --revoke-approval` and `--approval-mode`,
+ * `team grant --deny` and `--revoke-approval`). Its default is the owner at a terminal. The
+ * configured way in is a verified owner-signer `always` rule for `team-revoke-approval`, and the
+ * rule must cover the folder of the record the call changes (every folder in `targets`) — the
+ * target, never merely the caller's own folder: a rule is the owner's standing consent for that
+ * folder's records, wherever the call is made from. With no known target (a record that does not
+ * verify or cannot be placed) no rule admits anything. A refusal writes no record; an admission
+ * by rule is recorded in the owner-action audit folder, as a rule admission always was.
+ */
+export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly string[] | null, sources: OwnerSeatSources): OwnerRecordAdmission {
+  const caller = callerOf(io);
+  if (isOwner(caller)) return { ok: true, via: 'owner' };
+  const home = sources.home ?? homedir();
+  try {
+    const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
+    const now = sources.now?.() ?? new Date();
+    const rules = listOwnerActionRules(home, store, now).rules.filter((rule) => rule.actions.includes(action));
+    if (rules.length === 0) return { ok: false, kind: 'caller', caller };
+    if (targets === null || targets.length === 0) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    const rule = rules.find((one) => targets.every((target) => isSameOrInside(one.scope, target)));
+    if (rule === undefined) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    auditRuleAdmission(home, rule, action, targets, now);
+    return { ok: true, via: 'rule', ruleId: rule.rule_id, signer: rule.signer, ruleFolder: rule.scope };
+  } catch {
+    return { ok: false, kind: 'caller', caller };
+  }
 }
 
 /** Presents one owner-action request to the owner seat's Touch ID signer. `why` is null when no

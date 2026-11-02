@@ -8,7 +8,7 @@ import { validateTeamFile } from '../file/validate.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { parseYaml } from '../yaml.ts';
-import { bumpGeneration, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
+import { bumpGeneration, generationPath, generationPresence, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
 /**
  * The user-level store: what must survive the project folder and stay out of
@@ -152,20 +152,30 @@ function projectName(text: string): string | null {
   }
 }
 
-function matchingNames(root: string, home: string): string[] | null {
+/** The folder's names, or the reason it could not be read. A folder that is not there is the
+ *  ordinary virgin home, not a fault; any other failure is named, because a store that cannot
+ *  be listed is not a store this project does not have. */
+function matchingNames(root: string, home: string): string[] | { why: string; absent: boolean } {
   const suffix = `-${rootHash(root)}`;
   let names: string[];
   try {
     names = readdirSync(storesFolder(home));
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { why: error instanceof Error ? error.message : String(error), absent: code === 'ENOENT' || code === 'ENOTDIR' };
   }
   return names.filter((candidate) => candidate.endsWith(suffix)).sort();
 }
 
-function locateStores(root: string, home: string): { store: string | null; others: string[] } {
+/** The three ways a root can have no store this project can read: none was ever written there,
+ *  several match and none is the current project's (nothing is guessed), or the folder itself
+ *  cannot be read. The standing names each in its own words. */
+type StoreMiss = 'none' | 'several' | 'unreadable';
+
+function locateStores(root: string, home: string): { store: string | null; others: string[]; miss?: StoreMiss; why?: string } {
   const names = matchingNames(root, home);
-  if (names === null || names.length === 0) return { store: null, others: [] };
+  if (!Array.isArray(names)) return { store: null, others: [], miss: names.absent ? 'none' : 'unreadable', why: names.why };
+  if (names.length === 0) return { store: null, others: [], miss: 'none' };
   const folder = storesFolder(home);
   const project = projectAt(root, home);
   const expected = project === null ? null : basename(storePath(project, root, home));
@@ -179,12 +189,12 @@ function locateStores(root: string, home: string): { store: string | null; other
     const only = approved[0] as string;
     return { store: join(folder, only), others: [] };
   }
-  if (approved.length > 1) return { store: null, others: approved };
+  if (approved.length > 1) return { store: null, others: approved, miss: 'several' };
   if (names.length === 1) {
     const only = names[0] as string;
     return { store: join(folder, only), others: [] };
   }
-  return { store: null, others: [] };
+  return { store: null, others: [], miss: 'none' };
 }
 
 /** The repair every refused record names, and the one a legacy record names. */
@@ -272,14 +282,62 @@ export function payloadOf(approval: Approval, file: string, generation: number):
 }
 
 /**
+ * The first link the record's path holds, or null: the stores folder, the store and the record
+ * itself are read with lstat, never followed, so a linked folder or record is refused instead of
+ * read as an approval. A path that is not there holds no link; the reader names its own reason.
+ */
+function linkOnRecordPath(store: string, home: string): string | null {
+  for (const path of [storesFolder(home), store, join(store, APPROVAL)]) {
+    try {
+      if (lstatSync(path).isSymbolicLink()) return path;
+    } catch {
+      // Absent, or unreadable above it: not a link, and the checks below name that case.
+    }
+  }
+  return null;
+}
+
+/**
  * The standing of this root's approval, from one verified read. A reader never
  * parses the store itself: this is the only way in, and it returns the record
  * only when the whole of it — approval, stored copy, root and generation —
  * carries a signature of this machine's key.
+ *
+ * `none` is a project no approval was ever written for on this machine, and the generation is
+ * what says so: it is written before any record and outlives the record's removal. A project
+ * that has one is never `none` again — a store or a record that has gone missing, a generation
+ * path that holds a link or a component of the wrong shape, or anything on either path that
+ * cannot be read, is refused with its own reason, because a record that was removed is not a
+ * team that was never approved.
  */
 export function approvalStanding(root: string, home: string = homedir()): Standing {
-  const store = findStore(root, home);
-  if (store === null) return { kind: 'none' };
+  const presence = generationPresence(root, home);
+  if (presence.kind === 'unreadable') {
+    return { kind: 'refused', why: `this project's approval generation cannot be read (${presence.why}): no approval is judged until it is restored` };
+  }
+  const recorded = presence.kind === 'recorded' ? recordedGeneration(root, home) : null;
+  if (presence.kind === 'recorded' && recorded === null) {
+    return { kind: 'refused', why: `this project's approval generation cannot be read (${generationPath(root, home)}): no approval is judged until it is restored` };
+  }
+  const located = locateStores(root, home);
+  const store = located.store;
+  if (store === null) {
+    if (recorded === null) return { kind: 'none' };
+    const generation = `approval #${recorded.generation} is recorded for this project, but `;
+    if (located.miss === 'unreadable') {
+      return { kind: 'refused', why: `${generation}the folder its store lives in cannot be read (${located.why ?? 'an unknown error'}): no approval is judged until it is back` };
+    }
+    if (located.miss === 'several') {
+      return { kind: 'refused', why: `${generation}several stores match this root and none is its own (${located.others.join(', ')}): leave one store in place` };
+    }
+    const project = projectAt(root, home);
+    const wanted = project === null ? null : storePath(project, root, home);
+    return { kind: 'refused', why: `${generation}its store is missing${wanted === null ? '' : ` (${wanted})`}: restore the store` };
+  }
+  const link = linkOnRecordPath(store, home);
+  if (link !== null) {
+    return { kind: 'refused', why: `the approval's path holds a link (${link}): an approval is read from the files the store holds, never through a link` };
+  }
   let record: ApprovalRecord | null;
   try {
     record = readApproval(store);
@@ -287,7 +345,12 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
     const detail = error instanceof Error ? ` (${error.message})` : '';
     return { kind: 'refused', why: `the approval record cannot be read${detail}` };
   }
-  if (record === null) return { kind: 'none' };
+  if (record === null) {
+    if (recorded !== null) {
+      return { kind: 'refused', why: `approval #${recorded.generation} is recorded for this project, but its record is missing (${join(store, APPROVAL)}): restore approval.json` };
+    }
+    return { kind: 'none' };
+  }
   if (record.approval.format === 1) return { kind: 'legacy' };
   const { generation, signature } = record;
   // `shapeProblem` guarantees both on a format-2 record; the check below only
@@ -328,7 +391,6 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
   if (!sameRoot(record.approval.root, root)) {
     return { kind: 'refused', why: `the record approves another project root (${record.approval.root})` };
   }
-  const recorded = recordedGeneration(root, home);
   if (recorded === null) {
     return { kind: 'refused', why: 'no generation is recorded for this project' };
   }

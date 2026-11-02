@@ -96,7 +96,11 @@ describe('registry wording', () => {
       agents: () => [],
     }));
     expect(code).toBe(0);
-    expect(io.out).toContain("! warning: the team's registry config was never approved on this machine; dev mode continues\n");
+    // No approval record is a notice in dev mode, never a refusal, and it names the step a record
+    // is for. The run admits whatever the source of the config.
+    expect(io.out).toContain(
+      '! the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one\n',
+    );
     // The launch line shell-quotes the apostrophe, so the headline is not one literal span.
     expect(io.out).toContain('Rules for this session, from the team');
     expect(io.out).toContain('s registry config:');
@@ -117,7 +121,11 @@ describe('registry wording', () => {
       agents: () => [],
     }));
     expect(code).toBe(0);
-    expect(io.out).toContain('! warning: the file was never approved on this machine; dev mode continues\n');
+    expect(io.out).toContain(
+      '! the team has no approval record; the Team change workflow\'s step "apply over the file\'s digest" requires one\n',
+    );
+    expect(io.out).not.toContain('the file was never approved on this machine');
+    expect(io.out).not.toContain('the team\'s registry config was never approved on this machine');
     expect(io.out).toContain('Rules for this session, from the team file:');
     expect(io.out).toContain('never edit `trust:` in the team file');
     expect(io.out).not.toContain('s registry config:');

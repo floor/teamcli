@@ -8,6 +8,8 @@ import { runDown, type DownLaunch, type DownSources } from '../src/commands/down
 import { registerEnd, registerLaunch, registerRun, type RegistryTeam } from '../src/registry/sync.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
+import { noteLaunchedPane } from '../src/file/launched-file.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { findAgent, getAgent, readAgents, registerAgent } from '../src/registry/agents.ts';
@@ -16,6 +18,7 @@ import { get as getProject, projectIdOf, projectsFile, readProjects, upsertProje
 import { admitSend, PROJECT_RULES } from '../src/send/admit.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
 const IDLE = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Opus 5.5\n`;
@@ -643,6 +646,32 @@ describe('team down ends the agents it stops', () => {
     // `lead` is in the file's session again and is stopped; `worker` is in `alternate` and is left.
     expect(getAgent(fixture.home, ids.lead)).toMatchObject({ lifecycle: 'stopped', reach: { pane: null } });
     expect(getAgent(fixture.home, ids.worker)).toMatchObject({ lifecycle: 'running', reach: { session: 'alternate', pane: 'pane-worker' } });
+  });
+
+  // The record is the team. A seat calling `down` from its own pane is handed the file it
+  // launched from as its pointer; read as a plain file it misses a mark the record holds, and
+  // plans a stop the record forbids. The pointer is read through the seam, so the plan is the
+  // record's: the seat the record marks as a human's is left running.
+  test('a dry run from a launched pane reads the record, not the file it launched from', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    await underRegistry(async () => {
+      const stored = storedTeam(fixture.root, fixture.home);
+      if (stored === null) throw new Error('the fixture team is not in the registry');
+      const human = stored.text.replace(
+        '    name: worker\n    label: worker\n',
+        '    name: worker\n    label: worker\n    human: true\n',
+      );
+      expect(human).not.toBe(stored.text);
+      expect(writeTeamText(fixture.file, human, { home: fixture.home, command: 'config' }))
+        .toEqual({ ok: true, target: 'registry' });
+      seedState(fixture);
+      noteLaunchedPane(fixture.home, fixture.file, 'pane-lead', 'acme');
+      const { sources } = downSources(fixture, { running: true });
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runDown(['--dry-run'], io, sources), io.err).toBe(0);
+      expect(io.out).toContain("worker: the pane is a human's; nothing is typed into it; left running");
+    });
   });
 
   test('a dry run, and a run given no home, end nothing', async () => {

@@ -8,17 +8,28 @@
 // the variable does; `pr-per-change` keeps the process half and lifts no caller gate; `off`
 // lifts nothing and beats the legacy sources. An absent record leaves everything as it was.
 //
-// The write is the owner's: from a terminal outside herdr, or by the existing out-of-band
-// authorization for exactly this switch. `--show` (or `--dry-run`) prints what the switch would
+// The write is the owner's: from a terminal outside herdr, by the existing out-of-band
+// authorization for exactly this switch, or by an owner-seat request at the machine owner's Touch
+// ID. `--show` (or `--dry-run`) prints what the switch would
 // change and the `Owner-authorization fingerprint` — the digest of this machine, the exact mode
 // and the prior generation. The owner reads it back, and the run with `TEAM_OWNER_APPROVAL`
 // holding that hex is admitted. An empty or arbitrary token never matches, the token is never
 // logged, and a switch that finds the generation moved refuses the replayed token. The record
 // itself is signed with the owner's existing key; this command creates no key and no grant.
+//
+// `--request` records the switch as one owner-seat request — for `local-fast` the card reads
+// `Turn on fast local development` / `Stop asking Touch ID for routine team changes on this Mac.
+// OK?` / `This Mac · all teams`, and the other modes say their own lines — exactly as
+// `team config … --request` records a record change, and `--approval <request-id>` applies it once
+// the owner's verified signature binds these words. The request is bound to the caller's
+// repository, team, HEAD and words, and no charter admits it: the switch is the machine's, and
+// only the owner's own answer may stand for her.
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { ownerAuthorized } from '../approve/owner-token.ts';
 import { describeCaller, isOwner, logTag, walkCaller, type Caller } from '../caller.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ownerSeatStep } from '../client/owner-action-step.ts';
 import {
   DEVELOPMENT_MODE_VALUES,
   developmentModeFingerprint,
@@ -35,14 +46,22 @@ import { writeJson, writeJsonError } from '../output/index.ts';
 
 export const USAGE = `Usage: team development-mode [--json]
        team development-mode set <local-fast|pr-per-change|off> [--show] [--dry-run] [--json]
+       team development-mode set <local-fast|pr-per-change|off> --request [--reason <text>] [--json]
+       team development-mode set <local-fast|pr-per-change|off> --approval <request-id> [--json]
 
-Exits 0 when the setting is read, shown, or changed, 1 when refused, 2 when the invocation is invalid.
+Exits 0 when the setting is read, shown, changed, or a request is recorded, 1 when refused, 2
+when the invocation is invalid.
 `;
 
 export type DevelopmentModeOptions = {
   /** The machine home the record lives under; defaults to the caller's home. */
   home?: string;
   now?: Date;
+  /** The credential store a charter signature or an owner-seat answer is confirmed against.
+   *  Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
+  /** Present an owner-seat request to Touch ID at once (see OwnerSeatSources.present). */
+  present?: boolean;
 };
 
 export const developmentMode: Command = (argv, io) => runDevelopmentMode(argv, io);
@@ -61,7 +80,7 @@ export async function runDevelopmentMode(
   options: DevelopmentModeOptions = {},
 ): Promise<number> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, [], ['show', 'dry-run', 'json']);
+  const args = readArgs(argv, ['approval', 'reason'], ['show', 'dry-run', 'json', 'request']);
   const json = args.flags.has('json');
   const home = options.home ?? homedir();
   const sub = args.rest[0];
@@ -90,6 +109,8 @@ export async function runDevelopmentMode(
     outcome = read.kind === 'refused' ? 'refused' : 'ok';
   } else if (sub === 'set') {
     const modeArg = args.rest[1];
+    const show = args.flags.has('show') || args.flags.has('dry-run');
+    const ask = args.flags.has('request') || args.values.approval !== undefined;
     if (args.rest.length !== 2 || !isDevelopmentMode(modeArg)) {
       const why =
         args.rest.length === 2
@@ -98,15 +119,40 @@ export async function runDevelopmentMode(
       if (json) writeJsonError(rawIo, 'development-mode.invocation', why, null);
       else io.stderr(`team development-mode: ${why}\n${USAGE}`);
       outcome = 'invocation';
+    } else if (show && ask) {
+      // `--show` prints the fingerprint and writes nothing; `--request` and `--approval` apply a
+      // switch. Asking for both is an invocation error, not a request.
+      const why = '--request and --approval apply a switch, and --show only prints what it would change: pass one';
+      if (json) writeJsonError(rawIo, 'development-mode.invocation', why, null);
+      else io.stderr(`team development-mode: ${why}\n${USAGE}`);
+      outcome = 'invocation';
     } else {
       const mode: DevelopmentMode = modeArg;
       const prior = developmentModeGeneration(home);
       const fingerprint = developmentModeFingerprint(home, mode, prior);
       const read = readDevelopmentMode(home);
-      const show = args.flags.has('show') || args.flags.has('dry-run');
       const caller = walkCaller(rawIo);
       const owner = isOwner(caller);
       const token = ownerAuthorized(rawIo.env, fingerprint);
+      // The owner-seat door, exactly as `team config set … --request` opens it: the request binds
+      // this machine switch to the caller's repository, team, HEAD and words, and the owner's
+      // answer to it is the approval. No charter admits this switch (see `ownerSeatStep`).
+      let seatApproved = false;
+      if (ask) {
+        const step = ownerSeatStep('development-mode', 'development-mode', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, {
+          home,
+          now: () => options.now ?? new Date(),
+          ...(options.ownerSeatStore === undefined ? {} : { ownerSeatStore: options.ownerSeatStore }),
+          ...(options.present === undefined ? {} : { present: options.present }),
+        });
+        if (step.kind === 'requested') {
+          return 0; // exit: development-mode.approval-requested
+        }
+        if (step.kind === 'refused') {
+          return 1; // exit: development-mode.approval-refused
+        }
+        seatApproved = step.kind === 'admitted';
+      }
 
       if (show) {
         // Read-only, and anyone may ask: the agent needs the fingerprint to carry the owner's
@@ -131,7 +177,7 @@ export async function runDevelopmentMode(
           io.stdout(`Owner-authorization fingerprint: ${fingerprint}\n`);
         }
         outcome = 'ok';
-      } else if (!owner && !token) {
+      } else if (!owner && !token && !seatApproved) {
         const msg = `only the owner switches the machine development mode, from a terminal outside herdr, or with the owner-authorization token for this exact switch; this call is ${describeCaller(caller)}`;
         if (json) {
           writeJsonError(

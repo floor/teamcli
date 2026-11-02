@@ -25,7 +25,7 @@ export const USAGE = `Usage: team config keys [<level>] [--json]
        team config get <path> [--json]
        team config set <path> <value>
        team config unset <path>
-       team config set <path> <value> --request [--json]
+       team config set <path> <value> --request [--reason <text>] [--json]
        team config set <path> <value> --approval <request-id> [--json]
        team config set <path> <value> --general <grant.json> --key <client.key> [--json]
        team config unset <path> --general <grant.json> --key <client.key> [--json]
@@ -40,7 +40,8 @@ index: watch.unread_after, seats.lead.model, seats.0.cli. <value> is read as YAM
 number, true, a one-line [list] or {map}), else as text. edit opens the record as YAML
 in $VISUAL or $EDITOR and writes it back once it validates. Every write is validated
 first and is the owner's (or, with --request, recorded for the owner seat to approve with Touch
-ID and applied with --approval <request-id> once signed). set and unset rewrite only the changed
+ID — --reason <text> is the short reason the card shows — and applied with --approval
+<request-id> once signed). set and unset rewrite only the changed
 key's lines, so the record's comments, above,
 beside and below the key, are kept byte for byte; a comment beside or inside a value the
 change removes stays as a comment line where it was. A key a line-by-line change cannot
@@ -81,7 +82,7 @@ export type ConfigSources = {
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'general', 'key', 'reason'], ['json', 'request']);
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
     // A path whose last segment is `names.unique` is an entity's own record, not this team's:

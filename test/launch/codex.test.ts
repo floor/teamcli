@@ -46,12 +46,15 @@ describe('Codex launch and captured screens', () => {
         '-c',
         'mcp_servers.team_inbox.command="{command_json}"',
         '-c',
-        'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}{epoch_args}]',
+        'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{session_args}{file_args}{epoch_args}]',
       ],
       add: null,
       target: null,
       file: null,
     });
+    // A launch that names no file names its session: with two registered teams holding the seat
+    // name, `mcp serve` exits 2 without `--session`. A file-bound line names the file instead
+    // and leaves `--session` out (the test below).
     expect(
       launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, {
         seat: 'helper',
@@ -62,7 +65,7 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper"]\''
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
       + ' -c features.mcp_oauth_refresh_coordination=false',
     );
   });
@@ -77,7 +80,7 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/my \\"bun\\""\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper"]\''
+      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
       + ' -c features.mcp_oauth_refresh_coordination=false',
     );
   });
@@ -329,7 +332,7 @@ describe('Codex launch and captured screens', () => {
     );
     expectResume(
       `zsh -lc "${flagged}"`,
-      `AGENT_UNATTENDED=1 zsh -lc "${flagged} resume ${id}" ${tail}`,
+      `AGENT_UNATTENDED=1 zsh -lc "${flagged} resume ${id} ${tail} -c`,
     );
   });
 });

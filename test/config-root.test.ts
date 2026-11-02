@@ -15,6 +15,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import type { Io } from '../src/io.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { intoRegistry, storedTeam } from './helpers/registry-team.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
@@ -55,9 +56,12 @@ seats:
 delivery_order: [mcp-inbox, typed]
 `;
 
+/** The same team with the worker stopped, as `remove worker --keep` leaves it. */
+const STOPPED_TEAM = TEAM.replace('    inbound: hold\n', '    inbound: hold\n    stopped: true\n');
+
 /** One team, its `.agents` folder, a temp home, and the owner seat: the root is a git checkout
  *  only when the scene asks for one. The team is moved into the home's registry, as migrate does. */
-function place(git: boolean): { home: string; root: string; store: FakeStore } {
+function place(git: boolean, team = TEAM): { home: string; root: string; store: FakeStore } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'config-root-')));
   made.push(base);
   const home = join(base, 'home');
@@ -65,7 +69,7 @@ function place(git: boolean): { home: string; root: string; store: FakeStore } {
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home, { recursive: true });
   if (git) execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+  writeFileSync(join(root, '.agents', 'team.yaml'), team);
   const store = seatOwner(home);
   intoRegistry(root, home);
   return { home, root, store };
@@ -246,5 +250,63 @@ describe('add from a team root that is not a git repository', () => {
     const ask = ioOf(p.root);
     expect(await runAdd(['worker-2', '--like', 'worker', '--request'], ask, sources), ask.err).toBe(0);
     expect(requestId(ask.out)).not.toBe('');
+  });
+});
+
+// A stopped seat's sign-off is its own team's to lift: the lead clears exactly
+// `seats.<seat>.stopped` with no owner card and no dev mode, on its own recorded pane. Every
+// other key, and every other seat, keeps the owner-only door.
+describe('a lead clears its own team\'s stopped mark', () => {
+  const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+  const workerCaller: Caller = { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' };
+  const rivalCaller: Caller = { kind: 'seat', name: 'rival-lead', pane: 'pane-rival', session: 'acme' };
+
+  /** The state places the seat on its own recorded pane, ready — the proof the map reads. */
+  function placed(root: string, caller: Caller): void {
+    if (caller.kind !== 'seat' || caller.pane === undefined) throw new Error('a placed seat names its pane');
+    updateState(join(root, '.agents'), (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats[caller.name] = { stage: 'ready', pane: caller.pane, workspace: `ws-${caller.name}` };
+    });
+  }
+
+  test('the team\'s lead unsets its stopped seat\'s mark with no card, and the registry records it', async () => {
+    const p = place(false, STOPPED_TEAM);
+    placed(p.root, leadCaller);
+    expect(recordText(p)).toContain('stopped: true');
+    const io = ioOf(p.root, leadCaller);
+    expect(await runConfig(['unset', 'seats.worker.stopped'], io, sourcesOf(p)), io.err).toBe(0);
+    // No owner-seat request was filed: the write was admitted on the lead's placement alone.
+    expect(io.out).not.toContain('owner-seat request');
+    expect(recordText(p)).not.toContain('stopped: true');
+    const got = ioOf(p.root);
+    expect(await runConfig(['get', 'seats.worker.stopped'], got, sourcesOf(p))).toBe(1);
+  });
+
+  test('a worker is refused the same unset, and the mark stays', async () => {
+    const p = place(false, STOPPED_TEAM);
+    placed(p.root, workerCaller);
+    const io = ioOf(p.root, workerCaller);
+    expect(await runConfig(['unset', 'seats.worker.stopped'], io, sourcesOf(p))).toBe(1);
+    expect(io.err).toContain("only the owner edits the team's record");
+    expect(recordText(p)).toContain('stopped: true');
+  });
+
+  test('another team\'s lead is refused the same unset, and the mark stays', async () => {
+    const p = place(false, STOPPED_TEAM);
+    placed(p.root, rivalCaller);
+    const io = ioOf(p.root, rivalCaller);
+    expect(await runConfig(['unset', 'seats.worker.stopped'], io, sourcesOf(p))).toBe(1);
+    expect(io.err).toContain("only the owner edits the team's record");
+    expect(recordText(p)).toContain('stopped: true');
+  });
+
+  test('the lead is refused every other key: only the stopped mark is its to lift', async () => {
+    const p = place(false, STOPPED_TEAM);
+    placed(p.root, leadCaller);
+    const io = ioOf(p.root, leadCaller);
+    expect(await runConfig(['unset', 'seats.worker.inbound'], io, sourcesOf(p))).toBe(1);
+    expect(io.err).toContain("only the owner edits the team's record");
+    expect(recordText(p)).toContain('inbound: hold');
   });
 });
