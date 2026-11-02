@@ -576,6 +576,11 @@ describe('per-seat FIFO queue and concurrent sends', () => {
   });
 
   test('no typing queue fills: every send past MAX_QUEUE_DEPTH still lands in the bus inbox', async () => {
+    // The scene's own deadline starts at test entry, not at the gather: setup and the sends'
+    // synchronous admission take time under load, and a clock started after them could still
+    // fire past bun's 30 s test limit and surface this scene's expect as an unhandled error
+    // between tests. Spending the budget during setup makes the race resolve at once instead.
+    const deadlineAt = Date.now() + 25_000;
     const w = setupWorld();
     let blocked = true;
     let unblock: (() => void) | null = null;
@@ -627,8 +632,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     blocked = false;
     unblock!();
     // Measured alone, starting the thirty-three sends takes ~2.35 s (each call's synchronous
-    // admission before its first await). Bound the gather below the test's own timeout, and
-    // give the gather a rejection handler: a slow host then fails this scene with the expect
+    // admission before its first await). Give the gather a rejection handler and race it against
+    // what is left of the test-entry budget: a slow host then fails this scene with the expect
     // below, never with an assertion firing after bun has already timed the test out.
     const gathered = Promise.all(pending).then(
       (codes) => codes.every((code) => code === 0),
@@ -636,7 +641,7 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     );
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const bounded = new Promise<'timeout'>((resolve) => {
-      deadline = setTimeout(() => resolve('timeout'), 25_000);
+      deadline = setTimeout(() => resolve('timeout'), Math.max(0, deadlineAt - Date.now()));
     });
     const outcome = await Promise.race([gathered, bounded]);
     clearTimeout(deadline);
