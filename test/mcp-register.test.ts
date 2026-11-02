@@ -261,12 +261,13 @@ describe('the antigravity user-level route', () => {
       cli: 'antigravity',
       seat: 'helper',
       cwd: dir,
+      file: fileOf(dir),
       run: (command, args, cwd) => { calls.push({ command, args, cwd }); return { code: 0 }; },
     })).toEqual({ ok: true });
     expect(calls).toEqual([{
       command: 'agy',
       cwd: dir,
-      args: ['mcp', 'add', inboxEntryName('acme-web', 'helper'), runner.command, runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+      args: ['mcp', 'add', inboxEntryName('acme-web', 'helper'), runner.command, runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', fileOf(dir)],
     }]);
   });
 
@@ -289,29 +290,30 @@ describe('the antigravity user-level route', () => {
 
   test('no project file is written and no git exclude is touched: the store is the CLI\'s own', () => {
     const dir = folder({ repo: 'plain' });
-    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, run: () => ({ code: 0 }) })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: 0 }) })).toEqual({ ok: true });
     expect(() => statSync(join(dir, '.gemini'))).toThrow();
     expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).not.toContain('.gemini');
   });
 
   test('an add that exits is a refusal naming the command and its exit', () => {
-    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: 1 }) })).toEqual({
+    const dir = folder();
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: 1 }) })).toEqual({
       ok: false,
       reason: '`agy mcp add` exited 1',
     });
-    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: folder(), run: () => ({ code: null }) })).toEqual({
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: null }) })).toEqual({
       ok: false,
       reason: '`agy mcp add` exited without running',
     });
   });
 
-  test('the seat folder is still read for the team: no team file refuses and runs nothing', () => {
+  test('a launch that names no file and no registered team refuses: the folder is not read as the team', () => {
     const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
     dirs.push(dir);
     let ran = false;
-    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, run: () => { ran = true; return { code: 0 }; } })).toEqual({
+    expect(registerInbox({ cli: 'antigravity', seat: 'helper', cwd: dir, home: dir, run: () => { ran = true; return { code: 0 }; } })).toEqual({
       ok: false,
-      reason: 'no team file could be read from its folder',
+      reason: 'no registered team holds seat "helper"',
     });
     expect(ran).toBe(false);
   });
