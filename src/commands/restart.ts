@@ -28,6 +28,8 @@ import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/
 import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -237,12 +239,19 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = readTeamConfig(io.cwd, {
-    ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
+  const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
-  });
+  };
+  // A launched pointer names where this session was launched from, not a copy to read: a team
+  // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
+  // `up` launched from. A `--file` names its file, and is read as that file.
+  const loaded = args.values.file
+    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+    : launched !== undefined
+      ? readLaunchedTeam(launched, readOptions)
+      : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     return configuration(out, json, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
   }
@@ -326,7 +335,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, json, describeCaller(caller));
   }
-  if (declared.stopped) {
+  // A stopped seat is its own team's sign-off to lift: the owner, or a seat this team's map
+  // admits as `leads` on its recorded pane, restarts it, and the run clears the mark in the same
+  // write that records the launch. The caller gate above is not that proof on its own — dev mode
+  // folds its refusal into a warning, and a client run reads past it — so the verdict itself must
+  // be `ok`, not merely unfolded.
+  if (declared.stopped && mayChange.kind !== 'ok') {
     return signedOffRefused(out, json, name);
   }
 
@@ -491,6 +505,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ...(resume === undefined ? {} : { resume }),
     ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
+    // The sign-off this run lifts is cleared in the same write that carries the launch: after
+    // the old pane is closed and before the launch reads the file's own words. A launch that
+    // does not reach ready puts it back: the failed run leaves the mark exactly as it was.
+    ...(declared.stopped
+      ? { declare: () => declareRevived(path, name, home), restore: () => declareStopped(path, name, home) }
+      : {}),
     ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
     sources,
@@ -611,6 +631,11 @@ export type PerformInput = {
    *  refusal. A swap keeping its queue record on that abort is the caller's rule (the ruling of
    *  2026-10-19). */
   declare?: () => { ok: true } | { ok: false; why: string };
+  /** Puts back the sign-off `declare` lifted when the launch this run declared does not reach
+   *  ready: the team file is rewritten in one validated write, and a failed launch leaves the
+   *  mark exactly as it was. Only a revival of a stopped seat passes it; a swap's declaration
+   *  changes the file on purpose and has nothing to put back. */
+  restore?: () => { ok: true } | { ok: false; why: string };
   now(): Date;
   sources: RestartSources;
 };
@@ -821,6 +846,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   if ('held' in runLock) {
     return { kind: 'run-lock', held: runLock.held };
   }
+  // A revival's sign-off comes off before the launch reads the file, and the `finally` below
+  // puts it back unless the launch reached ready: a run that fails, returns early or throws
+  // leaves the mark exactly as it was.
+  let signOffLifted = false;
+  let launchReachedReady = false;
   try {
     const freshAgents = sources.agents(session);
     if (freshAgents === null) return { kind: 'herdr' };
@@ -1012,7 +1042,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and the launch, which reads the file's own words. A write that fails is a truthful abort:
     // the run ends non-zero and launches nothing — a swap's queue record stands and the failure
     // is reported (the ruling of 2026-10-19). The seat is already down either way, so the next
-    // `team up` starts it from the file the run actually holds.
+    // `team up` starts it from the file the run actually holds. A revival's sign-off is put back
+    // by the `finally` unless the launch reaches ready: a failed run leaves the mark as it was.
     if (input.declare) {
       const wrote = input.declare();
       if (!wrote.ok) {
@@ -1022,6 +1053,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         logLine(dir, input.command, who, said, sources.now());
         return { kind: 'not-ready', message: said };
       }
+      // Only a revival passes `restore`: this run lifted a sign-off the finally must put back
+      // unless the launch below reaches ready.
+      if (input.restore !== undefined) signOffLifted = true;
     }
 
     // A handover the old conversation wrote is passed to the new one through the brief and the
@@ -1151,6 +1185,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       logLine(dir, input.command, who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
       return { kind: 'not-ready', message: `${name} did not reach a ready prompt${keptAt(draftCopy)}` };
     }
+    // The launch reached a ready prompt: the sign-off this run lifted stays off from here on,
+    // whatever the binding reads below say about the record.
+    launchReachedReady = true;
     // The unsent text goes back into the new pane's own box, its rows verified. On success the
     // copy is removed; where the paste did not read back, the copy stays and this run names it.
     if (draftText !== undefined && draftCopy !== undefined) {
@@ -1238,6 +1275,24 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
   } finally {
     runLock.release();
+    // A revival that did not launch is no revival: the sign-off comes back in its own validated
+    // write, keeping whatever else the file gained while the launch ran. A write that cannot be
+    // made is said with its reason — the seat may then start without its mark, which is the one
+    // outcome this run must never leave silent.
+    if (signOffLifted && !launchReachedReady && input.restore !== undefined) {
+      let back: { ok: true } | { ok: false; why: string };
+      try {
+        back = input.restore();
+      } catch (error) {
+        back = { ok: false, why: error instanceof Error ? error.message : String(error) };
+      }
+      const said = back.ok
+        ? `${name}: the launch did not reach ready; its sign-off was put back in the team file`
+        : `${name}: the launch did not reach ready and its sign-off could not be put back (${back.why})`;
+      if (json) notes.push(said);
+      else out.stderr(`team ${input.command}: ${plainText(said)}\n`);
+      logLine(dir, input.command, callerText, said, sources.now());
+    }
   }
 }
 
@@ -1999,11 +2054,61 @@ function leadRefused(out: Io, json: boolean, callerText: string): number {
 function signedOffRefused(out: Io, json: boolean, name: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.signed-off',
-    message: `${plainLine(name)} is signed off; the owner takes the sign-off off in the file and runs team up`,
-    repair: 'the owner takes the sign-off off in the file, then runs team up',
+    message: `${plainLine(name)} is signed off; a \`leads\` seat of its own team clears it with \`team restart ${plainLine(name)}\``,
+    repair: `team restart ${name}`,
   });
   // exit: restart.signed-off
   return 1;
+}
+
+/**
+ * One team-file write a revival makes: the seat's entry edited on the text the file holds now,
+ * and the whole file validated before it replaces the one on disk. A file the schema refuses is
+ * left as it was, and a seat taken out of the file since the run read it is said, never re-added.
+ */
+function rewriteSeatEntry(
+  path: string,
+  name: string,
+  home: string,
+  edit: (text: string, name: string) => string,
+): { ok: true } | { ok: false; why: string } {
+  const where = { home, command: 'restart' };
+  let text: string;
+  try {
+    text = readTeamText(path, where);
+  } catch (error) {
+    return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${error instanceof Error ? error.message : String(error)})` };
+  }
+  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
+  const written = writeTeamText(path, edit(text, name), where);
+  if (!written.ok) {
+    const problem = written.errors[0];
+    return {
+      ok: false,
+      why: problem === undefined ? 'the rewritten file is invalid' : `${problem.line === undefined ? '' : `line ${problem.line}: `}${problem.message}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
+ * which reads the file's own words: the seat's block loses `stopped: true` and keeps everything
+ * else. A failed write is the caller's abort: nothing is launched from a file the run could not
+ * rewrite.
+ */
+function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
+  return rewriteSeatEntry(path, name, home, clearStopped);
+}
+
+/**
+ * The sign-off a launch that did not reach ready puts back: the seat's block is marked
+ * `stopped: true` again — exactly as it was, without re-adding a seat that left the file and
+ * without touching another entry — and the whole file is validated before it replaces the one
+ * on disk.
+ */
+function declareStopped(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
+  return rewriteSeatEntry(path, name, home, markStopped);
 }
 
 function herdrRefused(out: Io, json: boolean): number {

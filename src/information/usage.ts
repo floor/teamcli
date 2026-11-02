@@ -70,12 +70,13 @@ export const ACCOUNTS_FILE = '~/.config/team/accounts.yaml';
 export const NO_FIGURES = 'no figures (the file could not be read)';
 
 /** The line a block shows a caller who is not the owner in place of a refused approval's own
- *  words. Those words are the store's, and they can carry the record's absolute path, the key's
- *  fate, or the root of another project (`store.ts:154`, `:169`, `:185` — the last is the leak the
- *  after-review found): they are the owner's, and `status` already prints them to the owner. Every
- *  other caller gets this one fixed sentence instead, so no reason text reaching a non-owner can
- *  carry a path or a root. It is the whole of the restricted view's answer for a refusal — one
- *  `Standing` carries one opaque `why`, so the sentence replaces it as a whole. */
+ *  words. Those words are the store's, and they can carry the record's absolute path, the path a
+ *  link sits at, a folder's read error, the key's fate, or the root of another project (the
+ *  refusals `approvalStanding` builds; its root-of-another-project one is the leak the
+ *  after-review found): they are the owner's, and `status` already prints them to the owner.
+ *  Every other caller gets this one fixed sentence instead, so no reason text reaching a
+ *  non-owner can carry a path or a root. It is the whole of the restricted view's answer for a
+ *  refusal — one `Standing` carries one opaque `why`, so the sentence replaces it as a whole. */
 export const NOT_VERIFIED = 'the approval on this machine does not verify for this project';
 
 /** A restricted view shows a stored reading only when the live file names its account,

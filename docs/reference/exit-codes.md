@@ -111,6 +111,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust or question | `team answer` |
 | `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
+| `approvals.details` | `approvals` | 0 | one request's full record and the audit entries written for it were printed | `team approvals details <id>` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
 | `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
 | `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id...> --approval <request-id>` |
@@ -284,7 +285,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `delegate.refused` | `delegate` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team delegate <session/pane> --commands up,down` |
 | `delegate.invalid` | `delegate` | 2 | the team file or proposed authority record is invalid or cannot be read | `team delegate <session/pane> --commands up,down` |
 | `delegate.invocation` | `delegate` | 2 | the command arguments are invalid | `team delegate <session/pane> --commands up,down` |
+| `development-mode.approval-requested` | `development-mode` | 0 | an owner-seat request for this exact switch was recorded and sent to the owner seat; nothing was written | `team development-mode set local-fast --request` |
 | `development-mode.done` | `development-mode` | 0 | the machine development mode was read, shown, planned, or switched | `team development-mode set local-fast --show` |
+| `development-mode.approval-refused` | `development-mode` | 1 | the owner-seat request named another switch, is unanswered, expired or already used, or the request id is not one | `team development-mode set local-fast --approval oa_nope` |
 | `development-mode.refused` | `development-mode` | 1 | a non-owner called set without the owner-authorization token for this exact switch, or the machine record cannot be read or verified | `team development-mode set off` |
 | `development-mode.invocation` | `development-mode` | 2 | the command arguments are invalid | `team development-mode set maybe` |
 | `doctor.clear` | `doctor` | 0 | nothing is missing | `team doctor` |
@@ -659,7 +662,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.replaced` | `restart` | 1 | the old pane holds a process that is not the seat's CLI | `team restart worker` |
 | `restart.run-lock` | `restart` | 1 | another session-mutating run is holding the session | `team restart worker` |
 | `restart.self` | `restart` | 1 | a seat caller tried to restart its own recorded pane | `team restart lead` |
-| `restart.signed-off` | `restart` | 1 | the seat is parked or stopped | `team restart worker` |
+| `restart.signed-off` | `restart` | 1 | the seat is stopped, and the caller is not the owner or its own team's leads seat | `team restart worker` |
 | `restart.temporary` | `restart` | 1 | the seat is a temporary copy | `team restart worker-tmp-1` |
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |

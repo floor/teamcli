@@ -25,11 +25,12 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, r
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
+import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
-export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget', 'team-config', 'team-general-grant'] as const;
+export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget', 'team-config', 'team-general-grant', 'development-mode'] as const;
 export type OwnerAction = (typeof OWNER_ACTIONS)[number];
 export const OWNER_ACTION_TTL_MS = 15 * 60 * 1000;
 export const OWNER_ACTION_ID_PATTERN = /^oa_[0-9a-f]{24}$/;
@@ -44,6 +45,9 @@ export type OwnerActionParams = {
   args: Partial<Record<OwnerAction, string>>;
   /** Per action, the arguments that hash names. Present on a request recorded by this build. */
   words?: Partial<Record<OwnerAction, string[]>>;
+  /** Why the asker wants it, in their own words. Display only: it is not part of the hash, so a
+   *  request still signs the same actions and arguments whether or not it carries a reason. */
+  reason?: string;
   /** Who asked: the caller's log label. A signer of that name cannot answer it. */
   requested_by: string;
   /** Every caller folded into one card. Set only when more than one asked, and part of the hash then. */
@@ -66,8 +70,8 @@ export function boundWords(argv: readonly string[]): string[] {
   for (let i = 0; i < argv.length; i++) {
     const word = argv[i]!;
     if (word === '--json' || word === '--dry-run' || word === '--request' || word === '--then-up') continue;
-    if (word === '--approval') { i++; continue; }
-    if (word.startsWith('--approval=')) continue;
+    if (word === '--approval' || word === '--reason') { i++; continue; }
+    if (word.startsWith('--approval=') || word.startsWith('--reason=')) continue;
     out.push(word);
   }
   return out;
@@ -92,6 +96,8 @@ export function ownerActionHash(p: OwnerActionParams): string {
     body.words = words;
   }
   if (p.requesters !== undefined) body.requesters = [...p.requesters].sort();
+  // `reason` is not hashed on purpose: the owner's answer signs the actions, arguments, folder,
+  // team and HEAD, and the asker's own words about why must not change what that signature covers.
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
@@ -151,6 +157,7 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-forget': 'forget a team record',
   'team-config': "change the team's record",
   'team-general-grant': 'issue a general grant',
+  'development-mode': "set the machine's development mode",
 };
 
 /** The card for `team migrate`: team, project, seat count, and the canonical-record hash the signature binds. */
@@ -188,6 +195,8 @@ export type OwnerActionRequestInput = {
   head: string | null;
   args: Partial<Record<OwnerAction, readonly string[]>>;
   requestedBy: string;
+  /** Why the asker wants it. Display only; see `OwnerActionParams.reason`. */
+  reason?: string;
 };
 
 /** The directory two overlapping requests wait in. A caller writes its file before taking the lock. */
@@ -225,6 +234,8 @@ function recordFrom(inputs: readonly OwnerActionRequestInput[], now: Date, home:
     args[action] = actionArgsHash(action, words[action]!);
   }
   const requesters = [...new Set(inputs.map((input) => input.requestedBy))].sort();
+  // The first reason given names why the card was drawn; an asker who gave none leaves it out.
+  const reason = inputs.map((input) => input.reason?.replace(/\s+/g, ' ').trim()).find((why) => why !== undefined && why !== '');
   const params: OwnerActionParams = {
     kind: 'owner-action',
     actions,
@@ -233,6 +244,7 @@ function recordFrom(inputs: readonly OwnerActionRequestInput[], now: Date, home:
     head: first.head,
     args,
     words,
+    ...(reason === undefined ? {} : { reason }),
     requested_by: requesters.length === 1 ? requesters[0]! : requesters.join(', '),
     ...(requesters.length > 1 ? { requesters } : {}),
   };
@@ -450,7 +462,10 @@ export function approveOwnerAction(
     kind: 'owner-action', request_id: id, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: now.toISOString(),
     ...(choice === 'always' ? { scope: dirname(record.params.root) } : {}),
   };
-  const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} — ${ownerActionSummary(record.params)}`, via.assertion);
+  // The Touch ID prompt is the card, one line: the kind, the question, and the answer's scope.
+  // The record (arguments, root, HEAD, hash) is not in it; `team approvals details` prints that.
+  const card = answerCard(ownerActionCard(record.params), choice);
+  const signed = signOwnerAnswer(home, answer, via.signer, store, cardPrompt(card), via.assertion);
   if (!signed.ok) return signed;
   if (askedBy(record.params).includes(signed.signed.signer)) return { ok: false, why: `signer "${signed.signed.signer}" asked for request ${id}; no principal approves its own request` };
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;

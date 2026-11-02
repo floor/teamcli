@@ -77,6 +77,10 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^approval\.json$/, why: "the store record file name read for its `root` index entry, never shown to a caller" },
   // The `queue.installer` repair line: the owner seals the `installer:` designation in the live file.
   { literal: /^the owner records `installer:` in the team file and approves it$/, why: "the `queue.installer` repair line for sealing the live file's `installer:` designation" },
+  // `up`'s notice when the team has no approval record: a fact, never a refusal, naming the
+  // "Team change" workflow's step where a record is required. It is read as the source writes
+  // it, cut at its escaped apostrophe.
+  { literal: /^the team has no approval record; the Team change workflow\\$/, why: "up's no-record notice: it names the inventory's step where a record is required" },
   // Grant emission and owner-seat approval (`team grant`, `team init`): the request/answer flags,
   // the standing-rule listing and revocation, and their refusal id. These name the owner's answer
   // to one request or a standing rule, never a verified copy of the live file.
@@ -94,6 +98,9 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^team batch --approval \$\{made\.record\.request_id\}$/, why: "batch's replay line names the owner-seat door's --approval flag" },
   { literal: /^pass --request and one or more --do <command>, or --approval <request-id>$/, why: "batch's invocation line names the owner-seat door's --approval flag" },
   { literal: /^--request asks the owner seat and --approval runs an answered request: pass one$/, why: "batch and migrate refuse combining --request and --approval" },
+  // `development-mode set`'s own invocation refusal: a switch is applied by `--request` or by an
+  // answered `--approval`, and `--show` only prints what it would change. It names the flags.
+  { literal: /^--request and --approval apply a switch, and --show only prints what it would change: pass one$/, why: "development-mode's refusal to combine a switch's flags with --show: the flags' own names" },
   { literal: /^team migrate: owner-seat approval \$\{(?:id|args\.values\.approval)\} \(signed by \$\{admitted\.signer\}\)\\n$/, why: "migrate names the owner-seat signature that admitted this record" },
   { literal: /^team migrate\$\{keepFile \? ' --keep-file' : ''\} --approval \$\{id\}$/, why: "migrate's replay line names the owner-seat door's --approval flag" },
   { literal: /^team migrate: owner-seat request \$\{id\} recorded; \$\{where\}\\n\$\{made\.text\}\\nwaiting for the signed approval\\n$/, why: "migrate shows the owner-seat card and waits for the signature" },

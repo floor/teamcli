@@ -174,11 +174,14 @@ async function statusReach(made: World, seat: string, names: readonly string[]):
   };
   const io = testIo(made.root, { kind: 'owner' });
   await runStatus(['--file', join(made.dir, 'team.yaml')], io, sources);
-  const line = io.out.split('\n').find((candidate) => candidate.trimStart().startsWith(`${seat} `));
+  const lines = io.out.split('\n');
+  // The reach word is found under its header, not as the last column: the WAKE cell follows it.
+  const heads = (lines.find((candidate) => candidate.trimStart().startsWith('SEAT ')) ?? '').trim().split(/\s{2,}/);
+  const line = lines.find((candidate) => candidate.trimStart().startsWith(`${seat} `));
   if (line === undefined) throw new Error(`no status row for ${seat} in:\n${io.out}`);
   const trimmed = line.trimEnd();
-  const reach = trimmed.endsWith(' socket') ? 'socket' : trimmed.endsWith(' typed') ? 'typed' : null;
-  if (reach === null) throw new Error(`the ${seat} row carries no reach word: ${line}`);
+  const reach = trimmed.trim().split(/\s{2,}/)[heads.indexOf('REACH')];
+  if (reach !== 'socket' && reach !== 'typed') throw new Error(`the ${seat} row carries no reach word: ${line}`);
   return { reach, line: trimmed };
 }
 
@@ -247,7 +250,7 @@ test("a wrapper launch's own accept with no team-file word is a difference namin
   expect(checked.out).toContain(`difference: wrapped: ${SKIP} the receiving seat's team file does not declare inbound accept`);
   expect(checked.out).toContain('  repair: team config set seats.wrapped.inbound accept');
   expect(checked.code).toBe(1);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -263,7 +266,7 @@ test('a frame the box held is a difference repaired by a restart', async () => {
   expect(checked.out).toContain(`difference: lead: ${SKIP} its last socket frame was held at its box, and its declaration has not been re-confirmed since; restart its CLI host so it accepts`);
   expect(checked.out).toContain('  repair: team restart lead');
   expect(checked.code).toBe(1);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -277,7 +280,7 @@ test('a socket older than the declaration is a difference repaired by a restart'
   expect(checked.out).toContain(`difference: lead: ${SKIP} the socket predates the settings that declare it accepts`);
   expect(checked.out).toContain('  repair: team restart lead');
   expect(checked.code).toBe(1);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -290,7 +293,7 @@ test('a seat with no socket is a note naming its class, and the exit stays clear
   expect(checked.out).toContain('note: lead: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn');
   expect(checked.out).not.toContain(SKIP);
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -305,7 +308,7 @@ test('a declared delivery order that names neither socket nor typed is a choice,
   const checked = check(made, names);
   expect(checked.out).not.toContain('wrapped: sends go to its drop folder');
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -319,7 +322,7 @@ test('an explicit inbound opt-out is not a finding', async () => {
   const checked = check(made, names);
   expect(checked.out).not.toContain(SKIP);
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -331,7 +334,7 @@ test('a Codex seat is never flagged for a socket skip', async () => {
   const checked = check(made, names);
   expect(checked.out).not.toContain(SKIP);
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -344,7 +347,7 @@ test('the plain Claude seat with an accepted live socket is no finding, and both
   const checked = check(made, names);
   expect(checked.out).not.toContain(SKIP);
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ socket$/);
+  expect(status.reach).toBe('socket');
   expect(sent.code).toBe(0);
   expect(sent.out).toContain('lead: delivered (socket)');
 });
@@ -372,7 +375,7 @@ test('a held frame is a difference even when the registry records the seat a liv
   expect(checked.out).toContain(`difference: lead: ${SKIP} its last socket frame was held at its box, and its declaration has not been re-confirmed since; restart its CLI host so it accepts`);
   expect(checked.out).toContain('  repair: team restart lead');
   expect(checked.code).toBe(1);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -384,7 +387,7 @@ test('missing consent with no socket at all is a note, not a difference', async 
   expect(checked.out).toContain('note: wrapped: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn');
   expect(checked.out).not.toContain('wrapped: sends go to its drop folder');
   expect(checked.code).toBe(0);
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });
 
@@ -413,6 +416,6 @@ test('a retained pane whose CLI ended is named once, by its pane reading', async
   expect(out).not.toContain('note: lead: no cross-session socket is live');
   expect(code).toBe(1);
   const { status, sent } = await agree(made, 'lead', names, 'typed');
-  expect(status.line).toMatch(/ typed$/);
+  expect(status.reach).toBe('typed');
   expect(sent.frames).toEqual([]);
 });

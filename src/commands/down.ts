@@ -14,7 +14,7 @@ import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwne
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict } from '../delegate.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
-import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
+import { currentLaunchedTeam, currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -201,7 +201,7 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]\n       team down --request [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts. --abandon (seats holding unsent text, unrecognised screens, or not launched by team) takes --client only on a default bundle grant (--bundle default, formerly developer), still for that one team; --file and --session never take --client.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]\n       team down --request [--reason <text>] [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes; --reason <text> is the short reason the card shows) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts. --abandon (seats holding unsent text, unrecognised screens, or not launched by team) takes --client only on a default bundle grant (--bundle default, formerly developer), still for that one team; --file and --session never take --client.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
@@ -501,7 +501,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'wait', 'abandon', 'json', 'request']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'reason'], ['dry-run', 'wait', 'abandon', 'json', 'request']);
   // The lines plain output writes while it works ride on the document as notes under `--json`.
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
@@ -571,7 +571,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   if (clientDown === null) {
-    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, seatSources);
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json, reason: args.values.reason }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
       return 0;
@@ -705,7 +705,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
   const launched = args.values.file || clientDown !== null ? undefined : launchedTeamFile(io, sources.home);
-  const file = branching() ? undefined : (args.values.file ?? launched);
+  // A launched pointer names where this session was launched from, not a copy to read: the run
+  // reads the team where the edits write it, so the session it stops and the seats it knows are
+  // the registry's record, never missed over the file the session launched from. A `--file`
+  // names its file, and is read as that file.
+  const pointer = branching() ? undefined : launched;
+  const file = branching() ? undefined : args.values.file;
   const sessionFlag = branching() ? undefined : args.values.session;
 
   // The run's file. The load is today's: `currentTeam` falls back to the last copy that
@@ -723,7 +728,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // One clock reading serves the run's own file and the policy chain read beside it; the
   // remembering below keeps its own, later reading.
   const loadedAt = liveCurrent === undefined ? sources.now() : undefined;
-  const current: Current = liveCurrent ?? currentTeam(io.cwd, file, loadedAt!, sources.home, false);
+  const current: Current = liveCurrent ?? (pointer !== undefined
+    ? currentLaunchedTeam(pointer, loadedAt!, sources.home, false)
+    : currentTeam(io.cwd, file, loadedAt!, sources.home, false));
   if (!current.ok) {
     const said = current.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     const id = current.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
