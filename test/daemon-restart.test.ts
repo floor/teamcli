@@ -149,7 +149,7 @@ test('a seat that is not the owner and holds no grant is refused install and res
 
   const install = await runDaemon(['install', '--dry-run'], io, sourcesOf(fixture));
   expect(install, io.out + io.err).toBe(1);
-  expect(io.err).toContain('only the owner installs or removes the machine daemon; this call is op-1');
+  expect(io.err).toContain('only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is op-1');
 
   const restart = await runDaemon(['restart'], io, sourcesOf(fixture));
   expect(restart, io.out + io.err).toBe(1);
@@ -258,7 +258,7 @@ test('the owner\'s dev-mode lift admits a placed lead to restart', async () => {
   const code = await runDaemon(['restart'], io, sourcesOf(fixture));
 
   expect(code, io.out + io.err).toBe(0);
-  expect(io.err).toContain('warning: only the owner installs or removes the machine daemon');
+  expect(io.err).toContain('warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon');
   expect(io.err).toContain('dev mode continues');
   expect(io.out).toContain('team daemon: restarted');
   expect(existsSync(join(fixture.root, '.agents', 'team.state.json'))).toBe(true);

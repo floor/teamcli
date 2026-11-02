@@ -308,7 +308,7 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb:
     refuse(io, json, 'daemon', { id: 'daemon.grant-refused', message: verified.why, repair: null, rule: 'general-grant' });
     return false;
   }
-  const message = `only the owner installs or removes the machine daemon; this call is ${describeCaller(caller)}`;
+  const message = `only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is ${describeCaller(caller)}`;
   const lift = devModeOwnerLiftAtCwd(io, {
     command: 'daemon',
     refusal: message,
@@ -753,7 +753,7 @@ async function reportInstallFailure(
   // No daemon is running: the line names the command that starts one again, and where a kept
   // earlier unit is, so the failure is actionable without reading the log afterwards.
   const again = installAgain(roots, parsed);
-  const repair = `the owner runs \`${again}\``;
+  const repair = `the owner or a general-grant holder runs \`${again}\``;
   const keptAt = failure.kept ? `; the previous unit is kept at ${unitPath}` : '';
   if (outcome === 'lost') {
     refuse(io, parsed.json, 'daemon', {
