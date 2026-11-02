@@ -84,8 +84,10 @@ import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../polic
 import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { LockBusyError, reclaimLockDir, withLock } from '../state.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
+import { readSealedRecord, recordAuthOfSealed, recordFile, sameFolder } from './record.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
  *  one exists, the session the seat stands in, and the checkout the record is written under. */
@@ -670,7 +672,8 @@ export type DeferredNoteDrainReport = {
     recipient: CanonicalRecipient;
     state: 'continued' | 'delivered' | 'duplicate' | 'all-failed';
   }[];
-  /** Notes a refused write or an unreadable episode kept in place; the next pass retries them. */
+  /** Notes a refused write, an unreadable episode or a record that does not vouch for the note
+   *  kept in place; the next pass sees them again. */
   refused: { path: string; reason: string }[];
   /** Notes whose key another live holder kept: ordinary contention, left to the next pass. */
   deferred: { messageId: string; recipient: CanonicalRecipient; path: string }[];
@@ -685,7 +688,15 @@ export type DeferredNoteDrainReport = {
  * deferred to the next pass, so the drain never waits on a busy message either. The lock makes
  * the landed note and the note's removal one step against a retry, and the recorder's own dedupe
  * by `(route, at)` makes a note whose drain landed but whose removal did not record nothing twice.
- * A marker this pass creates takes the sender tag fixed in the note, never an invented identity.
+ *
+ * A note is unsigned text, so nothing in it is believed: the signed record the note names — the
+ * file beside it in the recipient's own folder — is read through the bus's rule first, and its
+ * signed fields decide which message, seat, session and checkout the fact is about, which record
+ * bytes it carries, who sent it, and when the attempt can have happened. A note the record does
+ * not vouch for is refused and left where it stands: this pass creates nothing and appends
+ * nothing for it. A note this pass does accept takes its sender tag from that record, never from
+ * the note. An honest note always has its record: a send stages the record before it walks any
+ * route, and only a busy episode key defers the fact beside it.
  */
 export function drainDeferredNotes(
   ctx: EscalationContext,
@@ -714,6 +725,11 @@ export function drainDeferredNotes(
       report.refused.push({ path: found.path, reason: `${found.path}: the note names another root than this pass reads` });
       continue;
     }
+    const record = noteRecordOf(ctx, fact, at.getTime());
+    if (!record.ok) {
+      report.refused.push({ path: found.path, reason: `${found.path}: ${record.reason}` });
+      continue;
+    }
     let step: { kind: 'landed'; state: 'continued' | 'delivered' | 'duplicate' | 'all-failed' } | { kind: 'refused'; reason: string };
     try {
       step = withKeyLock(
@@ -721,7 +737,7 @@ export function drainDeferredNotes(
         fact.recipient,
         fact.messageId,
         () => {
-          const noted = noteLocked(ctx, fact, note.sender, { dedupe: true });
+          const noted = noteLocked(ctx, fact, record.from, { dedupe: true });
           if (!noted.ok) return { kind: 'refused' as const, reason: noted.reason };
           return { kind: 'landed' as const, state: noted.state };
         },
@@ -786,6 +802,69 @@ function deferredNoteOf(text: string): { sender: string; fact: TransportFact } |
   if (fact.reason !== undefined && typeof fact.reason !== 'string') return null;
   if (factProblem(fact) !== null) return null;
   return { sender: raw.sender, fact };
+}
+
+/** How far past the pass's own clock a note's instant may stand: the send and the pass run in
+ *  different processes, and the note's fact is stamped at the send while the pass reads it a
+ *  heartbeat later, so the two readings may sit a little apart. A wider claim is not a fact this
+ *  checkout recorded. */
+const NOTE_FUTURE_SKEW_MS = 60_000;
+
+/**
+ * What the signed record beside one deferred note vouches for, or why the note is not believed.
+ * The record is the file the send staged before it walked any route — at the note's own message
+ * id in the recipient's drop folder — read through the bus's rule: a regular file this user
+ * owns, reached without following a link, whose signature covers the payload as parsed, and
+ * whose signed id, addressee, session and checkout answer the fact's claim. Not until that holds
+ * is anything taken from it, and what is taken is only what the signature covered: the record's
+ * bytes are hashed and must be the note's digest, the sender is the record's own `from`, and the
+ * note's instant may not stand before the record that answers it nor past the pass that reads
+ * it.
+ */
+function noteRecordOf(
+  ctx: EscalationContext,
+  fact: TransportFact,
+  passAtMs: number,
+): { ok: true; from: string } | { ok: false; reason: string } {
+  const path = recordFile(recordDir(ctx.root, fact.recipient.session, fact.recipient.seat), fact.messageId);
+  const read = readSealedRecord(path);
+  if (!read.ok) return { ok: false, reason: `the record beside the note cannot be read: ${read.reason}` };
+  if (read.sealed === null) return { ok: false, reason: 'the record beside the note is missing' };
+  const key = messageKeyState(ctx.home);
+  if (key.kind === 'missing') return { ok: false, reason: 'the record beside the note cannot be verified: this checkout has no message key' };
+  if (key.kind === 'unreadable') {
+    return { ok: false, reason: `the record beside the note cannot be verified: the message key cannot be read (${key.why})` };
+  }
+  const auth = recordAuthOfSealed(read.sealed, key.key);
+  if (auth.kind !== 'ok') {
+    // A tampered or unsupported envelope is refused on its own ground, exactly as the bus
+    // refuses it before raising anything from a record.
+    return {
+      ok: false,
+      reason: auth.kind === 'unsupported' ? auth.reason : 'the record beside the note is not signed with this checkout\'s message key',
+    };
+  }
+  const record = auth.value.payload;
+  if (record.id !== fact.messageId) return { ok: false, reason: 'the signed record names another id than the note' };
+  if (record.to !== fact.recipient.seat || record.session !== fact.recipient.session) {
+    return { ok: false, reason: 'the signed record is addressed to another seat or session than the note' };
+  }
+  if (record.to_id !== fact.recipient.toId) return { ok: false, reason: 'the signed record names another recipient id than the note' };
+  if (!sameFolder(record.root, ctx.root)) return { ok: false, reason: 'the signed record belongs to another checkout' };
+  // The digest is over the record's bytes as the send staged them; a note that names another
+  // digest names another episode's record, and the episode key would be checked against a value
+  // the file does not carry.
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: 'the record beside the note could not be read' };
+  if (createHash('sha256').update(text).digest('hex') !== fact.recordDigest) {
+    return { ok: false, reason: 'the note\'s digest is not the digest of the record beside it' };
+  }
+  // The record is staged before any route is walked, so an attempt cannot precede the record it
+  // is about; and a fact cannot have happened after the pass that reads it.
+  const notedAt = Date.parse(fact.at);
+  if (notedAt < Date.parse(record.at)) return { ok: false, reason: 'the note is older than the record it names' };
+  if (notedAt > passAtMs + NOTE_FUTURE_SKEW_MS) return { ok: false, reason: 'the note is dated past the pass that reads it' };
+  return { ok: true, from: record.from };
 }
 
 /**

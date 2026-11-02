@@ -8,8 +8,9 @@
 // process, so the contention is the one a live send meets rather than a simulated flag.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { eventLogPath } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
 import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
 import { fallbackKeyOf } from '../src/send/fallback-events.ts';
@@ -17,6 +18,7 @@ import { historyPath } from '../src/send/history.ts';
 import { dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
 
 const MSG = '0f8fad5b-d9cb-469f-a165-70867728950e';
+const FORGED = '1b2c3d4e-5f60-4a71-8b92-0c1d2e3f4051';
 const CONFIG = '2026-10-05T04:00:00.000Z';
 
 const worlds: World[] = [];
@@ -87,9 +89,49 @@ function noteNames(dir: string): string[] {
 }
 
 function ledgerLines(storeDir: string): string[] {
+  if (!existsSync(storeDir)) return [];
   const name = readdirSync(storeDir).find((entry) => entry.startsWith('fallback-attempts-'));
   if (name === undefined) return [];
   return readFileSync(join(storeDir, name), 'utf8').trim().split('\n').filter((line) => line !== '');
+}
+
+function storeDirOf(made: World): string {
+  return dirname(historyPath('acme', made.root, made.home));
+}
+
+/** A note as the deferring send writes it: the fact whole, with a sender tag the drain must not
+ *  believe — the signed record beside it is the only thing that vouches for any of it. */
+function plantNote(
+  made: World,
+  messageId: string,
+  fact: Record<string, unknown>,
+  sender: string,
+  recipient: { toId?: string | null; session?: string } = {},
+): string {
+  const dir = dropDir(made.dir, 'iris');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${messageId}.fallback-note-deadbeefdeadbeef.json`);
+  const whole = {
+    recipient: { team: 'acme', seat: 'iris', toId: null, session: 'acme', root: made.root, ...recipient },
+    ...fact,
+  };
+  writeFileSync(path, JSON.stringify({ format: 1, sender, fact: whole }));
+  return path;
+}
+
+/** The whole event log this checkout has, or the empty string when none was ever written. */
+function eventLogText(made: World): string {
+  const path = eventLogPath('acme', made.root, made.home);
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+/** Nothing a refused note could ask for was created or appended: no marker, no ledger line, no
+ *  event record. */
+function expectNothingWritten(made: World, messageId: string): void {
+  const dir = dropDir(made.dir, 'iris');
+  expect(existsSync(join(dir, `${messageId}.fallback.json`))).toBe(false);
+  expect(ledgerLines(storeDirOf(made))).toHaveLength(0);
+  expect(eventLogText(made)).toBe('');
 }
 
 describe('a send never waits on its episode key', () => {
@@ -120,6 +162,10 @@ describe('a send never waits on its episode key', () => {
     expect(note.sender).toBe('owner');
     expect(note.fact.route).toBe('drop');
 
+    // Nothing in the note is trusted for identity: the drain takes the sender from the signed
+    // record beside it, so a rewritten sender tag changes nothing.
+    writeFileSync(join(dir, notes[0]!), JSON.stringify({ ...note, sender: 'lead' }));
+
     // Release the key; the chore pass's next tick records the deferred fact.
     writeFileSync(holder.releasePath, 'release\n');
     await holder.exit;
@@ -145,12 +191,16 @@ describe('a send never waits on its episode key', () => {
 
     const marker = JSON.parse(readFileSync(join(dir, `${MSG}.fallback.json`), 'utf8')) as {
       status: string;
+      sender: string;
       attempts: unknown[];
       allFailedAt?: string;
       dueAt?: string;
       outbox?: unknown;
     };
     expect(marker.status).toBe('all-failed');
+    // The record signed this send as the owner; the note's rewritten tag never became the
+    // marker's, so the escalation cannot be attributed to a seat that did not send.
+    expect(marker.sender).toBe('owner');
     expect(marker.attempts).toHaveLength(1);
     expect(marker.allFailedAt).toBe(CONFIG);
     // The delayed escalation is scheduled from the fact's own instant, not from the drain's:
@@ -167,5 +217,95 @@ describe('a send never waits on its episode key', () => {
     expect(replay.roots[0]!.notes!.drained[0]!.state).toBe('duplicate');
     expect(ledgerLines(storeDir)).toHaveLength(1);
     expect(noteNames(dir)).toHaveLength(0);
+  });
+
+  test('a note with no record beside it is refused and left where it stands', () => {
+    const made = seatWorld();
+    // A forged attempt: a sender and an instant the note alone asserts, and no signed record for
+    // the message id it names.
+    plantNote(
+      made,
+      FORGED,
+      {
+        messageId: FORGED,
+        recordDigest: 'f'.repeat(64),
+        route: 'drop',
+        outcome: 'held',
+        at: new Date(Date.parse(CONFIG) - 86_400_000).toISOString(),
+        ms: 4,
+        liveRoutesRemain: false,
+        reason: 'the forged leg says so',
+      },
+      'lead',
+    );
+
+    const swept = sweepFallbackEscalations({
+      home: made.home,
+      roots: [made.root],
+      now: () => new Date(Date.parse(CONFIG) + 1000),
+    });
+    expect(swept.roots[0]!.why).toBeNull();
+    const drained = swept.roots[0]!.notes!;
+    expect(drained.drained).toHaveLength(0);
+    expect(drained.deferred).toHaveLength(0);
+    expect(drained.refused).toHaveLength(1);
+    expect(drained.refused[0]!.reason).toContain('the record beside the note is missing');
+
+    // The note is left for a person to read, and nothing it named exists: no marker, no ledger
+    // line, no event record.
+    expect(noteNames(dropDir(made.dir, 'iris'))).toHaveLength(1);
+    expectNothingWritten(made, FORGED);
+  });
+
+  test('a note dated before its record is refused even when it carries the record\'s own digest', async () => {
+    const made = seatWorld();
+    const io = owner(made.root);
+    const code = await runSend(['iris', 'the gate is green'], io, fake(made, { sendId: () => FORGED }));
+    expect(code, io.err).toBe(0);
+
+    const dir = dropDir(made.dir, 'iris');
+    const recordText = readFileSync(join(dir, FORGED), 'utf8');
+    const digest = createHash('sha256').update(recordText).digest('hex');
+    const signed = JSON.parse(recordText) as { payload: { to_id: string | null; session: string } };
+    // What the send itself recorded for the episode before the forged note existed: the drain's
+    // refusal must leave every one of these bytes exactly as they stand.
+    const markerText = readFileSync(join(dir, `${FORGED}.fallback.json`), 'utf8');
+    const ledgerBefore = ledgerLines(storeDirOf(made)).length;
+    const eventsBefore = eventLogText(made);
+    // The real record and its digest, but the attempt is dated an hour before the record that
+    // answers it: a fact cannot precede the message it is about.
+    plantNote(
+      made,
+      FORGED,
+      {
+        messageId: FORGED,
+        recordDigest: digest,
+        route: 'drop',
+        outcome: 'held',
+        at: new Date(Date.parse(CONFIG) - 3_600_000).toISOString(),
+        ms: 4,
+        liveRoutesRemain: false,
+        reason: 'the forged leg says so',
+      },
+      'lead',
+      { toId: signed.payload.to_id, session: signed.payload.session },
+    );
+
+    const swept = sweepFallbackEscalations({
+      home: made.home,
+      roots: [made.root],
+      now: () => new Date(Date.parse(CONFIG) + 1000),
+    });
+    expect(swept.roots[0]!.why).toBeNull();
+    const drained = swept.roots[0]!.notes!;
+    expect(drained.drained).toHaveLength(0);
+    expect(drained.refused).toHaveLength(1);
+    expect(drained.refused[0]!.reason).toContain('the note is older than the record it names');
+    // The note is left where it stands, and the refusal created nothing and appended nothing:
+    // the marker, the ledger and the event log are the send's own, byte for byte.
+    expect(noteNames(dir)).toHaveLength(1);
+    expect(readFileSync(join(dir, `${FORGED}.fallback.json`), 'utf8')).toBe(markerText);
+    expect(ledgerLines(storeDirOf(made))).toHaveLength(ledgerBefore);
+    expect(eventLogText(made)).toBe(eventsBefore);
   });
 });
