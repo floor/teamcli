@@ -1,4 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import { resolveForgeShim } from './settings/forge-shim.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -311,16 +316,196 @@ function resultOf(args: string[], session?: string): unknown | null {
 
 const SERVER_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'LANG'] as const;
 
-// Starts a session's server in a clean environment. Refuses unless the session is absent: a
-// second server for a session that already runs has been seen to drop it.
+/** The forge CLI a credential helper calls by name. The session's shim has to carry that name:
+ *  it is the CLI's, not ours. */
+const FORGE_CLI = 'gh';
+
+/** The shim's one refusal line, on stderr. It names no value and reads none: the check below
+ *  tests whether the variable holds a value, never what it holds. */
+export const NO_SEAT_TOKEN = 'team: no seat token in this environment; the account login stored on this machine is not used from a seat';
+
+/** `<home>/.config/team/bin`, the session server's own programs, ahead of every other folder. */
+export function sessionBinDir(home: string): string {
+  return join(home, '.config', 'team', 'bin');
+}
+
+/** The first executable of that name on a PATH value, skipping `skip` — the shim's own folder,
+ *  so a server started from inside another session never chooses the shim as the real CLI. A
+ *  folder of that name is not it: the helper runs a program. */
+function forgeOnPath(pathValue: string | undefined, skip: string): string | null {
+  if (pathValue === undefined) return null;
+  for (const dir of pathValue.split(':')) {
+    // Only an absolute folder names a program this process can point at by path: an empty entry
+    // is the working folder, and a relative one resolves against a folder the shim never bound.
+    if (!isAbsolute(dir) || dir === skip) continue;
+    const candidate = join(dir, FORGE_CLI);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // not here; the next folder
+    }
+  }
+  return null;
+}
+
+function shimQuote(path: string): string {
+  return `'${path.replaceAll("'", "'\\''")}'`;
+}
+
+/** The shim's text. It runs the real CLI only when the seat-token variable holds a non-empty
+ *  value, and it never
+ *  expands, prints or forwards the value: the real CLI execs with the environment as it is. Without
+ *  a token the helper reaches no stored login, so a seat cannot inherit the shared account's
+ *  broader access by pushing without one. */
+export function forgeShimText(real: string): string {
+  return [
+    '#!/bin/sh',
+    "# Written by team for this session's server.",
+    '# The forge CLI runs only with a seat token in the environment; without one this refuses,',
+    '# so no credential helper and no command reaches the account login stored on this machine.',
+    '# The value is never read, printed or forwarded: the real CLI execs with the environment as',
+    '# it is.',
+    'case ${GH_TOKEN:+x} in',
+    `  '') echo "${NO_SEAT_TOKEN}" >&2; exit 1 ;;`,
+    'esac',
+    `exec ${shimQuote(real)} "$@"`,
+    '',
+  ].join('\n');
+}
+
+/** Writes the shim when it is absent or names another real CLI: a fresh file created executable
+ *  and renamed into place, so no reader ever sees half of it. Only a real folder and a real file
+ *  are the shim's own: a linked folder would put the program outside it, and a linked file — even
+ *  one holding matching text — is not the file this folder holds. The temporary name is fresh and
+ *  created exclusively, so a pre-created link cannot be followed. False when it could not be
+ *  written; the caller then closes the fallback rather than leaving the environment as it was. */
+export function writeForgeShim(dir: string, real: string): boolean {
+  const file = join(dir, FORGE_CLI);
+  const text = forgeShimText(real);
+  try {
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+  } catch (error) {
+    // Only a folder that is not there yet is made below; any other answer is not ours to write to.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  try {
+    if (lstatSync(file).isFile() && readFileSync(file, 'utf8') === text) return true;
+  } catch {
+    // absent or unreadable: write it
+  }
+  let temp: string | null = null;
+  let handle: number | null = null;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+    temp = join(dir, `${FORGE_CLI}.${randomUUID()}.tmp`);
+    handle = openSync(temp, 'wx', 0o755);
+    writeFileSync(handle, text);
+    fchmodSync(handle, 0o755);
+    closeSync(handle);
+    handle = null;
+    renameSync(temp, file);
+    temp = null;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        // the descriptor is already gone
+      }
+    }
+    if (temp !== null) {
+      try {
+        unlinkSync(temp);
+      } catch {
+        // nothing was created, or the rename took it
+      }
+    }
+  }
+}
+
+/** Whether the folder holds an executable forge CLI. A folder that cannot be inspected proves
+ *  nothing, and is not kept. */
+function holdsForge(dir: string): boolean {
+  try {
+    if (!statSync(join(dir, FORGE_CLI)).isFile()) return false;
+    accessSync(join(dir, FORGE_CLI), constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The absolute system folders a shell finds its own tools in. A server that cannot keep the
+ *  shim keeps only the ones proven free of the forge CLI. */
+const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'] as const;
+
+/** The PATH a server may keep when the shim cannot stand first: absolute folders only — never
+ *  the working folder (an empty entry) and never a relative one, which a shell resolves against
+ *  a folder the shim does not control — and no folder that holds an executable forge CLI. When
+ *  no folder is kept, the system folders are tried instead. `null` is the refusal: an empty
+ *  PATH is not a denial, because a shell reads it as the working folder, so the caller must not
+ *  start the server at all. `holds` is injected so a test can prove the refusal without making
+ *  every system folder hold a CLI. */
+export function failClosedPath(pathValue: string, holds: (dir: string) => boolean = holdsForge): string | null {
+  const kept = pathValue.split(':').filter((dir) => isAbsolute(dir) && !holds(dir));
+  if (kept.length > 0) return kept.join(':');
+  const safe = SYSTEM_PATH.filter((dir) => !holds(dir));
+  return safe.length > 0 ? safe.join(':') : null;
+}
+
+/** The session server's environment: the clean allowlist, the SSH agent when the owner has one,
+ *  and the session's own folder first on PATH. When that PATH also holds the real forge CLI and
+ *  the machine's `forge-shim` setting is on (its default), the shim is written into the folder
+ *  first on it; a PATH without the CLI is left unchanged, because the helper's own call fails
+ *  there anyway. The setting is a mechanism, not a wall: `off` leaves the environment as it was. */
+export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const name of SERVER_ENV) {
+    const value = env[name];
+    if (value !== undefined) clean[name] = value;
+  }
+  if (env.SSH_AUTH_SOCK) clean.SSH_AUTH_SOCK = env.SSH_AUTH_SOCK;
+  if (!resolveForgeShim({ home, env }).on) return clean;
+  const dir = sessionBinDir(home);
+  const real = forgeOnPath(env.PATH, dir);
+  if (real === null) return clean;
+  if (writeForgeShim(dir, real)) {
+    clean.PATH = clean.PATH === undefined ? dir : `${dir}:${clean.PATH}`;
+    return clean;
+  }
+  // Fail closed: the shim cannot stand first, so no folder that holds the real CLI stays on the
+  // server's PATH — and never an empty or relative one, which a shell reads as the working
+  // folder. When no folder is proven free of the CLI, no environment is safe to start in, and
+  // the throw is the refusal `startServer` turns into a plain "it did not start".
+  const safe = failClosedPath(clean.PATH ?? '');
+  if (safe === null) {
+    throw new Error('the forge shim could not be installed and no PATH folder is free of the forge CLI; the session server was not started');
+  }
+  clean.PATH = safe;
+  return clean;
+}
+
+// Starts a session's server in a clean environment, with the session's own folder first on PATH
+// so the forge shim stands ahead of the machine's CLI (see `seatServerEnv`). Refuses unless the
+// session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
   if (sessionState(session) !== 'absent') return false;
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of SERVER_ENV) {
-    const value = process.env[name];
-    if (value !== undefined) env[name] = value;
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    // No safe environment can be built: a server started with an empty or forge-bearing PATH
+    // would hand the seat the fallback the shim exists to close. The caller says it did not start.
+    return false;
   }
-  if (process.env.SSH_AUTH_SOCK) env.SSH_AUTH_SOCK = process.env.SSH_AUTH_SOCK;
   const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
   try {
     const child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
