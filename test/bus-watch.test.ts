@@ -692,9 +692,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     handles.push(gapBus.handle);
 
     const dropDirWorker1 = join(gapRoot, '.agents', 'send-drops', 'acme', 'worker-1');
-    const dropDirOp1 = join(gapRoot, '.agents', 'send-drops', 'acme', 'op-1');
     mkdirSync(dropDirWorker1, { recursive: true });
-    mkdirSync(dropDirOp1, { recursive: true });
 
     const foldMessageEvent = (messages: Record<string, string>, ev: SignedEventRecord): void => {
       const id = ev.payload.record_id?.replace(/:(delivered|read|replied|held)$/, '');
@@ -796,7 +794,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
 
     // t0 (before the gap): m-1 arrives for worker-1, and worker-1 is at a permission prompt (seq 1..2).
     const t0Iso = '2026-10-18T12:16:00.000Z';
-    writeFileSync(join(dropDirWorker1, 'm-1'), 'from clerk\n\ntask 1\n', { mode: 0o600 });
+    signedArrival(gapRoot, gapHome, 'm-1', 'worker-1', t0Iso);
     reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t0Iso) });
     await publishWatchReportsToBus(
       gapRoot,
@@ -837,7 +835,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     // its second quiet pass). `gapFollower` now syncs from its pre-gap cursor (2), hits the real gap
     // (6 - 2 = 4 > bufferLimit 2), resets its tracker + stale flicker memory, rebuilds from disk, and runs pass().
     const t2Iso = '2026-10-18T12:18:00.000Z';
-    writeFileSync(join(dropDirOp1, 'm-2'), 'from clerk\n\ntask 2\n', { mode: 0o600 });
+    signedArrival(gapRoot, gapHome, 'm-2', 'op-1', t2Iso);
     reconcilePass({ project: 'acme', root: gapRoot, session: 'acme', home: gapHome, now: new Date(t2Iso) });
     await publishWatchReportsToBus(
       gapRoot,

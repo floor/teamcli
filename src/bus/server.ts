@@ -26,7 +26,6 @@ import {
   openSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -64,12 +63,11 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
-import { createReconcileState, reconcilePassAsync, RECORD_NAME } from './reconcile.ts';
+import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import { makeWebhookDelivery } from './webhook.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
-import { readSealedRecord, recordAuthOfSealed, sameFolder } from '../send/record.ts';
-import { messageKeyState } from '../store/keys.ts';
+import { RECORD_NAME, verifiedArrival } from './arrival.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -845,6 +843,12 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         kept: input.keptLogFiles,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
+        // A record the pass will not raise is named once: a linked file or folder, an unsigned
+        // record or one addressed elsewhere. The refusal says where and why, never what the
+        // record said.
+        onRefused: (refusal) => {
+          input.stderr(`team bus: ${refusal.where} was not raised: ${refusal.reason}\n`);
+        },
         state: reconcileState,
         signal: closing.signal,
       }).then(
@@ -985,59 +989,6 @@ function serveBusConnection(
   });
 }
 
-/**
- * The arrival a nudge, or a published `message.arrived`, may raise: built only after the bus has
- * read and verified the signed record the claim names. The claim carries no field the event
- * repeats, and the bus resolves the drop folder itself, so a caller can neither point at another
- * seat's record nor invent a sender: what the event says is what the signed file says. A record
- * that is missing, not a message, or not addressed to this seat, session and root raises nothing.
- */
-function verifiedArrival(
-  claim: { session: string; seat: string; record_id: string },
-  input: StartBusInput,
-  home: string,
-): EventAppendInput | null {
-  // The names become one path; the folder rule every record name obeys is the same here.
-  if (!RECORD_NAME.test(claim.session) || !RECORD_NAME.test(claim.seat) || !RECORD_NAME.test(claim.record_id)) {
-    return null;
-  }
-  // This bus scans one session's drop folders; a session it does not serve is not its record.
-  if (claim.session !== input.team.session) return null;
-  const key = messageKeyState(home);
-  if (key.kind !== 'key') return null;
-  const dir = join(input.root, '.agents', 'send-drops', claim.session, claim.seat);
-  // A linked ancestor — the session's or the seat's — could lead into another project, and the
-  // record it holds there is not this project's to raise. The record's own read refuses a linked
-  // file; this refuses the folders above it.
-  let expected: string;
-  let realDir: string;
-  try {
-    expected = join(realpathSync(input.root), '.agents', 'send-drops', claim.session, claim.seat);
-    realDir = realpathSync(dir);
-  } catch {
-    return null;
-  }
-  if (realDir !== expected) return null;
-  const read = readSealedRecord(join(dir, claim.record_id));
-  if (!read.ok || read.sealed === null) return null;
-  const auth = recordAuthOfSealed(read.sealed, key.key);
-  if (auth.kind !== 'ok') return null;
-  const record = auth.value.payload;
-  if (record.kind !== 'message') return null;
-  if (record.id !== claim.record_id) return null;
-  if (record.to !== claim.seat || record.session !== claim.session) return null;
-  if (!sameFolder(record.root, input.root)) return null;
-  return {
-    ts: record.at,
-    kind: 'message.arrived',
-    session: claim.session,
-    record_id: claim.record_id,
-    from: record.from,
-    to: record.to,
-    ...(record.thread === undefined ? {} : { thread: record.thread }),
-  };
-}
-
 function dispatchBusRequest(
   socket: Socket,
   line: string,
@@ -1063,7 +1014,7 @@ function dispatchBusRequest(
     if (event.kind === 'message.arrived') {
       const verified = verifiedArrival(
         { session: event.session, seat: event.to ?? '', record_id: event.record_id },
-        input,
+        { root: input.root, session: input.team.session },
         home,
       );
       if (verified === null) {
@@ -1096,7 +1047,7 @@ function dispatchBusRequest(
   }
 
   if (request.op === 'nudge') {
-    const event = verifiedArrival(request, input, home);
+    const event = verifiedArrival(request, { root: input.root, session: input.team.session }, home);
     if (event === null) {
       // Nothing verified, so nothing is appended and no adapter is posted. The send's own record
       // may still be landing; its reader's poll and the next pass both find it if it does.

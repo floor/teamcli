@@ -14,6 +14,7 @@ import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRequest, webhookRoutesOf } from '../src/bus/webhook.ts';
 import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
+import { messageKeyOf } from '../src/store/keys.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
 const made: string[] = [];
@@ -691,10 +692,8 @@ test('a running bus posts an accepted arrival to the seat\'s webhook adapter', a
   writeFileSync(hook.urlFile, get.url + '\n');
   // The seat's drop folder, as the send writes it before the bus's first reconcile pass.
   const root = join(base, 'acme');
-  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
-  mkdirSync(dir, { recursive: true });
-  const drop = join(dir, 'msg-1');
-  writeFileSync(drop, 'from lead\n\nhello from the bus scene\n');
+  const signed = signedDrop(base, root, 'msg-1');
+  const drop = join(root, '.agents', 'send-drops', 'acme', 'iris', 'msg-1');
   const lines: string[] = [];
 
   const started = await startBus({
@@ -720,9 +719,9 @@ test('a running bus posts an accepted arrival to the seat\'s webhook adapter', a
     expect(carrying.event.payload.to).toBe('iris');
     expect(carrying.event.payload.record_id).toBe('msg-1');
     expect(carrying.event.payload.from).toBe('lead');
-    // Delivered or not, the drop file the seat's pull reads stays the backup.
+    // Delivered or not, the record the seat's pull reads stays the backup.
     expect(existsSync(drop)).toBe(true);
-    expect(readFileSync(drop, 'utf8')).toBe('from lead\n\nhello from the bus scene\n');
+    expect(readFileSync(drop, 'utf8')).toBe(`${JSON.stringify(signed, null, 2)}\n`);
     expect(lines.join('\n')).not.toContain('not delivered');
     // Nothing the bus wrote — no record, log or drop copy — carries the secret. The fixture's
     // own two files are skipped: the secret file is where the secret belongs, and the URL file
@@ -739,6 +738,126 @@ test('a running bus posts an accepted arrival to the seat\'s webhook adapter', a
     };
     walk(base);
     expect(carryingSecret).toEqual([]);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus posts a signed record once, however many passes find it again', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  signedDrop(base, root, 'msg-1');
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    for (let i = 0; i < 200 && get.hits.length === 0; i += 1) await Bun.sleep(10);
+    expect(get.hits.length).toBe(1);
+    // The record stays where the seat's pull reads it, so each later pass finds it again and
+    // must not post it again: the log's dedupe answers the second pass.
+    await started.handle.reconcileNow();
+    await started.handle.reconcileNow();
+    await Bun.sleep(50);
+    expect(get.hits.length).toBe(1);
+    expect(lines).toEqual([]);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('an unsigned drop file posts nothing, and the pass says why once', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  // The checkout's message key exists, as it does after any send; the pass therefore reads the
+  // record and refuses it rather than leaving it unread for want of a key.
+  messageKeyOf(base);
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  mkdirSync(dir, { recursive: true });
+  const drop = join(dir, 'msg-1');
+  const unsigned = { payload: messagePayload(root, 'msg-1') };
+  writeFileSync(drop, `${JSON.stringify(unsigned, null, 2)}\n`);
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    // The start runs its first pass before it returns; these are two more over the same file.
+    await started.handle.reconcileNow();
+    await started.handle.reconcileNow();
+    await Bun.sleep(50);
+    expect(get.hits.length).toBe(0);
+    const refusals = lines.filter((line) => line.includes('was not raised'));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('iris/msg-1');
+    expect(refusals[0]).toContain('not a signed record');
+    // A refused record is left exactly where it was; nothing on disk changed.
+    expect(readFileSync(drop, 'utf8')).toBe(`${JSON.stringify(unsigned, null, 2)}\n`);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a drop folder entry that is a symbolic link posts nothing, and is said once', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  // The record the link points at would pass every check if it were read: it is a signed
+  // record for this seat, session and checkout. It sits outside the tree, and the link is the
+  // only reason it is not this checkout's arrival.
+  const outside = join(base, 'outside');
+  mkdirSync(outside, { recursive: true });
+  const signed = signRecord(messagePayload(root, 'msg-1'), base);
+  const outsideFile = join(outside, 'msg-1');
+  writeFileSync(outsideFile, `${JSON.stringify(signed, null, 2)}\n`);
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(outsideFile, join(dir, 'msg-1'));
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    await started.handle.reconcileNow();
+    await started.handle.reconcileNow();
+    await Bun.sleep(50);
+    expect(get.hits.length).toBe(0);
+    const refusals = lines.filter((line) => line.includes('was not raised'));
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('iris/msg-1');
+    expect(refusals[0]).toContain('symbolic link');
+    // Neither the link nor its target was followed, read or changed.
+    expect(readFileSync(outsideFile, 'utf8')).toBe(`${JSON.stringify(signed, null, 2)}\n`);
+    expect(existsSync(join(dir, 'msg-1'))).toBe(true);
   } finally {
     await started.handle.close();
   }

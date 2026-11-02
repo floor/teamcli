@@ -10,6 +10,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { appendHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
@@ -49,6 +50,33 @@ function makeScratch(): { root: string; home: string } {
   return { root, home };
 }
 
+/** One message record as a send writes it into the seat's drop folder. */
+function dropRecord(
+  at: { root: string; home: string },
+  seat: string,
+  id: string,
+  options: { from?: string; ts?: string; thread?: string } = {},
+): void {
+  const dir = join(at.root, '.agents', 'send-drops', 'acme', seat);
+  mkdirSync(dir, { recursive: true });
+  const from = options.from ?? 'clerk';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: at.root,
+    session: 'acme',
+    at: options.ts ?? '2026-10-18T12:00:00.000Z',
+    body: `from ${from} — admitted by: lead\n\nhello ${id}`,
+    from,
+    from_id: null,
+    rule: 'a synthetic admission',
+    thread: options.thread ?? id,
+  };
+  dropMessage(dir, id, `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`);
+}
+
 afterEach(() => {
   while (dirs.length > 0) {
     const dir = dirs.pop()!;
@@ -62,14 +90,14 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
     mkdirSync(seatDir, { recursive: true });
 
-    // 1. Plain drop file written by a tool that crashed before publishing to the bus.
-    dropMessage(seatDir, 'drop-1', 'from the file\'s seat clerk — admitted by: lead\n\nhello drop 1');
+    // 1. Signed drop record written by a tool that crashed before publishing to the bus.
+    dropRecord({ root, home }, 'worker-1', 'drop-1', { ts: '2026-10-18T12:00:00.000Z' });
     dropMessage(seatDir, 'drop-1.delivered', '{"ok":true}');
     dropMessage(seatDir, 'drop-1.read', '{"ok":true}');
     dropMessage(seatDir, 'drop-1.replied', '{"ok":true}');
 
     // 2. Held send with `.pending` marker past held_threshold_seconds (15m old >= 600s).
-    dropMessage(seatDir, 'drop-2', 'from the owner — admitted by: the owner\n\nheld drop 2');
+    dropRecord({ root, home }, 'worker-1', 'drop-2', { from: 'owner', ts: '2026-10-18T11:55:00.000Z' });
     markPending(seatDir, {
       id: 'drop-2',
       from: 'owner',
@@ -79,7 +107,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     });
 
     // 3. Fresh held send with `.pending` marker before held_threshold_seconds (2m old < 600s).
-    dropMessage(seatDir, 'drop-3', 'from the owner — admitted by: the owner\n\nfresh held drop 3');
+    dropRecord({ root, home }, 'worker-1', 'drop-3', { from: 'owner', ts: '2026-10-18T12:08:00.000Z' });
     markPending(seatDir, {
       id: 'drop-3',
       from: 'owner',
@@ -150,9 +178,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
       });
       expect(appended.ok).toBe(true);
     }
-    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
-    mkdirSync(seatDir, { recursive: true });
-    dropMessage(seatDir, 'drop-1', "from the file's seat clerk — admitted by: lead\n\nhello");
+    dropRecord({ root, home }, 'worker-1', 'drop-1');
 
     const first = reconcilePass({
       project: 'acme',
@@ -196,7 +222,7 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(quiet.raised).toHaveLength(0);
 
     // A new durable record is raised, and the pass that follows it is the one that checks it.
-    dropMessage(seatDir, 'drop-2', "from the file's seat clerk — admitted by: lead\n\nhello again");
+    dropRecord({ root, home }, 'worker-1', 'drop-2', { ts: '2026-10-18T12:13:00.000Z' });
     const raised = reconcilePass({
       project: 'acme',
       root,

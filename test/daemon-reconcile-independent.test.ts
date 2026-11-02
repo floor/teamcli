@@ -103,7 +103,9 @@ function passes(w: World) {
 }
 function drop(w: World, id: string, from = 'lead') {
   const path = join(w.drops, id);
-  fs.writeFileSync(path, JSON.stringify({ from, ts: NOW.toISOString(), thread: id, body: 'synthetic ' + id }));
+  const signed = signRecord({ kind: 'message', id, to: 'lead', to_id: null, root: w.root, session: SESSION,
+    at: NOW.toISOString(), body: 'synthetic ' + id, from, from_id: null, rule: 'synthetic scene', thread: id }, w.home);
+  fs.writeFileSync(path, JSON.stringify(signed));
   return path;
 }
 function signedMessage(w: World, id: string) {
@@ -117,12 +119,13 @@ function events(w: World): SignedEventRecord[] {
   return read.ok ? read.events : [];
 }
 function recordReads(w: World) {
-  const original = fs.readFileSync;
+  // A record's bytes are read through one no-follow open; the path it names is what this records.
+  const original = fs.openSync;
   const paths: string[] = [];
-  const spy = spyOn(fs, 'readFileSync').mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+  const spy = spyOn(fs, 'openSync').mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
     if (typeof args[0] === 'string' && (args[0].startsWith(w.drops + '/') || args[0].startsWith(w.signed + '/'))) paths.push(args[0]);
     return Reflect.apply(original, fs, args);
-  }) as typeof fs.readFileSync);
+  }) as typeof fs.openSync);
   return { paths, restore: () => spy.mockRestore() };
 }
 async function until(predicate: () => boolean, milliseconds = 1000) {

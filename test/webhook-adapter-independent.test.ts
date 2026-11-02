@@ -156,9 +156,9 @@ test('the actual bus posts each accepted published arrival once, with the secret
   await new Promise(resolve => setTimeout(resolve, 50)); expect(held.posts).toHaveLength(1);
 });
 test('startup and later reconciliation each post an unseen arrival once', async () => {
-  const w = world(); const held = receiver(); use(w, held.url); await configure(w); drop(w, 'startup-one'); drop(w, 'startup-two');
+  const w = world(); const held = receiver(); use(w, held.url); await configure(w); sealedDrop(w, 'startup-one'); sealedDrop(w, 'startup-two');
   const owned = await bus(w); await until(() => held.posts.length === 2);
-  expect(await owned.reconcileNow()).toEqual([]); drop(w, 'later-one'); await owned.reconcileNow();
+  expect(await owned.reconcileNow()).toEqual([]); sealedDrop(w, 'later-one'); await owned.reconcileNow();
   await until(() => held.posts.length === 3); expect(await owned.reconcileNow()).toEqual([]);
   await new Promise(resolve => setTimeout(resolve, 30));
   expect(held.posts.map(post => JSON.parse(post.body).event.payload.record_id).sort()).toEqual(['later-one', 'startup-one', 'startup-two']);

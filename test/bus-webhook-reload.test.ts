@@ -18,6 +18,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { readStoredTeamConfig, sha256, teamConfigRecordPath } from '../src/registry/team-config-store.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
 
@@ -150,7 +151,21 @@ async function start(at: Scene, stderr: string[] = []): Promise<{ close(): Promi
 function drop(at: Scene, id: string): void {
   const dir = join(at.root, '.agents', 'send-drops', 'acme', 'iris');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, id), `from lead\n\nhello from ${id}\n`);
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'iris',
+    to_id: null,
+    root: at.root,
+    session: 'acme',
+    at: NOW().toISOString(),
+    body: `from lead\n\nhello from ${id}\n`,
+    from: 'lead',
+    from_id: null,
+    rule: 'a synthetic reload fixture',
+    thread: id,
+  };
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`);
 }
 
 /** Replace the team's registry record with a row, as the owner's edit writes it, and approve the
