@@ -65,6 +65,18 @@ type Slot = {
   seat?: Seat;
 };
 
+/**
+ * The pane and workspace ids a page's world reports. A page may name them plainly
+ * (`panes: neutral`), so an example reads as a fixture rather than print the terminal host's own
+ * id shape. Both forms are the same width for a one-digit index, so the page's columns line up
+ * either way.
+ */
+export function paneNames(spec: Pick<Spec, 'panes'>, index: number): { pane: string; workspace: string } {
+  return spec.panes === 'neutral'
+    ? { pane: `pane${index}`, workspace: `workspace${index}` }
+    : { pane: `w${index}:p1`, workspace: `w${index}` };
+}
+
 const TOOL_TESTED: Record<string, { binary: string; version: string; old: string; login: string }> = {
   'claude-code': { binary: 'claude', version: '2.1.288', old: '2.1.200', login: 'claude-code' },
   codex: { binary: 'codex', version: '0.157.0', old: '0.150.0', login: 'codex' },
@@ -318,11 +330,12 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
       if (!chosen(seat)) continue;
       made++;
       const screen = spec.screens[seat.name] ?? 'idle';
+      const names = paneNames(spec, made);
       slots.push({
         name: seat.name,
         agent: true,
-        pane: `w${made}:p1`,
-        workspace: `w${made}`,
+        pane: names.pane,
+        workspace: names.workspace,
         label: seat.label,
         cli: seat.cli,
         status: statusOf(screen),
@@ -374,20 +387,21 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     createWorkspace(_session: string, cwd: string, label: string) {
       const seat = team?.seats.find((candidate) => candidate.label === label);
       made++;
-      const pane = `w${made}:p1`;
+      const names = paneNames(spec, made);
+      const pane = names.pane;
       const screen = seat ? (spec.screens[seat.name] ?? 'idle') : 'idle';
       slots.push({
         name: null,
         agent: false,
         pane,
-        workspace: `w${made}`,
+        workspace: names.workspace,
         label,
         cli: seat?.cli ?? 'claude-code',
         status: statusOf(screen),
         screen,
         seat,
       });
-      return { pane, workspace: `w${made}` };
+      return { pane, workspace: names.workspace };
     },
     paneRun(_session: string, pane: string, command: string) {
       did.runs.push(command);
