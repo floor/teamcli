@@ -105,6 +105,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
 | `answer.state` | `answer` | 1 | the seat is not waiting at the dialog this word answers | `team answer lead trust` |
+| `answer.trust-identity` | `answer` | 1 | the seat's launched identity was not recorded; no process in its pane can be checked against it | `team answer lead trust` |
 | `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
 | `answer.version` | `answer` | 1 | this version has no answer for the dialog | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
