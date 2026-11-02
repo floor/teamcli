@@ -63,9 +63,9 @@ describe('the development mode through the owner seat', () => {
     expect(typeof record).not.toBe('string');
     if (typeof record === 'string') return;
     expect(ownerActionCard(record.params)).toEqual({
-      title: 'TeamCLI: development mode',
-      question: 'Set development mode to local-fast on this machine?',
-      scope: `One-time change. ${record.params.requested_by} asked.`,
+      title: 'Turn on fast local development',
+      question: 'Stop asking Touch ID for routine team changes on this Mac. OK?',
+      scope: 'This Mac · all teams',
     });
 
     // The owner's answer is a signature; here the fake store signs for her.
@@ -75,6 +75,19 @@ describe('the development mode through the owner seat', () => {
     const mode = readDevelopmentMode(p.home);
     expect(mode.kind).toBe('set');
     if (mode.kind === 'set') expect(mode.record.mode).toBe('local-fast');
+  });
+
+  test('a request records the reason it was given, and the switch keeps its fixed words', async () => {
+    const p = place();
+    const ask = await run(p, ['set', 'off', '--request', '--reason', '  the   release  window ']);
+    expect(ask.code, ask.err).toBe(0);
+    const id = requestId(ask.out);
+    const record = readOwnerActionRecord(p.home, id);
+    expect(typeof record).not.toBe('string');
+    if (typeof record === 'string') return;
+    expect(record.params.reason).toBe('the release window');
+    // The owner fixed this card's words: the reason stays in the record, not in the sentence.
+    expect(ownerActionCard(record.params).question).toBe('Ask Touch ID again for routine team changes on this Mac. OK?');
   });
 
   test('an answer for one mode does not apply another, and writes nothing', async () => {
