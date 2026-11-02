@@ -14,7 +14,7 @@
 // inside a repository, and the user-level file is read when the project has none.
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import { tomlString, writePrivate } from './private-file.ts';
+import { tomlString, writePrivateAtomic } from './private-file.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
@@ -74,17 +74,20 @@ function realFolder(folder: string): string {
 }
 
 /** Writes or updates the seat's profile in the user-level `sandbox.toml`. Every other table and
- *  every other key in this one is kept. A file that already holds the profile byte for byte is
- *  not rewritten, and a symbolic link is not written through at all: the caller launches without
- *  the profile rather than failing the seat. */
+ *  every other key in this one is kept; a line that only looks like a table header or a field
+ *  because it sits inside a multi-line string is text, and is never read or rewritten. The file
+ *  is replaced whole through a private temporary file in the same folder, so a failed write leaves
+ *  the original as it was; the result is 0600 even when the old file was not. A file that already
+ *  holds the profile as this launch would write it is not rewritten, and a symbolic link is not
+ *  written through at all: the caller launches without the profile rather than failing the seat. */
 export function writeGrokSandbox(sandbox: GrokSandbox): { ok: true } | { ok: false; why: string } {
   try {
     const text = existsSync(sandbox.file) ? readFileSync(sandbox.file, 'utf8') : '';
     const next = mergeProfile(text, sandbox.profile, [
-      { key: 'extends', value: tomlString('workspace') },
-      { key: 'read_write', value: arrayValue(sandbox.readWrite) },
+      { key: 'extends', value: tomlString('workspace'), parsed: 'workspace' },
+      { key: 'read_write', value: arrayValue(sandbox.readWrite), parsed: [...sandbox.readWrite] },
     ]);
-    if (next !== null) writePrivate(sandbox.file, next, sandbox.guard);
+    if (next !== null) writePrivateAtomic(sandbox.file, next, sandbox.guard);
     return { ok: true };
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) };
@@ -124,7 +127,9 @@ export function withoutGrokSandbox(command: string, profile: string): string {
   return command;
 }
 
-type Field = { key: string; value: string };
+/** A field as it is spelled on its line and as the profile must parse it: the write is checked
+ *  against `parsed`, not only against the key being there. */
+type Field = { key: string; value: string; parsed: unknown };
 
 function mergeProfile(text: string, profile: string, fields: readonly Field[]): string | null {
   // The table is decided by parsing, never by one spelling of its header. A file that does not
@@ -133,6 +138,11 @@ function mergeProfile(text: string, profile: string, fields: readonly Field[]): 
   const parsed = parseSandbox(text);
   const exists = Object.prototype.hasOwnProperty.call(profileTables(parsed), profile);
   let next: string | null;
+  const lines = text.split('\n');
+  // A header or a key spelled inside a multi-line string is text. Every line decision below reads
+  // the document's string state, not just the line, so `notes = """` cannot lend its contents a
+  // table.
+  const outside = lineScopes(lines);
   if (!exists) {
     const block = [`[profiles.${profile}]`, ...fields.map((field) => `${field.key} = ${field.value}`), ''].join('\n');
     if (text === '') next = block;
@@ -141,11 +151,7 @@ function mergeProfile(text: string, profile: string, fields: readonly Field[]): 
       next = base.endsWith('\n\n') ? base + block : `${base}\n${block}`;
     }
   } else {
-    const lines = text.split('\n');
-    const at = lines.findIndex((line) => {
-      const path = headerPath(line);
-      return path !== null && path.length === 2 && path[0] === 'profiles' && path[1] === profile;
-    });
+    const at = lines.findIndex((line, index) => outside[index] === true && isProfileHeader(line, profile));
     if (at < 0) {
       // The parse proves the key exists, but not as a table header this version can edit — an
       // inline value under `[profiles]`, for example. Appending a second definition would make
@@ -153,22 +159,42 @@ function mergeProfile(text: string, profile: string, fields: readonly Field[]): 
       throw new Error(`the sandbox file defines profiles.${profile} in a form this version cannot rewrite; it was left as it is`);
     }
     let end = at + 1;
-    while (end < lines.length && headerPath(lines[end] ?? '') === null) end++;
+    while (end < lines.length && !(outside[end] === true && headerPath(lines[end] ?? '') !== null)) end++;
     const section = lines.slice(at + 1, end);
+    const sectionOutside = lineScopes(section);
     let changed = false;
     for (const field of fields) {
-      if (upsertField(section, field)) changed = true;
+      if (upsertField(section, sectionOutside, field)) changed = true;
     }
     if (!changed) return null;
     next = [...lines.slice(0, at + 1), ...section, ...lines.slice(end)].join('\n');
   }
-  // A file that parsed before this write parses after it. The check is the whole file, so an
-  // appended table beside an inline `profiles = {...}` is refused instead of corrupted.
+  // The text is re-parsed before anything replaces the file, and the profile's requested values
+  // are read back: a rewrite that landed in a look-alike table inside a string, or that left the
+  // old grants standing, is refused instead of written.
   const written = parseSandbox(next, 'writing the sandbox profile would leave the file unreadable');
-  if (!Object.prototype.hasOwnProperty.call(profileTables(written), profile)) {
+  const table = profileTables(written)[profile];
+  if (
+    table === null || typeof table !== 'object' || Array.isArray(table) ||
+    fields.some((field) => !Object.prototype.hasOwnProperty.call(table, field.key) ||
+      !sameValue((table as Record<string, unknown>)[field.key], field.parsed))
+  ) {
     throw new Error('writing the sandbox profile did not land in the file; it was left as it is');
   }
   return next;
+}
+
+function isProfileHeader(line: string, profile: string): boolean {
+  const path = headerPath(line);
+  return path !== null && path.length === 2 && path[0] === 'profiles' && path[1] === profile;
+}
+
+function sameValue(actual: unknown, wanted: unknown): boolean {
+  if (Array.isArray(actual) || Array.isArray(wanted)) {
+    return Array.isArray(actual) && Array.isArray(wanted) && actual.length === wanted.length &&
+      actual.every((item, index) => sameValue(item, wanted[index]));
+  }
+  return actual === wanted;
 }
 
 /** A sandbox file parsed as a TOML document. A file that does not parse is not written: the
@@ -260,10 +286,12 @@ function bareOrQuoted(raw: string): string | null {
   return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : null;
 }
 
-function upsertField(section: string[], field: Field): boolean {
+function upsertField(section: string[], outside: readonly boolean[], field: Field): boolean {
   const wanted = `${field.key} = ${field.value}`;
   const pattern = new RegExp(`^${field.key}\\s*=`);
-  const at = section.findIndex((line) => pattern.test(line.trim()));
+  // Only a line the section begins outside a string can define this field: a line of the value
+  // that only looks like `extends = …` is content, not a key.
+  const at = section.findIndex((line, index) => outside[index] === true && pattern.test(line.trim()));
   if (at >= 0) {
     const end = valueEnd(section, at);
     if (end === at + 1 && section[at]?.trim() === wanted) return false;
@@ -277,32 +305,121 @@ function upsertField(section: string[], field: Field): boolean {
 }
 
 /** The line after a field's value: an array written over several lines is replaced whole, and a
- *  `#` comment or a quoted bracket does not end it early. */
+ *  `#` comment, a quoted bracket or a bracket inside a multi-line string does not end it early. */
 function valueEnd(section: string[], at: number): number {
   let open = 0;
+  let state: StringState = 'none';
   for (let index = at; index < section.length; index++) {
-    open += bracketBalance(section[index] ?? '');
-    if (open <= 0) return index + 1;
+    const step = scanLine(section[index] ?? '', state);
+    open += step.open;
+    state = step.state;
+    if (open <= 0 && state === 'none') return index + 1;
   }
   return section.length;
 }
 
-function bracketBalance(line: string): number {
+/** A TOML string that can span lines. A single-line string never carries over, so only the
+ *  multi-line forms are states here. */
+type StringState = 'none' | 'basic' | 'literal';
+
+/** For each line, whether it begins outside a multi-line string. */
+function lineScopes(lines: readonly string[]): boolean[] {
+  let state: StringState = 'none';
+  return lines.map((line) => {
+    const outside = state === 'none';
+    state = scanLine(line, state).state;
+    return outside;
+  });
+}
+
+/** One line read with the string state carried from the line before: the brackets the line opens
+ *  outside strings and comments, and the state the next line starts in. `#` ends a line only
+ *  outside a string; a quoted bracket is text; a multi-line string keeps its contents opaque. */
+function scanLine(line: string, state: StringState): { open: number; state: StringState } {
   let open = 0;
-  let quote: '"' | "'" | null = null;
-  for (let index = 0; index < line.length; index++) {
+  let index = 0;
+  if (state !== 'none') {
+    const delimiter = state === 'basic' ? '"""' : "'''";
+    const close = closingAt(line, 0, delimiter, state === 'basic');
+    if (close < 0) return { open, state };
+    index = afterQuotes(line, close, state === 'basic' ? '"' : "'");
+    state = 'none';
+  }
+  while (index < line.length) {
     const char = line[index]!;
-    if (quote !== null) {
-      if (char === '\\' && quote === '"') index++;
-      else if (char === quote) quote = null;
+    if (char === '#') break;
+    if (char === '[') {
+      open++;
+      index++;
       continue;
     }
-    if (char === '"' || char === "'") quote = char;
-    else if (char === '#') break;
-    else if (char === '[') open++;
-    else if (char === ']') open--;
+    if (char === ']') {
+      open--;
+      index++;
+      continue;
+    }
+    if (char === '"') {
+      if (line.startsWith('"""', index)) {
+        const close = closingAt(line, index + 3, '"""', true);
+        if (close < 0) return { open, state: 'basic' };
+        index = afterQuotes(line, close, '"');
+        continue;
+      }
+      index = skipSingle(line, index, '"');
+      continue;
+    }
+    if (char === "'") {
+      if (line.startsWith("'''", index)) {
+        const close = closingAt(line, index + 3, "'''", false);
+        if (close < 0) return { open, state: 'literal' };
+        index = afterQuotes(line, close, "'");
+        continue;
+      }
+      index = skipSingle(line, index, "'");
+      continue;
+    }
+    index++;
   }
-  return open;
+  return { open, state };
+}
+
+/** The index after the single-line string that opens at `at`. A backslash escapes the next
+ *  character in a basic string; an unterminated string is a parse error found elsewhere. */
+function skipSingle(line: string, at: number, quote: string): number {
+  let index = at + 1;
+  while (index < line.length) {
+    const char = line[index]!;
+    if (quote === '"' && char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === quote) return index + 1;
+    index++;
+  }
+  return index;
+}
+
+/** The first closing delimiter, skipping a run a backslash escapes (`\"""` is content in a basic
+ *  string). */
+function closingAt(line: string, from: number, delimiter: string, escaped: boolean): number {
+  for (let index = from; index <= line.length - delimiter.length; index++) {
+    if (!line.startsWith(delimiter, index)) continue;
+    if (escaped) {
+      let slashes = 0;
+      for (let back = index - 1; back >= 0 && line[back] === '\\'; back--) slashes++;
+      if (slashes % 2 === 1) continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
+/** The index after a run of quote characters that closes a multi-line string. A run of four or
+ *  five carries one or two quotes of content before the delimiter. */
+function afterQuotes(line: string, at: number, quote: string): number {
+  let index = at;
+  while (line[index] === quote) index++;
+  return index;
 }
 
 function arrayValue(values: readonly string[]): string {

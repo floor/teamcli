@@ -5,16 +5,17 @@
 // scene here uses a synthetic `GROK_HOME`; nothing reads the machine's own Grok home.
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { executePlan, type Host } from '../../src/launch/execute.ts';
 import {
   grokHomeFor, grokSandboxOf, grokSandboxProfileName, withoutGrokSandbox, writeGrokSandbox, type GrokSandbox,
 } from '../../src/launch/grok-sandbox.ts';
 import { upPlan, type Step } from '../../src/launch/plan.ts';
+import { writePrivateAtomic } from '../../src/launch/private-file.ts';
 
 const FLAGS = "--trust --permission-mode auto --allow 'Bash(bun *)' --allow 'Bash(team *)' --allow 'Bash(git *)'";
 
@@ -203,6 +204,72 @@ describe('writing the file', () => {
       expect(parsed.profiles['team-seat-acme']?.extends).toBe('workspace');
     });
   }
+
+  test('a header-looking line inside a multi-line string is text: only the real table is updated', () => {
+    const { sandbox } = world();
+    const before = 'notes = """\n[profiles.team-seat-acme]\nextends = "quoted prose"\nread_write = ["not a grant"]\n"""\n[profiles.team-seat-acme]\nextends = "old"\nread_write = ["/old"]\ncustom = "real table field"\n';
+    writeFileSync(sandbox.file, before);
+    const original = Bun.TOML.parse(before) as { notes: string };
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    const text = readFileSync(sandbox.file, 'utf8');
+    const parsed = Bun.TOML.parse(text) as { notes: string; profiles: Record<string, any> };
+    expect(parsed.notes).toBe(original.notes);
+    expect(parsed.profiles['team-seat-acme']).toMatchObject({
+      extends: 'workspace',
+      read_write: [...sandbox.readWrite],
+      custom: 'real table field',
+    });
+    // The rewrite is done: a second launch writes nothing.
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    expect(readFileSync(sandbox.file, 'utf8')).toBe(text);
+  });
+
+  test('a header-looking line inside a multi-line literal string is text too', () => {
+    const { sandbox } = world();
+    const before = "notes = '''\n[profiles.team-seat-acme]\nextends = \"kept prose\"\nread_write = [\"not a grant\"]\n'''\n[profiles.team-seat-acme]\nextends = \"old\"\nread_write = [\"/old\"]\n";
+    writeFileSync(sandbox.file, before);
+    const original = Bun.TOML.parse(before) as { notes: string };
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    const parsed = Bun.TOML.parse(readFileSync(sandbox.file, 'utf8')) as { notes: string; profiles: Record<string, any> };
+    expect(parsed.notes).toBe(original.notes);
+    expect(parsed.profiles['team-seat-acme']).toMatchObject({ extends: 'workspace', read_write: [...sandbox.readWrite] });
+  });
+
+  test('a field-looking line inside a string in the real table is text: the real field is updated', () => {
+    const { sandbox } = world();
+    const before = '[profiles.team-seat-acme]\nnote = """\nextends = "quoted"\nread_write = ["not a grant"]\ncustom = "inside"\n"""\nextends = "old"\nread_write = ["/old"]\ncustom = "real"\n';
+    writeFileSync(sandbox.file, before);
+    const original = Bun.TOML.parse(before) as { profiles: Record<string, any> };
+    expect(original.profiles['team-seat-acme']?.note).toContain('extends = "quoted"');
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    const parsed = Bun.TOML.parse(readFileSync(sandbox.file, 'utf8')) as { profiles: Record<string, any> };
+    expect(parsed.profiles['team-seat-acme']?.note).toBe(original.profiles['team-seat-acme']?.note);
+    expect(parsed.profiles['team-seat-acme']).toMatchObject({
+      extends: 'workspace',
+      read_write: [...sandbox.readWrite],
+      custom: 'real',
+    });
+  });
+
+  test('the replacement is private whatever the old mode was, and leaves no temporary file', () => {
+    const { sandbox } = world();
+    writeFileSync(sandbox.file, '[profiles.team-seat-acme]\nextends = "old"\nread_write = ["/old"]\n');
+    chmodSync(sandbox.file, 0o644);
+    expect(writeGrokSandbox(sandbox)).toEqual({ ok: true });
+    expect(statSync(sandbox.file).mode & 0o777).toBe(0o600);
+    expect(readdirSync(dirname(sandbox.file)).filter((name) => name.includes('.tmp'))).toEqual([]);
+  });
+
+  test('a replacement that cannot be renamed leaves the original and no temporary file', () => {
+    const { sandbox } = world();
+    // A directory where the file belongs: the temporary is written and the rename cannot replace
+    // the directory, so the failure must clean up after itself.
+    mkdirSync(sandbox.file);
+    writeFileSync(join(sandbox.file, 'kept'), 'kept');
+    expect(() => writePrivateAtomic(sandbox.file, 'replacement', sandbox.guard)).toThrow();
+    expect(readFileSync(join(sandbox.file, 'kept'), 'utf8')).toBe('kept');
+    expect(readdirSync(dirname(sandbox.file)).filter((name) => name.includes('.tmp'))).toEqual([]);
+  });
 
   test('a file that does not parse is left byte for byte and the launch hears why', () => {
     const { sandbox } = world();
