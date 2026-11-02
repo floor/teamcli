@@ -25,25 +25,25 @@ const launched = (line: string): string => launchCommand(codex, line, 'RULES.');
 describe('an attached or joined short permission value is the option it names', () => {
   test('both attached short values keep their own and receive no default pair', () => {
     expect(launched('codex -aon-request -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen',
+      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
     );
   });
 
   test('one attached short value suppresses only its own default pair', () => {
     expect(launched('codex -aon-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen',
+      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
     );
     expect(launched('codex -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen',
+      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
     );
   });
 
   test('a short value joined with = suppresses its own default pair', () => {
     expect(launched('codex -a=never')).toBe(
-      'AGENT_UNATTENDED=1 codex -a=never -s danger-full-access --no-alt-screen',
+      'AGENT_UNATTENDED=1 codex -a=never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
     );
     expect(launched('codex -s=workspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -s=workspace-write -a never --no-alt-screen',
+      'AGENT_UNATTENDED=1 codex -s=workspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
     );
   });
 

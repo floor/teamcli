@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
+import { pinnedWords } from '../launch/features.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
 import type { ComposeProfile } from './compose.ts';
@@ -57,6 +58,11 @@ export interface Profile {
   tested: { from: string; to: string };
   /** Options that make the CLI run without approvals, added to the launch. */
   unattended: readonly string[];
+  /** The one feature set every seat of this CLI's launch pins, as `name=value` pairs. Empty for a
+   *  CLI whose launch carries none. The pins ride after the seat's own line, so the CLI's own
+   *  last-wins config rule makes them the effective values: a seat and the shared background
+   *  server it joins then present the same set, whichever value its config file holds. */
+  features: readonly string[];
   /** The option that carries the rules, or null when they go as a first message or are
    *  prepended to each brief. */
   rulesOption: string | null;
@@ -311,6 +317,13 @@ export function launchCommand(
     && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
     options.push('--settings', cliHook);
   }
+  // The profile's pinned feature set rides after every word the seat's own line carries, ahead
+  // of a first-message seat's rules line, which is positional. The CLI reads the last value for
+  // a repeated config key (measured on codex-cli 0.161.0 in a scratch CODEX_HOME: a duplicated
+  // `-c` for one key took the last value in both orders), so the pin is the seat's effective
+  // value whichever its config file holds, and every seat of the CLI presents the same set to
+  // the one background server they share.
+  options.push(...pinnedWords(profile.features));
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
   // is never typed into the pane.
   if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
@@ -723,7 +736,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1136,6 +1149,7 @@ function launchOf(root: YamlNode): Shipped {
   const modelsEntry = optional(entries, 'models');
   const notStartedEntry = optional(entries, 'not_started');
   const abandonAnswersEntry = optional(entries, 'abandon_answers');
+  const featuresEntry = optional(entries, 'features');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
     fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
@@ -1156,6 +1170,7 @@ function launchOf(root: YamlNode): Shipped {
       abandonAnswers: abandonAnswersEntry ? abandonAnswersOf(abandonAnswersEntry.value) : [],
       tested: testedOf(required(entries, 'tested', root.line).value),
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
+      features: featuresEntry ? featuresOf(featuresEntry.value) : [],
       rulesOption: rules.option,
       rulesMode: rules.mode,
       rulesPrompt: rules.prompt,
@@ -1207,6 +1222,19 @@ function notStartedOf(node: YamlNode): RegExp[][] {
   });
 }
 
+/** The pinned feature set a profile declares, as `name=value` pairs with `value` the word true
+ *  or false. Anything else is refused here, so a launch never carries a pin the CLI would read
+ *  as another option or another value. */
+function featuresOf(node: YamlNode): string[] {
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"features" must be a non-empty list of name=true or name=false');
+  return node.items.map((item) => {
+    const pair = stringOf(item);
+    if (pair === null || !/^[A-Za-z0-9_]+=(true|false)$/.test(pair)) {
+      return fail(item.line, '"features" entries are name=true or name=false');
+    }
+    return pair;
+  });
+}
 
 function patternsOf(node: YamlNode, line: number, key: string): RegExp[] {
   return strings(node, key).map((pattern) => {

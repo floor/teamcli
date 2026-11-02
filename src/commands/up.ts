@@ -2531,7 +2531,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           const model = effective?.model ?? prior.model;
           const version = effective?.version ?? prior.version;
           const effort = isSkipReady ? prior.effort : (declared?.effort ?? prior.effort);
-          const launch_line = effective?.launch ?? prior.launch_line;
+          // The line this run launched with, when it launched one; the record's own line
+          // otherwise, so a profile's pinned features written by an earlier launch are never
+          // erased by a keep; a record that holds none falls back to the effective base.
+          const launch_line = patch.launch_line ?? prior.launch_line ?? effective?.launch;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);

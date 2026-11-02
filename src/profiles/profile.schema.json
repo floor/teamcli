@@ -20,6 +20,11 @@
       }
     },
     "unattended": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "features": {
+      "type": "array", "minItems": 1,
+      "description": "optional: the one feature set every seat's launch pins, as name=true or name=false; each pair rides the launch as a trailing -c features.<pair>, so the CLI's last-wins config rule makes it the seat's effective value",
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+=(true|false)$" }
+    },
     "rules": {
       "oneOf": [
         { "const": "first-message" },

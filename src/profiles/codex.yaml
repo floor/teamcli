@@ -14,6 +14,20 @@ unattended:
   - -s
   - danger-full-access
   - --no-alt-screen
+# The feature settings every Codex seat's launch pins, appended last as `-c features.<pair>`.
+# `codex --help` documents `-c, --config <key=value>` as "Override a configuration value ... dotted
+# path ... parsed as TOML", and a scratch CODEX_HOME run of `codex features list` printed the row
+# `mcp_oauth_refresh_coordination  under development  false` among its 160 rows. The same command
+# with a trailing `-c features.mcp_oauth_refresh_coordination=true` printed that row as `true` and
+# exited 0, so a config word after the subcommand is read. `codex resume --help -c
+# features.mcp_oauth_refresh_coordination=false` exited 0 and printed
+# `Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]`, so the pin rides a resumed seat's
+# `resume <id>` line too. A duplicated `-c` for one key took the last value in both orders, so a
+# pin appended after the line's own words is the effective set: every seat then presents the same
+# settings to the one background server they share, and no seat meets its
+# "background server has incompatible feature settings" dialog.
+features:
+  - mcp_oauth_refresh_coordination=false
 rules:
   launch_prompt: positional
 # The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a

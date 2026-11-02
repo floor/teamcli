@@ -735,6 +735,14 @@ export async function executePlan(
   const launchSessions = new Map<string, string>();
   // The line each seat's pane actually ran this run, read again when its resume fails on screen.
   const launchedCommands = new Map<string, string>();
+  // The base recipe each seat's record keeps when this run records it: the plan's pinned line for
+  // a launched seat, never the expanded command above. A seat this run did not launch has no
+  // entry, so every later record of it keeps what its own earlier launch wrote.
+  const recordLines = new Map<string, string>();
+  const recordSeat = (seat: string, patch: Parameters<Host['record']>[1]): void => {
+    const line = recordLines.get(seat);
+    host.record(seat, line === undefined || patch.launch_line !== undefined ? patch : { ...patch, launch_line: line });
+  };
   // The seats this run launched: only a launch carries rules; a seat already running is never
   // typed into to give it them.
   const launchedThisRun = new Set<string>();
@@ -808,7 +816,7 @@ export async function executePlan(
    *  session over state that records none. The identity the close itself reads is never written:
    *  it is the changed process the close was refused for, and proves nothing. */
   const keepWaiting = (seat: string, here: Place, classification: Classification, launched?: LaunchedIdentity): void => {
-    host.record(seat, {
+    recordSeat(seat, {
       stage: 'launched',
       pane: here.pane,
       ...(here.workspace ? { workspace: here.workspace } : {}),
@@ -995,7 +1003,7 @@ export async function executePlan(
       if (op?.do === 'record' && op.seat) {
         if (op.held) held = true;
         if (op.launched) {
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'ready',
             ...(op.pane ? { pane: op.pane } : {}),
             ...(op.workspace ? { workspace: op.workspace } : {}),
@@ -1006,7 +1014,7 @@ export async function executePlan(
         final(op.seat, op.record, op.detail ?? '');
       } else if (op?.do === 'ready' && op.seat) {
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
-        host.record(op.seat, { stage: 'ready', rules: op.rules });
+        recordSeat(op.seat, { stage: 'ready', rules: op.rules });
         finishReady(op.seat);
       } else if (op?.do === 'refuse') {
         // The record carries the reason in words; the full finding — the start folder it names —
@@ -1112,7 +1120,7 @@ export async function executePlan(
         const made = host.createWorkspace(session, op.cwd, op.label);
         if (!made) {
           if (op.seat) {
-            host.record(op.seat, { stage: 'launched' });
+            recordSeat(op.seat, { stage: 'launched' });
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: 'its workspace was not created; left at launched' });
           } else if ('bus' in op && op.bus) {
@@ -1142,7 +1150,7 @@ export async function executePlan(
           // A fresh workspace is a fresh seat: any waiting record named an older pane, and is
           // void here. Clearing it in the same write is what makes the whole-team repair
           // (`team down` then `team up`) clear the record the next `up` would otherwise resume.
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'launched',
             pane: made.pane,
             workspace: made.workspace,
@@ -1225,6 +1233,7 @@ export async function executePlan(
         // deterministic line a dry run prints, and each launch gets its own id.
         const launch = withLaunchSession(op.cli ?? '', command);
         launchedCommands.set(op.seat, launch.command);
+        if (op.recordLine !== undefined) recordLines.set(op.seat, op.recordLine);
         launchedThisRun.add(op.seat);
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // A server this call started was never attached: it is this run's to stop, so a pane
@@ -1254,7 +1263,7 @@ export async function executePlan(
         // The watcher is what this run left beside the seat: a hook the map installed, an MCP
         // inbox the launch registered, or nothing. Written even when the launch path had no
         // created workspace to record it with.
-        if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
+        if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
       }
       case 'idle': {
@@ -1296,7 +1305,7 @@ export async function executePlan(
           }
           // What this run leaves watching for a drop is recorded before the screen is read, so
           // a seat whose identity cannot be read still carries the truth beside it.
-          if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
+          if (op.watcher) recordSeat(op.seat, { stage: 'launched', watcher: op.watcher });
           const model = op.model;
           const version = op.version;
           const screen = model !== undefined && version !== undefined
@@ -1309,14 +1318,14 @@ export async function executePlan(
           if (identity) {
             identities.set(op.seat, identity);
             const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
-            host.record(op.seat, {
+            recordSeat(op.seat, {
               stage: 'launched',
               pane: here.pane,
               launched: identity,
               ...(here.workspace ? { workspace: here.workspace } : {}),
               ...(sessionId ? { agent_session: sessionId } : {}),
               ...(model !== undefined && version !== undefined
-                ? { model, version, launch_line: op.command, effort: op.effort ?? null }
+                ? { model, version, effort: op.effort ?? null }
                 : {}),
             });
           }
@@ -1625,7 +1634,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'was not named in time; left at launched' });
           break;
         }
-        host.record(op.seat, {
+        recordSeat(op.seat, {
           stage: 'named',
           pane: here.pane,
           ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
@@ -1635,7 +1644,7 @@ export async function executePlan(
         // Rules carried on the launch line, or prepended to each brief: there is nothing left
         // to deliver, so the seat is ready at its name.
         if (op.rules !== 'message') {
-          host.record(op.seat, {
+          recordSeat(op.seat, {
             stage: 'ready',
             rules: op.rules,
             pane: here.pane,
@@ -1694,7 +1703,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its rules were not delivered; left at named' });
           break;
         }
-        host.record(op.seat, {
+        recordSeat(op.seat, {
           stage: 'ready',
           rules: 'message',
           pane: here.pane,
@@ -1969,7 +1978,7 @@ export async function executePlan(
           if (continuity === 'restored' && recordedSession !== undefined) {
             const identity = launchedIdentity(host.processInfo?.(session, op.pane) ?? null);
             if (identity) {
-              host.record(op.seat, {
+              recordSeat(op.seat, {
                 stage: 'ready',
                 pane: op.pane,
                 workspace: op.workspace,
@@ -2283,7 +2292,7 @@ export async function executePlan(
       if (!seat || logged.has(seat)) continue;
       if (step.kind === 'skip' && op?.do === 'ready') {
         if (op.notice) hold(seat, `${seat}: ${op.notice}\n`);
-        host.record(seat, { stage: 'ready', rules: op.rules });
+        recordSeat(seat, { stage: 'ready', rules: op.rules });
         finishReady(seat);
       } else if (step.kind === 'skip' && op?.do === 'record') {
         if (op.held) held = true;

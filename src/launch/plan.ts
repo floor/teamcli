@@ -4,6 +4,7 @@ import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
 import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { pinnedLine } from './features.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -36,6 +37,13 @@ export type Op =
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * The base recipe the seat's record keeps when this run records it: `seat.launch` with the
+       * profile's pinned feature words appended, never the expanded command the pane runs (the
+       * environment prefix, the unattended flags, the rules line). Set only for a profile that
+       * pins features; absent leaves the record path exactly as it was.
+       */
+      recordLine?: string;
       /**
        * True when the command this step runs carries the seat's rules line: decided here, where
        * the line is given to `launchCommand`, never re-derived from the built command — the line
@@ -955,6 +963,12 @@ export function upPlan(input: UpInput): Step[] {
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
     }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine);
+    // What the seat's record keeps as its launch line when this run records it: the same base
+    // recipe the record paths store today, with the profile's pins appended where the launch
+    // puts them. Never the expanded command — a dry run prints that and a pane runs it, and the
+    // record's line is the recipe, not the expansion. A profile that pins nothing records its
+    // base line unchanged.
+    const recordLine = pinnedLine(seat.launch, profile.features);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -980,7 +994,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, recordLine, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;

@@ -22,6 +22,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
+import { featureMismatch } from '../launch/features.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
@@ -564,6 +565,30 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
   return findings;
 }
 
+// A seat recorded as running whose launch line does not carry the one feature set its profile
+// pins: the launch that wrote the record predates the pin, or the file names its own feature
+// words. Every seat of such a CLI joins one background server, and a front end whose settings
+// differ is refused until its owner chooses "run without daemon", which costs the seat the route
+// its drops arrive on. The repair is a relaunch, which records the pinned line. The reading is
+// the RECORDED launch line in team's own state, never a running process's command line; a
+// record that holds no line says unknown rather than a guess. A seat the state does not record
+// was not left running by this session and is not named.
+function featureFindings(team: TeamFile, dir: string, session: string): Finding[] {
+  const recorded = readState(dir).sessions[session]?.seats ?? {};
+  const findings: Finding[] = [];
+  for (const seat of team.seats) {
+    if (seat.stopped) continue;
+    const features = profileFor(seat.cli)?.features ?? [];
+    if (features.length === 0) continue;
+    const held = recorded[seat.name];
+    if (!held) continue;
+    const said = featureMismatch(held.launch_line, features);
+    if (said === null) continue;
+    findings.push({ level: 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
+  }
+  return findings;
+}
+
 // A lead `team remove <lead> --keep` stopped for a swap and nothing started again: the file still
 // names it the lead, the state no longer records it running. Said as the swap it is, with the one
 // command that ends it, so the gap never reads as a lost orchestrator. A record whose seat runs
@@ -711,6 +736,7 @@ export function doctorFindings(
   findings.push(...identityFindings(team, dir, session));
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
+  findings.push(...featureFindings(team, dir, session));
 
   findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
   findings.push(...trustFindings(team, root, dir, session, sources));
