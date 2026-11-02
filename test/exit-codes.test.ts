@@ -97,6 +97,7 @@ import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
+import { runWaits } from '../src/commands/waits.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { runWorkflow } from '../src/commands/workflow.ts';
 import { runWorktree, type WorktreeSources } from '../src/commands/worktree.ts';
@@ -7681,6 +7682,34 @@ scene('up.general-refused', async (place) => {
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
+});
+
+/** `team waits` reads the team file at the checkout's root, the registry under the home and the
+ *  retention policy: its sources are the waits tests' own home and clock. */
+async function waited(place: Place, argv: string[], caller: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runWaits(argv, io, { home: place.home, now: () => NOW });
+  return { code, out: io.out, err: io.err };
+}
+
+scene('waits.ok', async (place) => {
+  write(place, TEAM);
+  return show(await waited(place, [], leadSeat), 'no waits');
+});
+scene('waits.refused', async (place) => {
+  write(place, TEAM);
+  return show(await waited(place, [], other), 'only a seat of this team');
+});
+scene('waits.configuration', async (place) => {
+  write(place, TEAM);
+  const registry = join(place.home, '.config', 'team');
+  mkdirSync(registry, { recursive: true });
+  writeFileSync(join(registry, 'teams.yaml'), 'teams: [\n');
+  return show(await waited(place, [], leadSeat), 'the team registry cannot be read');
+});
+scene('waits.usage', async (place) => {
+  write(place, TEAM);
+  return show(await waited(place, ['--all'], leadSeat), 'unknown option');
 });
 
 // The source probe reads every command file (~2 s); the tree does not change during a run.
