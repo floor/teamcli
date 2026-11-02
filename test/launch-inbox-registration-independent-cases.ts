@@ -45,6 +45,9 @@ function world(cli = 'cursor', registry = true, session = 'north', sharedHome?: 
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv() });
   const path = join(dir, 'team.yaml'), yaml = text(session, cli, root, lobby);
   writeFileSync(path, yaml);
+  // The state `team up` leaves: the server proves its caller stands on its seat's recorded pane.
+  const seats = Object.fromEntries(['lead', 'worker'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]));
+  writeFileSync(join(dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [session]: { seats, worktrees: {} } } })}\n`);
   const loaded = readTeamConfig(root, { file: path, home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
   writeApproval(storePath(loaded.team.project, root, home), { approval: approvalOf(loaded.team, root, NOW), file: yaml }, loaded.team.seats, home);
@@ -65,8 +68,13 @@ function signedDrop(w: World, label: string): void {
 }
 async function unread(w: World, args: readonly string[]) {
   const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
-  const io = testIo(w.lobby), replies: string[] = [];
-  const code = await runMcpServe({ seat: value('--seat'), session: value('--session'), ...(value('--file') === undefined ? {} : { file: value('--file') }) }, io,
+  const seat = value('--seat');
+  const session = value('--session') ?? w.session;
+  // The pane this launch's seat stands on is the one the state records now: `up` and the swap
+  // path both write it before the launch line is started.
+  const recorded = seat === undefined ? undefined : readState(w.dir).sessions[session]?.seats[seat]?.pane;
+  const io = testIo(w.lobby, seat === undefined ? undefined : { kind: 'seat', name: seat, pane: recorded ?? `pane-${seat}`, session }), replies: string[] = [];
+  const code = await runMcpServe({ seat: value('--seat'), session: value('--session'), ...(value('--file') === undefined ? {} : { file: value('--file') }), ...(value('--epoch') === undefined ? {} : { epoch: value('--epoch') }) }, io,
     { lines: (async function* () { yield JSON.stringify({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'inbox_check', arguments: {} } }); })(), write: line => { replies.push(line); } }, { home: w.home });
   expect(code, io.err).toBe(0);
   const response = JSON.parse(replies[0]!);

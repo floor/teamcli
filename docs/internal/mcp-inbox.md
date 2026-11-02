@@ -56,6 +56,20 @@ reason, prefixed `the team inbox was not registered: ` — for example `its proj
 .cursor/mcp.json`, `` `gemini mcp add` exited 1 ``, or `.gemini/settings.json was not written`.
 The seat still launches.
 
+## The server serves only its own launch
+
+The server a registration starts is bound to the seat and launch it was started for, not only to
+the folder it reads. Before it opens the inbox, `serve` proves that the process the CLI started is
+the seat `--seat` names: the caller must place as that seat — the same reading every command makes
+of its caller — on the pane the team's state records for it, in the team's own session. A
+process started with another seat's file, seat or session is refused even when it carries that
+seat's launch epoch, and so is a seat the state records on another pane or with no pane. The
+seat's current claim is the launch's other half: when the state holds one, `--epoch` must name
+that claim's epoch; when there is none, the server must carry no epoch. Both proofs run again on
+every tool call and every channel push, so a seat stopped, moved or relaunched under a running
+server is served nothing by it — no list, no body, no receipt — and no push marker is written.
+The refusal sentences are listed in [mcp.md](./mcp.md).
+
 ## The bounds
 
 Every wait on the leg is bounded.

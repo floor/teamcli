@@ -6,9 +6,9 @@
 // one. Fixtures only: a synthetic team, homes and listener markers this test writes; no live
 // session or pane is touched, and no process is spawned (the reload's start is driven through its
 // hooks).
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
@@ -61,6 +61,14 @@ afterEach(() => {
 /** A channel seat's world: no declared delivery order, and the lead's launch carries the flag. */
 function channelWorld(): World {
   const made = world(null, [], { lead: CHANNEL_LAUNCH });
+  // The state `team up` leaves: a server proves its caller stands on its seat's recorded pane.
+  const seats = Object.fromEntries(
+    ['lead', 'helper', 'native'].map((name) => [name, { stage: 'ready', pane: `pane-${name}` }]),
+  );
+  writeFileSync(
+    join(made.dir, 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } })}\n`,
+  );
   // A server started with no --file resolves its team from the registry record holding the seat.
   upsertTeam(made.home, teamIdOf(made.root), {
     project: 'acme',
@@ -185,7 +193,7 @@ describe('an install under a running server', () => {
     const dir = dropDir(made.dir, 'lead');
     let onDisk: InstallIdentity = { version: OLD.version, head: OLD.head };
     const restarts: InstallIdentity[] = [];
-    const staleIo = testIo(made.root);
+    const staleIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
     const staleFeed = feed();
     const stale = runMcpServe({ seat: 'lead', session: SESSION }, staleIo, staleFeed, {
       home: made.home,
@@ -214,7 +222,7 @@ describe('an install under a running server', () => {
       expect(staleIo.err).toBe('');
 
       // The fresh process the launch starts from the installed entry.
-      const installedIo = testIo(made.root);
+      const installedIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
       const installedFeed = feed();
       const installed = runMcpServe({ seat: 'lead', session: SESSION }, installedIo, installedFeed, {
         home: made.home,
@@ -264,7 +272,7 @@ describe('the fresh server a reload starts', () => {
     return made;
   }
 
-  test('it starts the loaded entry with the same arguments and leaves only once it is up', () => {
+  test('it starts the loaded entry with the same arguments and stays its parent until it exits', () => {
     const runner = selfRunner();
     const spawns: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
     const exits: number[] = [];
@@ -287,9 +295,39 @@ describe('the fresh server a reload starts', () => {
     expect(exits).toEqual([]);
     expect(fresh.refs).toBe(0);
     fresh.emit('spawn');
-    expect(fresh.refs).toBe(1);
+    // The fresh server proves its caller by its parent processes on every call. The old process
+    // must stay its parent for the fresh one's whole life: it is not unref'd, and it leaves
+    // only when the fresh server does.
+    expect(fresh.refs).toBe(0);
+    expect(exits).toEqual([]);
+    fresh.emit('exit', 0, null);
     expect(exits).toEqual([0]);
     expect(said).toEqual([]);
+  });
+
+  test('the parent leaves with the fresh server’s own failure code', () => {
+    const exits: number[] = [];
+    const refused = freshChild();
+    restartSelf({
+      spawnChild: (() => refused) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+    });
+    refused.emit('spawn');
+    // The fresh server refused at start, or ended another way: the parent's reader sees its code,
+    // never a quiet 0 that would read as a handed-over session.
+    refused.emit('exit', 2, null);
+    expect(exits).toEqual([2]);
+    // A child ended by a signal carries no code: the parent reports a failure, never a quiet 0.
+    const signalled = freshChild();
+    restartSelf({
+      spawnChild: (() => signalled) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+    });
+    signalled.emit('spawn');
+    signalled.emit('exit', null, 'SIGTERM');
+    expect(exits).toEqual([2, 1]);
   });
 
   test('a start that fails after spawn returns says so and exits non-zero', () => {
@@ -322,11 +360,130 @@ describe('the fresh server a reload starts', () => {
   });
 });
 
+describe('a shutdown aimed at the waiting parent', () => {
+  /** A signal host the scene can deliver through; no real process is signalled. */
+  function fakeSignals(): {
+    watch: { on(signal: NodeJS.Signals, listener: () => void): void; off(signal: NodeJS.Signals, listener: () => void): void };
+    send(signal: NodeJS.Signals): void;
+    held(): number;
+  } {
+    const listening = new Map<NodeJS.Signals, Set<() => void>>();
+    return {
+      watch: {
+        on: (signal, listener) => {
+          const set = listening.get(signal) ?? new Set();
+          set.add(listener);
+          listening.set(signal, set);
+        },
+        off: (signal, listener) => {
+          listening.get(signal)?.delete(listener);
+        },
+      },
+      send: (signal) => {
+        for (const listener of [...(listening.get(signal) ?? [])]) listener();
+      },
+      held: () => [...listening.values()].reduce((count, set) => count + set.size, 0),
+    };
+  }
+
+  function killedChild(kills: NodeJS.Signals[]): EventEmitter & { unref(): void; kill(signal?: NodeJS.Signals): boolean } {
+    const child = new EventEmitter() as EventEmitter & { unref(): void; kill(signal?: NodeJS.Signals): boolean };
+    child.unref = () => {};
+    child.kill = (signal?: NodeJS.Signals) => {
+      kills.push(signal ?? 'SIGTERM');
+      return true;
+    };
+    return child;
+  }
+
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    test(`a ${signal} reaches the fresh server and the parent leaves with its result`, () => {
+      const kills: NodeJS.Signals[] = [];
+      const exits: number[] = [];
+      const child = killedChild(kills);
+      const signals = fakeSignals();
+      restartSelf({
+        spawnChild: (() => child) as unknown as Spawn,
+        exit: (code) => exits.push(code),
+        say: () => {},
+        signals: signals.watch,
+      });
+      child.emit('spawn');
+      signals.send(signal);
+      // The shutdown is the fresh server's to finish: the parent has carried it, not left first.
+      expect(kills).toEqual([signal]);
+      expect(exits).toEqual([]);
+      child.emit('exit', 3, null);
+      expect(exits).toEqual([3]);
+      // No listener outlives the wait.
+      expect(signals.held()).toBe(0);
+    });
+  }
+
+  test('a signal is carried even before the child reports that it started', () => {
+    const kills: NodeJS.Signals[] = [];
+    const exits: number[] = [];
+    const child = killedChild(kills);
+    const signals = fakeSignals();
+    restartSelf({
+      spawnChild: (() => child) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+      signals: signals.watch,
+    });
+    signals.send('SIGTERM');
+    expect(kills).toEqual(['SIGTERM']);
+    expect(exits).toEqual([]);
+    child.emit('spawn');
+    child.emit('exit', 0, null);
+    expect(exits).toEqual([0]);
+  });
+
+  test('a fresh server that fails to start leaves no signal listener behind', () => {
+    const kills: NodeJS.Signals[] = [];
+    const exits: number[] = [];
+    const said: string[] = [];
+    const child = killedChild(kills);
+    const signals = fakeSignals();
+    restartSelf({
+      spawnChild: (() => child) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: (line) => said.push(line),
+      signals: signals.watch,
+    });
+    child.emit('error', new Error('spawn team ENOENT'));
+    expect(exits).toEqual([1]);
+    expect(said).toEqual(['team mcp serve: the fresh server could not start; the next launch reloads\n']);
+    expect(signals.held()).toBe(0);
+    signals.send('SIGTERM');
+    expect(kills).toEqual([]);
+  });
+
+  test('the default exit hook reports the code the fresh server ended with', () => {
+    const child = killedChild([]);
+    const signals = fakeSignals();
+    const codes: unknown[] = [];
+    const stop = spyOn(process, 'exit').mockImplementation((code) => {
+      codes.push(code);
+      return undefined as never;
+    });
+    try {
+      restartSelf({ spawnChild: (() => child) as unknown as Spawn, say: () => {}, signals: signals.watch });
+      child.emit('spawn');
+      signals.send('SIGINT');
+      child.emit('exit', 7, null);
+      expect(codes).toEqual([7]);
+    } finally {
+      stop.mockRestore();
+    }
+  });
+});
+
 describe('a sender falling back from a stale channel', () => {
   test('the sender holds the push name, so the stale server cannot wake the seat twice', async () => {
     const made = channelWorld();
     const dir = dropDir(made.dir, 'lead');
-    const serverIo = testIo(made.root);
+    const serverIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
     const serverFeed = feed();
     // The server believes it still runs OLD: its own install check agrees with its build, so only
     // the sender's held marker can stop its push.

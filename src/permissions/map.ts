@@ -296,7 +296,7 @@ function buildGates(): Record<string, Gate> {
     },
     mcp: {
       kind: 'any-caller',
-      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat and asks for none either',
+      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat, and its own row says who it admits',
     },
     pause: {
       kind: 'team-pause',
@@ -443,8 +443,8 @@ function buildGates(): Record<string, Gate> {
       why: 'the report writes nothing and asks for no caller',
     },
     'mcp:serve': {
-      kind: 'any-caller',
-      why: 'the launch line names its seat and session; the server reads and receipts only that seat\'s inbox, and asks for no caller',
+      kind: 'seat-only',
+      why: 'the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team\'s own session, and never the owner; the seat\'s current claim, when there is one, must be the --epoch the server carries',
     },
     'mcp:status': {
       kind: 'any-caller',

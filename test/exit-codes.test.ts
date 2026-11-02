@@ -6295,9 +6295,14 @@ scene('mcp.serve-ended', async (place) => {
     root: place.root,
     roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
   });
+  // The state `team up` leaves: the server proves its caller stands on lead's recorded pane.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'ready', pane: leadSeat.pane };
+  });
   const lobby = join(place.base, 'lobby');
   mkdirSync(lobby, { recursive: true });
-  const io = testIo(lobby, owner);
+  const io = testIo(lobby, leadSeat);
   const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
     lines: (async function* () {
       // stdin is already closed
@@ -7449,7 +7454,7 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
   return analyzed;
 }
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-replacement-ended', 'team.mcp-serve-restart-failed',
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
@@ -7598,7 +7603,14 @@ function canon(rows: readonly ExitRow[]): string {
   const sorted = [...rows].sort((a, b) => a.command.localeCompare(b.command) || a.code - b.code || a.id.localeCompare(b.id));
   return `${JSON.stringify({
     format: 1,
-    rows: sorted.map((row) => ({ code: row.code, command: row.command, id: row.id, meaning: row.meaning, trigger: row.trigger })),
+    rows: sorted.map((row) => ({
+      code: row.code,
+      command: row.command,
+      id: row.id,
+      ...(row.inherits ? { inherits: true as const } : {}),
+      meaning: row.meaning,
+      trigger: row.trigger,
+    })),
   }, null, 2)}\n`;
 }
 
@@ -7696,6 +7708,121 @@ analyzerTest('process.exit with no argument fails the check', () => {
 analyzerTest('a module-level process.exit fails the check', () => {
   const files = withDoctor('', "if (process.env.GATE_PROBE === '1') process.exit(17);\n");
   expect(namesLine(files, 'src/commands/doctor.ts')).toBe(true);
+});
+
+// The inherited exit: a command that leaves with the code a process it waited on exited with.
+// The form is allowed at exactly one site — `restartSelf`'s default exit hook in
+// src/mcp/serve.ts — and the parameter there must still be the argument the hook was called
+// with. That hook in turn has one caller only: the child's exit or close handler, as
+// `exit(<that handler's code parameter> ?? 1)`. Everywhere else `process.exit(<parameter>)` is
+// refused, and the row's own code is only the fallback when the child gave none.
+const INHERITED_PROBE: ExitRow = {
+  code: 1,
+  command: 'doctor',
+  id: 'doctor.inherited-probe',
+  inherits: true,
+  meaning: 'the process doctor waited on ended and doctor left with its exit code',
+  trigger: 'team doctor',
+};
+
+function inheritedProbe(body: string, row?: ExitRow): ReturnType<typeof problems> {
+  const files = withDoctor("  if (argv[0] === '--gate-probe') inheritExit(7);\n", body);
+  const rows = row ? [...contract.rows, row] : contract.rows;
+  return problems({ files, contractText: canon(rows), page: render(rows) });
+}
+
+// The one allowed hook, exactly as src/mcp/serve.ts spells it. A probe that changes one of these
+// lines is applied to the real file text, so everything else on the site still has to stand.
+const SERVE_HOOK_EXIT = '    // exit: team.mcp-serve-replacement-ended\n    process.exit(code);';
+
+function serveProbe(mutation: (text: string) => string): ReturnType<typeof problems> {
+  const text = readFileSync(new URL('../src/mcp/serve.ts', import.meta.url), 'utf8');
+  const next = mutation(text);
+  expect(next).not.toBe(text);
+  return problems({ files: new Map([['src/mcp/serve.ts', next]]) });
+}
+
+analyzerTest('an inherited exit outside the restart hook fails the check', () => {
+  // Even a clean helper that is handed a number is refused: the form is an allowlist of one
+  // site, not a way for any command to leave with a code it never declared.
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes('allowed only'))).toBe(true);
+});
+
+analyzerTest('an inherited exit under a fixed row fails the check', () => {
+  const found = serveProbe((text) => text.replace('// exit: team.mcp-serve-replacement-ended', '// exit: team.mcp-serve-restart-failed'));
+  expect(found.some((line) => line.includes('inherited'))).toBe(true);
+});
+
+analyzerTest('an inherited row on a fixed exit fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  // exit: doctor.inherited-probe\n  process.exit(1);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('doctor.inherited-probe') && line.includes('inherited row'))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is not a parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(): void {\n  const code = 7;\n  // exit: doctor.inherited-probe\n  process.exit(code);\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
+});
+
+analyzerTest('an inherited exit whose name is an outer parameter fails the check', () => {
+  const found = inheritedProbe(
+    'function inheritExit(code: number): void {\n  const nested = (): void => {\n    // exit: doctor.inherited-probe\n    process.exit(code);\n  };\n  nested();\n}\n',
+    INHERITED_PROBE,
+  );
+  expect(found.some((line) => line.includes('src/commands/doctor.ts') && line.includes(UNREADABLE))).toBe(true);
+});
+
+analyzerTest('assigning the restart hook\'s parameter fails the check', () => {
+  const found = serveProbe((text) => text.replace(SERVE_HOOK_EXIT, SERVE_HOOK_EXIT.replace('    // exit:', '    code = 247;\n    // exit:')));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('is assigned'))).toBe(true);
+});
+
+analyzerTest('shadowing the restart hook\'s parameter fails the check', () => {
+  const found = serveProbe((text) => text.replace(
+    SERVE_HOOK_EXIT,
+    `    {\n      const code = 247;\n${SERVE_HOOK_EXIT.replaceAll('    ', '      ')}\n    }`,
+  ));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook with a literal fails the check', () => {
+  // The hook only ever leaves with the child's code. A literal is a code the command chose,
+  // which is exactly what the inherited form is not allowed to hide.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('calling the restart hook without the child\'s fallback fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('a second caller of the restart hook fails the check', () => {
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'exit(code ?? 1);\n      exit(247);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('called once'))).toBe(true);
+});
+
+analyzerTest('assigning the child handler\'s code before the call fails the check', () => {
+  // The argument still reads `code`, but it is no longer the code the child exited with.
+  const found = serveProbe((text) => text.replace('exit(code ?? 1);', 'code = 247;\n      exit(code ?? 1);'));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('is assigned inside the child exit handler'))).toBe(true);
+});
+
+analyzerTest('shadowing the child handler\'s code before the call fails the check', () => {
+  const found = serveProbe((text) => text.replace(
+    'exit(code ?? 1);',
+    '{\n        const code = 247;\n        exit(code ?? 1);\n      }',
+  ));
+  expect(found.some((line) => line.includes('src/mcp/serve.ts') && line.includes('shadowed'))).toBe(true);
 });
 
 analyzerTest('a default call that is not the command table fails the check', () => {
