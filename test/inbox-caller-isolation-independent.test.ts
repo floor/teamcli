@@ -99,7 +99,7 @@ for (const route of ['file', 'registry', 'seat-only'] as const) for (const stale
   test(`foreign process cannot use saved ${route} arguments${stale ? ' at an old epoch with a removed seat' : ''}`, async () => {
     message(); if (stale) { epoch(newEpoch); updateState(dir, state => { delete state.sessions['session-b']!.seats.reader; }); }
     const before = snapshot(rootB), caller = ioFor('foreign', 'cursor', rootA);
-    const options = route === 'file' ? ownOptions() : { seat: 'reader', ...(route === 'registry' ? { session: 'session-b' } : {}), epoch: oldEpoch };
+    const options: ServeOptions = route === 'file' ? ownOptions() : { seat: 'reader', session: route === 'registry' ? 'session-b' : undefined, epoch: oldEpoch };
     const result = await serve(options, caller.io);
     expect(result.code).toBe(2); expect(result.replies).toEqual([]); expect(snapshot(rootB)).toEqual(before);
     expect(caller.error()).not.toContain('private synthetic body');
@@ -226,4 +226,80 @@ test('an install handoff preserves the replacement server own-seat route', async
   expect(result.code, caller.error()).toBe(0);
   expect(JSON.stringify(result.replies)).toContain('private synthetic body');
   expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
+});
+
+function changeDeclaration(kind: 'stopped' | 'dropped' | 'moved-session') {
+  let yaml = readFileSync(file, 'utf8');
+  if (kind === 'stopped') yaml += '    stopped: true\n';
+  if (kind === 'moved-session') yaml = yaml.replace('session: session-b', 'session: replacement-session');
+  // Keep a valid team when dropping the target: a different declared coordinator remains.
+  if (kind === 'dropped') yaml = yaml.replaceAll('reader', 'other');
+  writeFileSync(file, yaml);
+}
+for (const change of ['stopped', 'dropped', 'moved-session'] as const) test(`a declaration ${change} after start refuses each tool without receipt or state writes`, async () => {
+  message(); let afterChange: Record<string, string> = {};
+  const lines = (async function* () {
+    yield call('inbox_check', {});
+    changeDeclaration(change); afterChange = snapshot(rootB);
+    yield call('inbox_check', {}); yield call(); yield call('ack', { id });
+  })();
+  const result = await serve(ownOptions(), ioFor().io, lines);
+  expect(result.code).toBe(0); expect(result.replies[0]?.result?.isError).not.toBe(true);
+  for (const reply of result.replies.slice(1)) expect(reply.result.isError).toBe(true);
+  // The listener is removed by normal stream shutdown; all other bytes stay as at the change.
+  delete afterChange['.agents/send-drops/session-b/reader/.inbox-listener'];
+  expect(snapshot(rootB)).toEqual(afterChange);
+  expect(existsSync(join(drop, id + '.read.json'))).toBe(false);
+});
+test('a declaration stopped before startup refuses without a listener or state writes', async () => {
+  message(); changeDeclaration('stopped'); const before = snapshot(rootB);
+  const result = await serve(ownOptions(), ioFor().io);
+  expect(result.code).toBe(2); expect(result.replies).toEqual([]); expect(snapshot(rootB)).toEqual(before);
+});
+for (const loss of ['parent', 'declaration'] as const) test(`channel push refuses after ${loss} loss with no new marker or receipt`, async () => {
+  writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude', '    launch: claude --dangerously-load-development-channels server:team-inbox'));
+  let parentAlive = true; const caller = ioFor(); const original = caller.io.callerSources!;
+  caller.io.callerSources = session => {
+    const source = original(session);
+    return { ...source, ancestors: () => parentAlive ? source.ancestors() : [{ pid: 90, name: 'bun' }, { pid: 1, name: 'launchd' }] };
+  };
+  const lines = (async function* () {
+    yield JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+    if (loss === 'parent') parentAlive = false; else changeDeclaration('stopped');
+    message(); await Bun.sleep(600);
+  })();
+  const result = await serve(ownOptions(), caller.io, lines);
+  expect(result.code).toBe(0); expect(result.replies.filter(r => r.method === 'notifications/claude/channel')).toEqual([]);
+  expect(existsSync(join(drop, id + '.channel-push.json'))).toBe(false);
+  expect(existsSync(join(drop, id + '.read.json'))).toBe(false);
+});
+test('unexpected parent death makes the surviving replacement refuse subsequent calls', async () => {
+  message(); let parentAlive = true; const caller = ioFor(), original = caller.io.callerSources!;
+  caller.io.callerSources = session => {
+    const source = original(session);
+    return { ...source, ancestors: () => parentAlive ? source.ancestors() : [{ pid: 90, name: 'bun' }, { pid: 1, name: 'launchd' }] };
+  };
+  const lines = (async function* () { yield call('inbox_check', {}); parentAlive = false; yield call(); })();
+  const result = await serve(ownOptions(), caller.io, lines);
+  expect(result.code).toBe(0); expect(result.replies[0]?.result?.isError).not.toBe(true);
+  expect(result.replies[1]?.result?.isError).toBe(true); expect(existsSync(join(drop, id + '.read.json'))).toBe(false);
+});
+for (const termination of [0, 7, null] as const) test(`replacement exit ${termination} ends its parent once without a respawn loop`, () => {
+  const child = new EventEmitter() as ChildProcess; let starts = 0, unrefs = 0; const exits: number[] = [];
+  child.unref = () => { unrefs++; };
+  restartSelf({ spawnChild: (() => { starts++; return child; }) as never, exit: code => { exits.push(code); }, say: () => {} });
+  child.emit('spawn'); expect(exits).toEqual([]); expect(unrefs).toBe(0);
+  child.emit('exit', termination, termination === null ? 'SIGKILL' : null);
+  child.emit('exit', termination, null);
+  expect(exits).toEqual([termination ?? 1]); expect(starts).toBe(1);
+});
+test('production default exit handler preserves a replacement nonzero code', () => {
+  const child = new EventEmitter() as ChildProcess; child.unref = () => {};
+  const codes: unknown[] = [];
+  const stop = spyOn(process, 'exit').mockImplementation((code) => { codes.push(code); return undefined as never; });
+  try {
+    restartSelf({ spawnChild: (() => child) as never, say: () => {} });
+    child.emit('spawn'); child.emit('exit', 7, null);
+    expect(codes).toEqual([7]);
+  } finally { stop.mockRestore(); }
 });
