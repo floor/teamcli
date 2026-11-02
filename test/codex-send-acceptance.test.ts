@@ -786,8 +786,10 @@ exit 1
     expect(code).toBe(0);
     expect(err).toBe('');
     // The words follow the leg that took the message. A queued-for-bus sentence here would be the
-    // webhook's claim on a wake this send never made.
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
+    // webhook's claim on a wake this send never made. The trailing clause is the send's own post:
+    // the fixture's loopback adapter is a closed port, so the post tried and failed, and the claim
+    // was released for the bus.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue; webhook not delivered: could not connect (ConnectionRefused)\n`);
     expect(out).not.toContain('queued; its webhook fires');
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
@@ -820,8 +822,10 @@ exit 1
 
     expect(code).toBe(0);
     // The queue refused and the drop leg took the send: the adapter is the only route left, and
-    // the bus whose announcement fires it does not serve this root yet.
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; its webhook fires when the bus takes it\n`);
+    // the bus whose announcement fires it does not serve this root yet. The send's own post was
+    // tried first, against the fixture's closed loopback port: it failed, released the claim, and
+    // the line says so beside the bus words the released claim keeps true.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; its webhook fires when the bus takes it; webhook not delivered: could not connect (ConnectionRefused)\n`);
     expect(out).not.toContain('woken through its runtime queue');
     expect(err).toContain('queued, no event adapter');
     expect(calls).toHaveLength(1);
