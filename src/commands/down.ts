@@ -429,7 +429,10 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // carries a clearing key, and "not typed" is for a key-less profile the CLI is still on.
     if (!live()) return 'no-agent';
     if (!resting()) return false;
-    if (kindOf() !== 'unsent') return false;
+    // The box is read again on this fresh frame, exactly as before the first reading: a draft
+    // typed while the caller check ran is the user's, and only the exit text this run found is
+    // cleared. The kind alone does not tell a newer draft from the text.
+    if (kindOf() !== 'unsent' || !holds()) return false;
     if (key === null) return false;
     if (!io.sendKey(key)) return false;
     const after = await settle('unsent');
@@ -440,6 +443,11 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       return { left: `its box already held this exit text; the clearing key (${key}) left the screen reading ${after}; left running` };
     }
   }
+  // The typing lands on a box read again right here: a draft that appeared after the reading
+  // above is the user's, and the exit text is never typed onto it.
+  if (!live()) return 'no-agent';
+  if (!resting()) return false;
+  if (kindOf() !== 'idle') return false;
   if (!io.typeText(text)) return false;
   if (!live()) return 'no-agent';
   if (!resting()) return false;

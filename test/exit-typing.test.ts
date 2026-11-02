@@ -702,6 +702,23 @@ describe('a box that already holds exactly the exit text', () => {
     expect(pane.sent).toEqual([{ key: 'ctrl+c', kind: 'unsent', holds: true }]);
   });
 
+  // A person can type into the box while the cleared box is waited for. The typing is gated on
+  // a reading taken right before it, so the exit text never lands on a newer draft.
+  test('a newer draft typed after the clearing key is never typed onto', async () => {
+    const pane = leftoverPane('claude-code', 'claude', fixture('claude-code-unsent-ansi.txt'), fixture('claude-code-idle-ansi.txt'));
+    const origScreen = pane.io.screen;
+    let reads = 0;
+    pane.io.screen = () => {
+      reads++;
+      // reads 1-4 are the leftover walk, 5-6 the cleared box settling; read 7 is the one the
+      // typing is gated on.
+      return reads >= 7 ? fixture('claude-code-other-text-ansi.txt') : origScreen();
+    };
+    expect(await typeExit(pane.io, 'claude-code', exitText('claude-code'))).toBe(false);
+    expect(pane.sent).toEqual([{ key: 'ctrl+c', kind: 'unsent', holds: true }]);
+    expect(pane.types).toEqual([]);
+  });
+
   // The ordering the caller check needs: an agent gone at the clearing key is `no-agent`, not
   // "its exit was not typed" — the two readings differ, and only the first says what happened.
   test('a CLI gone at the clearing key is "no-agent", not "not typed"', async () => {
@@ -921,7 +938,9 @@ describe('per-key fresh witness contract in typeExit', () => {
     const pane = paneOf('claude-code', 'claude', idle, unsent);
     pane.io.status = () => {
       call++;
-      return call >= 4 ? 'working' : 'idle';
+      // The first four readings are the walks before and after the typing (the box is read
+      // again right before the typing); the fifth is inside sendExit, before its Enter.
+      return call >= 5 ? 'working' : 'idle';
     };
     expect(await typeExit(pane.io, 'claude-code', '/exit')).toEqual({
       left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
@@ -936,9 +955,9 @@ describe('per-key fresh witness contract in typeExit', () => {
     const origScreen = pane.io.screen;
     pane.io.screen = () => {
       screenCalls++;
-      // calls 1-5: progression up to line 307 holds() passing
-      // call 6: inside sendExit before pressEnter -> fails kindOf/holds
-      return screenCalls >= 6 ? fixture('claude-code-other-text-ansi.txt') : origScreen();
+      // calls 1-6: progression up to the pre-typing read and the holds() before sendExit
+      // call 7: inside sendExit before pressEnter -> fails kindOf/holds
+      return screenCalls >= 7 ? fixture('claude-code-other-text-ansi.txt') : origScreen();
     };
     expect(await typeExit(pane.io, 'claude-code', '/exit')).toEqual({
       left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
