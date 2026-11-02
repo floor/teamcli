@@ -11,6 +11,8 @@ import { realSources as realStatusSources, runStatus, type StatusJson, type Stat
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { SEATS_OUTPUT_SCHEMA } from '../../src/output/index.ts';
+import { registerAgent } from '../../src/registry/agents.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import { emptySession, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import type { Live } from '../../src/status/compare.ts';
@@ -22,6 +24,12 @@ const example = readFileSync(new URL('../fixtures/example.yaml', import.meta.url
 // A real idle capture, scrollback and all: the table's own reading of a pane.
 const claudeIdle = readFileSync(new URL('../fixtures/claude-code/2.1.289/idle-suggestion-plain.txt', import.meta.url), 'utf8');
 const NOW = new Date('2026-10-03T14:10:00Z');
+/** The wakeability reading of every seat in this fixture: a hook or inbox watcher serves its
+ *  turns, nothing wakes it while it is idle, and no home stands in for its receipts. */
+const PULL_ONLY = {
+  class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
+  oldest_unread_seconds: null,
+} as const;
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
 
@@ -169,21 +177,78 @@ describe('team seats', () => {
     expect((JSON.parse(again.out) as SeatsJson).pause).toEqual(pause);
   });
 
-  test('lists active seats in the 12-column registry table and omits stopped seats by default', async () => {
+  test('lists active seats in the 13-column registry table and omits stopped seats by default', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runSeats(['--file', file], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                                   EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE');
+    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                                   EFFORT  STATUS                                STATE    SOURCE  LAST ACTIVE  PANE    WAKE');
     // The coordinator is idle at its prompt, but its record was touched 12s before NOW — a
     // trace inside the window, which an idle word yields to (src/labels/state.ts).
     // An unread screen keeps the declared display, marked declared and unread together.
-    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace   now          pane-1');
-    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (declared, unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2');
-    expect(io.out).toContain('deepseek-acme            -         seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3');
-    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4');
+    // The WAKE column is every seat's class, `!` marking the ones a message cannot wake.
+    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace   now          pane-1  !pull-on-turn');
+    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (declared, unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2  !pull-on-turn');
+    expect(io.out).toContain('deepseek-acme            -         seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3  !pull-on-turn');
+    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4  !pull-on-turn');
     expect(io.out).toContain('4 seats');
     expect(io.out).not.toContain('grok-acme');
+  });
+
+  test('a recorded endpoint with no bound conversation is shown unwakeable, and the cell says why', async () => {
+    // The state and the registry a sessionless Codex launch leaves: the endpoint is recorded
+    // under the seat's own incarnation, the registry names the thread, and the state copy names
+    // none — so nothing can be handed to the runtime queue. The table must not read that as a
+    // wake: the seat is flagged, and the cell carries the reason.
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    const BINDING = 'prs_0123456789ab';
+    const THREAD = '019a0000-aaaa-7bbb-8ccc-ddddeeeeffff';
+    updateState(join(dir, '.agents'), (state) => {
+      const seat = state.sessions['acme-web']!.seats['codex-acme']!;
+      seat.presence_binding = BINDING;
+      seat.codex_endpoint = {
+        url: 'unix:///private/tmp/seats-fixture/app-server.sock',
+        binding: BINDING,
+        pid: 4242,
+        started_at: NOW.toISOString(),
+      };
+    });
+    registerAgent(home, {
+      name: 'codex-acme',
+      signing: { model: 'GPT Sol', version: '6', role: 'implementer' },
+      lab: 'openai',
+      cli: 'codex',
+      launcher: null,
+      launch: 'codex -m gpt-6-sol -c model_reasoning_effort=high',
+      reach: {
+        team: teamIdOf(dir),
+        seat: 'codex-acme',
+        session: 'acme-web',
+        pane: 'pane-2',
+        address: null,
+        agent_session: THREAD,
+      },
+      seat_handle: 'seat_222222222222',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file], io, { ...statusSources, home })).toBe(0);
+    expect(io.out).toMatch(/codex-acme .* !pull-on-turn \(endpoint, no bound conversation\)\n/);
+    // Every other seat is the same class without the note: no endpoint record proves nothing.
+    expect(io.out).toMatch(/claude-coordinator-acme .* !pull-on-turn\n/);
+
+    const jsonIo = testIo(dir, { kind: 'owner' });
+    expect(await runSeats(['--file', file, '--json'], jsonIo, { ...statusSources, home })).toBe(0);
+    const parsed = assertMatchesOutputSchema<SeatsJson>(jsonIo.out, SEATS_OUTPUT_SCHEMA);
+    const row = parsed.seats.find((one) => one.name === 'codex-acme');
+    expect(row?.wake).toEqual({
+      class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: true,
+      listener: false, oldest_unread_seconds: null,
+    });
   });
 
   test('a seat whose idle screen hides a commit inside the window reads working, source trace', async () => {
@@ -262,7 +327,7 @@ describe('team seats', () => {
     const code = await runSeats(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
-    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       !pull-on-turn');
     expect(io.out).toContain('5 seats');
   });
 
@@ -297,6 +362,8 @@ describe('team seats', () => {
       last_active: NOW.toISOString(),
       pane: 'pane-1',
       launch_line: 'claude --model claude-opus-5-5',
+      // The table's WAKE column: the class a send measures, and the facts behind it.
+      wake: PULL_ONLY,
     });
 
     const ioAll = testIo(dir, { kind: 'owner' });
@@ -319,6 +386,7 @@ describe('team seats', () => {
       last_active: '2026-10-02T14:10:00Z',
       pane: null,
       launch_line: 'grok --model grok-4.7',
+      wake: PULL_ONLY,
     });
 
     const ioErr = testIo(dir, { kind: 'owner' });
@@ -515,14 +583,14 @@ describe('the reading against a live herdr', () => {
 });
 
 describe('team status --all', () => {
-  test('renders the 12-column registry table while preserving difference footer and notes', async () => {
+  test('renders the 13-column registry table while preserving difference footer and notes', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runStatus(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     expect(io.out).toContain('team acme-web, session "acme-web"');
-    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                                   EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE');
-    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace    now          pane-1');
-    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -');
+    expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                                   EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE    WAKE');
+    expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace    now          pane-1  !pull-on-turn');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       !pull-on-turn');
     expect(io.out).toContain('no differences');
     expect(io.out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
   });

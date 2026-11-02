@@ -550,7 +550,10 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
     const sent = await sendWith(scene, server, scene.codexHome);
     expect(sent.code).toBe(0);
     expect(sent.err).toBe('');
-    expect(sent.out).toBe(nativeLine('; queued; probe-seat reads it at its next turn (pull-only)'));
+    // The leg that took the message decides the words: the queue accepted the pointer, so even
+    // an unmanaged seat names the runtime queue. The route this scene pins — the measured
+    // CODEX_HOME default — is unchanged, and the queue line below still reads that socket.
+    expect(sent.out).toBe(nativeLine('; woken through its runtime queue'));
     expect(sent.calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);

@@ -296,6 +296,23 @@ const PRESENCE_PROVENANCE_SCHEMA: JsonSchema = {
   },
 };
 
+/** Whether a message can reach a seat while it is idle (src/status/wake.ts): the class a send
+ *  measures, and the facts it was read from — the endpoint and the conversation bound to it, the
+ *  live inbox listener, and the oldest unread drop's age. */
+const SEAT_WAKE_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['class', 'wakeable', 'conversation', 'endpoint', 'listener', 'oldest_unread_seconds'],
+  properties: {
+    class: { type: 'string', enum: ['push', 'between-turns', 'pull-on-turn', 'none'] },
+    wakeable: { type: 'boolean' },
+    conversation: { type: 'boolean' },
+    endpoint: { type: 'boolean' },
+    listener: { type: 'boolean' },
+    oldest_unread_seconds: { type: ['integer', 'null'] },
+  },
+};
+
 /** Published `--json` output schema for the pilot `team status` command (`schema/status.schema.json`). */
 export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.status',
@@ -336,6 +353,7 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
               seat_state_source: { type: 'string' },
               seat_presence: PRESENCE_PROVENANCE_SCHEMA,
               seat_presence_unreadable: { type: 'boolean', const: true },
+              seat_wake: SEAT_WAKE_SCHEMA,
               blind: { type: 'boolean', const: true },
               dev_mode: { type: 'boolean' },
               start_cwd: { type: 'string' },
@@ -465,6 +483,7 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           launch_line: { type: ['string', 'null'] },
           dev_mode: { type: 'boolean' },
           start_cwd: { type: 'string' },
+          wake: SEAT_WAKE_SCHEMA,
         },
       },
     },
