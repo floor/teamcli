@@ -13,6 +13,7 @@ import type { Launch } from '../src/commands/up.ts';
 import type { RestartSources } from '../src/commands/restart.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { launchedCliBinary } from '../src/launch/line.ts';
 import { SWAP_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
@@ -95,7 +96,7 @@ const files: string[] = [];
 let root = '';
 let home = '';
 
-function place(): void {
+function place(leadLaunch?: string): void {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-swap-')));
   files.push(base);
   root = join(base, 'acme');
@@ -104,7 +105,10 @@ function place(): void {
   mkdirSync(home);
   // A migrated trust block: a swap's run is a restart, and a restart preflights the file a seat
   // would start from. The lobby is the entity's, and the project root is trusted for the seats.
-  const yaml = TEAM.replace('workspace:\n', `trust:\n  - ~/.config/team/lobbies/lab\n  - ${root}\nworkspace:\n`);
+  const lead = leadLaunch === undefined
+    ? TEAM
+    : TEAM.replace('launch: claude --model claude-opus-5-5', `launch: '${leadLaunch.replaceAll("'", "''")}'`);
+  const yaml = lead.replace('workspace:\n', `trust:\n  - ~/.config/team/lobbies/lab\n  - ${root}\nworkspace:\n`);
   writeFileSync(join(root, '.agents', 'team.yaml'), yaml);
 }
 
@@ -307,9 +311,9 @@ function fakeHerdr(
     },
     paneRun(_session, pane, command) {
       did.runs.push(command);
-      // The launch line may start with the run's environment assignments; the binary the pane
-      // runs is the first word that is not one.
-      binaries.set(pane, command.trim().split(/\s+/).find((word) => !word.includes('=')) ?? 'claude');
+      // The binary the pane runs is the CLI the line ends at: the assignments before it — a
+      // vendor's env words among them — are the line's environment, not its program.
+      binaries.set(pane, launchedCliBinary(command) ?? 'claude');
       const slot = newPanes.get(pane);
       if (slot) slot.agent = true;
       return true;
@@ -532,6 +536,165 @@ describe('team swap views', () => {
     const result = await swap(['queue', 'worker', '--json']);
     expect(result.code).toBe(1);
     assertJsonErrorShape(result.out, { id: 'swap.unchanged' });
+  });
+});
+
+describe('team swap to another vendor of the same CLI', () => {
+  const auth = (item: string): string =>
+    `ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s ${item} -a "$USER" -w)`;
+  const DEEPSEEK_LINE =
+    'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ' +
+    `${auth('deepseek-api-key')} ` +
+    'ANTHROPIC_MODEL=deepseek-flash claude --model deepseek-flash';
+  const ZAI_LINE =
+    'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic ' +
+    `${auth('glm-api-key')} ` +
+    'ANTHROPIC_MODEL=glm-5.3 claude --model glm-5.3';
+  const present = (): 'present' => 'present';
+
+  test("the profile's vendor table is the recipe: queued with no donor", async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'deepseek:deepseek-flash'], OWNER, { credentialProbe: present });
+    expect(result.code, result.err).toBe(0);
+    const record = queue().lead!;
+    expect(record.reason).toBe('model-rule');
+    expect(record.to).toEqual({
+      cli: 'claude-code',
+      vendor: 'deepseek',
+      model: 'DeepSeek Flash',
+      version: '4.0',
+      display: 'DeepSeek Flash 4.0',
+      launch: DEEPSEEK_LINE,
+    });
+  });
+
+  test('a queued vendor swap under --json matches the published schema and carries no donor', async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'zai:glm-5.3', '--json'], OWNER, { credentialProbe: present });
+    expect(result.code, result.err).toBe(0);
+    const doc = assertMatchesOutputSchema<{ status: string; seat: string; swap: { to: { launch: string } }; donor?: unknown }>(
+      result.out,
+      SWAP_OUTPUT_SCHEMA,
+    );
+    expect(doc.status).toBe('queued');
+    expect(doc.seat).toBe('lead');
+    expect(doc.swap.to.launch).toBe(ZAI_LINE);
+    expect(doc.donor).toBeUndefined();
+  });
+
+  test('a wrapper prefix the seat row already has is kept, and the vendor words come before the shell', async () => {
+    place('zsh ~/tools/as-floor.sh claude --model claude-opus-5-5');
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { credentialProbe: present });
+    expect(result.code, result.err).toBe(0);
+    // The wrapper is `exec "$@"`: every assignment word has to precede the shell that reads it,
+    // so the vendor's words go in front of `zsh`, never between the script and the CLI.
+    expect(queue().lead!.to.launch).toBe(ZAI_LINE.replace('claude --model', 'zsh ~/tools/as-floor.sh claude --model'));
+  });
+
+  test("switching away from a vendor line drops the previous vendor's words", async () => {
+    place(DEEPSEEK_LINE);
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'moonshot:kimi-k2.5'], OWNER, { credentialProbe: present });
+    expect(result.code, result.err).toBe(0);
+    const launch = queue().lead!.to.launch;
+    expect(launch).not.toContain('deepseek');
+    expect(launch).toContain('find-generic-password -s kimi-api-key');
+  });
+
+  test('the model rule refuses a vendor it does not allow the seat', async () => {
+    place();
+    setRule('*=!zai');
+    const result = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { credentialProbe: present });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('runs under the lab "zai"');
+    expect(result.err).toContain('does not allow on this seat');
+    expect(queue()).toEqual({});
+  });
+
+  test('a missing credential refuses the queue, naming the item and the add command', async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { credentialProbe: () => 'absent' });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('"glm-api-key"');
+    expect(result.err).toMatch(/add-generic-password -s glm-api-key -a "\$USER" -w\n$/);
+    expect(queue()).toEqual({});
+    const json = await swap(['queue', 'lead', '--to', 'zai:glm-5.3', '--json'], OWNER, { credentialProbe: () => 'absent' });
+    const doc = assertJsonErrorShape(json.out, {
+      id: 'swap.target',
+      repair: '/usr/bin/security add-generic-password -s glm-api-key -a "$USER" -w',
+      messageContains: 'add-generic-password -s glm-api-key',
+    });
+    // The one-time command ends at the prompt flag: nothing follows it, so no secret is in the
+    // words and nothing is read from stdin.
+    expect(doc.error.message).toMatch(/add-generic-password -s glm-api-key -a "\$USER" -w$/);
+  });
+
+  test('an unreadable credential store refuses, never queues', async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'moonshot:kimi-k2.5'], OWNER, {
+      credentialProbe: () => 'unavailable',
+    });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('could not be read');
+    expect(result.err).toContain('kimi-api-key');
+    expect(queue()).toEqual({});
+  });
+
+  test('a name the profile does not know is no vendor target, and the donor route answers', async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'openai:gpt-sol'], OWNER, { credentialProbe: present });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('no seat of the entity this team may copy from runs openai:gpt-sol');
+    // The credential lookup is the adapter's, and it is never asked for a name that is no vendor.
+    let asked = 0;
+    await swap(['queue', 'lead', '--to', 'openai:gpt-sol'], OWNER, {
+      credentialProbe: () => {
+        asked += 1;
+        return 'present';
+      },
+    });
+    expect(asked).toBe(0);
+  });
+
+  test('a model the vendor does not offer refuses and names the ones it does', async () => {
+    place();
+    setRule('*=!anthropic');
+    const result = await swap(['queue', 'lead', '--to', 'zai:glm-4'], OWNER, { credentialProbe: present });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('offers no model "glm-4"');
+    expect(result.err).toContain('glm-5.3');
+    expect(queue()).toEqual({});
+  });
+
+  test('the run writes the vendor into the seat row and reads the model back off the banner', async () => {
+    place();
+    setRule('*=!anthropic');
+    const queued = await swap(['queue', 'lead', '--to', 'zai:glm-5.3'], OWNER, { credentialProbe: present });
+    expect(queued.code, queued.err).toBe(0);
+    // A pane whose welcome box carries the vendor id the launch line names.
+    const world = fakeHerdr({ newScreen: CLAUDE_IDLE.replace('Opus 5.5 · Acme billing', 'glm-5.3 · API Usage Billing') });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    expect(ran.out).toContain('swapped: lead');
+    expect(ran.out).toContain('read-back glm-5.3');
+    const yaml = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
+    const lead = yaml.slice(yaml.indexOf('name: lead'), yaml.indexOf('name: worker'));
+    expect(lead).toContain('cli: claude-code');
+    expect(lead).toContain('vendor: zai');
+    expect(lead).toContain('model: GLM');
+    expect(lead).toContain('version: "5.3"');
+    expect(lead).toContain('display: GLM 5.3');
+    expect(lead).toContain(`launch: ${ZAI_LINE}`);
+    // The line the pane ran is the vendor line the seat row now holds.
+    expect(world.did.runs.join('\n')).toContain('find-generic-password -s glm-api-key');
+    expect(world.did.runs.join('\n')).not.toContain('claude-opus-5-5');
+    expect(queue()).toEqual({});
   });
 });
 

@@ -82,3 +82,33 @@ test('a NUL byte and an unclosed line each have their own reason', () => {
   // shells read it.
   expect(texts(`sh -c "claude $'x'"`)).toEqual(['sh', '-c', "claude $'x'"]);
 });
+
+test('a command substitution is one word, kept as written', () => {
+  // The shell runs the substitution to produce the word, which this reader does not run; its
+  // source text is what a reader can know, and the span is one word for every boundary served
+  // here. A launch line's credential lookup is exactly this shape: spaces inside `$(…)` are the
+  // substitution's, not the line's.
+  expect(texts('claude $(which claude) --model m')).toEqual(['claude', '$(which claude)', '--model', 'm']);
+  expect(
+    texts('ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s item -a "$USER" -w) claude'),
+  ).toEqual(['ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s item -a "$USER" -w)', 'claude']);
+  expect(texts('claude "x $(date) y"')).toEqual(['claude', 'x $(date) y']);
+  expect(texts('claude `date` --model m')).toEqual(['claude', '`date`', '--model', 'm']);
+  expect(texts('claude ${HOME}/x')).toEqual(['claude', '${HOME}/x']);
+  expect(texts('claude $(echo $(date))')).toEqual(['claude', '$(echo $(date))']);
+  expect(texts('claude $(echo ")")')).toEqual(['claude', '$(echo ")")']);
+  expect(texts('claude $(echo `date`)')).toEqual(['claude', '$(echo `date`)']);
+  // A backslash still takes the next character: an escaped `$` opens nothing.
+  expect(texts('claude \\$(date)')).toEqual(['claude', '$(date)']);
+});
+
+test('an unclosed substitution is a line no shell can run', () => {
+  expect(shellWords('claude $(date')).toBeNull();
+  expect(shellWordsReason('claude $(date')).toBe('unclosed');
+  expect(shellWords('claude `date')).toBeNull();
+  expect(shellWordsReason('claude `date')).toBe('unclosed');
+  expect(shellWords('claude ${HOME')).toBeNull();
+  expect(shellWordsReason('claude ${HOME')).toBe('unclosed');
+  expect(shellWords('claude "x $(date"')).toBeNull();
+  expect(shellWordsReason('claude "x $(date"')).toBe('unclosed');
+});
