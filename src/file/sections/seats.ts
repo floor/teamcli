@@ -33,6 +33,12 @@ export const SEAT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  *  keeps loading — the address never means it — and `team check` notes the name. */
 export const LEAD_NAME = 'lead';
 
+/** The daemon's own sender word: a reminder's record and history line read `from: daemon`, with
+ *  no registry id, so no new seat or nickname takes the name — a seat of that name would be
+ *  indistinguishable from the daemon in every record it wrote. A seat already named `daemon`
+ *  keeps loading, like a legacy `lead`. */
+export const DAEMON_NAME = 'daemon';
+
 export const seats: Section = {
   name: 'seats',
   owner: false,

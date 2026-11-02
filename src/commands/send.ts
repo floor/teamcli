@@ -355,6 +355,33 @@ export type WatchSendPrincipal = {
   recheck(): { ok: true } | { ok: false; why: string };
 };
 
+/** One seat a reminder's due instant addresses: the root its team file is loaded from, the
+ *  session that file names, and the declared seat. */
+export type DaemonRecipient = {
+  root: string;
+  session: string;
+  seat: string;
+};
+
+/**
+ * The machine daemon's own principal for one reminder send. It is established only by the
+ * internal `sendDaemonDirect`, after the daemon state record and the single-instance lock prove
+ * this process is the daemon: no command line, no delivery-order request and no io caller can set
+ * it. Admission admits exactly the recipients this principal carries, in their own roots and
+ * sessions; `recheck` is the same identity check, asked again before every transport the walk
+ * could take. A stale record, a replaced daemon or an exception is a refusal, never consent.
+ */
+export type DaemonSendPrincipal = {
+  /** The reminder's name and the wall-clock due key this principal was established for. */
+  reminder: string;
+  due: string;
+  /** The seats this due instant addresses; a target outside the list is refused. */
+  recipients: readonly DaemonRecipient[];
+  /** The roots the daemon hosted when the principal was established. */
+  roots: readonly string[];
+  recheck(): { ok: true } | { ok: false; why: string };
+};
+
 export type SendHost = {
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
@@ -419,6 +446,10 @@ export type SendHost = {
   /** The watch's own sender principal, set only by the internal `sendWatchDirect`. Absent, the
    *  caller is placed from the ordinary sources (`io.caller`, `io.callerSources`, ancestry). */
   watch?: WatchSendPrincipal;
+  /** The machine daemon's own sender principal for a reminder, set only by the internal
+   *  `sendDaemonDirect`. Absent, no daemon send is possible: the ordinary placement never yields
+   *  this kind. */
+  daemon?: DaemonSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
   /** The two external private lists a public-only body is scanned against. Absent (the real
@@ -756,10 +787,12 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   // reader for the session's agents, so a fake host answers it in tests.
   // A direct-work run's caller is the watch principal its internal entry established and
   // verified: the file's own session is the only one it is judged in, and no ambient placement
-  // or io caller is read. Every other run places its caller as it always has.
-  const judged = host.watch === undefined
+  // or io caller is read. A reminder run's caller is the daemon principal its internal entry
+  // established the same way. Every other run places its caller as it always has.
+  const internal = internalCallerOf(host);
+  const judged = internal === null
     ? judgeCallerIn(io, dir, team)
-    : { caller: watchCaller(host.watch), shown: watchCaller(host.watch), session: host.watch.session };
+    : { caller: internal, shown: internal, session: internalSessionOf(host, team) };
   const { caller } = judged;
   const who = logTag(caller);
   const from = senderLabelOf(caller);
@@ -1132,13 +1165,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
   }
-  // The owner-seat door, for a send that is not the watch's own. `--request` records the send and
-  // returns before anything is written; `--approval` and an always rule admit this run, so a
-  // caller with no terminal can send exactly what the owner seat signed. List, confirm and record
-  // keep the terminal check they have always had.
+  // The owner-seat door, for a send that is not an internal principal's own. `--request` records
+  // the send and returns before anything is written; `--approval` and an always rule admit this
+  // run, so a caller with no terminal can send exactly what the owner seat signed. List, confirm
+  // and record keep the terminal check they have always had. The watch's and the daemon's own
+  // principals are established by their internal entries with their own proof, so neither asks
+  // the owner seat and neither can be handed an owner answer.
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   let seatApproved = false;
-  if (host.watch === undefined) {
+  if (internalCallerOf(host) === null) {
     const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources);
     if (step.kind === 'requested') {
       // exit: send.approval-requested
@@ -1151,16 +1186,16 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     seatApproved = step.kind === 'admitted';
   }
   if (
-    host.watch === undefined && !seatApproved && !isOwner(callerOf(io))
+    internalCallerOf(host) === null && !seatApproved && !isOwner(callerOf(io))
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
     seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
   }
-  // The no-terminal refusal judges the ordinary caller. A direct-work run's caller is the watch
-  // principal, established and verified by its internal entry, which may run with no terminal;
-  // it is judged at admission by its own branch, never by the process's placement. An owner-seat
+  // The no-terminal refusal judges the ordinary caller. A direct-work or reminder run's caller is
+  // the principal its internal entry established and verified, which may run with no terminal; it
+  // is judged at admission by its own branch, never by the process's placement. An owner-seat
   // answer has already admitted this run, so the terminal is not asked again.
-  const detached = seatApproved ? undefined : detachedRefusal(host.watch === undefined ? callerOf(io) : watchCaller(host.watch), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
+  const detached = seatApproved ? undefined : detachedRefusal(internalCallerOf(host) ?? callerOf(io), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
     else io.stderr(`team send: ${detached}\n`);
@@ -1251,7 +1286,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1262,7 +1297,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1640,9 +1675,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (evidence !== null) return refuse(io, dir, who, evidence, host, report);
   }
   // The per-transport recheck every direct route reads: a watch principal's actual verifier
-  // always runs, and a guard the caller hands in may only narrow what it allows. It is composed
-  // once here, before the walk, so no route can transport without it and no caller has to
-  // remember to pass one.
+  // always runs, and a guard the caller hands in may only narrow what it allows. A reminder run's
+  // daemon principal is composed the same way. It is composed once here, before the walk, so no
+  // route can transport without it and no caller has to remember to pass one.
   const directGuard = composedGuard(host);
 
   // The delivery walk, in the owner's cascade over the legs the receiving seat's chain resolves
@@ -1840,6 +1875,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     report.deliveryWords = wordsNow(wakeOutcome);
   };
   for (const [at, leg] of walk.entries()) {
+    // A reminder send stands on the daemon principal its internal entry established, and that
+    // identity is rechecked before every leg, whatever the leg can do: a daemon that stopped, a
+    // state record that now names another process, or a heartbeat that stopped answering ends the
+    // walk here with nothing further staged, typed or dialled. An answer that throws is a refusal,
+    // never consent. Every other run reads no daemon guard at all.
+    const daemonIdentity = host.daemon === undefined ? null : guardRefusal(directGuard);
+    if (daemonIdentity !== null) {
+      failures.push(`${leg}: refused: ${daemonIdentity.why}`);
+      markLeg(leg, 'refused', daemonIdentity.why);
+      note(walkAttempt(leg, 'refused', false, host.now(), startedAt, { reason: daemonIdentity.why }));
+      return refuse(io, dir, who, `${to.seat}: the daemon's identity no longer stands (${daemonIdentity.why}); nothing further was sent`, host, report);
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
       // the seat's inbox first, so the push and every later reader carry the same signed copy;
@@ -2862,11 +2909,11 @@ function fallbackAfterNative(
     .filter((leg): leg is PendingNativeFallbackLeg => leg === 'typed' || leg === 'drop');
 }
 
-/** The registry id the sender's record carries, when it has one: the owner and the watch are
- *  named by their reserved words alone, and a declared sender the store holds no record for
- *  carries none. */
+/** The registry id the sender's record carries, when it has one: the owner, the watch and the
+ *  daemon are named by their reserved words alone, and a declared sender the store holds no
+ *  record for carries none. */
 export function senderIdOf(admission: Admission): string | null {
-  if (!admission.ok || admission.sender === 'owner' || admission.sender === 'watch') return null;
+  if (!admission.ok || admission.sender === 'owner' || admission.sender === 'watch' || admission.sender === 'daemon') return null;
   return 'id' in admission.sender ? admission.sender.id : null;
 }
 
@@ -3288,7 +3335,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -3299,7 +3346,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -5945,10 +5992,43 @@ function watchContext(host: SendHost, root: string): { principal: WatchSendPrinc
   return host.watch === undefined ? undefined : { principal: host.watch, root };
 }
 
+/** The caller a reminder run names: the daemon itself, built from the principal
+ *  `sendDaemonDirect` established after the state record and the single-instance lock proved this
+ *  process is the daemon. Like the watch's, it is never derived from io and never from a request. */
+function daemonCaller(): Caller {
+  return { kind: 'daemon' };
+}
+
+/**
+ * The caller an internal entry established for this run, or null for every ordinary run. The two
+ * internal entries are the watch's direct-work send and the daemon's reminder send; each verified
+ * its own authority before the run began and carries the principal that proved it. Nothing else in
+ * the program reaches this: `placeCaller` never yields either kind, and no command line or io seam
+ * can set one.
+ */
+function internalCallerOf(host: SendHost): Caller | null {
+  if (host.watch !== undefined) return watchCaller(host.watch);
+  if (host.daemon !== undefined) return daemonCaller();
+  return null;
+}
+
+/** The session an internal principal is judged in: the watch's captured session, or the team
+ *  file's own for the daemon, which stands in no terminal and has no session of its own. */
+function internalSessionOf(host: SendHost, team: TeamFile): string {
+  return host.watch?.session ?? team.session;
+}
+
+/** The daemon context admission reads, or undefined for an ordinary run: the verified principal
+ *  and the root this run actually loaded, compared canonically like the watch's. */
+function daemonContext(host: SendHost, root: string): { principal: DaemonSendPrincipal; root: string } | undefined {
+  return host.daemon === undefined ? undefined : { principal: host.daemon, root };
+}
+
 /** The sender label a record and a history line carry: a seat's name, the reserved word `watch`
- *  for the watch's own direct-work principal, or `owner` for every other non-seat. */
+ *  for the watch's own direct-work principal, `daemon` for the daemon's reminder principal, or
+ *  `owner` for every other non-seat. */
 function senderLabelOf(caller: Caller): string {
-  return caller.kind === 'seat' ? caller.name : caller.kind === 'watch' ? 'watch' : 'owner';
+  return caller.kind === 'seat' ? caller.name : caller.kind === 'watch' ? 'watch' : caller.kind === 'daemon' ? 'daemon' : 'owner';
 }
 
 /** One direct route's recheck, read as a refusal on any refusal or throw: a guard that cannot
@@ -5968,11 +6048,21 @@ function guardRefusal(guard: (() => { ok: true } | { ok: false; why: string }) |
  * principal's actual verifier always runs first: it is composed here, from the principal the run
  * carries, so a caller that omits its own guard — or hands in one that always allows — cannot
  * replace it. A caller's guard, when present, may only narrow the principal's verdict, and a
- * refusal from either stands. Every other direct walk keeps exactly the guard it was given.
+ * refusal from either stands. The daemon's reminder principal is composed the same way. Every
+ * other direct walk keeps exactly the guard it was given.
  */
 function composedGuard(host: SendHost): (() => { ok: true } | { ok: false; why: string }) | undefined {
   const principal = host.watch;
-  if (principal === undefined) return host.direct?.guard;
+  if (principal === undefined) {
+    const daemon = host.daemon;
+    if (daemon === undefined) return host.direct?.guard;
+    const narrowing = host.direct?.guard;
+    return () => {
+      const mine = guardRefusal(() => daemon.recheck());
+      if (mine !== null) return mine;
+      return guardRefusal(narrowing) ?? { ok: true };
+    };
+  }
   const narrowing = host.direct?.guard;
   return () => {
     const mine = guardRefusal(() => principal.recheck());
@@ -6016,7 +6106,7 @@ function declaredPlacementProblem(caller: Caller, name: string, at: SeatStanding
 /** Why the send is admitted, and the rule that admitted it — or why it is not. A refusal carries
  *  `grantInvalid` when it is the send-grant refusal proper: a record names the pair but is not
  *  signed by the owner, so the words name the record and the line that re-issues it signed. */
-export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' | 'watch' } | { ok: false; why: string; grantInvalid?: boolean };
+export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' | 'watch' | 'daemon' } | { ok: false; why: string; grantInvalid?: boolean };
 
 /**
  * The authority rule for this send: `admitSend`, over the registry's own records, default deny.
@@ -6068,9 +6158,11 @@ export function admissionOf(
   at: SeatStanding,
   reply?: ReplyContext,
   watch?: { principal: WatchSendPrincipal; root: string },
+  daemon?: { principal: DaemonSendPrincipal; root: string },
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   if (caller.kind === 'watch') return watchAdmissionOf(caller, team, target, seatName, watch);
+  if (caller.kind === 'daemon') return daemonAdmissionOf(team, target, seatName, daemon);
   const record = recordFor(home, team.session, caller.kind === 'seat' ? caller.name : '');
   // A record is bound to a call only where the call stands as it: the record's own seat, running,
   // on the pane the record holds, in its session, and on the pane the state records for that seat
@@ -6180,6 +6272,59 @@ function watchAdmissionOf(
   return { ok: true, rule: "the watch's direct-work authority", sender: 'watch' };
 }
 
+/**
+ * The daemon's own admission. The daemon is no seat either: its authority is the principal
+ * `sendDaemonDirect` established after the state record and the single-instance lock proved this
+ * process is the daemon. It admits exactly what a reminder's due instant addresses — one declared,
+ * non-human seat of a team file in a checkout the daemon hosted, in that file's session, matched
+ * canonically against the verified principal's recipient list — and nothing else. A resolved
+ * address is read only where it resolves to the same root, session and seat; every other address,
+ * grant, file or reply refuses. The target may never be the owner or a person's pane.
+ */
+function daemonAdmissionOf(
+  team: TeamFile,
+  target: Pick<Target, 'team' | 'agent'> | null,
+  seatName: string,
+  daemon: { principal: DaemonSendPrincipal; root: string } | undefined,
+): Admission {
+  if (daemon === undefined) {
+    return { ok: false, why: 'the daemon sends only through its own internal entry; no principal stands behind this run' };
+  }
+  // The checkouts the daemon hosted when the principal was established, canonically: a team file
+  // with the same session name in a checkout it did not host is another team.
+  if (!daemon.principal.roots.some((hosted) => samePath(hosted, daemon.root))) {
+    return { ok: false, why: 'the daemon was verified for the checkouts it hosted, and this run loaded a checkout it did not: same session names do not make another team' };
+  }
+  // A resolved address is allowed only when it is the plain declared seat this same file names;
+  // an agent id, nickname or another team's seat is a spec a reminder never carries.
+  if (target !== null) {
+    if (!samePath(target.team.root, daemon.root)) {
+      return { ok: false, why: `${target.agent.reach.seat}: it resolves to another team's record, and the daemon addresses a seat of a checkout it hosts only` };
+    }
+    if (seatName !== target.agent.reach.seat || target.agent.reach.session !== team.session) {
+      return { ok: false, why: `${seatName}: the daemon addresses a declared seat by its own name and session, never a resolved spec` };
+    }
+  }
+  const seat = target === null ? seatName : target.agent.reach.seat;
+  if (seat === 'owner') {
+    return { ok: false, why: 'owner: the daemon addresses a declared seat of a team it hosts, never the owner' };
+  }
+  // The recipient list the due instant carries is the whole of what this principal may address:
+  // a declared seat that is not on it was not due, and is refused before anything is staged.
+  const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
+  if (!addressed) {
+    return { ok: false, why: `${seat}: the reminder's due instant does not address this seat in this team; nothing was sent` };
+  }
+  const declared = team.seats.find((entry) => entry.name === seat);
+  if (declared === undefined) {
+    return { ok: false, why: `${seat}: it is not a declared seat; the daemon addresses a seat of a team it hosts only` };
+  }
+  if (declared.human === true) {
+    return { ok: false, why: `${seat}: the pane is a person's, and the daemon addresses seats only` };
+  }
+  return { ok: true, rule: "the daemon's reminder authority", sender: 'daemon' };
+}
+
 /** Whether two paths name the same place canonically; an unreadable side is not the same place. */
 function samePath(left: string, right: string): boolean {
   try {
@@ -6188,7 +6333,6 @@ function samePath(left: string, right: string): boolean {
     return false;
   }
 }
-
 /**
  * Why the watch's target is not the exact seat its own pass read, or null when it is. The watch
  * wakes a seat the registry holds a running record for, and the record, the state and the pass

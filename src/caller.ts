@@ -31,6 +31,13 @@ export type Caller =
   // carry it. It is a non-seat sender: admission never reads it as a seat, it never falls back to
   // the owner label, and it may never address the owner.
   | { kind: 'watch'; session: string; pane?: string }
+  // The machine daemon's own principal for a reminder's send: established internally by
+  // `sendDaemonDirect` after the daemon state record and its single-instance lock prove this
+  // process is the daemon, and never returned by `placeCaller`. No command line sets it and no io
+  // seam of the ordinary CLI can carry it. It is a non-seat sender: admission never reads it as a
+  // seat, it never falls back to the owner label, and it may never address the owner or a
+  // person's pane.
+  | { kind: 'daemon' }
   | { kind: 'unplaced'; reason: string };
 
 export type Process = { pid: number; name: string };
@@ -469,6 +476,7 @@ export function describeCaller(caller: Caller): string {
     return `it runs in pane ${caller.session}/${caller.pane}, which no grant lists`;
   }
   if (caller.kind === 'watch') return 'the watch';
+  if (caller.kind === 'daemon') return 'the daemon';
   return `unplaced (${caller.reason})`;
 }
 
@@ -483,6 +491,7 @@ export function logTag(caller: Caller): string {
   // `describeCaller` and is not this bracket.
   if (caller.kind === 'pane') return caller.session === undefined ? caller.pane : `${caller.session}/${caller.pane}`;
   if (caller.kind === 'watch') return 'watch';
+  if (caller.kind === 'daemon') return 'daemon';
   return caller.name;
 }
 
