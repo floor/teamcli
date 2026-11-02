@@ -1,10 +1,13 @@
 // The event bus service over `.agents/bus.sock` (RFC 002 Amendment 01 §4.2, §4.4).
 //
 // A dedicated process beside the broker with its own Unix domain socket (`.agents/bus.sock`,
-// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports two
+// mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
 //   live subscribers with bounded per-subscriber buffers.
+// - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
+//   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
+//   misaddressed record delivers nothing, and the nudge carries no authority of its own.
 // - `subscribe`: validates the subscriber and any self-subscribed `kinds` against the
 //   privileged-kind ban (`privileged-self-subscription`, raising `team.policy-refused` on
 //   violation), reads unseen events from `cursor`, answers `gap` with `oldest_seq` when the
@@ -21,6 +24,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -58,10 +62,12 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
-import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
+import { createReconcileState, reconcilePassAsync, RECORD_NAME } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import { makeWebhookDelivery } from './webhook.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
+import { readSealedRecord, recordAuthOfSealed, sameFolder } from '../send/record.ts';
+import { messageKeyState } from '../store/keys.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -120,6 +126,14 @@ export type BusPublishRequest = {
   event: EventAppendInput;
 };
 
+/** The one thing a nudge may name: a record the bus re-reads and verifies itself. */
+export type BusNudgeRequest = {
+  op: 'nudge';
+  session: string;
+  seat: string;
+  record_id: string;
+};
+
 export type BusSubscribeRequest = {
   op: 'subscribe';
   seat: string;
@@ -129,10 +143,11 @@ export type BusSubscribeRequest = {
   follow?: boolean;
 };
 
-export type BusRequest = BusPublishRequest | BusSubscribeRequest;
+export type BusRequest = BusPublishRequest | BusNudgeRequest | BusSubscribeRequest;
 
 export type BusAnswer =
   | { ok: true; kind: 'published'; event: SignedEventRecord; duplicate: boolean }
+  | { ok: true; kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
   | { ok: true; kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | { ok: true; kind: 'event'; event: SignedEventRecord }
   | {
@@ -430,6 +445,18 @@ export function parseBusRequest(line: string): BusRequest | null {
     return { op: 'publish', event: rest };
   }
 
+  if (obj.op === 'nudge') {
+    const keys = Object.keys(obj);
+    if (keys.length !== 4 || !keys.every((k) => k === 'op' || k === 'session' || k === 'seat' || k === 'record_id')) return null;
+    const session = obj.session;
+    const seat = obj.seat;
+    const recordId = obj.record_id;
+    if (typeof session !== 'string' || !RECORD_NAME.test(session)) return null;
+    if (typeof seat !== 'string' || !RECORD_NAME.test(seat)) return null;
+    if (typeof recordId !== 'string' || !RECORD_NAME.test(recordId)) return null;
+    return { op: 'nudge', session, seat, record_id: recordId };
+  }
+
   if (obj.op === 'subscribe') {
     const allowed = new Set(['op', 'seat', 'pane', 'cursor', 'kinds', 'follow']);
     for (const k of Object.keys(obj)) {
@@ -481,6 +508,13 @@ export function parseBusAnswer(line: string): BusAnswer | null {
       const rec = parseSignedEventLine(JSON.stringify(obj.event));
       if (!rec || typeof obj.duplicate !== 'boolean') return null;
       return { ok: true, kind: 'published', event: rec, duplicate: obj.duplicate };
+    }
+    if (obj.kind === 'nudged') {
+      if (typeof obj.duplicate !== 'boolean') return null;
+      if (obj.event === null) return { ok: true, kind: 'nudged', event: null, duplicate: obj.duplicate };
+      const rec = parseSignedEventLine(JSON.stringify(obj.event));
+      if (!rec) return null;
+      return { ok: true, kind: 'nudged', event: rec, duplicate: obj.duplicate };
     }
     if (obj.kind === 'events') {
       if (!Array.isArray(obj.events) || typeof obj.cursor !== 'number' || !Number.isInteger(obj.cursor) || obj.cursor < 0) {
@@ -947,6 +981,51 @@ function serveBusConnection(
   });
 }
 
+/**
+ * The arrival a nudge may raise, built only after the bus has read and verified the signed
+ * record the request names. The request carries no field the event repeats, and the bus resolves
+ * the drop folder itself, so a caller can neither point at another seat's record nor invent a
+ * sender: what the event says is what the signed file says. A record that is missing, not a
+ * message, or not addressed to this seat, session and root raises nothing.
+ */
+function verifiedArrival(request: BusNudgeRequest, input: StartBusInput, home: string): EventAppendInput | null {
+  // This bus scans one session's drop folders; a session it does not serve is not its record.
+  if (request.session !== input.team.session) return null;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return null;
+  const dir = join(input.root, '.agents', 'send-drops', request.session, request.seat);
+  // A linked ancestor — the session's or the seat's — could lead into another project, and the
+  // record it holds there is not this project's to raise. The record's own read refuses a linked
+  // file; this refuses the folders above it.
+  let expected: string;
+  let realDir: string;
+  try {
+    expected = join(realpathSync(input.root), '.agents', 'send-drops', request.session, request.seat);
+    realDir = realpathSync(dir);
+  } catch {
+    return null;
+  }
+  if (realDir !== expected) return null;
+  const read = readSealedRecord(join(dir, request.record_id));
+  if (!read.ok || read.sealed === null) return null;
+  const auth = recordAuthOfSealed(read.sealed, key.key);
+  if (auth.kind !== 'ok') return null;
+  const record = auth.value.payload;
+  if (record.kind !== 'message') return null;
+  if (record.id !== request.record_id) return null;
+  if (record.to !== request.seat || record.session !== request.session) return null;
+  if (!sameFolder(record.root, input.root)) return null;
+  return {
+    ts: record.at,
+    kind: 'message.arrived',
+    session: request.session,
+    record_id: request.record_id,
+    from: record.from,
+    to: record.to,
+    ...(record.thread === undefined ? {} : { thread: record.thread }),
+  };
+}
+
 function dispatchBusRequest(
   socket: Socket,
   line: string,
@@ -986,6 +1065,32 @@ function dispatchBusRequest(
       event: appended.record,
       duplicate: appended.duplicate,
     });
+    return;
+  }
+
+  if (request.op === 'nudge') {
+    const event = verifiedArrival(request, input, home);
+    if (event === null) {
+      // Nothing verified, so nothing is appended and no adapter is posted. The send's own record
+      // may still be landing; its reader's poll and the next pass both find it if it does.
+      answerOnce(socket, { ok: true, kind: 'nudged', event: null, duplicate: false });
+      return;
+    }
+    const appended = appendEvent(input.team.project, input.root, home, event, {
+      maxBytes: input.maxLogBytes,
+      kept: input.keptLogFiles,
+      maxTotalBytes: input.maxTotalLogBytes,
+      retentionSeconds: input.retentionSeconds,
+      deduplicate: true,
+    });
+    if (!appended.ok) {
+      answerOnce(socket, { ok: false, at: 'write', message: appended.reason });
+      return;
+    }
+    if (!appended.duplicate) {
+      fanOut(appended.record);
+    }
+    answerOnce(socket, { ok: true, kind: 'nudged', event: appended.record, duplicate: appended.duplicate });
     return;
   }
 
@@ -1150,19 +1255,30 @@ export type BusPublishOutcome =
   | { kind: 'wrong' }
   | { kind: 'deadline' };
 
-export function publishToBus(
-  root: string,
-  event: EventAppendInput,
-  options: { deadlineMs?: number } = {},
-): Promise<BusPublishOutcome> {
-  const deadlineMs = options.deadlineMs ?? BUS_DEADLINE_MS;
-  const request: BusPublishRequest = { op: 'publish', event };
+/** What a nudge heard back. `event: null` is the bus saying the record did not verify: nothing
+ *  was appended and no adapter was posted. */
+export type BusNudgeOutcome =
+  | { kind: 'nudged'; event: SignedEventRecord | null; duplicate: boolean }
+  | { kind: 'refused'; at: 'caller' | 'policy' | 'write'; message: string }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+type BusAsk =
+  | { kind: 'answer'; answer: BusAnswer }
+  | { kind: 'unavailable' }
+  | { kind: 'wrong' }
+  | { kind: 'deadline' };
+
+/** One request to a running bus, bounded by `deadlineMs`. The socket is the bus's own: a bus
+ *  that is not serving refuses the connection, and the caller hears `unavailable`. */
+function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<BusAsk> {
   return new Promise((done) => {
     let settled = false;
     let connected = false;
     let buffer = '';
     const socket = connect(busSocket(root));
-    const finish = (outcome: BusPublishOutcome) => {
+    const finish = (outcome: BusAsk) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1187,19 +1303,47 @@ export function publishToBus(
         finish({ kind: 'wrong' });
         return;
       }
-      if (!parsed.ok) {
-        finish({ kind: 'refused', at: parsed.at, message: parsed.message });
-        return;
-      }
-      if (parsed.kind !== 'published') {
-        finish({ kind: 'wrong' });
-        return;
-      }
-      finish({ kind: 'published', event: parsed.event, duplicate: parsed.duplicate });
+      finish({ kind: 'answer', answer: parsed });
     });
     socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
     socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
   });
+}
+
+export async function publishToBus(
+  root: string,
+  event: EventAppendInput,
+  options: { deadlineMs?: number } = {},
+): Promise<BusPublishOutcome> {
+  const asked = await askBus(root, { op: 'publish', event }, options.deadlineMs ?? BUS_DEADLINE_MS);
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'published') return { kind: 'wrong' };
+  return { kind: 'published', event: answer.event, duplicate: answer.duplicate };
+}
+
+/**
+ * Tells the bus serving `root` that a signed record has landed, naming it and nothing else. The
+ * bus resolves the drop folder, re-reads the file and verifies its signature before it appends
+ * anything, so the nudge grants no authority the record does not already carry. Best effort: a
+ * bus that is not running, refuses or answers slowly leaves the caller as it was.
+ */
+export async function nudgeBus(
+  root: string,
+  record: { session: string; seat: string; record_id: string },
+  options: { deadlineMs?: number } = {},
+): Promise<BusNudgeOutcome> {
+  const asked = await askBus(
+    root,
+    { op: 'nudge', session: record.session, seat: record.seat, record_id: record.record_id },
+    options.deadlineMs ?? BUS_DEADLINE_MS,
+  );
+  if (asked.kind !== 'answer') return asked;
+  const answer = asked.answer;
+  if (!answer.ok) return { kind: 'refused', at: answer.at, message: answer.message };
+  if (answer.kind !== 'nudged') return { kind: 'wrong' };
+  return { kind: 'nudged', event: answer.event, duplicate: answer.duplicate };
 }
 
 export type BusSubscribeOutcome =

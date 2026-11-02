@@ -189,7 +189,8 @@ export function createReconcileState(): ReconcileState {
   };
 }
 
-const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+/** One seat folder or record name: the names this pass and the bus's nudge both admit. */
+export const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 /** The share of the event loop one async pass takes between turns. */
 export const DEFAULT_RECONCILE_SLICE_MS = 8;
 /** How long the async driver keeps retrying a deferred append while the event lock is held: the

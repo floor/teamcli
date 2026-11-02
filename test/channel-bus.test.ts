@@ -172,7 +172,7 @@ async function deliver(at: Place, from: string, to: string, body: string, extra:
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const t0 = performance.now();
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, at.home), null, 2)}\n`, { mode: 0o600 });
-  if (announce) await announceArrival(payload, () => new Date());
+  if (announce) await announceArrival(payload);
   return { id, t0 };
 }
 
