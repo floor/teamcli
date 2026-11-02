@@ -1690,7 +1690,9 @@ describe('under the registry source', () => {
           expect(read.level).toBe('team');
           expect(read.why).toContain("the registry's record of this team cannot be read: ");
           expect(read.why).toContain(record);
-          expect(read.why).toContain('JSON Parse error');
+          // The refusal names the fault in fixed words: the parser's own message quotes the
+          // record's text back, and a record may hold anything.
+          expect(read.why).toContain('the record is not valid JSON');
         }
       });
       expect(realRegistryTouched()).toBe(false);

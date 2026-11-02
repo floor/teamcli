@@ -1155,7 +1155,9 @@ describe('team restart <seat>', () => {
         expect(io.out).toBe('');
         expect(io.err).toContain("team restart: the registry's record of this team cannot be read: ");
         expect(io.err).toContain(record);
-        expect(io.err).toContain('JSON Parse error');
+        // The refusal names the fault in fixed words: the parser's own message quotes the
+        // record's text back, and a record may hold anything.
+        expect(io.err).toContain('the record is not valid JSON');
       }
       expect(did.typed).toEqual([]);
       expect(did.closed).toEqual([]);
