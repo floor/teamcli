@@ -160,3 +160,16 @@ test('a non-Grok plan does not create or request a Grok profile', () => {
   const w = world(), op = planned(w, 'cursor-agent', 'cursor');
   expect(op.command).not.toContain('team-seat-orbit'); expect(existsSync(w.file)).toBe(false);
 });
+
+test('a header-looking line inside a multiline string is preserved while the real profile is updated', async () => {
+  const w = world();
+  writeFileSync(w.file, 'notes = """\n[profiles.team-seat-orbit]\nextends = "quoted prose"\nread_write = ["not a grant"]\n"""\n[profiles.team-seat-orbit]\nextends = "old"\nread_write = ["/old"]\ncustom = "real table field"\n');
+  const before = parsed(w);
+  expect(before.notes).toContain('[profiles.team-seat-orbit]');
+  expect(before.profiles['team-seat-orbit'].custom).toBe('real table field');
+  await launch(w);
+  const after = parsed(w);
+  expect(after.notes).toBe(before.notes);
+  expectGrants(w);
+  expect(ownProfile(w).custom).toBe('real table field');
+});
