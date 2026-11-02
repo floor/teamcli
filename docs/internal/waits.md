@@ -55,6 +55,12 @@ when that team upgrades, so the cost is delivery latency, not loss. Do not use t
 cross-team until the machine's build train is past the reader release; a team's own seats are
 that team's to keep on one build.
 
+A build that reads `message_kind` but not one of its values serves the record as a plain message:
+the unknown value is dropped, never interpreted, so a later release can add kinds without older
+readers refusing the records that carry them. Only a field NAME a build does not read is
+unsupported. Adding a value is the compatible half of the same rule; adding a field still waits
+for the releases that must read it.
+
 This — reader first, writer a release later — is the pattern for every optional signed field: the
 builds that must accept a field are the ones already running when it is first written.
 

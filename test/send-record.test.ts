@@ -20,6 +20,7 @@ import {
   RECEIPT_STATUSES,
   recordFile,
   recordNameOk,
+  recordHolds,
   recordPayloadOf,
   signReceiptPayload,
   signRecord,
@@ -90,6 +91,22 @@ describe('the record a send writes', () => {
       expect(read.record.payload.to_id).toBe('agent-lead');
       expect(read.record.payload.rule).toBe('the owner writes to any seat');
       expect(verifyRecord(read.record, messageKeyOf(s.home))).toBe(true);
+    } finally {
+      s.done();
+    }
+  });
+
+  test('the comparison reads the kind and the work item, not only the message', () => {
+    const s = scratch();
+    try {
+      const one = payload({ message_kind: 'task', work: '#1201' });
+      const written = writeRecord(s.dropDir, signRecord(one, s.home));
+      if (!written.ok) throw new Error(written.reason);
+      expect(recordHolds(written.path, one, s.home)).toBe(true);
+      // The fields a send added carry what the message is; a record holding another kind or
+      // another work item is not the one the caller expected.
+      expect(recordHolds(written.path, { ...one, message_kind: 'question' }, s.home)).toBe(false);
+      expect(recordHolds(written.path, { ...one, work: '#1202' }, s.home)).toBe(false);
     } finally {
       s.done();
     }

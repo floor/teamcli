@@ -334,7 +334,9 @@ export type RecordProjection = { payload: RecordPayload; unknown: string[] };
  * is not the shape this version writes. `thread` and the admitting rule are required: every
  * record carries them. Unknown signed fields do not fail the projection: they are returned as
  * `unknown`, and the caller decides — after the signature over the raw payload has been checked
- * — that it cannot act on a record carrying them.
+ * — that it cannot act on a record carrying them. A known field with a value this version does
+ * not know is the one exception: a message kind from a newer writer is dropped, so the record
+ * reads as a plain message instead of freezing every older reader out of it.
  */
 export function projectRecord(value: unknown): RecordProjection | null {
   if (!isRecordValue(value)) return null;
@@ -350,7 +352,7 @@ export function projectRecord(value: unknown): RecordProjection | null {
   if (value.from_id === undefined || value.to_id === undefined) return null;
   if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
   if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
-  if (value.message_kind !== undefined && (typeof value.message_kind !== 'string' || !isMessageKind(value.message_kind))) return null;
+  if (value.message_kind !== undefined && typeof value.message_kind !== 'string') return null;
   if (value.work !== undefined && !nonEmpty(value.work)) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
@@ -375,7 +377,10 @@ export function projectRecord(value: unknown): RecordProjection | null {
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
   if (value.subject !== undefined) payload.subject = value.subject as string;
-  if (value.message_kind !== undefined) payload.message_kind = value.message_kind as MessageKind;
+  // A known field carrying a value this version does not know is read as the plain message it
+  // is: the kind is dropped, never interpreted, so a newer writer's kind cannot make an older
+  // reader refuse the record. An unknown field NAME stays unsupported, as RECORD_FIELDS says.
+  if (value.message_kind !== undefined && isMessageKind(value.message_kind)) payload.message_kind = value.message_kind;
   if (value.work !== undefined) payload.work = value.work as string;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
@@ -804,7 +809,7 @@ export function recordHolds(path: string, expected: RecordPayload, home: string,
   const auth = recordAuthOfSealed(read.sealed, key.key);
   if (auth.kind !== 'ok') return false;
   const held = auth.value.payload;
-  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
+  const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
   for (const field of fields) {
     if (field === 'body' && options?.body === false) continue;
     if (field === 'to_id' && options?.to_id === false) continue;
