@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
+import { parseToml } from './toml.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
@@ -201,8 +202,7 @@ function sameValue(actual: unknown, wanted: unknown): boolean {
  *  error tells the caller why, and the launch continues without the profile. */
 function parseSandbox(text: string, prefix = 'the sandbox file is not valid TOML'): Record<string, unknown> {
   try {
-    const parsed: unknown = Bun.TOML.parse(text);
-    return parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    return parseToml(text);
   } catch (error) {
     const said = error instanceof Error ? error.message : String(error);
     throw new Error(`${prefix} (${said}); it was left as it is`);
