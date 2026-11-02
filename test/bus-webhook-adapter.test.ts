@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
 import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRequest, webhookRoutesOf } from '../src/bus/webhook.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -69,13 +70,17 @@ function files(base: string, url: string, secret = 'synthetic-secret-value'): { 
 }
 
 /** The team file the bus is started with: one webhook seat. */
-function teamWith(base: string, webhook: { urlFile: string; secretFile: string; header?: string; body?: string } | null) {
+function teamWith(
+  base: string,
+  webhook: { urlFile: string; secretFile: string; header?: string; body?: string; timeoutMs?: number } | null,
+) {
   const row = webhook === null ? '' : [
     '    webhook:',
     `      url_file: ${JSON.stringify(webhook.urlFile)}`,
     `      secret_file: ${JSON.stringify(webhook.secretFile)}`,
     ...(webhook.header === undefined ? [] : [`      header: ${JSON.stringify(webhook.header)}`]),
     ...(webhook.body === undefined ? [] : [`      body: ${webhook.body}`]),
+    ...(webhook.timeoutMs === undefined ? [] : [`      timeout_ms: ${String(webhook.timeoutMs)}`]),
     '',
   ].join('\n');
   const text = `format: 1
@@ -386,11 +391,13 @@ for (const mode of ['header', 'default'] as const) {
       report: said.report,
     });
 
+    // The 3xx was read, so the request was sent: a failure, and never a second POST.
     expect(outcome).toBe('failed');
     expect(hop.hits.length).toBe(1);
     expect(target.hits.length).toBe(0);
     expect(said.lines.length).toBe(1);
-    expect(said.lines[0]).toContain('not delivered after 1 attempts');
+    expect(said.lines[0]).toContain('not delivered after 1 attempt');
+    expect(said.lines[0]).toContain('a redirect the adapter does not follow');
     expect(hop.hits[0]?.body).not.toContain('synthetic-secret-value');
   });
 }
@@ -460,7 +467,7 @@ test('the inbox shape posts only a record addressed to this seat, session and pr
   }
 });
 
-test('a non-2xx answer keeps the drop and stops after three attempts, in plain words', async () => {
+test('a non-2xx answer is reported and never asked for twice: the routine was reached', async () => {
   const base = scratch();
   const hook = files(base, '');
   const get = receiver(() => new Response('no', { status: 500 }));
@@ -477,16 +484,38 @@ test('a non-2xx answer keeps the drop and stops after three attempts, in plain w
   });
 
   expect(outcome).toBe('failed');
-  expect(get.hits.length).toBe(3);
+  // The routine answered, so the body reached it: one POST, never a second run.
+  expect(get.hits.length).toBe(1);
   expect(said.lines.length).toBe(1);
   expect(said.lines[0]).toContain('iris');
-  expect(said.lines[0]).toContain('not delivered after 3 attempts');
+  expect(said.lines[0]).toContain('not delivered after 1 attempt');
   expect(said.lines[0]).toContain('HTTP 500');
   expect(said.lines[0]).toContain('the drop file stays in place');
   expect(readFileSync(drop, 'utf8')).toBe('hello from the bus scene\n');
 });
 
-test('a receiver that never answers times out, keeps the drop, and the retries are bounded', async () => {
+test('a row that names its answer bound sets how long the delivery waits', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Promise<Response>(() => {}));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const said = quiet();
+
+  await deliverWebhook({
+    seat: 'iris',
+    webhook: { ...hook, timeoutMs: 60 },
+    record: arrival(),
+    // No timeout in the injected policy: the row's own bound is the one that must apply.
+    policy: { attempts: 1 },
+    report: said.report,
+  });
+
+  expect(get.hits.length).toBe(1);
+  expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('no answer within 60 ms');
+});
+
+test('a receiver that never answers is sent one body and reported sent, response unknown', async () => {
   const base = scratch();
   const hook = files(base, '');
   const get = receiver(() => new Promise<Response>(() => {}));
@@ -502,11 +531,80 @@ test('a receiver that never answers times out, keeps the drop, and the retries a
     report: said.report,
   });
 
-  expect(outcome).toBe('failed');
-  expect(get.hits.length).toBe(2);
+  // The body may have reached the routine: no retry, one POST, and the drop stays.
+  expect(outcome).toBe('sent-unknown');
+  expect(get.hits.length).toBe(1);
   expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('sent, response unknown');
   expect(said.lines[0]).toContain('no answer within 50 ms');
+  expect(said.lines[0]).toContain('not retried');
   expect(readFileSync(drop, 'utf8')).toBe('hello from the bus scene\n');
+});
+
+test('a connection that was never made is retried within the bound', async () => {
+  // The measured shapes: the plain runtime wraps a refused connection in a TypeError whose cause
+  // carries the code; this runtime raises the code on the error itself. Both prove the request
+  // never left, so both are retried; the last failure is what the report names.
+  const shapes = [
+    Object.assign(new TypeError('Unable to connect. Is the computer able to access the url?'), { code: 'ConnectionRefused' }),
+    Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }),
+  ];
+  for (const shape of shapes) {
+    const base = scratch();
+    const hook = files(base, 'http://127.0.0.1:1/routine');
+    const said = quiet();
+    let calls = 0;
+
+    const outcome = await deliverWebhook({
+      seat: 'iris',
+      webhook: hook,
+      record: arrival(),
+      policy: { timeoutMs: 1000, attempts: 3, backoffMs: [1, 1] },
+      report: said.report,
+      fetch: (() => {
+        calls += 1;
+        throw shape;
+      }) as unknown as typeof fetch,
+    });
+
+    expect(outcome).toBe('failed');
+    expect(calls).toBe(3);
+    expect(said.lines.length).toBe(1);
+    expect(said.lines[0]).toContain('not delivered after 3 attempts');
+    expect(said.lines[0]).toContain('could not connect (');
+  }
+});
+
+test('a server that reads the body and answers after the bound gets exactly one request', async () => {
+  // The acceptance scene: the routine takes the body, then runs past the delivery's bound. The
+  // second request would be a second run far side, so there is none, and the delivery says what
+  // it saw: sent, response unknown.
+  const base = scratch();
+  const hook = files(base, '');
+  const bodies: string[] = [];
+  const get = receiver(async (hit) => {
+    bodies.push(hit.body);
+    await Bun.sleep(300);
+    return new Response('ok', { status: 200 });
+  });
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const said = quiet();
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: hook,
+    record: arrival(),
+    policy: { timeoutMs: 60, attempts: 3, backoffMs: [1, 1] },
+    report: said.report,
+  });
+
+  expect(outcome).toBe('sent-unknown');
+  expect(get.hits.length).toBe(1);
+  expect(bodies.length).toBe(1);
+  expect(bodies[0]).toContain('"kind":"message.arrived"');
+  expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('sent, response unknown');
+  expect(said.lines[0]).toContain('not retried');
 });
 
 test('the default wait between attempts runs under the plain runtime', async () => {
@@ -782,6 +880,185 @@ test('a running bus posts the inbox shape for a seat whose row names it', async 
   }
 });
 
+test('a fixture inbox with side files beside its record posts once, and never reads one as a record', async () => {
+  // The watch, the channel and a thread close leave marker files beside the record. Their names
+  // match a record's shape, but none is a message: a scan that raises one asks the inbox shape to
+  // read it and gets "the record is not a signed record". The record itself is the only arrival.
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  signedDrop(base, root, MESSAGE_ID);
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  for (const side of [`${MESSAGE_ID}.reported`, `${MESSAGE_ID}.wake`, `${MESSAGE_ID}.channel-push.json`]) {
+    writeFileSync(join(dir, side), `${JSON.stringify({ id: MESSAGE_ID })}\n`);
+  }
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, { ...hook, body: 'inbox' }),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    for (let i = 0; i < 200 && get.hits.length === 0; i += 1) await Bun.sleep(10);
+    // A second pass sees the same folder; a side file raised as an arrival would be read now.
+    await started.handle.reconcileNow();
+    expect(get.hits.length).toBe(1);
+    expect(get.hits[0]?.body).toContain(MESSAGE_ID);
+    const said = lines.join('\n');
+    expect(said).not.toContain('not a signed record');
+    expect(said).not.toContain(`the message record ${MESSAGE_ID}.reported`);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus records a failed delivery on the seat\'s state row', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('no', { status: 500 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  // The seat's launch record: the bus writes facts onto an existing row, never invents one.
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stateDir: dir,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.record_id).toBe(MESSAGE_ID);
+    expect(record?.outcome).toBe('failed');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('HTTP 500');
+    expect(Number.isNaN(Date.parse(record?.at ?? ''))).toBe(false);
+    // The record repeats no secret, and the bus's own line still names the failure.
+    expect(JSON.stringify(record)).not.toContain('synthetic-secret-value');
+    expect(lines.join('\n')).toContain('not delivered after 1 attempt');
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus records a 2xx answer as delivered, and says nothing', async () => {
+  // The other side of the policy's line: delivered is only ever the routine's 2xx, and a
+  // successful delivery prints no failure sentence, so the state record is the reading.
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stateDir: dir,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.record_id).toBe(MESSAGE_ID);
+    expect(record?.outcome).toBe('delivered');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('HTTP 204');
+    expect(get.hits.length).toBe(1);
+    expect(lines.join('\n')).not.toContain('not delivered');
+    expect(lines.join('\n')).not.toContain('sent, response unknown');
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus records a late answer as sent, response unknown, with one request', async () => {
+  // The row names its own bound; the routine takes the body and answers well after it. The seat's
+  // state records the outcome the send could not have known: the response never arrived.
+  const base = scratch();
+  const hook = files(base, '');
+  const bodies: string[] = [];
+  const get = receiver(async (hit) => {
+    bodies.push(hit.body);
+    await Bun.sleep(300);
+    return new Response('ok', { status: 200 });
+  });
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  updateState(dir, (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.iris = { stage: 'ready' };
+  });
+  signedDrop(base, root, MESSAGE_ID);
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, { ...hook, timeoutMs: 60 }),
+    home: base,
+    stateDir: dir,
+    stderr: () => {},
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    let record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    for (let i = 0; i < 200 && record === undefined; i += 1) {
+      await Bun.sleep(10);
+      record = readState(dir).sessions.acme?.seats.iris?.webhook_delivery;
+    }
+    expect(record?.outcome).toBe('sent-unknown');
+    expect(record?.attempts).toBe(1);
+    expect(record?.reason).toBe('no answer within 60 ms');
+    // Past the routine's own answer time: the late 2xx is never read and never asked for twice.
+    await Bun.sleep(400);
+    expect(get.hits.length).toBe(1);
+    expect(bodies.length).toBe(1);
+    expect(readState(dir).sessions.acme?.seats.iris?.webhook_delivery?.outcome).toBe('sent-unknown');
+  } finally {
+    await started.handle.close();
+  }
+});
+
 test('a URL that names credentials is refused at read time, and its parts are never echoed', () => {
   const base = scratch();
   const hook = files(
@@ -826,7 +1103,7 @@ test('a secret with an internal newline is refused at read time, and never echoe
   expect(said.lines.join('\n')).not.toContain('SYNTHETIC_SECRET');
 });
 
-test('a runtime error is reported in fixed words, never its own message', async () => {
+test('a runtime error that proves nothing is reported in fixed words, never its own message', async () => {
   const base = scratch();
   const hook = files(base, 'http://127.0.0.1:1/routine');
   const said = quiet();
@@ -844,9 +1121,12 @@ test('a runtime error is reported in fixed words, never its own message', async 
     }) as unknown as typeof fetch,
   });
 
-  expect(outcome).toBe('failed');
+  // A bare error proves nothing about whether the body left: the delivery says so, once.
+  expect(outcome).toBe('sent-unknown');
   const line = said.lines.join('\n');
-  expect(line).toContain('could not connect');
+  expect(line).toContain('sent, response unknown');
+  expect(line).toContain('the request may have been sent (Error)');
+  expect(line).toContain('not retried');
   expect(line).not.toContain('SYNTHETIC_URL_PATH');
   expect(line).not.toContain('SYNTHETIC_BEARER_SECRET');
   expect(line).not.toContain('failed url=');

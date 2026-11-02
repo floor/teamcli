@@ -153,6 +153,7 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   const started = await startBus({
     root: loaded.root,
     team: loaded.team,
+    stateDir: dirname(loaded.path),
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     ...(sources.reconcileIntervalMs !== undefined
       ? { reconcileIntervalMs: sources.reconcileIntervalMs }

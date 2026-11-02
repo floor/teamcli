@@ -13,8 +13,8 @@ one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, m
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
-documents the sections one by one: `tasks`, `seats`, `delivery_order`, `grant`, `delegates`,
-tempo, and `budgets` with the format.
+documents the sections one by one: `tasks`, `seats`, `delivery_order`, `webhook`,
+`sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
 
 ## Editing with team config
 
@@ -542,6 +542,57 @@ delivery_order: [typed]
 - What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
   one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
   then awaits a reply record on the thread.
+
+## `webhook`
+
+A seat's webhook delivery adapter: the routine every accepted signed message for the seat is
+POSTed to, with the drop file kept as the backup. The record holds two absolute paths and nothing
+that authenticates — both values are read at POST time, so a rotated URL or secret works without
+rewriting the team file. The whole map is part of the seat's digest, so writing or changing it is
+a change the owner approves; a file that writes none keeps the digest it had.
+
+```yaml
+seats:
+  - role: remote
+    name: iris
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
+    webhook:
+      url_file: /home/me/team/iris-url
+      secret_file: /home/me/team/iris-secret
+      body: inbox
+      timeout_ms: 5000
+```
+
+- `url_file` and `secret_file` are required and name readable files: the URL's one line and the
+  secret's one line. The secret file must be mode `0600`; one readable by group or others is
+  refused with its mode, never its value.
+- `header` is optional: the HTTP field the secret authenticates. Set, the secret file's line is
+  that header's value verbatim; absent, the adapter sends `Authorization: Bearer <secret>`. It
+  must be an HTTP field name and cannot be `content-type`, which the adapter writes itself.
+- `body` is optional: `event` for the bus envelope, `inbox` for the seat-inbox record shape.
+  Absent, the routine reads the envelope.
+- `timeout_ms` is optional: how long one POST waits for the routine's answer, a whole number of
+  milliseconds from 1 to 60000, 5000 when absent. Anything else is refused —
+  `webhook.timeout_ms must be a whole number from 1 to 60000` — never clamped to a bound the
+  seat did not ask for.
+
+The bus that announces a signed record posts it; a send never dials the adapter, and its line
+says `queued; its webhook fires when the bus takes it` whether or not a bus is serving. Only a
+2xx is a delivery. A redirect is not followed. A request that could not be sent — a refused
+connection, a name that does not resolve — is retried, three attempts in all, with a pause
+before each retry, while a non-2xx answer fails after one attempt. A timeout after the body went
+out is reported as sent with its response unknown and is not retried, so the routine is never
+asked twice.
+
+The drop file stays in place in every case, so the seat's own pull still reads the message. The
+last outcome is recorded on the seat's state row — `delivered`, `failed` with its attempts and
+reason, `refused`, or `sent-unknown` — and `team check` and `team status` print one note when it
+is not delivered: `<seat>: its last webhook delivery did not arrive: …; the delivery left the
+drop record for the seat's own pull`. A later delivered record clears the note.
 
 ## `sender_name`
 

@@ -37,6 +37,7 @@ import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readS
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
+import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
@@ -596,6 +597,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // A Codex seat whose last launch fell back to an unmanaged line says so here, with the reason:
   // the fallback is a reading worth acting on, never a silent state.
   comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
+  // A seat whose last webhook delivery did not arrive, in the same words `team check` prints.
+  comparison.notes.push(...webhookDeliveryNotes(team.seats, state));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),

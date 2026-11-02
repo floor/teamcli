@@ -63,7 +63,9 @@ function receiver(respond: (hit: Hit) => Response | Promise<Response> = () => ne
   return seen;
 }
 
-/** The two files a webhook row names: the routine's URL, and the secret only the POST may carry. */
+/** The two files a webhook row names, and the answer bound when the row names one. */
+type Hook = { urlFile: string; secretFile: string; timeoutMs?: number };
+
 function hookFiles(base: string, name: string, url: string, secret = 'synthetic-secret-value'): { urlFile: string; secretFile: string } {
   const urlFile = join(base, `${name}-url`);
   const secretFile = join(base, `${name}-secret`);
@@ -98,11 +100,11 @@ seats:
 ${row}`;
 }
 
-function webhookRow(hook: { urlFile: string; secretFile: string }): string {
+function webhookRow(hook: Hook): string {
   return `    webhook:
       url_file: ${JSON.stringify(hook.urlFile)}
       secret_file: ${JSON.stringify(hook.secretFile)}
-`;
+${hook.timeoutMs === undefined ? '' : `      timeout_ms: ${String(hook.timeoutMs)}\n`}`;
 }
 
 type Scene = { base: string; home: string; root: string; file: string };
@@ -155,7 +157,7 @@ function drop(at: Scene, id: string): void {
 
 /** Replace the team's registry record with a row, as the owner's edit writes it, and approve the
  *  new copy: the bus reloads only the record the owner's approval is signed over. */
-function setRow(at: Scene, hook: { urlFile: string; secretFile: string } | null): void {
+function setRow(at: Scene, hook: Hook | null): void {
   const text = teamText(hook === null ? '' : webhookRow(hook));
   const wrote = writeTeamText(at.file, text, {
     home: at.home,
@@ -358,4 +360,56 @@ test('a removed registry record is named once and the running rows keep working'
   const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
   expect(problems).toHaveLength(1);
   expect(problems[0]).toContain('holds no record of this team');
+});
+
+test('a changed timeout_ms applies on the reconcile pass after the change, without a restart', async () => {
+  const before = receiver();
+  const at = await scene((base) => webhookRow(hookFiles(base, 'before', before.url)));
+  const said: string[] = [];
+  const bus = await start(at, said);
+
+  // The new row's own bound, not the build's 5000 ms default: an answer half a second late is
+  // past a 50 ms bound, so the attempt ends unknown. A pass that kept the old row would have
+  // delivered to `before` instead, and nothing would be said.
+  const slow = receiver(async () => {
+    await Bun.sleep(500);
+    return new Response('ok', { status: 200 });
+  });
+  setRow(at, { ...hookFiles(at.base, 'slow', slow.url), timeoutMs: 50 });
+  drop(at, 'msg-1');
+  await bus.reconcileNow();
+  await waitFor(() => said.some((line) => line.includes('sent, response unknown')), 'the attempt to end on the new bound');
+  expect(said.join('\n')).toContain('no answer within 50 ms');
+  expect(before.hits.length).toBe(0);
+  await waitFor(() => slow.hits.length === 1, 'the POST to reach the new routine');
+  expect(postedId(slow.hits[0]!)).toBe('msg-1');
+});
+
+test('a row that fails validation keeps the last good routes and says why', async () => {
+  const trusted = receiver();
+  const at = await scene((base) => webhookRow(hookFiles(base, 'trusted', trusted.url)));
+  const said: string[] = [];
+  const bus = await start(at, said);
+
+  // The stored text moves to a row this build refuses — 0 is outside timeout_ms's 1..60000 —
+  // so the pass must try it, find it invalid, keep the running row and say so once. The record
+  // is written straight into the store: validation runs before the approval check, so this
+  // never reaches the approval chain the forged-row scene covers.
+  const rejected = receiver();
+  const stored = readStoredTeamConfig(at.home, teamIdOf(at.root));
+  if (stored === null) throw new Error('the scene lost its record');
+  const replacement = teamText(webhookRow({ ...hookFiles(at.base, 'rejected', rejected.url), timeoutMs: 0 }));
+  writeFileSync(
+    teamConfigRecordPath(at.home, teamIdOf(at.root)),
+    JSON.stringify({ ...stored, text: replacement, text_sha256: sha256(replacement), record_sha256: sha256(replacement) }),
+  );
+
+  drop(at, 'msg-1');
+  await bus.reconcileNow();
+  await waitFor(() => trusted.hits.length === 1, 'the arrival at the last good row');
+  expect(postedId(trusted.hits[0]!)).toBe('msg-1');
+  expect(rejected.hits.length).toBe(0);
+  const problems = said.filter((line) => line.includes('webhook rows were not reloaded'));
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('does not validate');
 });
