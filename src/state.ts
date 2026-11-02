@@ -3,6 +3,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, ren
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
+import { folderProblem, heldAt } from './held.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
@@ -985,14 +986,13 @@ export class LockBusyError extends Error {
   }
 }
 
-/** Whether `path` is a directory right now. A lock folder can be removed between two calls, so
- *  a failed stat answers "no" instead of escaping as an error. */
-function stillDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
+/** What stands at the lock folder now, read with `lstat` and the ladder's own rule
+ *  (`folderProblem`, the rule `ensureFoldersBelow` in send/history.ts applies): a link, a FIFO,
+ *  anything that is not a folder, or another user's folder refuses. A missing folder is not a
+ *  problem — the lock makes it. A caller that must report a refusal reads the folder once. */
+function lockFolderAt(dir: string): { held: ReturnType<typeof heldAt>; problem: string | null } {
+  const held = heldAt(dir);
+  return { held, problem: folderProblem(held, 'lock') };
 }
 
 // One writer at a time. The lock file holds its holder's pid; a lock whose holder is dead is
@@ -1008,6 +1008,11 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
   // against a path that can never be created.
   let recreated = 0;
   for (;;) {
+    // Before the first write, the lock folder is held to the same lstat rule as every folder
+    // below the state store (`folderProblem`): a link, a FIFO, anything that is not a folder,
+    // or another user's folder refuses and is never followed or written through.
+    const opening = lockFolderAt(dir);
+    if (opening.problem !== null) throw new Error(`${dir}: ${opening.problem}`);
     try {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
     } catch (error) {
@@ -1017,8 +1022,12 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       // scene's acquirer failed 4 of 4 runs with "EEXIST: file already exists, mkdir '<lock
       // folder>'" thrown at this call). A folder that is still there is what the open below
       // wants; a folder now gone is made again, within the same bound as the open's retries.
-      // ENOENT is the same race one step earlier.
-      if (code === 'EEXIST' && stillDirectory(dir)) {
+      // ENOENT is the same race one step earlier. What the platform reports for a node that
+      // stands and is not ours to use is a refusal, never a retry.
+      const after = lockFolderAt(dir);
+      if (after.problem !== null) {
+        throw new Error(`${dir}: ${after.problem}`);
+      } else if (code === 'EEXIST' && after.held.kind === 'folder') {
         // The folder is there after all: fall through to the open, which takes the key or
         // reports who holds it.
       } else if ((code === 'ENOENT' || code === 'EEXIST') && recreated++ < 8) {
