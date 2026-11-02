@@ -272,7 +272,7 @@ describe('the fresh server a reload starts', () => {
     return made;
   }
 
-  test('it starts the loaded entry with the same arguments and leaves only once it is up', () => {
+  test('it starts the loaded entry with the same arguments and stays its parent until it exits', () => {
     const runner = selfRunner();
     const spawns: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
     const exits: number[] = [];
@@ -295,9 +295,39 @@ describe('the fresh server a reload starts', () => {
     expect(exits).toEqual([]);
     expect(fresh.refs).toBe(0);
     fresh.emit('spawn');
-    expect(fresh.refs).toBe(1);
+    // The fresh server proves its caller by its parent processes on every call. The old process
+    // must stay its parent for the fresh one's whole life: it is not unref'd, and it leaves
+    // only when the fresh server does.
+    expect(fresh.refs).toBe(0);
+    expect(exits).toEqual([]);
+    fresh.emit('exit', 0, null);
     expect(exits).toEqual([0]);
     expect(said).toEqual([]);
+  });
+
+  test('the parent leaves with the fresh server’s own failure code', () => {
+    const exits: number[] = [];
+    const refused = freshChild();
+    restartSelf({
+      spawnChild: (() => refused) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+    });
+    refused.emit('spawn');
+    // The fresh server refused at start, or ended another way: the parent's reader sees its code,
+    // never a quiet 0 that would read as a handed-over session.
+    refused.emit('exit', 2, null);
+    expect(exits).toEqual([2]);
+    // A child ended by a signal carries no code: the parent reports a failure, never a quiet 0.
+    const signalled = freshChild();
+    restartSelf({
+      spawnChild: (() => signalled) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: () => {},
+    });
+    signalled.emit('spawn');
+    signalled.emit('exit', null, 'SIGTERM');
+    expect(exits).toEqual([2, 1]);
   });
 
   test('a start that fails after spawn returns says so and exits non-zero', () => {
