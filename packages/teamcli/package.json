@@ -1,6 +1,6 @@
 {
   "name": "@teamcli/cli",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -8,10 +8,22 @@
     "directory": "packages/teamcli"
   },
   "homepage": "https://github.com/floor/teamcli#readme",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
-  "publishConfig": { "access": "public" },
-  "dependencies": { "team": "0.5.10" },
-  "bin": { "teamcli": "cli.js", "team": "cli.js" },
-  "files": ["cli.js", "README.md"]
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "team": "0.5.10"
+  },
+  "bin": {
+    "teamcli": "cli.js",
+    "team": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ]
 }
