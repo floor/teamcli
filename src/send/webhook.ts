@@ -19,7 +19,7 @@
 // `webhookRouteOf` is the one reader both halves of a send share: the dry run names the route it
 // would take and the delivery class reads it as push evidence, so the two can never disagree.
 import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from 'node:fs';
-import type { SeatWebhook } from '../file/types.ts';
+import type { SeatWebhook, WebhookBodyShape } from '../file/types.ts';
 
 /** The most a URL or secret file may hold; both are one line of text, not documents. */
 export const WEBHOOK_FILE_LIMIT = 4096;
@@ -38,8 +38,12 @@ const NONBLOCK = constants.O_NONBLOCK ?? 0;
 /** What reading one webhook file found: the value, or a plain-words reason it cannot be used. */
 export type WebhookFileRead = { ok: true; value: string } | { ok: false; reason: string };
 
-/** Where the adapter would post, or why it cannot: `null` when the seat configures none. */
-export type WebhookRoute = { ok: true; url: string; secret: string } | { ok: false; reason: string };
+/** Where the adapter would post, or why it cannot: `null` when the seat configures none. The
+ *  header and body words are the row's own, carried through as written; both are absent on a row
+ *  that names neither, which keeps the form every earlier row had. */
+export type WebhookRoute =
+  | { ok: true; url: string; secret: string; header?: string; body?: WebhookBodyShape }
+  | { ok: false; reason: string };
 
 /** The plain words for what an opened path is, when it is not a regular file: the desk can say
  *  why it refused, and the owner can tell a mistyped path from a deliberately rare shape. */
@@ -166,7 +170,13 @@ export function webhookRouteOf(webhook: SeatWebhook | undefined): WebhookRoute |
     if (!url.ok) return url;
     const secret = readSecretFile(webhook.secretFile);
     if (!secret.ok) return secret;
-    return { ok: true, url: url.value, secret: secret.value };
+    return {
+      ok: true,
+      url: url.value,
+      secret: secret.value,
+      ...(webhook.header === undefined ? {} : { header: webhook.header }),
+      ...(webhook.body === undefined ? {} : { body: webhook.body }),
+    };
   } catch {
     return { ok: false, reason: 'the webhook files could not be read' };
   }
