@@ -85,9 +85,10 @@ What the orchestrator runs, in the new repository (say `~/Code/floor/demo`):
 2. `team init --request --then-up` — one request for "create the team, then start the team".
 3. Waits for your answer, then `team init --execute <id>` and `team up --approval <id>`.
 
-What you see, and all you do: the owner page shows one card, **Create a team, then Start the team**,
-*"seat:iris asks to create the team, then start the team — team "demo" in
-/home/…/floor/demo (HEAD …)."*, with **Approve once**, **Always allow** and **Deny**.
+What you see, and all you do: the owner page shows one card, **TeamCLI: create a team, then start
+the team**, *"Allow seat:iris to create a team, then start the team for team "demo"?"*, and
+*"One-time change."*, with **Approve once**, **Always allow** and **Deny**. The repository, the
+HEAD and the request id are in the card's folded details, never on the card itself.
 **Approve once** is a one-time approval. A migration needs that. **Always allow** also permits
 later runs of the same action in the parent folder. You tap **Approve once** and confirm with
 Touch ID on the Mac, or with your iPhone (the browser's QR code for the passkey). The card

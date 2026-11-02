@@ -732,6 +732,13 @@
     {
       "code": 0,
       "command": "approvals",
+      "id": "approvals.details",
+      "meaning": "one request's full record and the audit entries written for it were printed",
+      "trigger": "team approvals details <id>"
+    },
+    {
+      "code": 0,
+      "command": "approvals",
       "id": "approvals.listed",
       "meaning": "the always rules were listed",
       "trigger": "team approvals list"

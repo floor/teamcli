@@ -413,6 +413,57 @@
             }
           ],
           "hidden": false,
+          "name": "details",
+          "positionals": [
+            {
+              "name": "id",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team approvals details <id> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the details read one recorded request and its audit entries and write nothing; they print what the card deliberately leaves out"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
           "name": "list",
           "positionals": [],
           "subcommands": [],
@@ -496,6 +547,7 @@
       ],
       "usage": [
         "team approvals list [--json]",
+        "team approvals details <id> [--json]",
         "team approvals revoke <id...> [--json]",
         "team approvals revoke <id...> --request [--json]",
         "team approvals revoke <id...> --approval <request-id> [--json]"

@@ -25,6 +25,7 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, r
 import { dirname, join } from 'node:path';
 import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
+import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
@@ -450,7 +451,10 @@ export function approveOwnerAction(
     kind: 'owner-action', request_id: id, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: now.toISOString(),
     ...(choice === 'always' ? { scope: dirname(record.params.root) } : {}),
   };
-  const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} — ${ownerActionSummary(record.params)}`, via.assertion);
+  // The Touch ID prompt is the card, one line: the kind, the question, and the answer's scope.
+  // The record (arguments, root, HEAD, hash) is not in it; `team approvals details` prints that.
+  const card = answerCard(ownerActionCard(record.params), choice, record.params.actions.length === 1 ? record.params.requested_by : undefined);
+  const signed = signOwnerAnswer(home, answer, via.signer, store, cardPrompt(card), via.assertion);
   if (!signed.ok) return signed;
   if (askedBy(record.params).includes(signed.signed.signer)) return { ok: false, why: `signer "${signed.signed.signer}" asked for request ${id}; no principal approves its own request` };
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;

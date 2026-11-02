@@ -12,6 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { answerCard, cardPrompt, teamCreateCard } from './approval-card.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
@@ -85,7 +86,8 @@ export function createTeamCreateRequest(home: string, root: string, head: string
   return { ok: true, record, inbox, text };
 }
 
-function readRecord(home: string, id: string): TeamCreateRecord | string {
+/** The record at `id`, or why it cannot be read; `team approvals details` shows what this returns. */
+export function readTeamCreateRecord(home: string, id: string): TeamCreateRecord | string {
   if (!TEAM_CREATE_ID_PATTERN.test(id)) return `"${id}" is not a team request id`;
   try {
     const path = join(actionRequestsFolder(home), `${id}.json`);
@@ -135,7 +137,7 @@ export function approveTeamCreate(
 ): { ok: true; choice: 'once' | 'always' | 'deny'; ruleId?: string } | { ok: false; why: string } {
   const choice = answerChoiceOf(word);
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
-  const record = readRecord(home, id);
+  const record = readTeamCreateRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
@@ -144,7 +146,8 @@ export function approveTeamCreate(
     kind: 'team-create', request_id: id, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: now.toISOString(),
     ...(choice === 'always' ? { scope: dirname(record.params.root) } : {}),
   };
-  const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${teamCreateSummary(record.params)}`, via.assertion);
+  // The Touch ID prompt is the card, one line; the repository and request id stay in the record.
+  const signed = signOwnerAnswer(home, answer, via.signer, store, cardPrompt(answerCard(teamCreateCard(record.params), choice)), via.assertion);
   if (!signed.ok) return signed;
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
   const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
@@ -212,7 +215,7 @@ export function revokeTeamCreateRule(home: string, ruleId: string): { ok: true }
  * scope holds the repository. Claims the request single-use and writes an audit entry.
  */
 export function admitTeamCreate(home: string, id: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; via: 'owner-seat' | 'rule' | 'policy' | 'security-profile'; ruleId?: string; signer: string } | { ok: false; why: string } {
-  const record = readRecord(home, id);
+  const record = readTeamCreateRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (record.params.root !== canonicalRoot(root)) return { ok: false, why: `request ${id} is for ${record.params.root}, not this repository` };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };

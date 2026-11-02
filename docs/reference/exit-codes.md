@@ -110,6 +110,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust or question | `team answer` |
 | `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
+| `approvals.details` | `approvals` | 0 | one request's full record and the audit entries written for it were printed | `team approvals details <id>` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
 | `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
 | `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id...> --approval <request-id>` |
