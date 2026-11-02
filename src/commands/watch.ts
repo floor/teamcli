@@ -605,6 +605,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   };
   const say = (text: string, desktop: boolean) => tell(text, desktop && !args.flags.has('no-notify'));
 
+  // A hosted pass yields to the daemon's beat between its blocking reads: one synchronous seam,
+  // a clock comparison between beats. A CLI watch has no host and yields nothing.
+  const yieldBeat = (): void => {
+    hosted?.beat?.();
+  };
+
   const memory = newMemory();
   const told = new Set<string>();
   // The owner-addressed texts this process has already told: an event raised from one of them
@@ -747,8 +753,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // a second read would count as a second pass to a caller that records the calls.
       const own = sources.ownPane?.(session, sources.pid);
       const ownPane = own && own !== 'gone' ? own.pane : null;
+      // Before the one whole-session read: a beat overdue from the last pass lands here, so the
+      // other hosted routes are renewed going into a call that can hold the loop for seconds.
+      yieldBeat();
       const live = sources.live(session, team);
       lastLive = live;
+      yieldBeat();
       if (!live) {
         if (!silent) tell('herdr doesn\'t answer; the watch keeps trying', true);
         silent = true;
@@ -809,6 +819,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           });
           const panesBySeat: Record<string, string> = {};
           for (const seat of team.seats) {
+            // Between seats: the screen read below is synchronous and can be slow.
+            yieldBeat();
             if (seat.human === true || seat.stopped === true) continue;
             const agent = live.agents.find((candidate) => candidate.name === seat.name);
             if (!agent) continue;
@@ -855,8 +867,12 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // pass reads what they read, and nothing else. Only their state is ever said — a
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
         if (checksAt === null || now - checksAt >= budget.checkEvery * 1000) {
+          yieldBeat();
           checksAt = now;
           outcomes = sources.readChecks(standing, team, now);
+          // A check command is synchronous and can run for its own timeout: the beat it displaced
+          // lands as soon as it returns.
+          yieldBeat();
           // The money a spend check counted is kept, like the pass's screen readings: the launch
           // gate of `up` and `add` reads it later, and one that is stale by then reads unknown
           // (§ 5). An account whose check did not run keeps its stored reading.
@@ -882,6 +898,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // the process team launched for its seat is not the seat, and the restored check says so.
         const processes: Record<string, PaneProcesses | null> = {};
         for (const agent of live.agents) {
+          // Between seats: two synchronous herdr reads each, one per process figure.
+          yieldBeat();
           foreground[agent.pane] = sources.foreground(agent.pane, session);
           processes[agent.pane] = sources.processes?.(agent.pane, session) ?? null;
         }
@@ -890,6 +908,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // on record in the tool's own files. `unread` where a figure couldn't be read; the gate
         // that acts on these figures is elsewhere and unchanged.
         const machine = sources.machine(root);
+        yieldBeat();
         if (readingsAt === null || now - readingsAt >= READINGS_EVERY * 1000) {
           readingsAt = now;
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
@@ -943,6 +962,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readScreen: (cli, pane) => classifyWith(cli, pane, overrides.profiles),
           nativeHeld: nativeHeldNow,
           readings: stored, foreground, processes,
+          // The pass itself is synchronous and can be long: a hosted pass carries a due daemon
+          // beat to the other routes between its seats. A CLI watch passes none.
+          ...(hosted?.beat === undefined ? {} : { beat: hosted.beat }),
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
           mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home, new Date(now)) : [],
