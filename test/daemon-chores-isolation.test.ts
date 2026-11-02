@@ -23,8 +23,10 @@ import { choresPolicyFor, tightestPolicy, type ChoresPolicy } from '../src/daemo
 import {
   parseChoresFrame,
   readChildMessage,
+  readHostMessage,
   type ChoresChildMessage,
   type ChoresHostMessage,
+  type ChoresPresenceReading,
 } from '../src/daemon/chores/protocol.ts';
 import {
   spawnChoresChild,
@@ -38,8 +40,9 @@ import {
   type ChoresRouteInput,
 } from '../src/daemon/chores/supervisor.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
+import type { PresenceSourceStatus } from '../src/daemon/presence/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
-import { machineConfigDir } from '../src/daemon/paths.ts';
+import { machineConfigDir, daemonLogPath } from '../src/daemon/paths.ts';
 import { routeOf } from '../src/daemon/routes.ts';
 import { readDaemonState, type DaemonChoresState, type DaemonState } from '../src/daemon/state.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -688,6 +691,187 @@ describe('the chores fleet', () => {
   });
 });
 
+describe('the fleet presence nudge', () => {
+  const readings: ChoresPresenceReading[] = [{
+    seat: 'crew-lead',
+    status: {
+      seat: 'crew-lead',
+      binding: 'prs_0123456789ab',
+      threadId: 'th-1',
+      channel: 'connected',
+      stream: 'initialized',
+      baseline: 'read',
+      evidenceAt: AT,
+      stagedEventId: '2026-11-02T03:00:00.000Z-aaaaaaaa',
+    },
+  }];
+
+  test('a ready child receives the measured readings and its result settles the pass', async () => {
+    const made = world();
+    const fake = fakeChild(4550);
+    const inputs: SpawnChoresInput[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [{ ...routeInput(made.root, policy()), stateDir: join(made.root, '.agents') }],
+      log: () => {},
+      factory: (input) => {
+        inputs.push(input);
+        return fake.child;
+      },
+    });
+    // Nothing to ask before a child exists, and nothing while it is still starting: the daemon's
+    // own steps answer those passes.
+    expect(fleet.presence({ root: made.root, at: new Date(NOW), readings })).toBeNull();
+    fleet.tick(new Date(NOW));
+    expect(inputs[0]!.config.routes[0]!.stateDir).toBe(join(made.root, '.agents'));
+    expect(fleet.presence({ root: made.root, at: new Date(NOW), readings })).toBeNull();
+    fake.emit({ type: 'ready', pid: 4550, at: AT });
+    const answer = fleet.presence({ root: made.root, at: new Date(NOW + 5), readings });
+    expect(answer).not.toBeNull();
+    const frame = fake.sends.find((message) => message.type === 'presence');
+    expect(frame).toEqual({
+      type: 'presence',
+      id: expect.any(String),
+      root: made.root,
+      at: new Date(NOW + 5).toISOString(),
+      readings,
+    });
+    if (frame?.type !== 'presence') throw new Error('the child was never nudged');
+    fake.emit({
+      type: 'presence-result',
+      id: frame.id,
+      root: made.root,
+      at: frame.at,
+      proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
+      notes: ['the activity step failed: from the child'],
+    });
+    await expect(answer!).resolves.toEqual({
+      kind: 'answered',
+      proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
+      notes: ['the activity step failed: from the child'],
+    });
+  });
+
+  test('a leaving child settles an unanswered nudge instead of leaving the pass waiting', async () => {
+    const made = world();
+    const fake = fakeChild(4560);
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      log: () => {},
+      factory: () => fake.child,
+    });
+    fleet.tick(new Date(NOW));
+    fake.emit({ type: 'ready', pid: 4560, at: AT });
+    const answer = fleet.presence({ root: made.root, at: new Date(NOW), readings });
+    expect(answer).not.toBeNull();
+    fake.leave();
+    await expect(answer!).resolves.toEqual({
+      kind: 'unavailable',
+      why: 'the child left before it answered the presence pass',
+    });
+  });
+
+  test('a stop settles an unanswered nudge and an inline root is never asked', async () => {
+    const made = world();
+    const fake = fakeChild(4570);
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      log: () => {},
+      killGraceMs: 10,
+      factory: () => fake.child,
+    });
+    fleet.tick(new Date(NOW));
+    fake.emit({ type: 'ready', pid: 4570, at: AT });
+    const answer = fleet.presence({ root: made.root, at: new Date(NOW), readings });
+    expect(answer).not.toBeNull();
+    const stopping = fleet.stop('the test is done');
+    await expect(answer!).resolves.toEqual({
+      kind: 'unavailable',
+      why: 'the daemon is stopping this child',
+    });
+    fake.leave();
+    await stopping;
+
+    const inline = world('inline');
+    let spawned = 0;
+    const inlineFleet = createChoresFleet({
+      home: inline.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(inline.root, policy({ mode: 'inline' }))],
+      log: () => {},
+      factory: () => {
+        spawned += 1;
+        return fakeChild(4580).child;
+      },
+    });
+    inlineFleet.tick(new Date(NOW));
+    expect(spawned).toBe(0);
+    expect(inlineFleet.presence({ root: inline.root, at: new Date(NOW), readings })).toBeNull();
+  });
+});
+
+describe('the presence frames', () => {
+  const status: PresenceSourceStatus = {
+    seat: 'crew-lead',
+    binding: 'prs_0123456789ab',
+    threadId: 'th-1',
+    channel: 'connected',
+    stream: 'initialized',
+    baseline: 'read',
+    evidenceAt: AT,
+    stagedEventId: '2026-11-02T03:00:00.000Z-aaaaaaaa',
+  };
+
+  test('a nudge carries each measured reading and a result carries one proof per seat', () => {
+    const readings: ChoresPresenceReading[] = [
+      { seat: 'crew-lead', status },
+      { seat: 'other', failed: 'the runtime source has staged no event yet' },
+    ];
+    expect(readHostMessage({ type: 'presence', id: 'p1', root: '/repo', at: AT, readings })).toEqual({
+      type: 'presence', id: 'p1', root: '/repo', at: AT, readings,
+    });
+    // A reading this contract cannot carry is refused whole, never half-read.
+    expect(readHostMessage({
+      type: 'presence', id: 'p1', root: '/repo', at: AT,
+      readings: [{ seat: 'crew-lead', status: { ...status, channel: 'serving' } }],
+    })).toBeNull();
+    expect(readHostMessage({
+      type: 'presence', id: 'p1', root: '/repo', at: AT,
+      readings: [{ seat: 'crew-lead', status: { ...status, stagedEventId: 7 } }],
+    })).toBeNull();
+
+    const proofs = [
+      { seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' },
+      { seat: 'other', miss: 'the runtime source has staged no event yet' },
+    ];
+    expect(readChildMessage({
+      type: 'presence-result', id: 'p1', root: '/repo', at: AT, proofs,
+      notes: ['the activity step failed: spool'],
+    })).toEqual({
+      type: 'presence-result', id: 'p1', root: '/repo', at: AT, proofs,
+      notes: ['the activity step failed: spool'],
+    });
+    // A row with neither a proof nor a reason is not a result this protocol carries.
+    expect(readChildMessage({
+      type: 'presence-result', id: 'p1', root: '/repo', at: AT,
+      proofs: [{ seat: 'crew-lead' }], notes: [],
+    })).toBeNull();
+  });
+});
+
 describe('the chores child loop', () => {
   test('a 10 s awaited slice in one root does not hold the next root\'s slice', async () => {
     const made = world();
@@ -747,6 +931,187 @@ describe('the chores child loop', () => {
     }
     expect(await served).toBe(0);
   }, 15_000);
+
+  test('one presence pass per root is in flight; a second nudge for that root is dropped', async () => {
+    const made = world();
+    const lines: ChoresChildMessage[] = [];
+    const stdout = {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as ChoresChildMessage);
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    const asked: string[] = [];
+    let release!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 250,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev', stateDir: join(made.root, '.agents') }],
+      },
+      stdin,
+      stdout,
+      pass: async () => [],
+      presence: {
+        async run(_route, input) {
+          asked.push(input.at.toISOString());
+          if (asked.length === 1) await firstGate;
+          return {
+            proofs: input.readings.map((reading) => ({
+              seat: reading.seat,
+              id: `2026-11-02T03:00:00.000Z-0000000${String(asked.length)}`,
+              binding: 'prs_0123456789ab',
+            })),
+            notes: [],
+          };
+        },
+      },
+    });
+    const nudge = (id: string, at: string): string => `${JSON.stringify({
+      type: 'presence',
+      id,
+      root: made.root,
+      at,
+      readings: [{ seat: 'crew-lead', failed: 'the runtime source has staged no event yet' }],
+    })}\n`;
+    try {
+      stdin.write(nudge('p1', AT));
+      stdin.write(nudge('p2', new Date(NOW + 1).toISOString()));
+      await waitUntil(() => asked.length === 1);
+      // The second nudge found this root's pass still in flight and was dropped, exactly as the
+      // daemon skips a route whose previous pass has not finished.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(asked).toEqual([AT]);
+      release();
+      await waitUntil(() => lines.some((message) => message.type === 'presence-result'));
+      expect(lines.find((message) => message.type === 'presence-result')).toEqual({
+        type: 'presence-result',
+        id: 'p1',
+        root: made.root,
+        at: AT,
+        proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-00000001', binding: 'prs_0123456789ab' }],
+        notes: [],
+      });
+    } finally {
+      stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+    }
+    expect(await served).toBe(0);
+  }, 10_000);
+
+  test('a stop drains a presence pass and sends no result behind it', async () => {
+    const made = world();
+    const lines: ChoresChildMessage[] = [];
+    const stdout = {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as ChoresChildMessage);
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    let started = false;
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 250,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev' }],
+      },
+      stdin,
+      stdout,
+      pass: async () => [],
+      presence: {
+        async run() {
+          started = true;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return {
+            proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
+            notes: ['finished during the stop'],
+          };
+        },
+      },
+    });
+    stdin.write(`${JSON.stringify({
+      type: 'presence',
+      id: 'p1',
+      root: made.root,
+      at: AT,
+      readings: [{ seat: 'crew-lead', failed: 'the runtime source has staged no event yet' }],
+    })}\n`);
+    await waitUntil(() => started);
+    stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+    // The child leaves only once the pass has drained, and the answer is never written behind a
+    // host that has already stopped it.
+    expect(await served).toBe(0);
+    expect(lines.some((message) => message.type === 'presence-result')).toBe(false);
+  }, 10_000);
+
+  test('a nudge this child cannot run is answered with its reason, never handed to the steps', async () => {
+    const made = world();
+    const elsewhere = join(made.base, 'elsewhere');
+    const lines: ChoresChildMessage[] = [];
+    const stdout = {
+      write(chunk: string) {
+        lines.push(JSON.parse(chunk) as ChoresChildMessage);
+        return true;
+      },
+    } as unknown as NodeJS.WritableStream;
+    const stdin = new PassThrough();
+    const served = serveChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 250,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev' }],
+      },
+      stdin,
+      stdout,
+      pass: async () => [],
+      presence: {
+        async run() {
+          throw new Error('a nudge that cannot run must never reach the presence steps');
+        },
+      },
+    });
+    const write = (message: ChoresHostMessage): void => {
+      stdin.write(`${JSON.stringify(message)}\n`);
+    };
+    try {
+      write({ type: 'presence', id: 'bad-at', root: made.root, at: 'yesterday', readings: [{ seat: 'crew-lead', failed: 'x' }] });
+      write({ type: 'presence', id: 'elsewhere', root: elsewhere, at: AT, readings: [{ seat: 'crew-lead', failed: 'x' }] });
+      await waitUntil(() => lines.filter((message) => message.type === 'presence-result').length === 2);
+      const results = lines.filter((message) => message.type === 'presence-result');
+      expect(results).toContainEqual({
+        type: 'presence-result',
+        id: 'bad-at',
+        root: made.root,
+        at: 'yesterday',
+        proofs: [{ seat: 'crew-lead', miss: 'the presence nudge names no valid instant' }],
+        notes: ['a presence nudge named no valid instant'],
+      });
+      expect(results).toContainEqual({
+        type: 'presence-result',
+        id: 'elsewhere',
+        root: elsewhere,
+        at: AT,
+        proofs: [{ seat: 'crew-lead', miss: 'the chores child does not serve this root' }],
+        notes: ['a presence nudge named a root this child does not serve'],
+      });
+    } finally {
+      stdin.write(`${JSON.stringify({ type: 'stop', why: 'the test is done' })}\n`);
+    }
+    expect(await served).toBe(0);
+  }, 10_000);
 });
 
 describe('a real child', () => {
@@ -778,6 +1143,27 @@ describe('a real child', () => {
         () => messages(events).some((message) => message.type === 'pass' && message.passes.some((pass) => pass.root === made.root)),
         20_000,
       );
+      // A token route with no state folder cannot run the presence steps; the real child answers
+      // the nudge with that reason instead of guessing a store.
+      child.send({
+        type: 'presence',
+        id: 'p1',
+        root: made.root,
+        at: AT,
+        readings: [{ seat: 'crew-lead', failed: 'the runtime source has staged no event yet' }],
+      });
+      await waitUntil(
+        () => messages(events).some((message) => message.type === 'presence-result' && message.id === 'p1'),
+        20_000,
+      );
+      expect(messages(events).find((message) => message.type === 'presence-result' && message.id === 'p1')).toEqual({
+        type: 'presence-result',
+        id: 'p1',
+        root: made.root,
+        at: AT,
+        proofs: [{ seat: 'crew-lead', miss: 'the chores child has no state folder for this root' }],
+        notes: ['the presence pass has no state folder for this root'],
+      });
     } finally {
       unsubscribe();
       child.kill('the test is done');
@@ -818,6 +1204,106 @@ describe('under the machine daemon', () => {
         started.daemon.close().then(() => true),
         new Promise<boolean>((resolve) => {
           const timer = setTimeout(() => resolve(false), 5000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+
+  test('a hosted root\'s presence steps run in its child, and the child\'s answer is the one applied', async () => {
+    const made = world();
+    const fake = fakeChild(4700);
+    // The fake answers a stop by leaving, so the daemon's close is not held by the kill bound.
+    const child: ChoresChild = {
+      ...fake.child,
+      kill(why: string) {
+        fake.child.kill(why);
+        fake.leave();
+      },
+    };
+    let inlineCalls = 0;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 100,
+      choresHosting: true,
+      presenceHosting: true,
+      presenceEveryMs: 20,
+      presenceSubscriptions: () => [{
+        step: async () => undefined,
+        status: () => ({
+          seat: 'crew-lead',
+          binding: 'prs_0123456789ab',
+          threadId: 'th-1',
+          channel: 'connected',
+          stream: 'initialized',
+          baseline: 'read',
+          evidenceAt: new Date().toISOString(),
+          stagedEventId: '2026-11-02T03:00:00.000Z-aaaaaaaa',
+        }),
+        close: async () => ({ quiesced: true }),
+      }],
+      presenceActivity: () => async () => {
+        inlineCalls += 1;
+        return { failed: null, seats: [] };
+      },
+      presencePublish: () => async () => {
+        inlineCalls += 1;
+        return { failed: null, seats: [] };
+      },
+      choresFactory: () => child,
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // Until the child is ready the daemon runs the presence steps itself: the fallback every
+      // root kept before the isolation.
+      await waitUntil(() => inlineCalls > 0, 5000);
+      await waitUntil(() => fake.sends.some((message) => message.type === 'tick'), 5000);
+      fake.emit({ type: 'ready', pid: 4700, at: new Date().toISOString() });
+      fake.emit({ type: 'heartbeat', at: new Date().toISOString(), rssBytes: 40 * 1024 * 1024, busy: null });
+      await waitUntil(() => fake.sends.some((message) => message.type === 'presence'), 5000);
+      const frame = [...fake.sends].reverse().find((message) => message.type === 'presence');
+      if (frame?.type !== 'presence') throw new Error('the child was never nudged');
+      // The nudge carries the reading the daemon measured, not a verdict of its own.
+      expect(frame.readings).toHaveLength(1);
+      expect(frame.readings[0]).toMatchObject({
+        seat: 'crew-lead',
+        status: {
+          binding: 'prs_0123456789ab',
+          threadId: 'th-1',
+          channel: 'connected',
+          stream: 'initialized',
+          baseline: 'read',
+          stagedEventId: '2026-11-02T03:00:00.000Z-aaaaaaaa',
+        },
+      });
+      // The child's own answer is what the daemon applies: its note reaches the daemon log, and
+      // the daemon's inline steps produced no such line.
+      fake.emit({
+        type: 'presence-result',
+        id: frame.id,
+        root: made.root,
+        at: frame.at,
+        proofs: [{ seat: 'crew-lead', miss: 'the canonical presence projection has not applied the runtime event' }],
+        notes: ['the activity step failed: from the child'],
+      });
+      await waitUntil(() => {
+        try {
+          return readFileSync(daemonLogPath(made.home), 'utf8').includes('the activity step failed: from the child');
+        } catch {
+          return false;
+        }
+      }, 5000);
+    } finally {
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 10_000);
           timer.unref();
         }),
       ]);
