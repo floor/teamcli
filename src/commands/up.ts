@@ -857,6 +857,9 @@ function seatPlan(
           launched: next,
           session: restoredSession,
           detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
+          // The pane and workspace the seat holds now: `up` paints both sidebar lines there.
+          pane: onRecordedPane?.pane ?? recorded.pane,
+          workspace: onRecordedPane?.workspace || recorded.workspace,
         },
       };
     }
