@@ -40,9 +40,23 @@ herdr, and CI does not run it.
 
 ## Review and CI
 
-Hosted CI runs the Linux test job and the commit and pull request checks on every pull request.
-The hosted macOS job runs on every push to `main`, nightly, and on demand; a red macOS run on
-`main` is fixed before anything else.
+Hosted CI runs the commit and pull request checks and the sharded test job on every pull request.
+On every push to `main`, nightly, and on demand, the static job runs the build and every check
+once per hosted system, then the whole suite runs as four shards per system; a red run on `main`
+is fixed before anything else.
+
+The full suite's split is checked in at `scripts/ci-shard-assignment.json`. A new test file joins
+the lightest shard and moves nothing already placed, so a shard's test set stays stable between
+runs; a deleted file's unit is dropped. `bun run ci:shard:check` (run by CI) fails when a tracked
+test file belongs to no shard. To run one shard locally, `bun run ci:shard 0/4` — the same unit
+list CI runs for that shard.
+
+The estimates come from the recorded durations in `scripts/ci-test-timings.json`. After a sharded
+full run, `bun scripts/ci-shard-tests.ts --record <log>...` with that run's shard logs of one
+system rewrites them, and `--rebalance` re-splits the suite by the new times. Each shard log
+carries its units' measured times as `##[unit]<unit> <ms>` lines, printed from the run's JUnit
+report; until a unit has a recorded time the assignment weighs it at the measured average of the
+units that had none when the suite was measured, not at its size alone.
 
 Before a merge, the author quotes their own full `bun run ci` on the exact head in the pull
 request. At least one reviewer who is not the author runs `bun run ci` on macOS on the exact
