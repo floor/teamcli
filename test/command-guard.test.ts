@@ -41,6 +41,13 @@ afterEach(() => {
 
 const seat = (name = SEAT, extra: { human?: true } = {}) => ({ name, cli: 'claude-code', launch: CLAUDE, ...extra });
 
+/** The hook script's stable path: a scene's stand-in for the settings file's baked command. */
+function guardScript(): string {
+  const path = commandGuardScriptPath();
+  if (path === null) throw new Error('the command guard script has no stable path');
+  return path;
+}
+
 /** Runs the hook the way the CLI does: its command through a shell, one JSON payload on stdin. */
 function runHook(command: string, payload: unknown): string {
   return execFileSync('/bin/sh', ['-c', command], {
@@ -52,7 +59,7 @@ function runHook(command: string, payload: unknown): string {
 
 /** Runs the shipped hook script itself with the context flags the settings file bakes. */
 function runScript(input: string, args: string[] = []): string {
-  return execFileSync(process.execPath, [commandGuardScriptPath(), ...args], {
+  return execFileSync(process.execPath, [guardScript(), ...args], {
     input,
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -329,7 +336,7 @@ describe('the settings file and the launch line', () => {
     const entry = settings.hooks.PreToolUse?.[0];
     expect(entry?.matcher).toBe('Bash');
     const command = entry?.hooks[0]?.command ?? '';
-    expect(command).toContain(commandGuardScriptPath());
+    expect(command).toContain(guardScript());
     expect(command).toContain(`--root ${root}`);
     expect(command).toContain(`--home ${home}`);
     expect(command).toContain('--project crew');
@@ -373,6 +380,7 @@ describe('the settings file and the launch line', () => {
 
   test('the bakes command names this install’s interpreter, never a chmod', () => {
     const command = commandGuardHookCommand({ ...context, root, home }, SESSION, SEAT);
+    if (command === null) throw new Error('the guard command has no stable script path');
     expect(command.startsWith(`${process.execPath} `)).toBe(true);
     expect(command).not.toContain('chmod');
   });

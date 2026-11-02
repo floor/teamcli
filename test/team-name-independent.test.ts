@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const fixtureRoot = fileURLToPath(new URL('../../team-name-resolve-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
-afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (bases.length > 0) discardFixtures(bases, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 type Result = { code: number; out: string; err: string; ids: Record<string, string>; agentIds: Record<string, string>; records: { team: string; body: string; toId: string }[]; paneWrites: number; home: string; grantResult?: { ok: boolean; why?: string }; grantTarget?: string };
 function scene(name: string): Result {
   const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-')));

@@ -1,12 +1,13 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const fixtureRoot = fileURLToPath(new URL('../../error-same-dest-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const roots: string[] = [];
-afterAll(() => { if (roots.length > 0) spawnSync('trash', roots, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (roots.length > 0) discardFixtures(roots, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 for (const [scenario, accepted] of [
   ['honest', true], ['guarded', true], ['redirected-refusal', true], ['normal', true],
   ['forged-same-over-done', false], ['forged-other-over-done', false], ['without-error', false],

@@ -100,6 +100,7 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
   ['oneShellWord', 'reads one vendor env fragment, never a whole launch line: a boolean, never a word or span of the CLI'],
 ]);
 
+
 // Every exported function that returns CLI words, an id read from them, a launch line, or a
 // span into one. Each must reach the proof through the functions it calls.
 const READERS = [

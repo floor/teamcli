@@ -1,6 +1,7 @@
 // Synthetic registry, signed drops, and launch hosts; no agent executable is run.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,7 +33,7 @@ const route = { cursor: ['.cursor', 'mcp.json'], gemini: ['.gemini', 'settings.j
 type Route = keyof typeof route;
 function folder(path: string): void { const mask = process.umask(0); try { mkdirSync(path, { recursive: true, mode: 0o700 }); } finally { process.umask(mask); } }
 function temp(): string { const base = realpathSync(mkdtempSync(join(tmpdir(), 'inbox-independent-'))); made.push(base); return base; }
-afterEach(() => { for (const base of made.splice(0)) execFileSync('trash', [base]); });
+afterEach(() => { for (const base of made.splice(0)) discardFixtures([base]); });
 test('the suite starts with its own empty synthetic HOME', assertIndependentHome);
 
 function text(session: string, cli = 'cursor', root = '', lobby = ''): string {
@@ -53,7 +54,7 @@ function world(cli = 'cursor', registry = true, session = 'north', sharedHome?: 
   writeApproval(storePath(loaded.team.project, root, home), { approval: approvalOf(loaded.team, root, NOW), file: yaml }, loaded.team.seats, home);
   if (registry) {
     intoRegistry(root, home);
-    execFileSync('trash', [path]);
+    discardFixtures([path]);
     upsertTeam(home, teamIdOf(root), { project: loaded.team.project, session, root, roster: [{ agent: 'agt_111111111111', seat: 'worker', role: 'worker' }] });
   }
   return { base, home, root, dir, lobby, path, yaml, team: loaded.team, session };

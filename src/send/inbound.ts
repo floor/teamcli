@@ -127,6 +127,18 @@ export function inboundIsLive(declaration: InboundDeclaration, socketPath: strin
   }
 }
 
+/** Why a walk passes over a live socket: the session it belongs to was launched before the file
+ *  that declares `accept` changed, so the setting is not in force in that process. One site, so
+ *  `team route` words the state a send would meet with the sender's own words. */
+export const INBOUND_STALE_REASON = 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts';
+
+/** Null when a frame dialed at `socketPath` is taken under the declaration in force; else the
+ *  reason the walk passes that socket over. No socket is no dial, so it is never stale. */
+export function inboundStaleReason(declaration: InboundDeclaration, socketPath: string | null): string | null {
+  if (socketPath === null) return null;
+  return inboundIsLive(declaration, socketPath) ? null : INBOUND_STALE_REASON;
+}
+
 /** The line a walk records instead of dialing, by the declaration it read. */
 export function inboundSkipReason(policy: CrossSessionInbound | null): string {
   if (policy === 'hold') return 'the receiving Claude session declares crossSessionInbound hold, which would hold the frame at its box';

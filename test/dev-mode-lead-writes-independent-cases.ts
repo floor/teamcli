@@ -1,6 +1,7 @@
 // Real record writers and signed machine settings, entirely inside owned synthetic stores.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -24,7 +25,7 @@ const OPS: Operation[] = ['config-set', 'config-unset', 'config-edit', 'settings
 const owned: string[] = [], drafts: string[] = [];
 afterEach(() => {
   const paths = [...drafts.splice(0), ...owned.splice(0)].filter(p => fs.existsSync(p));
-  if (paths.length) execFileSync('trash', paths);
+  if (paths.length) discardFixtures(paths);
 });
 function teamText() { return `format: 1
 project: record-scene
