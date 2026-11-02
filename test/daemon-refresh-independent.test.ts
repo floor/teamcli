@@ -246,9 +246,9 @@ test('an in-place refresh keeps the old copy intact, so the rollback load and pr
 });
 
 for (const json of [false, true]) {
-  test(`a restored registration without an answering probe is bounded and gives recovery (${json ? 'structured' : 'plain'})`, async () => {
+  test(`a restored daemon that never answers is reported as still starting, never as absent (${json ? 'structured' : 'plain'})`, async () => {
     const fixture = refreshFixture();
-    fixture.seedPrevious();
+    const original = fixture.seedPrevious();
     fixture.setPolicy('reject-new');
     fixture.setProbeDelay(Infinity);
 
@@ -256,13 +256,25 @@ for (const json of [false, true]) {
 
     expect(code).toBe(1);
     const error = json ? (JSON.parse(io.out) as ErrorDocument).error : null;
-    if (error !== null) expect(error.id).toBe('daemon.install-rollback-failed');
-    const message = error === null ? io.err : error.message + ' ' + error.repair;
-    expect(message).toContain('no daemon is running');
-    expect(message).toContain('team daemon install');
-    expect(fixture.healthReads.length).toBeGreaterThan(1);
-    expect(fixture.healthReads.length).toBeLessThanOrEqual(10);
-    expect(fixture.healthWaits.length).toBe(fixture.healthReads.length - 1);
-    expect(fixture.healthWaits.reduce((sum, wait) => sum + wait, 0)).toBeLessThanOrEqual(6_000);
+    // The rollback started a daemon whose process is alive; it has not answered yet, so the
+    // answer is the rollback with the probe still pending — never "no daemon is running", which
+    // would be false and would invite another install that stops a daemon on its way up.
+    if (error !== null) {
+      expect(error.id).toBe('daemon.install-rolled-back');
+      expect(error.message).toContain('may still be starting');
+      expect(error.message).not.toContain('no daemon is running');
+      expect(error.repair).toBeNull();
+    }
+    const message = error === null ? io.err : error.message;
+    expect(message).toContain('may still be starting');
+    expect(message).not.toContain('no daemon is running');
+    if (!json) expect(io.err).toContain('check `team status`');
+    // The unit the rollback put back stays, and the process the manager holds is its daemon.
+    expect(readFileSync(fixture.unitPath, 'utf8')).toBe(original);
+    expect(fixture.running()).toBe('previous');
+    // Bounded: the cold-start window's sixteen probes, with growing waits up to about 90 s.
+    expect(fixture.healthReads.length).toBe(16);
+    expect(fixture.healthWaits.length).toBe(15);
+    expect(fixture.healthWaits.reduce((sum, wait) => sum + wait, 0)).toBeLessThanOrEqual(90_000);
   });
 }

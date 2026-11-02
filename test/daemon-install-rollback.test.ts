@@ -431,9 +431,10 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     expect(document.error.id).toBe('daemon.install-rollback-failed');
     expect(document.error.message).toContain('did not answer');
     expect(document.error.repair).toBe(`the owner or a general-grant holder runs \`team daemon install --root ${root}\``);
-    // The check is bounded: eight probes, with the growing waits between them and no more.
-    expect(probes).toBe(8);
-    expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000]);
+    // The check is bounded: the cold-start window's sixteen probes, with the growing waits
+    // between them and no more.
+    expect(probes).toBe(16);
+    expect(sleeps).toEqual([250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000]);
   });
 
   test('a restored daemon that answers after the first probes is still a verified rollback', async () => {
@@ -458,7 +459,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     expect(document.error.id).toBe('daemon.install-rolled-back');
     expect(document.error.repair).toBeNull();
     expect(probes).toBe(3);
-    expect(sleeps).toEqual([100, 200]);
+    expect(sleeps).toEqual([250, 500]);
   });
 
   test('a rollback that cannot start a daemon exits 1 under daemon.install-rollback-failed', async () => {
@@ -580,7 +581,9 @@ describe('an install whose new daemon does not answer is taken back out', () => 
     expect(document.error.message).toContain('did not answer');
     // The earlier definition is the one on disk again, and its daemon was the one loaded last.
     expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
-    expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap']);
+    // The last health probe asks the manager for its job record: a daemon no process stands
+    // behind is the one an undo is for.
+    expect(calls).toEqual(['bootstrap', 'print', 'bootout', 'bootstrap']);
   });
 
   test('a fresh install whose new daemon never answers removes its unit and names the rerun', async () => {
@@ -599,8 +602,9 @@ describe('an install whose new daemon does not answer is taken back out', () => 
     // Its own definition was taken back out, so there is no kept unit to name.
     expect(io.err).not.toContain('is kept at');
     expect(existsSync(manager.unitPath(home))).toBe(false);
-    // The job the manager accepted was stopped again before the unit was removed.
-    expect(calls).toEqual(['bootstrap', 'bootout']);
+    // The job the manager accepted was stopped again before the unit was removed; the last
+    // health probe had already asked the manager for the job record and found no process.
+    expect(calls).toEqual(['bootstrap', 'print', 'bootout']);
   });
 
   test('an install is reported only after the new daemon answers', async () => {
