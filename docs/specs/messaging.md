@@ -64,11 +64,12 @@ nothing. Fields (`src/send/history.ts`):
 | `to` | string | yes | — | 0.4.x | the recipient seat |
 | `body` | string | yes | — | 0.4.x | the message body, whole |
 | `id` | string | yes | — | 0.4.x | the drop's id |
-| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent (unconfirmed)`, `held`, `not-submitted`, `unreachable`, `answered`, `timeout` |
+| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent (unconfirmed)`, `sent (channel)`, `held`, `queued (receiver busy)`, `not-submitted`, `unreachable`, `answered`, `timeout` |
 | `spec` | string | no | absent | 0.5.0 | the address the caller wrote, when not the resolved seat's own name |
 | `resolved` | string | no | absent | 0.5.0 | the agent id the spec resolved to, written with `spec` |
 | `ms` | number | no | absent | 0.5.0 | send to outcome in whole milliseconds, when measured |
 | `via` | string | no | absent | 0.5.0 | the path the message travelled: `typed` or `socket` |
+| `session` | string | no | absent | 0.5.12 | the id the receiving CLI printed on its own session line, on a line the `session` leg carried |
 | `failed` | string[] | no | absent | 0.5.0 | the legs that did not take the send, each `<leg>: <reason>`, in the order tried |
 | `note` | string | no | absent | 0.5.0 | a qualifier the outcome cannot carry: `trigger taken, no read receipt yet`, `taken but never acted on`, and `the unsent text was pasted back` beside either |
 
