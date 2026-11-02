@@ -615,6 +615,26 @@ export function upPlan(input: UpInput): Step[] {
   const { session } = input;
   const steps: Step[] = [];
 
+  // A seat's sidebar is painted from the record: line 1 its label, line 2 its display-agent.
+  // The same step serves a ready seat and a restored one. Nothing is typed into the pane, and
+  // the seat is not launched again.
+  const repaint = (seat: UpSeat, pane: string | undefined, workspace: string | undefined): void => {
+    if (!pane || !workspace || !seat.displayAgent) return;
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'workspace', 'rename', workspace, seat.label),
+      also: herdr(session, 'pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
+      do: {
+        do: 'relabel',
+        seat: seat.name,
+        pane,
+        workspace,
+        title: seat.label,
+        displayAgent: seat.displayAgent,
+      },
+    });
+  };
+
   if (!input.sessionRunning) {
     steps.push({
       kind: 'run',
@@ -698,6 +718,8 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     if (seat.restored) {
+      // The seat keeps its pane; its sidebar is painted from the record like a ready seat's.
+      repaint(seat, seat.restored.pane ?? seat.pane, seat.restored.workspace ?? seat.workspace);
       steps.push({
         kind: 'skip',
         text: `${seat.name}: ${seat.restored.detail}`,
@@ -804,22 +826,7 @@ export function upPlan(input: UpInput): Step[] {
         continue;
       }
       // Seats launched before the sidebar took the file's lines still show the CLI or the role.
-      // Repaint both lines from the file. Nothing is typed, and the seat is not launched again.
-      if (seat.pane && seat.workspace && seat.displayAgent) {
-        steps.push({
-          kind: 'run',
-          argv: herdr(session, 'workspace', 'rename', seat.workspace, seat.label),
-          also: herdr(session, 'pane', 'report-metadata', seat.pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', seat.displayAgent),
-          do: {
-            do: 'relabel',
-            seat: seat.name,
-            pane: seat.pane,
-            workspace: seat.workspace,
-            title: seat.label,
-            displayAgent: seat.displayAgent,
-          },
-        });
-      }
+      repaint(seat, seat.pane, seat.workspace);
       steps.push({
         kind: 'skip',
         text: `${seat.name}: already ready; left as it is${seat.restartNote ? `; ${seat.restartNote}` : ''}`,
