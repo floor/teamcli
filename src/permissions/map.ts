@@ -476,6 +476,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the records it lists and is the owner\'s, from a terminal outside herdr',
     },
+    fallback: {
+      kind: 'any-caller',
+      why: 'the listing reads the project\'s fallback store and the signed retention word and changes nothing, so any caller reads it; --apply retires finished episodes and reclaims stale lock folders, and that write is the owner\'s, from a terminal outside herdr',
+    },
+    'fallback:prune': {
+      kind: 'any-caller',
+      why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the listed episodes and is the owner\'s, from a terminal outside herdr',
+    },
     batch: {
       kind: 'any-caller',
       why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',

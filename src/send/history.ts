@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
+import { folderProblemAt } from '../held.ts';
 import { storePath, storesFolder } from '../store/store.ts';
 
 /** `O_NOFOLLOW` is POSIX: 0 on platforms without it, while `heldAt` (`lstat`) still guards every open. */
@@ -123,17 +124,12 @@ export function historyPath(project: string, root: string, home: string): string
 }
 
 /**
- * Checks a directory in the state-folder ladder without following a symbolic link.
+ * Checks a directory in the state-folder ladder without following a symbolic link: the shared
+ * rule `folderProblemAt` (see src/held.ts), also used for every lock-path folder in `withLock`.
  * Missing levels are created by the caller one level at a time at mode 0700.
  */
 function ladderProblem(at: string): string | null {
-  const held = heldAt(at);
-  if (held.kind === 'missing') return null;
-  if (held.kind === 'link') return 'a symbolic link was found and not followed';
-  if (held.kind === 'fifo') return 'a FIFO was found and not followed';
-  if (held.kind !== 'folder') return 'the state folder path is not a directory';
-  if (process.getuid !== undefined && held.uid !== process.getuid()) return "another user's folder";
-  return null;
+  return folderProblemAt(at);
 }
 
 /**

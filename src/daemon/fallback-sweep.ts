@@ -15,7 +15,13 @@
 // requires a full context with the verified caller.
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { escalateDue, type EscalationReport } from '../send/fallback-events.ts';
+import {
+  escalateDue,
+  reclaimFallbackLocks,
+  retireFinished,
+  type EscalationReport,
+  type RetirementReport,
+} from '../send/fallback-events.ts';
 
 /** A hosted checkout and the team file the daemon validated when it started. */
 export type SweepRoot = { root: string; team: TeamFile };
@@ -27,6 +33,10 @@ export type SweepRootResult = {
   root: string;
   /** The pass over this root, or null when the root was not swept. */
   report: EscalationReport | null;
+  /** What this pass retired, or null when the caller did not ask for retirement. */
+  retirement: RetirementReport | null;
+  /** The lock folders this pass reclaimed, or null when it did not reclaim. */
+  reclaim: { reclaimed: number; kept: number; scanned: number } | null;
   /** Why the root was skipped; null when the pass ran. */
   why: string | null;
 };
@@ -48,6 +58,10 @@ export function sweepFallbackEscalations(input: {
   home: string;
   roots: readonly SweepRootInput[];
   now: () => Date;
+  /** Ask this pass to retire finished episodes and reclaim their lock folders after the
+   *  escalation pass. Absent, the pass only escalates — a direct sweep never writes the store's
+   *  history. */
+  retire?: { limit?: number; lockWaitMs?: number; youngMs?: number };
 }): FallbackSweepResult {
   const at = input.now();
   const roots: SweepRootResult[] = [];
@@ -59,6 +73,8 @@ export function sweepFallbackEscalations(input: {
         roots.push({
           root: given,
           report: null,
+          retirement: null,
+          reclaim: null,
           why: loaded.errors[0]?.message ?? 'the team file cannot be read',
         });
         continue;
@@ -68,15 +84,30 @@ export function sweepFallbackEscalations(input: {
       entry = given;
     }
     try {
-      const report = escalateDue(
-        { team: entry.team, root: entry.root, home: input.home, now: input.now },
-        { at, lockWaitMs: 0 },
-      );
-      roots.push({ root: entry.root, report, why: null });
+      const ctx = { team: entry.team, root: entry.root, home: input.home, now: input.now };
+      const report = escalateDue(ctx, { at, lockWaitMs: 0 });
+      // Escalation first: a pending intent is flushed before retirement may archive its episode,
+      // and an intent written during the pass keeps the marker out of the retired set.
+      let retirement: RetirementReport | null = null;
+      let reclaim: { reclaimed: number; kept: number; scanned: number } | null = null;
+      if (input.retire !== undefined) {
+        retirement = retireFinished(ctx, {
+          at,
+          lockWaitMs: input.retire.lockWaitMs ?? 0,
+          ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+        });
+        reclaim = reclaimFallbackLocks(ctx, {
+          ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+          ...(input.retire.youngMs !== undefined ? { youngMs: input.retire.youngMs } : {}),
+        });
+      }
+      roots.push({ root: entry.root, report, retirement, reclaim, why: null });
     } catch (error) {
       roots.push({
         root: entry.root,
         report: null,
+        retirement: null,
+        reclaim: null,
         why: error instanceof Error ? error.message : String(error),
       });
     }

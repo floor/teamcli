@@ -2627,6 +2627,97 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "fallback",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--apply",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "prune",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team fallback prune [--apply] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the only verb: the listing changes nothing and is any caller's, and --apply retires the listed episodes and is the owner's, from a terminal outside herdr"
+          }
+        }
+      ],
+      "usage": [
+        "team fallback prune [--apply] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "the listing reads the project's fallback store and the signed retention word and changes nothing, so any caller reads it; --apply retires finished episodes and reclaims stale lock folders, and that write is the owner's, from a terminal outside herdr"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false

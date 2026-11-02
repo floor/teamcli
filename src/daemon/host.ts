@@ -259,6 +259,12 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = 5_000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
+/** The store's retirement pass rides the heartbeat, but at most once per this interval: the
+ *  escalation pass keeps its five-second tick, and a store's history is not rewritten that often. */
+const FALLBACK_STORE_PASS_MS = 30_000;
+/** Episodes retired and lock folders judged by one retirement pass. A store with a long history
+ *  drains over several passes instead of one tick holding the event loop. */
+const FALLBACK_STORE_PASS_LIMIT = 256;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -1831,6 +1837,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // timer itself started before the roots loop; this attaches the rest of the beat to it.
   writeState();
 
+  // The first retirement pass waits one full interval after the daemon started: a restart's first
+  // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
+  // due instant never advances into a store pass.
+  let lastStorePassAt = now().getTime();
   beat = () => {
     try {
       faultInbox.consume(faultTargets);
@@ -1848,17 +1858,36 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // hosted root reads its own validated team file and its markers' durable due instants; the
     // pass keeps no state of its own, and close stops it with this timer.
     if (closed) return;
-    const swept = sweepFallbackEscalations({ home, roots: sweepRoots, now });
+    const beatAt = now().getTime();
+    const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
+    if (housekeeping) lastStorePassAt = beatAt;
+    const swept = sweepFallbackEscalations({
+      home,
+      roots: sweepRoots,
+      now,
+      ...(housekeeping
+        ? { retire: { limit: FALLBACK_STORE_PASS_LIMIT, lockWaitMs: 0 } }
+        : {}),
+    });
     for (const entry of swept.roots) {
       if (entry.why !== null) {
         logLine(`fallback sweep ${entry.root}: ${entry.why}`);
         continue;
       }
       const report = entry.report;
-      if (report === null) continue;
-      if (report.escalated.length === 0 && report.refused.length === 0 && report.unreadable.length === 0) continue;
+      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
+        );
+      }
+      const retired = entry.retirement;
+      if (retired === null) continue;
+      const reclaimed = entry.reclaim?.reclaimed ?? 0;
+      if (retired.retired.length === 0 && retired.refused.length === 0 && retired.unreadable.length === 0 && reclaimed === 0) {
+        continue;
+      }
       logLine(
-        `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
+        `fallback store ${entry.root}: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
       );
     }
   };

@@ -67,8 +67,8 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
@@ -77,9 +77,10 @@ import { recordDir } from '../commands/messages.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../policy/delivery.ts';
+import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { LockBusyError, withLock } from '../state.ts';
-import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
+import { LockBusyError, reclaimLockDir, withLock } from '../state.ts';
+import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
@@ -270,6 +271,18 @@ export function publicationLedgerFileName(recipient: CanonicalRecipient, message
   return `fallback-published-${episodeHash(recipient, messageId)}.jsonl`;
 }
 
+/** Where the store keeps a retired episode's marker and attempt ledger. The publication ledger is
+ *  never archived: replay dedup must outlive the episode. */
+export const FALLBACK_ARCHIVE_DIR = 'fallback-archive';
+
+function episodeArchiveMarkerPath(storeDir: string, recipient: CanonicalRecipient, messageId: string): string {
+  return join(storeDir, FALLBACK_ARCHIVE_DIR, 'markers', `${episodeHash(recipient, messageId)}.json`);
+}
+
+function episodeArchiveAttemptsPath(storeDir: string, recipient: CanonicalRecipient, messageId: string): string {
+  return join(storeDir, FALLBACK_ARCHIVE_DIR, 'attempts', attemptLedgerFileName(recipient, messageId));
+}
+
 /** The event record id of the immediate all-failed event: deterministic per episode, and derived
  *  from the canonical recipient as well as the message id, so two recipients of one message id in
  *  one session never share an event key. */
@@ -380,17 +393,47 @@ function noteLocked(ctx: FallbackContext, fact: TransportFact): FallbackNote {
       };
     }
   } else {
-    marker = {
-      format: 1,
-      messageId: fact.messageId,
-      recipient: fact.recipient,
-      recordDigest: fact.recordDigest,
-      sender: logTag(ctx.caller),
-      status: 'trying',
-      attempts: [],
-      receipt: { kind: 'unknown' },
-      updatedAt: fact.at,
-    };
+    // A retired episode is still the same episode. Its archived marker answers a fact after
+    // retirement: a delivered or refused one is a duplicate that writes nothing, an expired one
+    // reopens because the walk evidently was not finished, and another digest or recipient is
+    // the same conflict a live marker would give.
+    const archived = markerAt(
+      episodeArchiveMarkerPath(storeDirOf(ctx, fact.recipient), fact.recipient, fact.messageId),
+    );
+    if (archived.kind === 'unreadable') return { ok: false, kind: 'marker', reason: archived.reason };
+    const archivedKind = archived.kind === 'ok' ? finishedKind(archived.marker) : null;
+    if (archived.kind === 'ok' && archivedKind !== null) {
+      if (!sameRecipient(archived.marker.recipient, fact.recipient)) {
+        return {
+          ok: false,
+          kind: 'conflict',
+          reason: `fallback: ${fact.messageId} already names another recipient than ${fact.recipient.seat}`,
+        };
+      }
+      if (archived.marker.recordDigest !== fact.recordDigest) {
+        return {
+          ok: false,
+          kind: 'conflict',
+          reason: `fallback: ${fact.messageId} already records another digest than this record`,
+        };
+      }
+      if (archivedKind === 'delivered' || archivedKind === 'refused') {
+        return { ok: true, state: 'duplicate', marker: archived.marker, eventDuplicate: false, dueAt: null };
+      }
+      marker = { ...archived.marker };
+    } else {
+      marker = {
+        format: 1,
+        messageId: fact.messageId,
+        recipient: fact.recipient,
+        recordDigest: fact.recordDigest,
+        sender: logTag(ctx.caller),
+        status: 'trying',
+        attempts: [],
+        receipt: { kind: 'unknown' },
+        updatedAt: fact.at,
+      };
+    }
   }
 
   const receipt = normalizeReceipt(fact.receipt);
@@ -624,6 +667,346 @@ type EscalationStep =
   | { kind: 'unreadable'; path: string }
   | { kind: 'refused'; reason: string }
   | { kind: 'escalated'; entry: EscalationEntry };
+
+/** How a finished episode ended: its message arrived, its escalation went out after every live
+ *  route failed, or the walk was never finished and its last fact is past retention. */
+export type FinishedKind = 'delivered' | 'refused' | 'expired';
+
+/**
+ * Classify an episode as finished, or null while it still has work: a pending event intent (the
+ * escalation pass must flush it first), an exhaustion no escalation has been decided for yet.
+ * A `trying` episode is `expired` by kind; whether it is old enough to retire is the retention
+ * word's question, not this one's.
+ */
+export function finishedKind(marker: FallbackMarker): FinishedKind | null {
+  if (marker.outbox !== undefined) return null;
+  if (marker.status === 'delivered') return 'delivered';
+  if (marker.status === 'all-failed') return marker.escalatedAt !== undefined ? 'refused' : null;
+  return 'expired';
+}
+
+/** The retention word in force for a receiver, in seconds, or why it could not be read. */
+export type FallbackRetention = { seconds: number | null; refusal: string | null };
+
+/**
+ * Resolve how long an unfinished episode's marker may stand from the receiver's own signed chain:
+ * the canonical `event-retention-days` in days, through the same reader every event threshold
+ * uses. The team is the receiver's, selected exactly as the escalation delay selects it, so a
+ * cross-root episode without its receiver's file in hand reads no chain and retires nothing
+ * expired. An unreadable chain fails closed: the refusal is reported and the episode stays.
+ */
+export function fallbackRetentionOf(
+  ctx: EscalationContext,
+  recipient: CanonicalRecipient,
+  at: Date,
+): FallbackRetention {
+  const team = ctx.recipientTeam ?? (recipient.root === ctx.root ? ctx.team : null);
+  if (team === null) {
+    return {
+      seconds: null,
+      refusal: `no team file is in hand for the receiver's root ${recipient.root}: the sender's chain is never read for another team`,
+    };
+  }
+  const inForce = eventThresholdsInForce({
+    home: ctx.home,
+    entity: team.entity ?? '',
+    projectId: projectIdOfTeam(ctx.home, team, recipient.root) ?? '',
+    root: recipient.root,
+    team,
+    seat: team.seats.find((seat) => seat.name === recipient.seat) ?? null,
+    agentId: recipient.toId ?? null,
+    now: at,
+    upToLevel: 'team',
+  });
+  if (!inForce.ok) {
+    const said = inForce.refusals.map((refusal) => refusal.message).join('; ');
+    return { seconds: null, refusal: said === '' ? 'the event retention word could not be read' : said };
+  }
+  return { seconds: inForce.thresholds.retention_days * 86_400, refusal: null };
+}
+
+/** One finished episode the store could retire, with the age that decides an expired one. */
+export type RetirementCandidate = {
+  messageId: string;
+  recipient: CanonicalRecipient;
+  kind: FinishedKind;
+  /** Seconds from the marker's last update to the planning instant. */
+  ageSeconds: number;
+  /** Whether a retirement pass at this instant would retire it now. */
+  eligible: boolean;
+  /** An expired but not yet eligible episode's earliest retire instant; null when the retention
+   *  word is unreadable and no instant can be named. */
+  until: string | null;
+};
+
+export type RetirementPlan = {
+  at: string;
+  /** Finished episodes, oldest first. */
+  candidates: RetirementCandidate[];
+  /** Markers a pass found but could not trust; never rewritten. */
+  unreadable: string[];
+  /** Trusted markers the pass read, finished or not. */
+  scanned: number;
+  /** The first receiver chain the plan resolved, when an expired episode needed one. */
+  retention: FallbackRetention | null;
+};
+
+/** Everything a retirement pass did, per root, for a sweep to add to its own report. */
+export type RetirementReport = {
+  at: string;
+  retired: { messageId: string; recipient: CanonicalRecipient; kind: FinishedKind; at: string; archive: string }[];
+  /** Expired episodes inside the retention window, and expired ones whose word is unreadable. */
+  waiting: { messageId: string; recipient: CanonicalRecipient; ageSeconds: number; until: string | null }[];
+  /** Episodes another live holder kept: ordinary contention, left to the next pass. */
+  deferred: { messageId: string; recipient: CanonicalRecipient }[];
+  /** Episodes that were eligible but whose retirement did not complete; the live marker stays. */
+  refused: { messageId: string; recipient: CanonicalRecipient; reason: string }[];
+  unreadable: string[];
+  scanned: number;
+  retention: FallbackRetention | null;
+};
+
+/**
+ * List the store's finished episodes by age without writing anything. Delivered and refused
+ * episodes are eligible at once; an expired one is eligible once its last update is at least the
+ * receiver's signed `event-retention-days` old. The chain is read only when an expired episode is
+ * there to judge, so a store of delivered and escalated episodes costs no policy read.
+ */
+export function planRetirement(ctx: EscalationContext, options: { at?: Date } = {}): RetirementPlan {
+  const at = options.at ?? ctx.now();
+  const plan: RetirementPlan = { at: at.toISOString(), candidates: [], unreadable: [], scanned: 0, retention: null };
+  const words = new Map<string, FallbackRetention>();
+  const ordered: { order: string; candidate: RetirementCandidate }[] = [];
+  for (const found of markersUnder(ctx.root)) {
+    if (found.kind === 'unreadable') {
+      plan.unreadable.push(found.path);
+      continue;
+    }
+    plan.scanned += 1;
+    const kind = finishedKind(found.marker);
+    if (kind === null) continue;
+    const { recipient, messageId } = found.marker;
+    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(found.marker.updatedAt)) / 1000));
+    let eligible = kind !== 'expired';
+    let until: string | null = null;
+    if (kind === 'expired') {
+      const key = fallbackKeyOf(recipient, '');
+      let word = words.get(key);
+      if (word === undefined) {
+        word = fallbackRetentionOf(ctx, recipient, at);
+        words.set(key, word);
+      }
+      if (plan.retention === null) plan.retention = word;
+      if (word.seconds !== null) {
+        until = new Date(Date.parse(found.marker.updatedAt) + word.seconds * 1000).toISOString();
+        eligible = at.getTime() >= Date.parse(until);
+      }
+      // With an unreadable word, `until` stays null and the episode stays: fail closed.
+    }
+    ordered.push({
+      order: `${found.marker.updatedAt}\u0000${messageId}\u0000${fallbackKeyOf(recipient, messageId)}`,
+      candidate: { messageId, recipient, kind, ageSeconds, eligible, until },
+    });
+  }
+  ordered.sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : 0));
+  plan.candidates = ordered.map((entry) => entry.candidate);
+  return plan;
+}
+
+/**
+ * Retire finished episodes: move each eligible marker and its attempt ledger into the store's
+ * archive, then remove the live marker. The publication ledger stays where it is — replay dedup
+ * outlives the episode. Each episode is retired under its own key lock and re-read inside it, so
+ * a fact or a due escalation running beside the pass is neither lost nor archived mid-write: it
+ * lands first and the pass sees the new state, or it waits for the pass. Only the first `limit`
+ * eligible episodes, oldest first, are retired per pass. A retirement that does not complete
+ * leaves the live marker in place and is reported; the next pass tries again.
+ */
+export function retireFinished(
+  ctx: EscalationContext,
+  options: { at?: Date; lockWaitMs?: number; limit?: number } = {},
+): RetirementReport {
+  const at = options.at ?? ctx.now();
+  const lockWaitMs = options.lockWaitMs ?? 10_000;
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
+  const plan = planRetirement(ctx, { at });
+  const report: RetirementReport = {
+    at: at.toISOString(),
+    retired: [],
+    waiting: [],
+    deferred: [],
+    refused: [],
+    unreadable: plan.unreadable,
+    scanned: plan.scanned,
+    retention: plan.retention,
+  };
+  for (const candidate of plan.candidates) {
+    if (report.retired.length >= limit) break;
+    if (!candidate.eligible) {
+      report.waiting.push({
+        messageId: candidate.messageId,
+        recipient: candidate.recipient,
+        ageSeconds: candidate.ageSeconds,
+        until: candidate.until,
+      });
+      continue;
+    }
+    let step: RetireStep;
+    try {
+      step = withKeyLock(
+        ctx,
+        candidate.recipient,
+        candidate.messageId,
+        () => retireOne(ctx, candidate.recipient, candidate.messageId, at),
+        lockWaitMs,
+      );
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        report.deferred.push({ messageId: candidate.messageId, recipient: candidate.recipient });
+        continue;
+      }
+      step = { kind: 'refused', reason: errorMessage(error) };
+    }
+    if (step.kind === 'retired') {
+      report.retired.push(step.entry);
+      // The key lock's folder is what the next pass would otherwise walk forever. A folder a
+      // live holder took after the pass released the key stays; the reclaim pass judges it.
+      try {
+        rmdirSync(join(storeDirOf(ctx, candidate.recipient), 'locks', `fallback-${episodeHash(candidate.recipient, candidate.messageId)}`));
+      } catch {}
+    } else if (step.kind === 'refused') {
+      report.refused.push({ messageId: candidate.messageId, recipient: candidate.recipient, reason: step.reason });
+    } else if (step.kind === 'waiting') {
+      report.waiting.push(step.waiting);
+    }
+  }
+  return report;
+}
+
+type RetireStep =
+  | { kind: 'gone' }
+  | { kind: 'retired'; entry: RetirementReport['retired'][number] }
+  | { kind: 'waiting'; waiting: RetirementReport['waiting'][number] }
+  | { kind: 'refused'; reason: string };
+
+function retireOne(
+  ctx: EscalationContext,
+  recipient: CanonicalRecipient,
+  messageId: string,
+  at: Date,
+): RetireStep {
+  const path = markerPathOf(recipient, messageId);
+  const read = markerAt(path);
+  if (read.kind === 'unreadable') return { kind: 'refused', reason: read.reason };
+  if (read.kind === 'none') return { kind: 'gone' };
+  const marker = read.marker;
+  if (!sameRecipient(marker.recipient, recipient) || marker.messageId !== messageId) {
+    return { kind: 'refused', reason: `${path}: the marker names another episode` };
+  }
+  const kind = finishedKind(marker);
+  if (kind === null) return { kind: 'gone' };
+  if (kind === 'expired') {
+    // Re-checked under the lock against the marker as it stands now, not the scan's copy.
+    const word = fallbackRetentionOf(ctx, recipient, at);
+    const ageSeconds = Math.max(0, Math.round((at.getTime() - Date.parse(marker.updatedAt)) / 1000));
+    if (word.seconds === null) {
+      return { kind: 'waiting', waiting: { messageId, recipient, ageSeconds, until: null } };
+    }
+    const until = new Date(Date.parse(marker.updatedAt) + word.seconds * 1000).toISOString();
+    if (at.getTime() < Date.parse(until)) {
+      return { kind: 'waiting', waiting: { messageId, recipient, ageSeconds, until } };
+    }
+  }
+  const storeDir = storeDirOf(ctx, recipient);
+  // The archive tree is checked before the first write, not left to a recursive mkdir: each
+  // folder below the store must be a real directory of this user's, and a link anywhere in the
+  // ladder refuses the whole retirement with the live marker untouched.
+  const folderProblem = ensureFoldersBelow(storeDir, [
+    FALLBACK_ARCHIVE_DIR,
+    join(FALLBACK_ARCHIVE_DIR, 'markers'),
+    join(FALLBACK_ARCHIVE_DIR, 'attempts'),
+  ]);
+  if (folderProblem !== null) return { kind: 'refused', reason: folderProblem };
+  const archive = episodeArchiveMarkerPath(storeDir, recipient, messageId);
+  try {
+    dropMessage(dirname(archive), basename(archive), `${JSON.stringify(marker, null, 2)}\n`);
+  } catch (error) {
+    return { kind: 'refused', reason: `${archive}: the marker was not archived: ${errorMessage(error)}` };
+  }
+  const moved = moveAttemptLedger(storeDir, recipient, messageId);
+  if (moved !== null) return { kind: 'refused', reason: moved };
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { kind: 'refused', reason: `${path}: the retired marker was not removed: ${errorMessage(error)}` };
+    }
+  }
+  return { kind: 'retired', entry: { messageId, recipient, kind, at: at.toISOString(), archive } };
+}
+
+/** Move one episode's attempt ledger beside its archived marker, merging when an earlier
+ *  retirement already archived one. The merge is idempotent: a source whose exact text already
+ *  ends the archive was appended by a pass that then failed to remove it, so this pass only
+ *  removes the source (the merge would add the same bytes again). Any other archive is rewritten
+ *  atomically through the store's tmp-and-rename write. A ledger that cannot be read or written
+ *  names why and leaves the episode to the next pass; the live marker is removed only after. */
+function moveAttemptLedger(storeDir: string, recipient: CanonicalRecipient, messageId: string): string | null {
+  const source = join(storeDir, attemptLedgerFileName(recipient, messageId));
+  const text = readNoFollow(source);
+  if (text === null) return `${source}: the attempt ledger could not be read; the episode stays`;
+  if (text === '') return null;
+  const dest = episodeArchiveAttemptsPath(storeDir, recipient, messageId);
+  try {
+    const existing = readNoFollow(dest);
+    if (existing === null) return `${dest}: the archived attempt ledger could not be read; the episode stays`;
+    if (existing === '') {
+      renameSync(source, dest);
+      return null;
+    }
+    if (!existing.endsWith(text)) {
+      dropMessage(dirname(dest), basename(dest), existing + text);
+    }
+    unlinkSync(source);
+    return null;
+  } catch (error) {
+    return `${source}: the attempt ledger was not archived: ${errorMessage(error)}`;
+  }
+}
+
+const FALLBACK_LOCK_DIR = /^fallback-[0-9a-f]{16}$/;
+
+/**
+ * Reclaim the key-lock folders of `ctx.root`'s store whose owner is gone: an empty folder past
+ * the grace (`youngMs`, 60 s by default, for an acquirer between its `mkdir` and its `open`), a
+ * folder whose lock names a dead holder, and a lock file too old to be a writer still starting
+ * up. A live holder's folder, a younger lock and a folder whose name is not an episode's are left
+ * alone. A pass that loses an empty folder under it recreates it (`withLock`), so a reclaim never
+ * breaks a sweep in flight.
+ */
+export function reclaimFallbackLocks(
+  ctx: EscalationContext,
+  options: { limit?: number; youngMs?: number } = {},
+): { reclaimed: number; kept: number; scanned: number } {
+  const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
+  const limit = options.limit ?? 64;
+  const names = folderNames(locksDir).filter((name) => FALLBACK_LOCK_DIR.test(name));
+  let reclaimed = 0;
+  let kept = 0;
+  let scanned = 0;
+  for (const name of names.slice(0, limit)) {
+    scanned += 1;
+    const result = reclaimLockDir(join(locksDir, name), { youngMs: options.youngMs });
+    if (result === 'removed') reclaimed += 1;
+    else if (result === 'kept') kept += 1;
+  }
+  return { reclaimed, kept, scanned };
+}
+
+/** The store of episodes whose record lives under `recipient.root`. */
+function storeDirOf(ctx: EscalationContext, recipient: CanonicalRecipient): string {
+  return dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+}
 
 function escalateOne(
   ctx: EscalationContext,
@@ -899,7 +1282,7 @@ function withKeyLock<T>(
   work: () => T,
   waitMs = 10_000,
 ): T {
-  const storeDir = dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+  const storeDir = storeDirOf(ctx, recipient);
   const ladder = ensureStoreLadder(storeDir, ctx.home);
   if (ladder !== null) throw new Error(ladder);
   return withLock(join(storeDir, 'locks', `fallback-${episodeHash(recipient, messageId)}`), work, { waitMs });
