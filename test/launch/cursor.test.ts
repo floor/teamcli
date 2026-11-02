@@ -39,7 +39,8 @@ describe('Cursor launch and captured screens', () => {
     expect(versionVerdict('2026.10.14-0f9edde', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.16-e3cb207', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.19-6bbf2c4', cursor.tested)).toBe('tested');
-    expect(versionVerdict('2026.10.20', cursor.tested)).toBe('newer');
+    expect(versionVerdict('2026.10.22-27dcf5f', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.23', cursor.tested)).toBe('newer');
     expect(versionVerdict('2026.09.30', cursor.tested)).toBe('older');
   });
 
@@ -63,7 +64,7 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', current('permission')).kind).toBe('permission');
     expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
     // The folder is the profile's ceiling, and the composer's status row is its model.
-    expect(profileFor('cursor')?.tested.to).toBe('2026.10.19');
+    expect(profileFor('cursor')?.tested.to).toBe('2026.10.22');
     expect(runningModel('cursor', current('idle'))).toEqual({ model: 'Grok', version: '4.7' });
   });
 
