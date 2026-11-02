@@ -293,11 +293,12 @@ export type StartMachineDaemonInput = {
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
   /**
    * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
-   * picked up without a restart. Absent, no reminder runs; resolving the config file into these
-   * specs is the caller's business. A reader that throws is logged and fires nothing on that
-   * beat, and a reminder is machine-scoped: the one list serves every hosted root.
+   * picked up without a restart. Absent, no reminder runs; reading the configured list into
+   * these specs is the caller's business, and the reader gets the beat's log so a refused entry
+   * is named. A reader that throws is logged and fires nothing on that beat, and a reminder is
+   * machine-scoped: the one list serves every hosted root.
    */
-  reminders?: () => readonly ReminderSpec[];
+  reminders?: (log: (line: string) => void) => readonly ReminderSpec[];
   /**
    * The transport a reminder uses. The default is the verified daemon sender, which proves this
    * process's own state record, lock and heartbeat before every leg; a test injects its own so a
@@ -2125,7 +2126,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed || input.reminders === undefined) return;
     let specs: readonly ReminderSpec[];
     try {
-      specs = input.reminders();
+      specs = input.reminders((line) => logLine(line));
     } catch (error) {
       logLine(`reminders: the configured list could not be read — ${messageOf(error)}; nothing fires this beat`);
       return;

@@ -55,6 +55,8 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
+import { machineZone, readReminderConfig } from '../reminder/config.ts';
+import { createReminderProvider } from '../reminder/provider.ts';
 import type { ReminderSpec } from '../reminder/run.ts';
 import { readRemindersState } from '../reminder/state.ts';
 import { reminderStatus, type ReminderReading } from '../reminder/status.ts';
@@ -125,12 +127,17 @@ export type DaemonCommandSources = {
   sleep?: (ms: number) => Promise<void>;
   /**
    * The configured reminders `status --json` reports, read through the same parser the daemon
-   * runs. Absent, the reading carries no `reminders` field at all; a reader that throws is named
-   * in `remindersError` and the daemon's own health still prints. Internal, like the daemon's
-   * own `reminders` input; not a setting and not printed by the one-line status.
+   * runs. Absent, the reader is the entity record's own (`configuredReminders`); a reader that
+   * throws is named in `remindersError` and the daemon's own health still prints, and a refused
+   * entry is named there while the entries that read are still reported. Internal, like the
+   * daemon's own `reminders` input; not a setting and not printed by the one-line status.
    */
-  reminders?: () => readonly ReminderSpec[];
+  reminders?: () => ReminderStatusInput;
 };
+
+/** What a status reader answers: the reminders that read, and the entries the parser refused as
+ *  one line each — the same words the daemon logs. */
+export type ReminderStatusInput = { specs: readonly ReminderSpec[]; problems?: readonly string[] };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
 export default daemon;
@@ -695,25 +702,47 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
 }
 
 /**
- * The reminder reading `status --json` carries: none at all when the command was given no config
- * reader, the named failure when the reader throws, and otherwise one entry per configured
- * reminder read from the same state record the tick writes. A state record that cannot be read
- * is named in `error`, and the entries then carry no results. The one-line status never changes.
+ * The reminder reading `status --json` carries: the named failure when the reader throws, and
+ * otherwise one entry per configured reminder read from the same state record the tick writes. A
+ * refused entry, and a state record that cannot be read, are named in `error` while the entries
+ * that read are still reported. The one-line status never changes.
  */
 function remindersForStatus(
-  reader: (() => readonly ReminderSpec[]) | undefined,
+  reader: () => ReminderStatusInput,
   home: string,
   now: (() => Date) | undefined,
-): { reminders: ReminderReading[]; error: string | null } | null {
-  if (reader === undefined) return null;
-  let specs: readonly ReminderSpec[];
+): { reminders: ReminderReading[]; error: string | null } {
+  let read: ReminderStatusInput;
   try {
-    specs = reader();
+    read = reader();
   } catch (error) {
     return { reminders: [], error: error instanceof Error ? error.message : String(error) };
   }
-  const reading = reminderStatus(specs, readRemindersState(home), now === undefined ? new Date() : now());
-  return { reminders: reading.reminders, error: reading.unreadable };
+  const reading = reminderStatus(read.specs, readRemindersState(home), now === undefined ? new Date() : now());
+  const named = [...(read.problems ?? []), ...(reading.unreadable === null ? [] : [reading.unreadable])];
+  return { reminders: reading.reminders, error: named.length === 0 ? null : named.join('; ') };
+}
+
+/**
+ * The entity record as a status reader: every reminder that reads, with the targets left to the
+ * fire (the reading asks only what is scheduled and what the state record says came of it), and
+ * one line per entry the parser refused. An absent or unreadable file names itself the same way
+ * the daemon logs it, so a status the owner runs alone still says what the daemon would skip.
+ */
+function configuredReminders(home: string): () => ReminderStatusInput {
+  return () => {
+    const read = readReminderConfig(home, { defaultZone: machineZone() });
+    return {
+      specs: read.entries.map((entry) => ({
+        name: entry.name,
+        at: entry.at,
+        zone: entry.zone,
+        ...(entry.catchUp === undefined ? {} : { catchUp: entry.catchUp }),
+        targets: [],
+      })),
+      problems: read.problems.map((problem) => problem.why),
+    };
+  };
 }
 
 /**
@@ -1045,16 +1074,12 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       ...(sources.now !== undefined ? { now: sources.now } : {}),
     });
     if (parsed.json) {
-      const reminders = remindersForStatus(sources.reminders, home, sources.now);
+      const reminders = remindersForStatus(sources.reminders ?? configuredReminders(home), home, sources.now);
       writeJson(io, 'team.daemon-status', {
         format: 1,
         daemon: health,
-        ...(reminders === null
-          ? {}
-          : {
-              reminders: reminders.reminders,
-              ...(reminders.error === null ? {} : { remindersError: reminders.error }),
-            }),
+        reminders: reminders.reminders,
+        ...(reminders.error === null ? {} : { remindersError: reminders.error }),
       });
     } else {
       io.stdout(`${statusLine(health)}\n`);
@@ -1086,10 +1111,20 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // foreground run, and the non-zero exit below hands the restart to the service manager.
     let fatalWhy: string | null = null;
     let endRun: (() => void) | null = null;
+    // The configured list the beat runs: the entity record read on its own stamp, or the
+    // caller's injected reader, whose refused entries are named through the beat's log.
+    const reminderReader = sources.reminders === undefined
+      ? createReminderProvider({ home })
+      : (log: (line: string) => void) => {
+          const read = sources.reminders!();
+          for (const problem of read.problems ?? []) log(problem);
+          return read.specs;
+        };
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
       startedBy,
+      reminders: reminderReader,
       version: sources.version ?? installedVersion(),
       gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
       onFatal: (why: string) => {

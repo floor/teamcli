@@ -147,7 +147,7 @@ describe('team daemon status --json', () => {
     const code = await runDaemon(['status', '--json'], io, {
       home,
       now: () => NOW,
-      reminders: () => [spec()],
+      reminders: () => ({ specs: [spec()] }),
     });
 
     expect(code).toBe(0);
@@ -192,15 +192,37 @@ describe('team daemon status --json', () => {
     expect(doc.remindersError).toBe('line 3: unknown key "when"');
   });
 
-  test('without a config reader the document is exactly what it was before', async () => {
+  test('without an injected reader, the entity record is read and a refused entry is named', async () => {
     const home = scratchHome();
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(
+      join(home, '.config', 'team', 'entities.yaml'),
+      [
+        'acme:',
+        '  reminders:',
+        '    - name: daily',
+        '      at: ["07:00", "19:00"]',
+        '      zone: Europe/Paris',
+        '      to: [orchestrator@acme]',
+        '      text: "Do the thing."',
+        '    - name: broken',
+        '      at: ["25:00"]',
+        '      to: [lead@acme]',
+      ].join('\n'),
+    );
     const io = testIo(home);
 
     const code = await runDaemon(['status', '--json'], io, { home, now: () => NOW });
 
     expect(code).toBe(0);
     const doc = JSON.parse(io.out) as Record<string, unknown>;
-    expect(Object.hasOwn(doc, 'reminders')).toBe(false);
-    expect(Object.hasOwn(doc, 'remindersError')).toBe(false);
+    expect(doc.reminders).toEqual([{
+      name: 'daily',
+      nextAt: '2026-11-03T06:00:00.000Z',
+      lastDue: '2026-11-02T19:00',
+      lastResult: null,
+      missed: false,
+    }]);
+    expect(doc.remindersError).toContain('at holds a value that is not an HH:MM time');
   });
 });

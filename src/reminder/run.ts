@@ -11,7 +11,7 @@
 import { readRemindersState, recordReminder, settleReminder, type ReminderDelivery, type ReminderRecord } from './state.ts';
 import { catchUpWindow, decideDue, latestDue, type ReminderStored, type ReminderTimes } from './schedule.ts';
 import { sendDaemonDirect, type DaemonDirectContext, type DaemonDirectRequest, type DaemonDirectResult } from './direct-send.ts';
-import type { DaemonRecipient } from '../commands/send.ts';
+import { realHost, type DaemonRecipient } from '../commands/send.ts';
 
 /** One seat a reminder addresses and the text that seat receives: the parser has already
  *  resolved the address to a declared seat of a hosted checkout and filled the placeholders. */
@@ -67,7 +67,11 @@ const inFlight = new Set<string>();
  */
 export async function reminderTick(input: ReminderTickInput): Promise<ReminderEvent[]> {
   const { home, now, specs } = input;
-  const send: ReminderSend = input.send ?? ((context, request) => sendDaemonDirect(context, request));
+  // The default transport is the verified daemon sender, bound to this tick's home: the state
+  // record, lock and heartbeat it proves are the ones this daemon process holds, whatever home
+  // the daemon was started with.
+  const send: ReminderSend =
+    input.send ?? ((context, request) => sendDaemonDirect(context, request, { ...realHost, home }));
   const log: ReminderLog = input.log ?? (() => {});
   const events: ReminderEvent[] = [];
   for (const spec of specs) {
