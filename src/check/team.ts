@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
+import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -45,7 +46,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
-import { seatDeliveryClass } from '../launch/delivery-class.ts';
+import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { listUnread } from '../mcp/inbox.ts';
@@ -559,6 +560,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A Codex seat whose last launch fell back to an unmanaged line, in the same words `team
     // status` prints: the fallback is a reading worth acting on, never a silent state.
     ...unmanagedEndpointNotes(team.seats, state),
+    // A seat whose last webhook delivery did not arrive, in the same words `team status` prints:
+    // the send could not have known, so the outcome is read here.
+    ...webhookDeliveryNotes(team.seats, state),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
@@ -1593,11 +1597,11 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
  * nor the `typed` wake word chose its routes, and the check calls no choice a skip. Only a pane
  * that still holds the seat is read (`paneShowsSeat`, the gate `compare()` applies): a CLI that
  * ended in a retained pane is named once by the comparison and gains no line here. A seat that
- * opts out in the team file (`inbound` other than accept), a human's pane, a seat its launch
- * already wakes through the push channel, and a seat whose class is between-turns keep no
- * promise the socket would keep: none is named. A push class the socket itself supplied is
- * never an exemption — the class reader does not see the held-frame guard, so the socket gate
- * below decides, not the class it made.
+ * opts out in the team file (`inbound` other than accept), a human's pane, and a seat whose
+ * class can already be woken while it is idle — through its runtime queue, its push channel, or
+ * the socket this leg would dial — keep no promise the socket would keep: none is named. The
+ * class reads the same held-frame mark and makes the same address choice as the leg below, so a
+ * push class it supplies is that leg's own reading, not a second one that could disagree.
  *
  * Three reasons are the team's to fix and each is a difference, like an unread drop — one line
  * per seat, the repair named, exit 1:
@@ -1651,8 +1655,14 @@ function socketSkippedDeliveries(
       // keeps for the seat, never a finding read off half a store.
       continue;
     }
-    // The class the seat's own launch left, from the one reader of it.
-    const delivery = seatDeliveryClass({ dir, root, session, seat: seat.name, declared: seat, state: recorded, home });
+    // The class the seat's own launch left, from the one reader of it, with the pane's processes
+    // and this check's own sockets folders: a recorded socket the pane no longer carries is no
+    // push class here either, the same proof the send's leg below makes.
+    const delivery = seatDeliveryClass({
+      dir, root, session, seat: seat.name, declared: seat, state: recorded, home,
+      processes: live.processes?.[listed.pane] ?? null,
+      sockets,
+    });
     // Only the CLI whose profile declares push is read: a seat that never promised a socket is
     // not falling short of one.
     if (delivery.evidence.declared !== 'push') continue;
@@ -1661,11 +1671,11 @@ function socketSkippedDeliveries(
     if (seat.inbound !== undefined && seat.inbound !== 'accept') continue;
     const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
     if (!overrides.ok || overrides.overrides.human === true) continue;
-    // A seat its launch already wakes through the push channel keeps the promise without a
-    // socket. A push class the socket itself supplied is not an exemption: the class reader does
-    // not see the held-frame guard, so the socket gate below decides.
-    if (delivery.class === 'between-turns') continue;
-    if (delivery.class === 'push' && delivery.evidence.channel === true) continue;
+    // A seat the class proves can be woken while it is idle keeps the promise without a socket:
+    // its runtime queue, its push channel, or the socket this leg would dial. The class reads
+    // the same held-frame mark and the same address choice the leg does, so its word and the
+    // leg's cannot split.
+    if (wakeableWhileIdle(delivery.class)) continue;
     let order: readonly DeliveryLeg[];
     let declaredOrder: boolean;
     try {

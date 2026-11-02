@@ -65,7 +65,8 @@ import {
 } from './log.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
-import { makeWebhookDelivery } from './webhook.ts';
+import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
+import { recordWebhookDelivery } from './webhook-record.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 import { RECORD_NAME, verifiedArrival } from './arrival.ts';
 
@@ -184,6 +185,9 @@ export type StartBusInput = {
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
+  /** The folder of the team file: the state beside it records each seat's last webhook delivery,
+   *  which `team check` and `team status` note. Absent, a delivery's facts go to `stderr` alone. */
+  stateDir?: string;
   /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
    *  each seat's configured adapter row and re-reads it when the root's registry record changes;
    *  a caller may inject its own for a scene, and that one is the caller's to refresh. */
@@ -737,8 +741,17 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
     // awaits, so a pass or a publish is never failed by a routine.
+    const stateDir = input.stateDir;
     const builtIn = input.deliver === undefined
-      ? makeWebhookDelivery({ team: input.team, stderr: input.stderr, root: input.root })
+      ? makeWebhookDelivery({
+          team: input.team,
+          stderr: input.stderr,
+          root: input.root,
+          ...(stateDir === undefined ? {} : {
+            onResult: (seat: string, record: SignedEventRecord, facts: WebhookFacts) =>
+              recordWebhookDelivery(stateDir, input.team.session, seat, record, facts),
+          }),
+        })
       : null;
     const deliver = input.deliver ?? builtIn!;
 

@@ -172,31 +172,44 @@ for (const status of [200, 202, 299]) {
     expect(held.posts[0]!.body + bodyAndLogs(w, reports)).not.toContain(w.secret); expect(fs.readFileSync(path, 'utf8')).toBe(before);
   });
 }
-test('non-2xx really retries three times with one-second then four-second gaps and preserves the drop', async () => {
+test('non-2xx is reported once and never asked again, and the drop is preserved', async () => {
   const w = world(); const held = receiver(() => new Response('synthetic rejection', { status: 503 })); use(w, held.url);
   const path = drop(w, 'rejected'); const before = fs.readFileSync(path, 'utf8'); const reports: string[] = [];
   expect(await delivery().deliverWebhook({ seat: 'routine', webhook: w.webhook, record: event(w, 'rejected'), report: text => reports.push(text) })).toBe('failed');
-  expect(held.posts).toHaveLength(3); expect(held.posts[1]!.at - held.posts[0]!.at).toBeGreaterThanOrEqual(900);
-  expect(held.posts[2]!.at - held.posts[1]!.at).toBeGreaterThanOrEqual(3900);
-  expect(reports.join('\n')).toContain('after 3 attempts'); expect(reports.join('\n')).toContain('HTTP 503');
+  // The routine answered: the body reached it, so a second POST could start a second run.
+  expect(held.posts).toHaveLength(1);
+  expect(reports.join('\n')).toContain('after 1 attempt'); expect(reports.join('\n')).toContain('HTTP 503');
   expect(held.posts.map(post => post.body).join('') + bodyAndLogs(w, reports)).not.toContain(w.secret);
   expect(fs.readFileSync(path, 'utf8')).toBe(before);
 }, 20_000);
-for (const mode of ['timeout', 'no-connection'] as const) {
-  test(mode + ' makes exactly three real requests and schedules the released backoff', async () => {
-    const w = world(); const waits: number[] = []; const reports: string[] = []; let attempts = 0;
-    const held = receiver(() => new Promise<Response>(resolve => releases.push(() => resolve(new Response('released')))));
-    use(w, held.url); if (mode === 'no-connection') held.server.stop(true);
-    const path = drop(w, mode); const before = fs.readFileSync(path, 'utf8');
-    const realFetch: typeof fetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => { attempts += 1; return fetch(url, init); }) as typeof fetch;
-    const outcome = await delivery().deliverWebhook({ seat: 'routine', webhook: w.webhook, record: event(w, mode),
-      policy: { timeoutMs: 80 }, fetch: realFetch, sleep: async ms => { waits.push(ms); }, report: text => reports.push(text) });
-    expect(outcome).toBe('failed'); expect(attempts).toBe(3); expect(waits).toEqual([1000, 4000]);
-    if (mode === 'timeout') expect(held.posts).toHaveLength(3);
-    expect(reports.join('\n')).toContain('after 3 attempts'); expect(bodyAndLogs(w, reports)).not.toContain(w.secret);
-    expect(fs.readFileSync(path, 'utf8')).toBe(before);
-  }, 10_000);
-}
+test('a timeout is one request, reported as sent with its response unknown, and never a retry', async () => {
+  const w = world(); const waits: number[] = []; const reports: string[] = []; let attempts = 0;
+  const held = receiver(() => new Promise<Response>(resolve => releases.push(() => resolve(new Response('released')))));
+  use(w, held.url);
+  const path = drop(w, 'timeout'); const before = fs.readFileSync(path, 'utf8');
+  const realFetch: typeof fetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => { attempts += 1; return fetch(url, init); }) as typeof fetch;
+  const outcome = await delivery().deliverWebhook({ seat: 'routine', webhook: w.webhook, record: event(w, 'timeout'),
+    policy: { timeoutMs: 80 }, fetch: realFetch, sleep: async ms => { waits.push(ms); }, report: text => reports.push(text) });
+  // The body may have reached the routine before the bound: no second POST, no wait.
+  expect(outcome).toBe('sent-unknown'); expect(attempts).toBe(1); expect(waits).toEqual([]);
+  expect(held.posts).toHaveLength(1);
+  expect(reports.join('\n')).toContain('sent, response unknown'); expect(reports.join('\n')).toContain('not retried');
+  expect(bodyAndLogs(w, reports)).not.toContain(w.secret);
+  expect(fs.readFileSync(path, 'utf8')).toBe(before);
+}, 10_000);
+test('a refused connection is retried three times with the policy backoff and reported failed', async () => {
+  const w = world(); const waits: number[] = []; const reports: string[] = []; let attempts = 0;
+  const held = receiver(); use(w, held.url); held.server.stop(true);
+  const path = drop(w, 'no-connection'); const before = fs.readFileSync(path, 'utf8');
+  const realFetch: typeof fetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => { attempts += 1; return fetch(url, init); }) as typeof fetch;
+  const outcome = await delivery().deliverWebhook({ seat: 'routine', webhook: w.webhook, record: event(w, 'no-connection'),
+    policy: { timeoutMs: 80 }, fetch: realFetch, sleep: async ms => { waits.push(ms); }, report: text => reports.push(text) });
+  // The request provably never left: every attempt was made, and the last one is the report.
+  expect(outcome).toBe('failed'); expect(attempts).toBe(3); expect(waits).toEqual([1000, 4000]);
+  expect(reports.join('\n')).toContain('after 3 attempts'); expect(reports.join('\n')).toContain('could not connect (');
+  expect(bodyAndLogs(w, reports)).not.toContain(w.secret);
+  expect(fs.readFileSync(path, 'utf8')).toBe(before);
+}, 10_000);
 
 
 for (const file of ['url', 'secret'] as const) {

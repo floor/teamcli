@@ -103,9 +103,9 @@ Every wait on the leg is bounded.
 
 A send with no receipt in the grace prints `sent (unconfirmed)` with the receiving seat's
 delivery class appended — `queued; <seat> reads it at its next turn (pull-only)`, `queued;
-<seat> has no way to be woken while idle`, `woken through its event adapter` or `woken through
-its runtime queue` — keeps the drop and the marker, and ends the walk there: the message is
-safe, and the seat's client may still read it. The watch promotes a receipt to one `delivered
+<seat> has no way to be woken while idle`, `queued; its webhook fires when the bus takes it`,
+`woken through its event adapter` or `woken through its runtime queue` — keeps the drop and the
+marker, and ends the walk there: the message is safe, and the seat's client may still read it. The watch promotes a receipt to one `delivered
 (read)` history line and clears the marker, typing nothing. Past `INBOX_FALLBACK_MS` the watch's
 retry pass looks at the marker again, but the retry types nothing in this build
 (`src/send/no-pane-messaging.ts`): it can promote a receipt that has arrived and deliver nothing

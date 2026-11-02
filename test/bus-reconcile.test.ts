@@ -166,6 +166,32 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(log.events.length).toBe(first.raised.length + third.raised.length);
   });
 
+  test('side files beside a record are never arrivals; only the signed record is raised', () => {
+    const { root, home } = makeScratch();
+    const seatDir = join(root, '.agents', 'send-drops', 'acme', 'worker-1');
+    mkdirSync(seatDir, { recursive: true });
+    dropMessage(seatDir, 'drop-9', "from the file's seat clerk — admitted by: lead\n\nhello");
+    // The bookkeeping the watch, the channel push and a thread close leave beside the record.
+    // Their names match a record's shape, but none of them is a message any seat was sent.
+    for (const side of ['drop-9.wake', 'drop-9.reported', 'drop-9.channel-push.json', 'drop-9.closed.json']) {
+      dropMessage(seatDir, side, '{"ok":true}');
+    }
+
+    const pass = reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      now: new Date('2026-10-18T12:10:00.000Z'),
+    });
+    expect(pass.ok).toBe(true);
+    if (!pass.ok) return;
+    const arrived = pass.raised
+      .filter((record) => record.payload.kind === 'message.arrived')
+      .map((record) => record.payload.record_id);
+    expect(arrived).toEqual(['drop-9']);
+  });
+
   test('a pass verifies the whole log once, then only the events appended since its last read', () => {
     const { root, home } = makeScratch();
     for (const id of ['seed-1', 'seed-2', 'seed-3']) {

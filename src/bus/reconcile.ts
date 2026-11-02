@@ -243,6 +243,39 @@ function refuseRecord(
   options.onRefused?.({ where, reason });
 }
 
+/** The names a record's bookkeeping takes beside it in a drop folder; none of them is a message
+ *  any seat was sent. Each is written by a different part of a delivery: a writer's temp
+ *  (`.tmp`, and the receipt publisher's `.new`), a send holding or taking the record
+ *  (`.pending`, `.taken`), a receipt the pass scans on its own below (`.delivered`, `.read`,
+ *  `.replied`, with or without `.json`, and a legacy `.held.json`), the unread watch's two
+ *  reservations (`.wake`, `.reported`), the channel's push marker (`.channel-push.json`), a
+ *  thread's close (`.closed.json`) and a route episode's summary (`.fallback.json`). Every name
+ *  here matches a record's own name shape, so a scan that reads one as a record raises an
+ *  arrival for a "record" no seat was sent — the webhook inbox then refuses it as not a signed
+ *  record, and the drop folder's real records are what the pass is for. */
+const SIDE_SUFFIXES: readonly string[] = [
+  '.tmp',
+  '.pending',
+  '.taken',
+  '.read',
+  '.read.json',
+  '.delivered',
+  '.delivered.json',
+  '.replied',
+  '.replied.json',
+  '.held.json',
+  '.wake',
+  '.reported',
+  '.channel-push.json',
+  '.closed.json',
+  '.fallback.json',
+  '.new',
+];
+
+function isSideFile(file: string): boolean {
+  return SIDE_SUFFIXES.some((suffix) => file.endsWith(suffix));
+}
+
 /** A receipt's own name says what it is and which record it belongs to; its bytes are never
  *  read. Returns null for anything that is not one of the three receipts. */
 function receiptOf(file: string): { receipt: 'delivered' | 'read' | 'replied'; id: string } | null {
@@ -488,22 +521,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
 
       for (const file of files) {
         if (file.startsWith('.')) continue;
-        if (
-          file.endsWith('.tmp') ||
-          file.endsWith('.pending') ||
-          file.endsWith('.taken') ||
-          file.endsWith('.read') ||
-          file.endsWith('.read.json') ||
-          file.endsWith('.delivered') ||
-          file.endsWith('.delivered.json') ||
-          file.endsWith('.replied') ||
-          file.endsWith('.replied.json') ||
-          // The fallback episode's marker beside a message record: a summary of route
-          // attempts, never a record some seat was sent.
-          file.endsWith('.fallback.json')
-        ) {
-          continue;
-        }
+        if (isSideFile(file)) continue;
         const fullPath = join(seatDir, file);
         const id = file.endsWith('.json') ? file.slice(0, -'.json'.length) : file;
         if (!RECORD_NAME.test(id)) continue;

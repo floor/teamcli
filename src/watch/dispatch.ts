@@ -170,11 +170,16 @@ function scopeOf(input: IdleWorkInput): string {
 }
 
 /** One seat's effective class this pass, read from the records already in hand: the team file's
- *  row for its launch line, and the session's runtime record for what the launch actually left.
- *  A seat the pass holds no record for falls to the class its file row declares. */
+ *  row for its launch line, the session's runtime record for what the launch actually left, and
+ *  the pass's own live reading for the pane's processes — the proof a send makes that the
+ *  recorded socket is the pane's own. The pane read is the one the route would type into: the
+ *  live reading's own name for the seat. A pass with no live agent for the seat, or one whose
+ *  reading carries no processes map, keeps the conservative rule. A seat the pass holds no
+ *  record for falls to the class its file row declares. */
 function deliveryClassOf(input: IdleDispatchInput, seat: string) {
   const declared = input.team.seats.find((one) => one.name === seat);
   const state = input.state.seats[seat];
+  const pane = input.live?.agents.find((one) => one.name === seat)?.pane;
   return seatDeliveryClass({
     dir: input.dir,
     root: input.root,
@@ -183,6 +188,7 @@ function deliveryClassOf(input: IdleDispatchInput, seat: string) {
     ...(declared === undefined ? {} : { declared }),
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
+    processes: pane === undefined ? null : (input.live?.processes?.[pane] ?? null),
   }).class;
 }
 

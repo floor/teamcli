@@ -109,6 +109,7 @@ export const seats: Section = {
             secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
             header: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[!#$%&\'*+\\-.^_`|~0-9A-Za-z]+$', $comment: 'an HTTP field name; the secret file\'s line is sent as this header\'s value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>' },
             body: { enum: [...WEBHOOK_BODY_SHAPES], $comment: 'the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event' },
+            timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, $comment: 'how long one POST waits for the routine\'s answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice' },
           },
           required: ['url_file', 'secret_file'],
           $comment: 'the seat\'s webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here',
@@ -395,18 +396,39 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     check.fail(node.line, `${at}: webhook.secret_file is required`);
     return undefined;
   }
-  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body']);
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms']);
   const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
   const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
   const header = readWebhookHeader(fields.get('header'), `${at}: webhook.header`, check);
   const body = check.oneOf(fields.get('body'), `${at}: webhook.body`, [...WEBHOOK_BODY_SHAPES]);
+  const timeoutMs = readWebhookTimeout(fields.get('timeout_ms'), `${at}: webhook.timeout_ms`, check);
   if (urlFile === undefined || secretFile === undefined) return undefined;
   return {
     urlFile,
     secretFile,
     ...(header === undefined ? {} : { header }),
     ...(body === undefined ? {} : { body }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
+}
+
+/** The delivery's answer bound, when the row names one: a whole number of milliseconds this
+ *  build can honour, from one to a minute. Anything else is refused rather than clamped — a
+ *  bound the row did not write would be a different routine contract than the one it asked for. */
+function readWebhookTimeout(entry: YamlEntry | undefined, name: string, check: Check): number | undefined {
+  if (!entry) return undefined;
+  const node = entry.value;
+  if (
+    node.kind === 'scalar'
+    && typeof node.value === 'number'
+    && Number.isInteger(node.value)
+    && node.value >= 1
+    && node.value <= 60_000
+  ) {
+    return node.value;
+  }
+  check.fail(node.line, `${name} must be a whole number from 1 to 60000`);
+  return undefined;
 }
 
 /** An HTTP field name, as the front's own webhook reader accepts one. */

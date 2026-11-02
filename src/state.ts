@@ -13,6 +13,7 @@ import type { DialogKind } from './watch/dialog.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
 import { isPresenceBinding } from './daemon/presence/contract.ts';
 import type { CodexEndpointRecord } from './daemon/presence/endpoint-record.ts';
+import type { WebhookOutcome } from './bus/webhook.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -164,6 +165,14 @@ export type SeatState = {
     offset: number;
   };
   /**
+   * The seat's last webhook delivery, as the bus recorded it. A later delivery replaces it, a
+   * delivered one clears the note it would draw. Written only by the bus, for a seat whose row
+   * exists; `team check` and `team status` note a seat whose last delivery did not arrive, and
+   * nothing reads it to route or gate. Absent on a seat no bus has delivered for and on every
+   * record an older build wrote.
+   */
+  webhook_delivery?: WebhookDeliveryRecord;
+  /**
    * What this launch declared, written when the idle prompt appears and left in place when a
    * later ready write merges onto the record. A skip of a seat that is already ready does not
    * set them: the file may have drifted, and the record has to stay the launch. Absent on a
@@ -274,6 +283,22 @@ export type QueuedSwap = {
  * hold at all (`liveHold`), so an expired record needs no writer to clear it.
  */
 export type HoldRecord = { reason: string; by: string; at: string; until?: string };
+
+/**
+ * A seat's last webhook delivery, as the bus recorded it after the attempt: what it ended as,
+ * how many attempts it made, the fixed-words reason the last attempt ended on, and the record it
+ * carried. `at` is the instant the delivery ended — the failure time a reader prints. Evidence
+ * only: no command routes, gates or repairs from it.
+ */
+export type WebhookDeliveryRecord = {
+  /** The signed record's id, as the arrival named it. */
+  record_id: string;
+  /** ISO 8601 instant the delivery ended. */
+  at: string;
+  outcome: WebhookOutcome;
+  attempts: number;
+  reason: string;
+};
 
 /**
  * One seat's place when the team was paused: the stage its record held, the branch and folder of
@@ -464,6 +489,20 @@ function isHoldRecord(value: unknown): value is HoldRecord {
   if (Number.isNaN(Date.parse(hold.at))) return false;
   if (hold.until !== undefined && (typeof hold.until !== 'string' || Number.isNaN(Date.parse(hold.until)))) return false;
   return true;
+}
+
+/** Whether a value from the state file is the record the bus writes for a webhook delivery: the
+ *  closed outcome list, a count of attempts, a fixed-words reason, a record id and a parseable
+ *  instant. Any other value is not evidence and is dropped at the read door. */
+function isWebhookDeliveryRecord(value: unknown): value is WebhookDeliveryRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const one = value as Partial<WebhookDeliveryRecord>;
+  const outcomes: readonly string[] = ['delivered', 'failed', 'refused', 'sent-unknown'];
+  return typeof one.record_id === 'string' && one.record_id !== ''
+    && typeof one.at === 'string' && !Number.isNaN(Date.parse(one.at))
+    && typeof one.outcome === 'string' && outcomes.includes(one.outcome)
+    && Number.isInteger(one.attempts) && (one.attempts as number) >= 0
+    && typeof one.reason === 'string' && one.reason !== '';
 }
 
 /** The hold in force at `now`: the stored record, or null when none stands — none stored, or
@@ -705,6 +744,12 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       // model or launch line is.
       if (seat.agent_session !== undefined && (typeof seat.agent_session !== 'string' || seat.agent_session === '')) {
         delete seat.agent_session;
+      }
+      // A webhook delivery record enters from the file like every other value: one the bus wrote
+      // has the closed outcome, a count, a reason and a parseable instant, and anything else is
+      // dropped whole rather than printed as a failure the bus never reported.
+      if (seat.webhook_delivery !== undefined && !isWebhookDeliveryRecord(seat.webhook_delivery)) {
+        delete seat.webhook_delivery;
       }
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);

@@ -221,7 +221,10 @@ for (const mode of ['http-failure', 'throwing-fetch', 'invalid-secret']) {
       fetch: (() => { throw new Error('synthetic failure ' + SECRET); }) as unknown as typeof fetch,
     });
     else outcome = await deliver(w, { ...w.hook, header: 'X-Routine-Key', body: 'inbox' });
-    expect(outcome).toBe(mode === 'invalid-secret' ? 'refused' : 'failed');
+    // A 503 was answered (failed); a bare error proves nothing about the body (sent-unknown);
+    // a secret this build cannot use is refused before any POST.
+    const expected = mode === 'invalid-secret' ? 'refused' : mode === 'throwing-fetch' ? 'sent-unknown' : 'failed';
+    expect(outcome).toBe(expected);
     expect(reports.length).toBeGreaterThan(0); expect(reports.join('\n').includes(SECRET)).toBe(false); unchanged(drop);
   });
 }

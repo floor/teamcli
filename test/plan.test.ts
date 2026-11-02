@@ -16,6 +16,9 @@ import { runPlan, USAGE, type PlanSources } from '../src/commands/plan.ts';
 import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { PLAN_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -256,6 +259,42 @@ describe('team plan', () => {
         '2 tasks\n',
       err: '',
     });
+  });
+
+  test('a socket seat the box held is shown the same note as a pull-on-turn seat', async () => {
+    ready(WITH, '- id: timed\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n');
+    // The lead's launch leaves an accepted socket with a standing address, named the way the
+    // command reads the folder (the loaded team file's own, reported resolved). No mark yet: the
+    // seat is push-class, and the row is shown as written.
+    const dir = realpathSync(join(root, '.agents'));
+    mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
+    writeFileSync(join(dir, 'hooks', 'acme', 'lead.json'), '{"crossSessionInbound":"accept"}\n');
+    const socket = join(base, 'lead.sock');
+    writeFileSync(socket, '');
+    registerAgent(home, {
+      name: 'lead',
+      signing: { model: 'Test', version: '1', role: 'builder' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: teamIdOf(root), seat: 'lead', session: 'acme', pane: 'fixture-pane-lead', address: socket },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    expect((await run()).out).toContain('1     open   -      the time-bound title\n');
+    // The box held the last frame under the declaration in force: the send would not dial, so a
+    // deadline on the seat falls between its turns and the plan says what stays put. This command
+    // reads no pane processes, like next, up and the class a send appends: the conservative rule
+    // stands, and a recorded address that still stands is the only socket evidence counted.
+    recordHeldSocket(
+      heldSocketPath(dir, 'acme', 'lead'),
+      declaredInboundOf({ dir, root, session: 'acme', seat: 'lead', launch: 'claude --model claude-opus-5-5' }),
+      new Date(now),
+    );
+    expect((await run()).out).toContain('the time-bound title (its seat cannot be woken while idle)\n');
   });
 
   test('the mark is plan\'s alone: next and issues do not carry one', async () => {

@@ -31,6 +31,7 @@ export const HISTORY_KEPT = 3;
 export type HistoryOutcome =
   | 'delivered'
   | 'delivered (read)'
+  | 'delivered (typed wake)'
   | 'sent (unconfirmed)'
   | 'sent (channel)'
   | 'held'

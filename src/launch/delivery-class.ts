@@ -18,15 +18,16 @@
 // at the same moment) — and answers one class plus the evidence it read, so a caller that skips
 // a seat can say why. The words a console prints come from the same class (`deliveryWords`), so
 // the report and the gating can never disagree.
-import { existsSync } from 'node:fs';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import type { Seat } from '../file/types.ts';
+import type { PaneProcesses } from '../herdr.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { DELIVERY_CLASSES, profileFor, type DeliveryClass } from '../profiles/profile.ts';
 import { findAgent } from '../registry/agents.ts';
 import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { declaredInboundOf, inboundIsLive, socketEligible } from '../send/inbound.ts';
+import { defaultSocketsDirs, socketAddressOf } from '../send/address.ts';
+import { declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketEligible, socketHeldReason } from '../send/inbound.ts';
 import { webhookRouteOf } from '../send/webhook.ts';
 import type { SeatState } from '../state.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -170,18 +171,30 @@ export type SeatDeliveryInput = {
    *  `agent_session` are the two facts a conversation binding is compared by. */
   state?: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'>;
   /** The registry home: where the seat's agent record keeps the cross-session address its
-   *  launch recorded. A caller that cannot name it proves no recorded address, and the socket
-   *  is then no evidence — the conservative reading, never a guess. */
+   *  launch recorded. A caller that cannot name it proves no recorded address; the socket then
+   *  rests on the pane's own processes alone, which is the conservative reading, never a guess. */
   home?: string;
+  /** The pane's process identity as a live read found it, when the caller read the pane: the
+   *  same proof a send makes that the recorded socket is the pane's own, or — when the registry
+   *  named no address — that the pane's own socket is there to dial. Absent means the caller
+   *  could not read the pane, and null means the terminal host could not answer for it; both
+   *  keep the conservative rule, where a recorded address that still stands counts. */
+  processes?: PaneProcesses | null;
+  /** The folders a pane's socket is discovered in, when the caller names them: the send's own
+   *  choice. Defaults to this machine's. */
+  sockets?: string | readonly string[];
 };
 
-/** The cross-session address the seat's registry record names, when one is recorded: the same
- *  record a send resolves its dial from. A home the caller cannot name, or a registry that
- *  cannot be read, proves no address. */
+/** The cross-session address the seat's registry record names, when the record is this
+ *  session's: the same record a send resolves its dial from. A home the caller cannot name, a
+ *  registry that cannot be read, and a record that names another session each prove no recorded
+ *  address; the pane's own processes are then the only route counted, never a guess. */
 function recordedSocketAddress(input: SeatDeliveryInput): string | null {
   if (input.home === undefined) return null;
   try {
-    return findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat })?.reach.address ?? null;
+    const reach = findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat })?.reach;
+    if (reach === undefined || reach.session !== input.session) return null;
+    return reach.address;
   } catch {
     return null;
   }
@@ -216,11 +229,13 @@ function conversationBound(input: SeatDeliveryInput): boolean {
  * first (what ran) and the file's row second (what a launch will run); the watcher is the
  * recorded one, or the one `cliWatcher` derives from the line; the channel is the launch
  * line's own flag; the socket is the route the send itself admits — the effective settings'
- * `crossSessionInbound`, the team file's own word, and the address the launch recorded; and
- * the endpoint is the recorded app-server URL only while it is bound to the seat's current
- * presence incarnation and the seat's records bind the conversation its queue is addressed by
- * (`recordedSeatSession`, the read the push adapter makes). A record that cannot be read falls
- * to the conservative class, never to a guess.
+ * `crossSessionInbound`, the team file's own word, the address the launch recorded while the
+ * pane's own processes still carry it, or the pane's own socket those processes carry when no
+ * address was recorded (when the caller could read them), and no held-frame mark under the
+ * declaration in force; and the endpoint is the recorded app-server URL only while it is bound
+ * to the seat's current presence incarnation and the seat's records bind the conversation its
+ * queue is addressed by (`recordedSeatSession`, the read the push adapter makes). A record that
+ * cannot be read falls to the conservative class, never to a guess.
  */
 export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const cli = input.state?.cli ?? input.declared?.cli ?? '';
@@ -247,15 +262,26 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const endpoint = endpointRecorded && conversation;
   const human = input.declared?.human === true;
   // The socket is the route the send itself admits: the effective settings' accept, the team
-  // file's own `inbound` word, and the address the launch recorded still standing. A
-  // declaration alone is no evidence that a socket exists; without a recorded address that is
-  // there, nothing can be dialed, and a dispatch must not spend time-bound work on it.
+  // file's own `inbound` word, the address a launch left standing in the seat's pane, and no
+  // held-frame mark the box left under the declaration in force. A declaration alone is no
+  // evidence that a socket exists; the address is read by the send's own choice
+  // (`socketAddressOf`), so a socket the pane no longer carries is no evidence either — the same
+  // proof the walk makes before it dials. The choice is asked even when the registry recorded no
+  // address: a send dials the pane's own socket as well, and the caller's process reading is
+  // evidence enough for that discovery. Only a read with neither an address nor processes
+  // proves no route, and a dispatch must not spend time-bound work on a seat it cannot wake.
   const address = recordedSocketAddress(input);
+  const dialed = socketAddressOf(address, input.processes ?? null, input.sockets ?? defaultSocketsDirs());
+  const held = socketHeldReason(
+    readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)),
+    inbound,
+  );
   const socket =
     socketEligible(input.declared?.inbound, inbound) &&
-    address !== null &&
-    existsSync(address) &&
-    inboundIsLive(inbound, address);
+    held === null &&
+    dialed !== null &&
+    dialed.kind === 'path' &&
+    inboundIsLive(inbound, dialed.path);
   // The webhook adapter is read from the two files its row names, right now: a route that cannot
   // be read is no evidence the seat wakes, and the words say why in the same breath.
   const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook);

@@ -86,6 +86,13 @@ export type SeatWebhook = {
   /** The body the routine reads: the bus envelope when absent, the seat-inbox record shape when
    *  it says so. The record shape is flattened from the signed message the arrival names. */
   body?: WebhookBodyShape;
+  /**
+   * How long one POST waits for the routine's answer, in milliseconds: a whole number from 1 to
+   * 60000, five seconds when absent. A routine that needs longer than the default to run says so
+   *  here; an answer after the bound is not read, and the delivery is reported as sent with its
+   *  response unknown rather than retried.
+   */
+  timeoutMs?: number;
 };
 
 export type Seat = {
