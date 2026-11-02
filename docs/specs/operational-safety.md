@@ -210,8 +210,8 @@ declared identity is injected.
 On the 0.5.12 line (from int/0.5.11) one control of this end state is built, as defence in depth
 rather than the end state itself: the session server's environment puts a team-owned forge shim
 first on `PATH`. Git resolves a credential helper written as `!<command>` on `PATH`, so the shim
-stands between every such helper and the forge CLI. It runs the real CLI only when `GH_TOKEN` is
-set at all; without it, it prints one refusal line and exits 1, so no helper and no command
+stands between every such helper and the forge CLI. It runs the real CLI only when `GH_TOKEN`
+holds a non-empty value; without one, it prints one refusal line and exits 1, so no helper and no command
 reaches the account login stored on this machine — the shared account seats push through on
 purpose, whose scopes also include dispatching workflows. The shim never reads, prints, logs or
 forwards the token's value: it execs the real CLI with the environment as it is. A seat whose
@@ -340,7 +340,7 @@ Result identifiers this spec asserts, all registered at v0.5.0:
    server's clean-server environment and its `SSH_AUTH_SOCK` pass-through were the only built
    pieces. On the 0.5.12 line (from int/0.5.11) the forge shim of §3.6 is built: a session
    server's environment puts a team-owned forge CLI first on `PATH`, and it runs the real CLI only
-   when `GH_TOKEN` is set at all, so a credential helper cannot fall back to the account login
+   when `GH_TOKEN` holds a non-empty value, so a credential helper cannot fall back to the account login
    stored on this machine. The shim is a mechanism, on by default, with `off` as its only
    disabling word; it never reads, prints or forwards the token's value, a call by absolute path
    bypasses it, and the rest of the end state remains unbuilt. Proof: `test/no-owner-credential-fallback.test.ts`.

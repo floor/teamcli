@@ -3,14 +3,14 @@
 // the CLI falls back to the account login stored on this machine. That login is the one seats
 // push through on purpose today; the gap is that it also carries rights no seat was given, such as
 // dispatching workflows. The shim stands first on the session server's PATH and runs the real CLI
-// only when GH_TOKEN is set at all; otherwise it refuses in one line and exits 1. It never reads,
+// only when GH_TOKEN holds a non-empty value; otherwise it refuses in one line and exits 1. It never reads,
 // prints or forwards the value: the real CLI execs with the environment as it is.
 //
 // Everything here is a fake: a synthetic CLI, a synthetic home and a synthetic credential helper
 // chain. No real login is read, no network is reached, nothing is pushed.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NO_SEAT_TOKEN, forgeShimText, seatServerEnv, sessionBinDir, writeForgeShim } from '../src/herdr.ts';
@@ -119,9 +119,10 @@ afterEach(() => {
 });
 
 describe('the shim text', () => {
-  test('it tests whether the token variable is set, and never expands its value', () => {
+  test('it tests whether the token variable holds a value, and never expands the value itself', () => {
     const text = forgeShimText('/opt/fixture/gh');
-    expect(text).toContain('${GH_TOKEN+x}');
+    // `:+` yields a literal only when the variable is set and non-empty: an empty token is no token.
+    expect(text).toContain('${GH_TOKEN:+x}');
     expect(text).not.toContain('$GH_TOKEN');
     expect(text).not.toContain('${GH_TOKEN}');
     expect(text).toContain(NO_SEAT_TOKEN);
@@ -167,6 +168,59 @@ describe('the shim at run time', () => {
     const first = readFileSync(shimOf(w), 'utf8');
     expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(true);
     expect(readFileSync(shimOf(w), 'utf8')).toBe(first);
+  });
+
+  test('an empty seat token is no token: it refuses, and the real CLI never runs', () => {
+    const w = world();
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(true);
+    const out = spawnSync('/bin/sh', [shimOf(w), 'auth', 'git-credential', 'get'], {
+      env: { PATH: '/usr/bin:/bin', GH_TOKEN: '' },
+      encoding: 'utf8',
+    });
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(NO_SEAT_TOKEN);
+    expect(out.stdout).toBe('');
+    expect(existsSync(w.log)).toBe(false);
+  });
+});
+
+describe('the shim install refuses an unsafe path', () => {
+  test('a bin path that is a file is refused, not written through', () => {
+    const w = world();
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    writeFileSync(sessionBinDir(w.home), 'not a directory');
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(false);
+  });
+
+  test('a linked bin folder receives nothing', () => {
+    const w = world();
+    const foreign = join(w.root, 'foreign');
+    mkdirSync(foreign);
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    symlinkSync(foreign, sessionBinDir(w.home));
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(false);
+    expect(readdirSync(foreign)).toEqual([]);
+  });
+
+  test('a matching shim behind a link is replaced by a real file', () => {
+    const w = world();
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(true);
+    const file = shimOf(w);
+    const target = join(w.root, 'matching-shim');
+    renameSync(file, target);
+    symlinkSync(target, file);
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(true);
+    expect(lstatSync(file).isSymbolicLink()).toBe(false);
+  });
+
+  test('a pre-created temporary name cannot be followed', () => {
+    const w = world();
+    const target = join(w.root, 'temp-target');
+    writeFileSync(target, 'retained fixture bytes');
+    mkdirSync(sessionBinDir(w.home), { recursive: true });
+    symlinkSync(target, join(sessionBinDir(w.home), `gh.${process.pid}.tmp`));
+    expect(writeForgeShim(sessionBinDir(w.home), w.cli)).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('retained fixture bytes');
   });
 });
 
@@ -230,6 +284,32 @@ describe('the session server environment', () => {
     const env = seatServerEnv({ HOME: w.home, PATH: `${w.real}:/usr/bin:/bin`, [FORGE_SHIM_ENV]: 'off' }, w.home);
     expect(env.PATH).toBe(`${w.real}:/usr/bin:/bin`);
   });
+
+  test('a shim that cannot be installed leaves no reachable forge CLI', () => {
+    const w = world();
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    writeFileSync(sessionBinDir(w.home), 'not a directory');
+    const env = serverEnv(w);
+    expect(env.PATH?.split(':')).not.toContain(w.real);
+    const out = credentialFill(w, env);
+    expect(out.status).not.toBe(0);
+    expect(out.stdout).not.toContain('password=');
+    expect(existsSync(w.log)).toBe(false);
+  });
+
+  test('a linked bin folder leaves no reachable forge CLI', () => {
+    const w = world();
+    const foreign = join(w.root, 'foreign');
+    mkdirSync(foreign);
+    mkdirSync(join(w.home, '.config', 'team'), { recursive: true });
+    symlinkSync(foreign, sessionBinDir(w.home));
+    const env = serverEnv(w);
+    expect(readdirSync(foreign)).toEqual([]);
+    expect(env.PATH?.split(':')).not.toContain(w.real);
+    const out = credentialFill(w, env);
+    expect(out.status).not.toBe(0);
+    expect(existsSync(w.log)).toBe(false);
+  });
 });
 
 describe('the shim switch', () => {
@@ -264,6 +344,19 @@ describe('the shim switch', () => {
     const fromEnv = resolveForgeShim({ home: w.home, env: { [FORGE_SHIM_ENV]: 'maybe' } });
     expect(fromEnv.on).toBe(true);
     expect(fromEnv.problem).toContain('maybe');
+  });
+
+  test('only the word off turns it off: false in any spelling leaves it on and is named', () => {
+    const w = world();
+    for (const written of ['false', '"false"', 'no', '0', 'disabled', 'true']) {
+      settings(w.home, `${FORGE_SHIM_SETTING}: ${written}\n`);
+      const fromFile = resolveForgeShim({ home: w.home, env: {} });
+      expect(fromFile.on).toBe(true);
+      expect(fromFile.problem).toBeDefined();
+      const fromEnv = resolveForgeShim({ home: w.home, env: { [FORGE_SHIM_ENV]: written.replaceAll('"', '') } });
+      expect(fromEnv.on).toBe(true);
+      expect(fromEnv.problem).toBeDefined();
+    }
   });
 });
 

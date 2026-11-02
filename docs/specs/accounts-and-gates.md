@@ -179,8 +179,8 @@ Child process Git environment injected alongside `GH_TOKEN`:
 
 The rows above are planned and unbuilt. One control of the same boundary is built on the 0.5.12
 line (from int/0.5.11), independently of this file: the session server's environment puts a
-team-owned forge shim first on `PATH`, and the shim runs the real CLI only when `GH_TOKEN` is set
-at all, so the helper chain above cannot fall back to the account login stored on the machine. Its
+team-owned forge shim first on `PATH`, and the shim runs the real CLI only when `GH_TOKEN` holds a
+non-empty value, so the helper chain above cannot fall back to the account login stored on the machine. Its
 default, its `forge-shim: off` setting and its limits are
 [operational safety](operational-safety.md) §3.6's.
 

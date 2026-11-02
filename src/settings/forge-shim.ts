@@ -29,9 +29,9 @@ export type ForgeShimResolution = {
   problem?: string;
 };
 
+/** The grammar's two words, and only them: a boolean or another spelling — `false`, `no`, `0` —
+ *  is not the word `off`, and leaves the mechanism on with a problem named. */
 function word(value: unknown): 'on' | 'off' | null {
-  if (value === true || value === 'true') return 'on';
-  if (value === false || value === 'false') return 'off';
   if (typeof value !== 'string') return null;
   const text = value.trim();
   return text === 'on' || text === 'off' ? text : null;

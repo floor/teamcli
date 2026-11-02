@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { accessSync, chmodSync, constants, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveForgeShim } from './settings/forge-shim.ts';
@@ -320,7 +321,7 @@ const SERVER_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TERM', 'LANG'] 
 const FORGE_CLI = 'gh';
 
 /** The shim's one refusal line, on stderr. It names no value and reads none: the check below
- *  tests whether the variable is set, never what it holds. */
+ *  tests whether the variable holds a value, never what it holds. */
 export const NO_SEAT_TOKEN = 'team: no seat token in this environment; the account login stored on this machine is not used from a seat';
 
 /** `<home>/.config/team/bin`, the session server's own programs, ahead of every other folder. */
@@ -351,7 +352,8 @@ function shimQuote(path: string): string {
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
-/** The shim's text. It runs the real CLI only when the seat-token variable is set, and it never
+/** The shim's text. It runs the real CLI only when the seat-token variable holds a non-empty
+ *  value, and it never
  *  expands, prints or forwards the value: the real CLI execs with the environment as it is. Without
  *  a token the helper reaches no stored login, so a seat cannot inherit the shared account's
  *  broader access by pushing without one. */
@@ -363,7 +365,7 @@ export function forgeShimText(real: string): string {
     '# so no credential helper and no command reaches the account login stored on this machine.',
     '# The value is never read, printed or forwarded: the real CLI execs with the environment as',
     '# it is.',
-    'case ${GH_TOKEN+x} in',
+    'case ${GH_TOKEN:+x} in',
     `  '') echo "${NO_SEAT_TOKEN}" >&2; exit 1 ;;`,
     'esac',
     `exec ${shimQuote(real)} "$@"`,
@@ -372,26 +374,78 @@ export function forgeShimText(real: string): string {
 }
 
 /** Writes the shim when it is absent or names another real CLI: a fresh file created executable
- *  and renamed into place, so no reader ever sees half of it. False when it could not be written;
- *  the caller then leaves the environment as it was. */
+ *  and renamed into place, so no reader ever sees half of it. Only a real folder and a real file
+ *  are the shim's own: a linked folder would put the program outside it, and a linked file — even
+ *  one holding matching text — is not the file this folder holds. The temporary name is fresh and
+ *  created exclusively, so a pre-created link cannot be followed. False when it could not be
+ *  written; the caller then closes the fallback rather than leaving the environment as it was. */
 export function writeForgeShim(dir: string, real: string): boolean {
   const file = join(dir, FORGE_CLI);
   const text = forgeShimText(real);
   try {
-    if (readFileSync(file, 'utf8') === text) return true;
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+  } catch (error) {
+    // Only a folder that is not there yet is made below; any other answer is not ours to write to.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+  try {
+    if (lstatSync(file).isFile() && readFileSync(file, 'utf8') === text) return true;
   } catch {
     // absent or unreadable: write it
   }
+  let temp: string | null = null;
+  let handle: number | null = null;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o755 });
-    const temp = `${file}.${process.pid}.tmp`;
-    writeFileSync(temp, text, { mode: 0o755 });
-    chmodSync(temp, 0o755);
+    const state = lstatSync(dir);
+    if (state.isSymbolicLink() || !state.isDirectory()) return false;
+    temp = join(dir, `${FORGE_CLI}.${randomUUID()}.tmp`);
+    handle = openSync(temp, 'wx', 0o755);
+    writeFileSync(handle, text);
+    fchmodSync(handle, 0o755);
+    closeSync(handle);
+    handle = null;
     renameSync(temp, file);
+    temp = null;
     return true;
   } catch {
     return false;
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        // the descriptor is already gone
+      }
+    }
+    if (temp !== null) {
+      try {
+        unlinkSync(temp);
+      } catch {
+        // nothing was created, or the rename took it
+      }
+    }
   }
+}
+
+/** A PATH value with every folder that holds an executable forge CLI removed: the environment's
+ *  fail-closed shape when the shim cannot stand first. An empty entry (the working folder) goes
+ *  too, since a program there is not one the shim can stand ahead of. */
+function withoutForge(pathValue: string): string {
+  return pathValue
+    .split(':')
+    .filter((dir) => {
+      if (dir === '') return false;
+      try {
+        if (!statSync(join(dir, FORGE_CLI)).isFile()) return true;
+        accessSync(join(dir, FORGE_CLI), constants.X_OK);
+        return false;
+      } catch {
+        return true;
+      }
+    })
+    .join(':');
 }
 
 /** The session server's environment: the clean allowlist, the SSH agent when the owner has one,
@@ -409,9 +463,15 @@ export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Proc
   if (!resolveForgeShim({ home, env }).on) return clean;
   const dir = sessionBinDir(home);
   const real = forgeOnPath(env.PATH, dir);
-  if (real !== null && writeForgeShim(dir, real)) {
+  if (real === null) return clean;
+  if (writeForgeShim(dir, real)) {
     clean.PATH = clean.PATH === undefined ? dir : `${dir}:${clean.PATH}`;
+    return clean;
   }
+  // Fail closed: the shim cannot stand first, so no folder that holds the real CLI stays on the
+  // server's PATH. A seat then has no forge CLI to reach the stored login with, instead of being
+  // handed the fallback the mechanism exists to close.
+  if (clean.PATH !== undefined) clean.PATH = withoutForge(clean.PATH);
   return clean;
 }
 
