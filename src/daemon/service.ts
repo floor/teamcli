@@ -151,6 +151,18 @@ export type ServiceInstallSuccess = {
    *  plain words. An install never writes a key or a grant into a definition. */
   droppedAuthorization?: boolean;
   /**
+   * Runtime copies this install kept because a hook file of a hosted root names them. A seat's
+   * hook command runs this tool's entry, and a settings file written from a runtime copy names
+   * that copy: the copy is a program a seat still needs after this install returns, even when no
+   * unit names it. Absent when no hook file names a copy.
+   */
+  hookedRuntime?: string[];
+  /**
+   * Set when the hook files of a hosted root could not be read whole: this install pruned no
+   * copy at all, and this says what could not be read or parsed.
+   */
+  runtimeKeepFault?: string;
+  /**
    * Puts the machine back after a load the manager accepted but whose daemon does not answer:
    * the earlier unit is restored, unchanged, and started again — its entry names the retained
    * program that unit was installed with, which this install did not touch — or, for a fresh
