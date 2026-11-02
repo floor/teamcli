@@ -5,7 +5,7 @@
 // a linked folder, an unsigned record, or one addressed to another seat, session or checkout
 // raises nothing and is named once — and the mailbox messages and read receipts answer to the
 // same envelope; a seat.* event never reaches an adapter; a bus that is down or silent never
-// fails a send and the record is delivered when the bus can take it.
+// fails a send: the send posts the seat webhook itself, and the late bus adds no second post.
 // Fixtures only: a synthetic checkout and home under short /tmp paths (the socket name limit),
 // a bus this file starts and closes, a loopback HTTP receiver. No live session, pane or CLI.
 import { afterEach, expect, test } from 'bun:test';
@@ -352,7 +352,7 @@ test('a send with no bus running still lands its record', async () => {
   expect(existsSync(dropPath(at, 'iris', id))).toBe(true);
 });
 
-test('a silent bus socket never fails the send, and the real bus delivers the record later', async () => {
+test('a silent bus socket never fails the send, and the real bus adds no second post', async () => {
   const at = place(); const held = receiver();
   writeFileSync(at.urlFile, held.url + '\n');
   // A listener that accepts the connection and never answers: the nudge's deadline is the bound.
@@ -366,15 +366,22 @@ test('a silent bus socket never fails the send, and the real bus delivers the re
   const folder = join(at.dir, 'send-drops', SESSION, 'iris');
   const id = recordIds(at, 'iris')[0]!;
   expect(existsSync(dropPath(at, 'iris', id))).toBe(true);
-  expect(held.posts).toHaveLength(0);
-  // The safety net: once the real bus serves the root, its pass posts the unseen arrival.
+  // The send itself posted the seat webhook once, holding the claim: the mark stands beside the
+  // record, nothing is left in flight, and the posted envelope is the arrival itself.
+  expect(held.posts).toHaveLength(1);
+  expect(existsSync(join(folder, `${id}.posted`))).toBe(true);
+  expect(existsSync(join(folder, `${id}.posting`))).toBe(false);
+  const sent = (JSON.parse(held.posts[0]!.body) as { event: { payload: Record<string, unknown> } }).event.payload;
+  expect(sent.record_id).toBe(id);
+  expect(sent.kind).toBe('message.arrived');
+  // The safety net: once the real bus serves the root, its pass raises the record and hands it
+  // to the adapter — which sees the sender's mark and posts nothing a second time.
   silent.stop(true);
   rmSync(busSocket(at.root), { force: true });
   await bus(at);
-  await until(() => held.posts.length === 1);
-  const payload = (JSON.parse(held.posts[0]!.body) as { event: { payload: Record<string, unknown> } }).event.payload;
-  expect(payload.record_id).toBe(id);
-  expect(payload.kind).toBe('message.arrived');
+  await until(() => logIds(at).includes(id));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(held.posts).toHaveLength(1);
 }, 15_000);
 
 test('a valid send reaches the local webhook inside five seconds, secret only in its header', async () => {
