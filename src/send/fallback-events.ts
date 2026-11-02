@@ -398,6 +398,10 @@ export type DeferredNote = { ok: true; state: 'deferred'; notePath: string };
  * drain pass records the note under the same lock; the sender tag rides along so a note that is
  * the episode's first fact creates the same marker a locked call would have fixed.
  *
+ * The bus append inside the note is taken with `lockWaitMs: 0` too: a first exhaustion writes its
+ * intent into the marker, and a log another live holder keeps leaves that intent for the next
+ * pass instead of pausing the send on a busy event lock for the lock's whole budget.
+ *
  * A refusal that is not contention (a conflict, a ledger that cannot be written) answers exactly
  * as `noteTransport` would; only contention defers.
  */
@@ -405,7 +409,7 @@ export function noteTransportSoon(ctx: FallbackContext, fact: TransportFact): Fa
   const problem = factProblem(fact);
   if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
   try {
-    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller)), 0);
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, logTag(ctx.caller), { lockWaitMs: 0 }), 0);
   } catch (error) {
     if (!(error instanceof LockBusyError)) return { ok: false, kind: 'marker', reason: errorMessage(error) };
     // The fact is durable on disk before this returns, so nothing is lost by deferring it.
@@ -431,13 +435,16 @@ function deferNote(ctx: FallbackContext, fact: TransportFact): DeferredNote {
 }
 
 /** `dedupe` makes a replayed fact a no-op: an attempt with the same route and instant is already
- *  in the marker, so a note whose earlier drain landed but did not unlink records nothing twice. */
+ *  in the marker, so a note whose earlier drain landed but did not unlink records nothing twice.
+ *  `lockWaitMs` bounds this call's bus append: a send passes 0 so a live event-lock holder can
+ *  never hold its line, and the intent the marker carries is emitted by the next pass. */
 function noteLocked(
   ctx: EscalationContext,
   fact: TransportFact,
   senderTag: string,
-  options: { dedupe?: boolean } = {},
+  options: { dedupe?: boolean; lockWaitMs?: number } = {},
 ): FallbackNote {
+  const waits = options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs };
   const path = markerPathOf(fact.recipient, fact.messageId);
   const read = markerAt(path);
   if (read.kind === 'unreadable') return { ok: false, kind: 'marker', reason: read.reason };
@@ -560,19 +567,22 @@ function noteLocked(
     if (marker.outbox?.kind === 'escalated') delete marker.outbox;
     let flushed: FlushResult;
     try {
-      flushed = flushOutbox(ctx, marker, path);
+      flushed = flushOutbox(ctx, marker, path, waits);
     } catch (error) {
       return { ok: false, kind: 'marker', reason: errorMessage(error) };
     }
-    if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
+    // A busy log leaves the intent standing: the delivery is recorded now and a later pass emits
+    // the pending event, exactly as it would after a crash between the intent and the append.
+    if (!flushed.ok && flushed.busy !== true) return { ok: false, kind: 'marker', reason: flushed.reason };
+    const emitted = flushed.ok ? flushed : null;
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
     return {
       ok: true,
       state: wasDelivered ? 'duplicate' : 'delivered',
       marker,
-      ...(flushed.event !== null ? { event: flushed.event } : {}),
-      eventDuplicate: flushed.duplicate,
+      ...(emitted !== null && emitted.event !== null ? { event: emitted.event } : {}),
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
     };
   }
@@ -581,12 +591,13 @@ function noteLocked(
   // lock. A delivery above cancelled one instead.
   let drained: FlushResult;
   try {
-    drained = flushOutbox(ctx, marker, path);
+    drained = flushOutbox(ctx, marker, path, waits);
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
-  if (!drained.ok) return { ok: false, kind: 'marker', reason: drained.reason };
-  const eventFields = drained.event === null ? {} : { event: drained.event };
+  if (!drained.ok && drained.busy !== true) return { ok: false, kind: 'marker', reason: drained.reason };
+  const emitted = drained.ok ? drained : null;
+  const eventFields = emitted !== null && emitted.event !== null ? { event: emitted.event } : {};
 
   if (wasDelivered) {
     const wrote = writeMarker(path, marker);
@@ -595,7 +606,7 @@ function noteLocked(
       ok: true,
       state: 'duplicate',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -609,7 +620,7 @@ function noteLocked(
       ok: true,
       state: 'duplicate',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -623,7 +634,7 @@ function noteLocked(
       ok: true,
       state: 'continued',
       marker,
-      eventDuplicate: drained.duplicate,
+      eventDuplicate: emitted?.duplicate ?? false,
       dueAt: marker.dueAt ?? null,
       ...eventFields,
     };
@@ -647,17 +658,20 @@ function noteLocked(
 
   let flushed: FlushResult;
   try {
-    flushed = flushOutbox(ctx, marker, path);
+    flushed = flushOutbox(ctx, marker, path, waits);
   } catch (error) {
     return { ok: false, kind: 'marker', reason: errorMessage(error) };
   }
-  if (!flushed.ok) return { ok: false, kind: 'marker', reason: flushed.reason };
+  // A busy log is not a failed note: the intent above is durable, so the episode is all-failed
+  // and the next pass emits the event. A caller on an event loop passes 0 and never waits here.
+  if (!flushed.ok && flushed.busy !== true) return { ok: false, kind: 'marker', reason: flushed.reason };
+  const sent = flushed.ok ? flushed : null;
   return {
     ok: true,
     state: 'all-failed',
     marker,
-    ...(flushed.event !== null ? { event: flushed.event } : {}),
-    eventDuplicate: flushed.duplicate,
+    ...(sent !== null && sent.event !== null ? { event: sent.event } : {}),
+    eventDuplicate: sent?.duplicate ?? false,
     dueAt: marker.dueAt ?? null,
     ...(delay.refusal !== undefined ? { policyRefusal: delay.refusal } : {}),
   };
@@ -685,7 +699,9 @@ export type DeferredNoteDrainReport = {
 /**
  * Record the facts a non-blocking `noteTransportSoon` deferred, then remove their notes. Each note is
  * processed under its episode's key lock with `waitMs: 0`: a key another live holder keeps is
- * deferred to the next pass, so the drain never waits on a busy message either. The lock makes
+ * deferred to the next pass, so the drain never waits on a busy message either. With
+ * `lockWaitMs: 0` the note's bus append is taken the same way: a first exhaustion keeps its intent
+ * in the marker for the next pass instead of pausing the drain on a busy event log. The lock makes
  * the landed note and the note's removal one step against a retry, and the recorder's own dedupe
  * by `(route, at)` makes a note whose drain landed but whose removal did not record nothing twice.
  *
@@ -700,10 +716,11 @@ export type DeferredNoteDrainReport = {
  */
 export function drainDeferredNotes(
   ctx: EscalationContext,
-  options: { at?: Date; limit?: number } = {},
+  options: { at?: Date; limit?: number; lockWaitMs?: number } = {},
 ): DeferredNoteDrainReport {
   const at = options.at ?? ctx.now();
   const limit = options.limit ?? 64;
+  const noteOptions = { dedupe: true, ...(options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs }) };
   const report: DeferredNoteDrainReport = {
     at: at.toISOString(),
     drained: [],
@@ -737,7 +754,7 @@ export function drainDeferredNotes(
         fact.recipient,
         fact.messageId,
         () => {
-          const noted = noteLocked(ctx, fact, record.from, { dedupe: true });
+          const noted = noteLocked(ctx, fact, record.from, noteOptions);
           if (!noted.ok) return { kind: 'refused' as const, reason: noted.reason };
           return { kind: 'landed' as const, state: noted.state };
         },
@@ -881,7 +898,8 @@ function noteRecordOf(
  * is reported; a later pass under a readable chain schedules it from the original failure time.
  *
  * `lockWaitMs: 0` makes the pass non-blocking: a key another live holder keeps is reported as
- * `deferred` and left to a later pass, so a scheduler tick never waits on a busy message.
+ * `deferred` and left to a later pass, so a scheduler tick never waits on a busy message. The
+ * same budget reaches the pass's bus append, so a busy event log is deferred as well.
  */
 export function escalateDue(
   ctx: EscalationContext,
@@ -908,7 +926,7 @@ export function escalateDue(
     }
     let step: EscalationStep;
     try {
-      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso), lockWaitMs);
+      step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso, lockWaitMs), lockWaitMs);
     } catch (error) {
       if (error instanceof LockBusyError) {
         // A live holder is working this episode: ordinary contention. Leave it to the next pass,
@@ -919,6 +937,12 @@ export function escalateDue(
       step = { kind: 'refused', reason: errorMessage(error) };
     }
     if (step.kind === 'none') continue;
+    if (step.kind === 'deferred') {
+      // The episode is this pass's, but the bus append met another live holder. Its intent
+      // stands in the marker, so the next tick emits it; other markers keep moving.
+      report.deferred.push({ messageId, recipient });
+      continue;
+    }
     report.scanned += 1;
     if (step.kind === 'unreadable') report.unreadable.push(step.path);
     else if (step.kind === 'refused') report.refused.push({ messageId, recipient, reason: step.reason });
@@ -941,6 +965,9 @@ function settledAt(marker: FallbackMarker, at: Date): boolean {
 type EscalationStep =
   | { kind: 'none' }
   | { kind: 'idle' }
+  /** The pass had work, but the bus append met another live holder; the intent stands for the
+   *  next tick. */
+  | { kind: 'deferred'; reason: string }
   | { kind: 'unreadable'; path: string }
   | { kind: 'refused'; reason: string }
   | { kind: 'escalated'; entry: EscalationEntry };
@@ -1307,6 +1334,7 @@ function escalateOne(
   messageId: string,
   at: Date,
   atIso: string,
+  lockWaitMs: number,
 ): EscalationStep {
   const path = markerPathOf(recipient, messageId);
   const read = markerAt(path);
@@ -1325,8 +1353,11 @@ function escalateOne(
     const cancelled = writeMarker(path, marker);
     if (!cancelled.ok) return { kind: 'refused', reason: cancelled.reason };
   }
-  const drained = flushOutbox(ctx, marker, path);
-  if (!drained.ok) return { kind: 'refused', reason: drained.reason };
+  const drained = flushOutbox(ctx, marker, path, { lockWaitMs });
+  if (!drained.ok) {
+    if (drained.busy === true) return { kind: 'deferred', reason: drained.reason };
+    return { kind: 'refused', reason: drained.reason };
+  }
   if (drained.kind === 'escalated' && drained.event !== null) {
     return {
       kind: 'escalated',
@@ -1378,8 +1409,11 @@ function escalateOne(
   const intent = writeMarker(path, marker);
   if (!intent.ok) return { kind: 'refused', reason: intent.reason };
 
-  const flushed = flushOutbox(ctx, marker, path);
-  if (!flushed.ok) return { kind: 'refused', reason: flushed.reason };
+  const flushed = flushOutbox(ctx, marker, path, { lockWaitMs });
+  if (!flushed.ok) {
+    if (flushed.busy === true) return { kind: 'deferred', reason: flushed.reason };
+    return { kind: 'refused', reason: flushed.reason };
+  }
   if (flushed.event === null) return { kind: 'refused', reason: `${path}: the escalation intent emitted no event` };
   return {
     kind: 'escalated',
@@ -1389,7 +1423,9 @@ function escalateOne(
 
 type FlushResult =
   | { ok: true; kind: EventIntent['kind'] | null; event: SignedEventRecord | null; duplicate: boolean; mailbox: string | null }
-  | { ok: false; reason: string };
+  /** `busy` marks an append a live event-lock holder kept: the intent is still in the marker, so
+   *  a caller that may not wait leaves it for the next pass rather than failing the note. */
+  | { ok: false; reason: string; busy?: true };
 
 /**
  * Emit the marker's pending intent, then clear it. Called under the episode's key lock. A
@@ -1399,8 +1435,16 @@ type FlushResult =
  * history an `appendEvent` duplicate; the mailbox is `once`, so a retry after a mailbox failure
  * finds the first record. The intent stays in the marker until both writes return, so a crash in
  * this function is retried next pass.
+ *
+ * `lockWaitMs` reaches the bus append: a caller on an event loop passes 0, and a log another live
+ * holder keeps answers `busy` with the intent still in the marker, for the next pass to emit.
  */
-function flushOutbox(ctx: EscalationContext, marker: FallbackMarker, path: string): FlushResult {
+function flushOutbox(
+  ctx: EscalationContext,
+  marker: FallbackMarker,
+  path: string,
+  options: { lockWaitMs?: number } = {},
+): FlushResult {
   const intent = marker.outbox;
   if (intent === undefined) return { ok: true, kind: null, event: null, duplicate: false, mailbox: null };
 
@@ -1449,8 +1493,16 @@ function flushOutbox(ctx: EscalationContext, marker: FallbackMarker, path: strin
     appendedRecord = published.record;
     duplicate = true;
   } else {
-    const result = appendEvent(ctx.team.project, marker.recipient.root, ctx.home, input);
-    if (!result.ok) return { ok: false, reason: result.reason };
+    const result = appendEvent(
+      ctx.team.project,
+      marker.recipient.root,
+      ctx.home,
+      input,
+      options.lockWaitMs === undefined ? {} : { lockWaitMs: options.lockWaitMs },
+    );
+    if (!result.ok) {
+      return { ok: false, reason: result.reason, ...(result.busy === true ? { busy: true } : {}) };
+    }
     appendedRecord = result.record;
     duplicate = result.duplicate;
     const recorded = recordPublication(ctx, marker, intent, result.record);

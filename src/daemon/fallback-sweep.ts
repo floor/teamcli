@@ -103,7 +103,8 @@ export type FallbackSweepResult = {
  * nothing. A throw inside one root's pass is reported for that root and never stops another root
  * or the heartbeat that called this. Each pass hands `escalateDue` that root's validated team, so
  * the delay reader resolves that root's chain, and no `Caller`, so no identity is fabricated. The
- * key lock is taken with `waitMs: 0`, so a busy episode is deferred to the next tick, not waited on.
+ * key lock is taken with `waitMs: 0`, and so is every bus append the pass makes, so a busy
+ * episode or a busy event log is deferred to the next tick, not waited on.
  */
 export function sweepFallbackEscalations(input: {
   home: string;
@@ -149,7 +150,7 @@ export function sweepFallbackEscalations(input: {
       const ctx = { team: entry.team, root: entry.root, home: input.home, now: input.now };
       // Notes first: a fact a send deferred is recorded before this pass judges the episode, so
       // an exhaustion it carries schedules its escalation in the same tick rather than the next.
-      const notes = drainDeferredNotes(ctx, { at });
+      const notes = drainDeferredNotes(ctx, { at, lockWaitMs: 0 });
       const report = escalateDue(ctx, { at, lockWaitMs: 0 });
       // Escalation first: a pending intent is flushed before retirement may archive its episode,
       // and an intent written during the pass keeps the marker out of the retired set.
