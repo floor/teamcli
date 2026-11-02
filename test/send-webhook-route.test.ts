@@ -1,7 +1,8 @@
 // What a send says about a seat that configures a webhook adapter: a readable adapter is a route
-// that exists, a configured adapter that cannot post says why, and the wake is claimed only
-// while a bus serving the receiving root is proved live at send time. Without one the drop is
-// queued for the bus, whose announcement is what posts the adapter.
+// that exists, a configured adapter that cannot post says why, and a webhook-only route always
+// reads as queued for the bus, because the bus posts the adapter after the send returns. The
+// send never claims that wake; the bus's own report and the seat's recorded delivery outcome
+// carry what the adapter answered.
 //
 // The team is a synthetic world under a temp folder and the secret is a fixture file. No live
 // seat, no real routine.
@@ -114,14 +115,14 @@ describe('team send names the webhook route', () => {
     expect(readFileSync(join(dir, record!), 'utf8')).toContain('the gate is green');
   });
 
-  test('a live bus that takes the arrival lets the send claim the adapter wake', async () => {
+  test('a live bus that takes the arrival still reads as queued, never woken', async () => {
     const hook = hookFiles();
     const at = withHookSeat(hook);
     const loaded = readTeamConfig(at.root, { home: at.home });
     if (!loaded.ok) throw new Error(loaded.errors.map((problem) => problem.message).join('; '));
-    // The bus is the one that posts an adapter, so the control starts the real bus on this
-    // root, with its own delivery recorded instead of dialled: a claim of a wake is only fair
-    // when that bus is serving, and it must actually take the send's announcement.
+    // The bus is the one that posts an adapter. Even with the real bus serving this root and
+    // taking the send's announcement, the send cannot see what the adapter answered, so its own
+    // line keeps the queued words and the bus's report carries the outcome.
     const taken: SignedEventRecord[] = [];
     const started = await startBus({
       root: at.root,
@@ -136,13 +137,15 @@ describe('team send names the webhook route', () => {
     buses.push(started.handle);
     const preview = owner(at.root);
     expect(await runSend(['iris', 'the gate is green', '--dry-run'], preview, fake(at)), preview.err).toBe(0);
-    expect(preview.out).toContain('woken through its webhook adapter');
+    expect(preview.out).toContain('queued; its webhook fires when the bus takes it');
+    expect(preview.out).not.toContain('woken through its webhook adapter');
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
     expect(io.out).toContain('sent (unconfirmed)');
-    expect(io.out).toContain('woken through its event adapter');
-    expect(io.out).not.toContain('queued; its webhook fires when the bus takes it');
+    expect(io.out).toContain('queued; its webhook fires when the bus takes it');
+    expect(io.out).not.toContain('woken through its event adapter');
+    expect(io.out).not.toContain('woken through its webhook adapter');
     expect(taken.some((record) => record.payload.kind === 'message.arrived' && record.payload.to === 'iris')).toBe(true);
   });
 
