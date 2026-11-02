@@ -27,7 +27,15 @@ export function writePrivateAtomic(file: string, text: string, home: string): vo
   try {
     // The open mode is subject to the process umask; the record is private regardless of it.
     fchmodSync(fd, 0o600);
-    writeSync(fd, text);
+    // A host may accept only part of the text and return the count without throwing: every byte
+    // is written before the sync and the rename, and a call that takes nothing is a failure.
+    const bytes = Buffer.from(text, 'utf8');
+    let written = 0;
+    while (written < bytes.byteLength) {
+      const count = writeSync(fd, bytes, written, bytes.byteLength - written);
+      if (count <= 0) throw new Error('writing the record made no progress');
+      written += count;
+    }
     fsyncSync(fd);
   } catch (error) {
     closeSync(fd);
