@@ -1,13 +1,14 @@
 import { afterAll, expect, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const fixtureRoot = fileURLToPath(new URL('../../names-unique-independent-fixtures/', import.meta.url));
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
-afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+afterAll(() => { if (bases.length > 0) discardFixtures(bases, { quiet: true, roots: [fixtureRoot] }); }, 30_000);
 type Run = { code: number; out: string; err: string; bodies?: string[] };
 type Input = { action: string; scope?: string; relation?: string; map?: boolean; word?: string; actor?: string; json?: boolean };
 type Result = Run & { home: string; before: string | Run; after: string | Run; get?: Run; created?: string; fileWritten?: boolean; plan?: Run; edit?: Run; paneWrites?: number; oldId?: string; id?: string; beforeAgent?: { id: string; reach: unknown }; afterAgent?: { id: string; reach: unknown }; roster?: { seat: string; nickname?: string }[] };

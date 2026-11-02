@@ -2,6 +2,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -16,7 +17,7 @@ import { writeDevelopmentMode } from '../src/development_mode.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 const bases: string[] = [];
-afterEach(() => { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned, { timeout: 20_000 }); }, 30_000);
+afterEach(() => { const owned = bases.splice(0); if (owned.length) discardFixtures(owned); }, 30_000);
 const NOW = new Date('2026-11-01T16:00:00Z');
 /** The reading the install's confirmation gate receives: the daemon the command just wrote
  *  answers, so a scene never opens the machine socket. */

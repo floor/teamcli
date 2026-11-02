@@ -2,6 +2,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +27,7 @@ afterEach(async () => {
   for (const release of releases.splice(0)) release();
   for (const bus of buses.splice(0)) await bus.close();
   for (const receiver of receivers.splice(0)) receiver.stop(true);
-  const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned, { timeout: 20_000 });
+  const owned = bases.splice(0); if (owned.length) discardFixtures(owned);
 }, 30_000);
 const NOW = new Date('2026-11-01T16:00:00Z');
 const TEXT = `format: 1

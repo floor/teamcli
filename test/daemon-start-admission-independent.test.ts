@@ -3,6 +3,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { discardFixtures } from './fixture-cleanup.ts';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -15,9 +16,10 @@ import * as output from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
 import { inertRuntimeManager, runtimeWords } from './adapters/daemon-runtime-independent.ts';
 const NOW = new Date('2026-11-01T18:20:00Z');
+const FIXTURE_ROOT = '/tmp/teamcli-sa-fixtures';
 const bases: string[] = [];
 assert.equal(homedir(), fs.realpathSync(process.env.HOME!));
-afterEach(() => { const owned = bases.splice(0); if (owned.length) execFileSync('trash', owned, { timeout: 20_000 }); }, 30_000);
+afterEach(() => { const owned = bases.splice(0); if (owned.length) discardFixtures(owned, { roots: [FIXTURE_ROOT] }); }, 30_000);
 type Job = { pid: number | null; program: string | null };
 type Unit = { path: string; label: string | null; ownerUid: number | null; mode: number | null; programArguments: string[] | null };
 function ownedFile(path: string, text: string, mode = 0o600) {
@@ -26,7 +28,7 @@ function ownedFile(path: string, text: string, mode = 0o600) {
   try { fs.writeFileSync(path, text, { flag: 'wx', mode }); } finally { process.umask(previousMask); }
 }
 function world() {
-  const base = fs.realpathSync(fs.mkdtempSync('/tmp/sa-')); bases.push(base);
+  fs.mkdirSync(FIXTURE_ROOT, { recursive: true }); const base = fs.realpathSync(fs.mkdtempSync(join(FIXTURE_ROOT, 'sa-'))); bases.push(base);
   const root = join(base, 'r'); const home = join(base, 'h'); const dir = join(root, '.agents');
   fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(home); execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   fs.writeFileSync(join(dir, 'team.yaml'), `format: 1
