@@ -12,15 +12,22 @@
 // through the raw state file. A stale fenced record of this same pid is an old host that lost its
 // proof: acquire refuses it too; recovery is explicit.
 //
-// Renew compares the captured epoch and this runtime's pid AND requires the standing record to be
-// a fresh authority under the fixed window, so an expired proof cannot be resurrected. Release
-// compares the same pair. Every operation reads, compares and writes under `updateState` with
+// Renew compares the captured epoch and this runtime's pid, and refreshes the standing record's
+// heartbeat from this host's own clock. The standing heartbeat may be past the fixed window: this
+// runtime's own event loop can be held longer than the window by one synchronous pass, and a
+// record still carrying this pid and this epoch is this host's — no other host can acquire it,
+// because `holderStands` refuses a stale same-pid record. Refreshing it therefore cannot
+// resurrect a proof or beat over a successor. A heartbeat that cannot be read, or one stamped
+// beyond the future skew, is still `lost`, because the record cannot be judged. Effects are never
+// admitted by this renew alone: the shared verifier re-reads the record under the same fixed
+// window immediately before every effect, and a stale record refuses them until this write lands.
+// Release compares the same pair. Every operation reads, compares and writes under `updateState` with
 // `waitMs: 0`: one attempt, never a pause on the heartbeat. A held state lock is `busy` and
 // consumes nothing, to be retried on a later tick. A refused operation leaves the file as it
 // stands, sanitizing read included. No sender is enabled by this module.
 
 import { emptySession, LockBusyError, pidAlive, storedWatchRecord, updateState } from '../state.ts';
-import { isWatchEpoch, mintWatchEpoch, watchEpochCurrent } from './epoch.ts';
+import { isWatchEpoch, mintWatchEpoch, WATCH_AUTHORITY_FUTURE_SKEW_MS, watchEpochCurrent } from './epoch.ts';
 
 /** The authority record a holder renews from. */
 export type WatchAuthority = { pid: number; epoch: string; heartbeat: string };
@@ -118,7 +125,10 @@ export function acquireWatchAuthority(
 /**
  * Renews the heartbeat on the strength of the captured epoch. The write happens only when the
  * record still carries that epoch and this runtime's pid; anything else is `lost`, so an old
- * holder cannot beat over a successor. A held state lock is `busy`, not `lost`: the record may
+ * holder cannot beat over a successor. An older heartbeat is refreshed rather than refused: this
+ * runtime's own event loop may have been held past the window by one synchronous pass, and no
+ * other host can acquire this runtime's stale record. An unreadable heartbeat, or one stamped
+ * beyond the future skew, is `lost`. A held state lock is `busy`, not `lost`: the record may
  * still be this holder's, so the next tick tries again.
  */
 export function renewWatchAuthority(
@@ -131,10 +141,11 @@ export function renewWatchAuthority(
   try {
     return updateState(dir, (state) => {
       const watch = state.sessions[session]?.watch;
-      if (!isWatchEpoch(epoch) || !watch || watch.epoch !== epoch || watch.pid !== pid
-        || !watchEpochCurrent(watch, options.now.getTime())) {
+      if (!isWatchEpoch(epoch) || !watch || watch.epoch !== epoch || watch.pid !== pid) {
         return { kind: 'lost' };
       }
+      const age = options.now.getTime() - Date.parse(watch.heartbeat);
+      if (!Number.isFinite(age) || age < -WATCH_AUTHORITY_FUTURE_SKEW_MS) return { kind: 'lost' };
       watch.heartbeat = options.now.toISOString();
       return { kind: 'renewed', authority: { pid, epoch, heartbeat: watch.heartbeat } };
     }, { waitMs: 0, writeWhen: (result) => result.kind === 'renewed' });
