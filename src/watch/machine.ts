@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, statfsSync } from 'node:fs';
 import { cpus, loadavg } from 'node:os';
+import { execText, type ChildOptions } from '../child.ts';
 import type { TeamFile } from '../file/types.ts';
 
 // The OS's own memory-pressure level, where it offers one: macOS's kernel level, and Linux's PSI
@@ -21,9 +22,23 @@ export type Machine = {
   pressure?: MemoryPressure | null;
 };
 
+/** The shape with every figure unread: a pass whose budget did not reach the machine reads
+ *  this, never a zero and never "fine". */
+export function unreadMachine(): Machine {
+  return { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null, pressure: null };
+}
+
 function command(name: string, args: string[]): string | null {
   try {
     return execFileSync(name, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+  } catch {
+    return null;
+  }
+}
+
+async function commandAsync(name: string, args: string[], options: ChildOptions): Promise<string | null> {
+  try {
+    return await execText(name, args, options);
   } catch {
     return null;
   }
@@ -114,7 +129,7 @@ export function parsePsiMemory(text: string): MemoryPressure | null {
 // This platform's figures: macOS's commands on darwin, Linux's /proc everywhere Linux runs.
 // `platform` and `proc` are parameters for the tests; the command passes neither.
 export function readMachine(root: string, platform: string = process.platform, proc = '/proc'): Machine {
-  const machine: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null, pressure: null };
+  const machine: Machine = unreadMachine();
   const cores = cpus().length;
   try {
     const volume = statfsSync(root);
@@ -144,6 +159,37 @@ export function readMachine(root: string, platform: string = process.platform, p
     if (psi !== null) machine.pressure = parsePsiMemory(psi);
   } else if (cores) {
     machine.loadPerCore = (loadavg()[0] as number) / cores;
+  }
+  return machine;
+}
+
+/**
+ * The same figures, awaited: the platform's commands are children that can be killed at the
+ * pass's deadline or at the loop's stop, so a machine read never holds the event loop. The
+ * cheap local reads (load, disk, `/proc`) are taken as the synchronous read takes them, and a
+ * command that was killed or aborted leaves its figure unread — null, never a zero and never
+ * "fine". The shape with every figure null is the pass's unread machine.
+ */
+export async function readMachineAsync(root: string, options: ChildOptions = {}, platform: string = process.platform, proc = '/proc'): Promise<Machine> {
+  const machine: Machine = unreadMachine();
+  const cores = cpus().length;
+  try {
+    const volume = statfsSync(root);
+    machine.diskFree = volume.bavail * volume.bsize;
+  } catch {}
+  if (platform === 'darwin') {
+    if (cores) machine.loadPerCore = (loadavg()[0] as number) / cores;
+    const pressure = await commandAsync('memory_pressure', [], options);
+    if (pressure) machine.memoryFree = parseMemoryPressure(pressure);
+    machine.pressure = parseVmPressureLevel(await commandAsync('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], options) ?? '');
+    const swap = parseSwapUsage(await commandAsync('sysctl', ['-n', 'vm.swapusage'], options) ?? '');
+    if (swap && swap.total > 0) {
+      machine.swapTotal = swap.total;
+      machine.swapFree = swap.free;
+      machine.swapUsed = swap.used;
+    }
+  } else {
+    return readMachine(root, platform, proc);
   }
   return machine;
 }
