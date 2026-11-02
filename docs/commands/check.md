@@ -165,6 +165,14 @@ names that limit instead of a repair `up` will not make, and a standing-by hoste
 claim a live pane watch that its record no longer shows. These notes never enter the total and
 never change the exit.
 
+A general grant whose op list is the wildcard (`*`) reaches every op, including ops that shipped
+after the grant was signed. When such a grant reaches ops that first shipped after its signing, the
+check prints one note per grant — `wildcard general grant <id> signed <date> now reaches <ops>,
+which shipped in later releases; re-sign the grant to stop this note` — naming only the ops whose
+first release is later than that date, each dated from the release tags. Re-signing the grant on or
+after that release stops the note. A grant whose signing time cannot be read says `unknown` instead
+of claiming an op is new. Like every note here, it is information, never a difference.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
