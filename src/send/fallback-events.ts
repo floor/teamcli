@@ -67,7 +67,7 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -80,7 +80,7 @@ import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../polic
 import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { LockBusyError, reclaimLockDir, withLock } from '../state.ts';
-import { appendStoreLine, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
+import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
@@ -918,6 +918,15 @@ function retireOne(
     }
   }
   const storeDir = storeDirOf(ctx, recipient);
+  // The archive tree is checked before the first write, not left to a recursive mkdir: each
+  // folder below the store must be a real directory of this user's, and a link anywhere in the
+  // ladder refuses the whole retirement with the live marker untouched.
+  const folderProblem = ensureFoldersBelow(storeDir, [
+    FALLBACK_ARCHIVE_DIR,
+    join(FALLBACK_ARCHIVE_DIR, 'markers'),
+    join(FALLBACK_ARCHIVE_DIR, 'attempts'),
+  ]);
+  if (folderProblem !== null) return { kind: 'refused', reason: folderProblem };
   const archive = episodeArchiveMarkerPath(storeDir, recipient, messageId);
   try {
     dropMessage(dirname(archive), basename(archive), `${JSON.stringify(marker, null, 2)}\n`);
@@ -936,9 +945,12 @@ function retireOne(
   return { kind: 'retired', entry: { messageId, recipient, kind, at: at.toISOString(), archive } };
 }
 
-/** Move one episode's attempt ledger beside its archived marker, appending when an earlier
- *  retirement already archived one. A ledger that cannot be read or written names why and leaves
- *  the episode to the next pass; the live marker is not removed until this returns null. */
+/** Move one episode's attempt ledger beside its archived marker, merging when an earlier
+ *  retirement already archived one. The merge is idempotent: a source whose exact text already
+ *  ends the archive was appended by a pass that then failed to remove it, so this pass only
+ *  removes the source (the merge would add the same bytes again). Any other archive is rewritten
+ *  atomically through the store's tmp-and-rename write. A ledger that cannot be read or written
+ *  names why and leaves the episode to the next pass; the live marker is removed only after. */
 function moveAttemptLedger(storeDir: string, recipient: CanonicalRecipient, messageId: string): string | null {
   const source = join(storeDir, attemptLedgerFileName(recipient, messageId));
   const text = readNoFollow(source);
@@ -946,15 +958,16 @@ function moveAttemptLedger(storeDir: string, recipient: CanonicalRecipient, mess
   if (text === '') return null;
   const dest = episodeArchiveAttemptsPath(storeDir, recipient, messageId);
   try {
-    mkdirSync(dirname(dest), { recursive: true, mode: 0o700 });
     const existing = readNoFollow(dest);
     if (existing === null) return `${dest}: the archived attempt ledger could not be read; the episode stays`;
     if (existing === '') {
       renameSync(source, dest);
-    } else {
-      appendFileSync(dest, text, { mode: 0o600 });
-      unlinkSync(source);
+      return null;
     }
+    if (!existing.endsWith(text)) {
+      dropMessage(dirname(dest), basename(dest), existing + text);
+    }
+    unlinkSync(source);
     return null;
   } catch (error) {
     return `${source}: the attempt ledger was not archived: ${errorMessage(error)}`;

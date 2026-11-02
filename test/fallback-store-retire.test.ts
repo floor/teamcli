@@ -18,6 +18,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -513,6 +514,99 @@ for (let i = 0; i < 800; i += 1) withLock(dir, () => {}, { waitMs: 2_000 });
     const stderr = await new Response(proc.stderr).text();
     expect(stderr).toBe('');
     expect(code).toBe(0);
+  });
+});
+
+describe('the fallback archive is held to the state ladder', () => {
+  /** One delivered episode and a folder outside the store that a link in the archive would
+   *  reach. */
+  function linked(world: World, path: string): { outside: string; link: string } {
+    const outside = join(dirname(world.root), 'outside-archive');
+    mkdirSync(outside, { recursive: true });
+    const link = join(storeDir(world), path);
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(outside, link);
+    return { outside, link };
+  }
+
+  test('a linked archive folder is refused, and nothing lands outside the store', () => {
+    const world = makeWorld();
+    delivered(world);
+    const { outside } = linked(world, 'fallback-archive');
+
+    const report = retireFinished(world.ctx, { at: at(AT), lockWaitMs: 0 });
+    expect(report.retired).toHaveLength(0);
+    expect(report.refused).toHaveLength(1);
+    expect(report.refused[0]!.reason).toContain('symbolic link');
+    expect(report.refused[0]!.reason).toContain('fallback-archive');
+
+    expect(readdirSync(outside)).toEqual([]);
+    expect(markerExists(world)).toBe(true);
+    expect(existsSync(attemptsPath(world))).toBe(true);
+  });
+
+  test('a linked markers folder is refused, and nothing lands outside the store', () => {
+    const world = makeWorld();
+    delivered(world);
+    const { outside } = linked(world, join('fallback-archive', 'markers'));
+
+    const report = retireFinished(world.ctx, { at: at(AT), lockWaitMs: 0 });
+    expect(report.retired).toHaveLength(0);
+    expect(report.refused).toHaveLength(1);
+    expect(report.refused[0]!.reason).toContain('symbolic link');
+    expect(report.refused[0]!.reason).toContain('markers');
+
+    expect(readdirSync(outside)).toEqual([]);
+    expect(markerExists(world)).toBe(true);
+  });
+
+  test('a linked attempts folder is refused before the marker is archived', () => {
+    const world = makeWorld();
+    delivered(world);
+    const { outside } = linked(world, join('fallback-archive', 'attempts'));
+
+    const report = retireFinished(world.ctx, { at: at(AT), lockWaitMs: 0 });
+    expect(report.retired).toHaveLength(0);
+    expect(report.refused).toHaveLength(1);
+    expect(report.refused[0]!.reason).toContain('symbolic link');
+    expect(report.refused[0]!.reason).toContain('attempts');
+
+    expect(readdirSync(outside)).toEqual([]);
+    // The refusal comes before the first write: the live marker and its ledger are untouched,
+    // and the real markers folder stays empty.
+    expect(markerExists(world)).toBe(true);
+    expect(existsSync(attemptsPath(world))).toBe(true);
+    expect(existsSync(archivedMarkerPath(world))).toBe(false);
+  });
+
+  test('a source ledger already appended to the archive is removed, not appended again', () => {
+    const world = makeWorld();
+    delivered(world);
+    const text = readFileSync(attemptsPath(world), 'utf8');
+    mkdirSync(dirname(archivedAttemptsPath(world)), { recursive: true });
+    writeFileSync(archivedAttemptsPath(world), text, { mode: 0o600 });
+
+    // An earlier pass appended the ledger and then failed to remove the source.
+    const report = retireFinished(world.ctx, { at: at(AT), lockWaitMs: 0 });
+    expect(report.refused).toHaveLength(0);
+    expect(report.retired).toHaveLength(1);
+    expect(lines(archivedAttemptsPath(world))).toBe(1);
+    expect(existsSync(attemptsPath(world))).toBe(false);
+    expect(markerExists(world)).toBe(false);
+  });
+
+  test('a source ledger the archive does not yet hold is merged into it atomically', () => {
+    const world = makeWorld();
+    delivered(world);
+    const text = readFileSync(attemptsPath(world), 'utf8');
+    mkdirSync(dirname(archivedAttemptsPath(world)), { recursive: true });
+    writeFileSync(archivedAttemptsPath(world), '{"episode":"an older one"}\n', { mode: 0o600 });
+
+    const report = retireFinished(world.ctx, { at: at(AT), lockWaitMs: 0 });
+    expect(report.refused).toHaveLength(0);
+    expect(report.retired).toHaveLength(1);
+    expect(readFileSync(archivedAttemptsPath(world), 'utf8')).toBe(`{"episode":"an older one"}\n${text}`);
+    expect(existsSync(attemptsPath(world))).toBe(false);
   });
 });
 
