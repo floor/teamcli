@@ -7979,6 +7979,51 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "waits",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team waits [--json]"
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -8427,6 +8472,81 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--remote-session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "pull",
+          "positionals": [
+            {
+              "name": "task",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]"
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat pulls a remote session's result into a worktree; --session and --file are the owner's"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--branch",
               "repeatable": false,
               "takesValue": true
@@ -8496,6 +8616,7 @@
       "usage": [
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
         "team worktree list [--session <name>] [--file <path>] [--json]",
+        "team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]",
         "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
       ],
       "who": {

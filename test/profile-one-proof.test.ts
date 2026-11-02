@@ -13,17 +13,18 @@ import { fileURLToPath } from 'node:url';
 //
 // What they hold:
 //
-//   - every function in `src/profiles/profile.ts` that decodes a launch line with a tokenizer
-//     reaches `provenScriptWord`, or is one of the three functions that never return or rewrite
-//     a word or a span, each named here with what it does instead;
+//   - every function in the launch readers (`src/profiles/profile.ts` and the line machinery it
+//     asks, `src/launch/cli-scope.ts`) that decodes a launch line with a tokenizer reaches
+//     `provenScriptWord`, or is named here with what it does instead;
 //   - every name on the exported reader set reaches it too, so a reader added later cannot skip
 //     it without failing here;
-//   - `shell-words.ts` is the one tokenizer, and `profile.ts` the one module that asks it for the
-//     words of a launch line;
+//   - `shell-words.ts` is the one tokenizer, and the two reader modules are the ones that ask it
+//     for the words of a launch line;
 //   - the four files that split a launch line on whitespace are named with what each split is
 //     for, so a fifth one cannot appear unnoticed.
 
-const PROFILE_SRC = readFileSync(new URL('../src/profiles/profile.ts', import.meta.url), 'utf8');
+const SOURCE_FILES = ['../src/profiles/profile.ts', '../src/launch/cli-scope.ts'];
+const SOURCES = SOURCE_FILES.map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'));
 
 /** The source without comments: a doc comment names functions too, and this scan reads code. */
 function codeOf(source: string): string {
@@ -58,6 +59,7 @@ function calledIn(body: string): Set<string> {
 // them a question is the one that must ask the proof.
 const TOKENIZERS = new Set([
   'shellWords',
+  'readShellWords',
   'shellScriptWordOf',
   'closingQuoteOf',
   'openingOf',
@@ -73,6 +75,9 @@ const NOT_A_READER = new Map<string, string>([
   ['shellProgramOf', 'names the shell that parses the line: one program word, never a word or span of the CLI'],
   ['startsWithCli', "compares the first decoded word with the CLI's binary and returns a boolean, never a word or span"],
   ['launchWordScopes', "0.5.10's raw-line question: it may see more words than the CLI reads, and its answer only suppresses an addition"],
+  ['splitAtDelimiter', 'splits a line at its delimiter word so a rewrite keeps the tail verbatim: source spans, never a word or span of the CLI'],
+  ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
+  ['oneShellWord', 'asks how many shell words one vendor env fragment splits into, never reading a launch line: a boolean, never a word or span of the CLI'],
 ]);
 
 // The plain proof: a line with no script word names the CLI's own words only when a word written
@@ -90,6 +95,9 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
   ['cliBodyOn', 'returns a span inside a script word only; its callers ask the plain proof on a plain line'],
   ['cliTextOf', 'follows script words only; its caller cliWordListOf asks the plain proof on a plain line'],
   ['launchWordScopes', "0.5.10's raw-line question: its answer only suppresses an addition"],
+  ['splitAtDelimiter', 'splits a line at its delimiter word for a rewrite: source spans only, never a word or span of the CLI'],
+  ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
+  ['oneShellWord', 'reads one vendor env fragment, never a whole launch line: a boolean, never a word or span of the CLI'],
 ]);
 
 // Every exported function that returns CLI words, an id read from them, a launch line, or a
@@ -107,7 +115,7 @@ const READERS = [
   'launchSessionId',
 ];
 
-const DECLS = declarationsIn(PROFILE_SRC);
+const DECLS = SOURCES.flatMap((source) => declarationsIn(source));
 const BY_NAME = new Map(DECLS.map((decl) => [decl.name, decl]));
 
 /** Whether `name` reaches `root` through the file's own functions. */
@@ -150,7 +158,7 @@ function sourceFiles(folder: string): string[] {
 
 const SCANNED = ['src/profiles', 'src/launch', 'src/commands'].flatMap(sourceFiles);
 const TOKENIZER_FILE = 'src/launch/shell-words.ts';
-const READER_FILE = 'src/profiles/profile.ts';
+const READER_FILES = ['src/launch/cli-scope.ts', 'src/profiles/profile.ts'];
 
 // A launch line split on whitespace, and what that split is for. `profile.ts` asks 0.5.10's
 // raw-line question so an option the line plainly sets is not added twice, and `line.ts` reads
@@ -254,18 +262,18 @@ describe('every reader of a launch line asks the one proof', () => {
 });
 
 describe('a launch line is decoded in one place', () => {
-  test('the shell tokenizer is asked for launch words only by the reader module', () => {
+  test('the shell tokenizer is asked for launch words only by the reader modules', () => {
     const askers = SCANNED.filter((file) => /\bshellWords\(/.test(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')))
       .filter((file) => file !== TOKENIZER_FILE)
       .sort();
-    expect(askers, 'a module outside profile.ts decodes launch words: route it through a reader there').toEqual([READER_FILE]);
+    expect(askers, 'a module outside the launch readers decodes launch words: route it through a reader there').toEqual([...READER_FILES].sort());
   });
 
   test('a launch line is split on whitespace only in the named files, each with its reason', () => {
     const splitters = SCANNED.filter((file) =>
       /\.split\(\/\\s\+\//.test(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')),
     ).sort();
-    expect(splitters, 'a new module splits launch lines itself: name it and its reason, or read the words through profile.ts').toEqual(
+    expect(splitters, 'a new module splits launch lines itself: name it and its reason, or read the words through the launch readers').toEqual(
       [...WHITESPACE_SPLITS.keys()].sort(),
     );
   });

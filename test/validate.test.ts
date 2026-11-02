@@ -297,6 +297,31 @@ describe('a nickname is one seat\'s human name', () => {
   });
 });
 
+// The public-only mark: the seat's briefs go to a service outside this machine. It rides the
+// built seat like `human`, so a file that marks one is a change the owner approves; a file that
+// marks none keeps the digest it had, and a written `false` reads as absent — a team file can add
+// the guard a hosted CLI's profile declares, never take it away.
+describe('a public-only seat is one the file marks', () => {
+  const mark = (text: string, value = 'true', at = '    launch: claude --model claude-opus-5-5\n'): string =>
+    change(text, at, `${at}    public_only: ${value}\n`);
+
+  test('the mark rides the seat, and a file that marks none carries no field', () => {
+    const { team } = valid(mark(marked));
+    expect(team.seats.map((seat) => [seat.name, seat.publicOnly])).toEqual([['lead', true], ['worker', undefined]]);
+    expect(Object.hasOwn(valid(marked).team.seats[0]!, 'publicOnly')).toBe(false);
+  });
+
+  test('a written false reads as absent: the field is never set', () => {
+    const { team } = valid(mark(marked, 'false'));
+    expect(team.seats.map((seat) => seat.publicOnly)).toEqual([undefined, undefined]);
+    expect(Object.hasOwn(team.seats[0]!, 'publicOnly')).toBe(false);
+  });
+
+  test('anything but an unquoted boolean is refused at the field', () => {
+    expect(errors(mark(marked, '"true"'))).toEqual(['14: seat "lead": public_only must be true or false']);
+  });
+});
+
 const refusals: [string, string, RegExp][] = [
   ['no format', change(minimal, 'format: 1\n', ''), /format is required/],
   ['another format', change(minimal, 'format: 1', 'format: 2'), /format must be 1/],

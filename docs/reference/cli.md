@@ -3781,6 +3781,32 @@ Usage:
 
 None.
 
+## `waits`
+
+Hidden: no
+
+Usage:
+
+    team waits [--json]
+
+### Who may run it
+
+`seat-record` — a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `watch`
 
 Hidden: no
@@ -3935,6 +3961,7 @@ Usage:
 
     team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree list [--session <name>] [--file <path>] [--json]
+    team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
     team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]
 
 ### Who may run it
@@ -4004,6 +4031,38 @@ Usage:
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
 | `--kind` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `task` | no | no |
+
+### `pull`
+
+Hidden: no
+
+Usage:
+
+    team worktree pull <task> --remote-session <id> [--seat <name>] [--session <name>] [--file <path>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator's seat or the operator's seat pulls a remote session's result into a worktree; --session and --file are the owner's
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--remote-session` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |

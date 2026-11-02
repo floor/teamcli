@@ -255,6 +255,7 @@ describe('each mapped row pins the module function its kind names', () => {
       'worktree',
       'worktree:list',
       'worktree:new',
+      'worktree:pull',
       'worktree:remove',
     ]);
     for (const [command] of rows) {

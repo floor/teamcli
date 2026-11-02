@@ -207,6 +207,28 @@ started detached in a clean environment whose allowlist is `HOME`, `USER`, `LOGN
 there therefore keeps the owner's SSH agent, and the owner's ambient Git configuration, and no
 declared identity is injected.
 
+On the 0.5.12 line (from int/0.5.11) one control of this end state is built, as defence in depth
+rather than the end state itself: the session server's environment puts a team-owned forge shim
+first on `PATH`. Git resolves a credential helper written as `!<command>` on `PATH`, so the shim
+stands between every such helper and the forge CLI. It runs the real CLI only when `GH_TOKEN`
+holds a non-empty value; without one, it prints one refusal line and exits 1, so no helper and no command
+reaches the account login stored on this machine — the shared account seats push through on
+purpose, whose scopes also include dispatching workflows. The shim never reads, prints, logs or
+forwards the token's value: it execs the real CLI with the environment as it is. A seat whose
+launcher exports its own token is unaffected; a seat that runs `env -u GH_TOKEN git push` fails
+closed.
+
+The control is a mechanism, on by default. `forge-shim: off` in
+`<home>/.config/team/settings.yaml`, or `TEAM_FORGE_SHIM=off` for one run, turns it off; the owner
+or a workflow may decide either (OD-20261101-12). Only the word `off` turns it off: a value the
+setting does not know leaves it on, because a typo must not open the fallback.
+
+Its limits are part of the control. A call to the CLI by absolute path bypasses the shim. A
+session team did not start keeps the environment it was started with, and the owner's own
+terminals are untouched. A session that is already running takes the shim only when it is started
+again. The root repair at the seat boundary is the launcher's own credential helper, which lives
+outside this repository.
+
 ### 3.7 Author and committer checks
 
 `team check` applies an account rule to the selected commits. It is a consistency check, not
@@ -314,9 +336,14 @@ Result identifiers this spec asserts, all registered at v0.5.0:
 8. **Not built at v0.5.0 or at int/0.5.1 (8acb470b).** A launched child MUST receive only its
    declared Git identity, the inherited identity inputs MUST be cleared, no value MUST be printed
    or logged, and the Git forms that would escape the identity MUST run `false`. Source: archived
-   seat-account design; the accepted accounts amendment. Proof: none at either ref; the herdr
-   server's clean-server environment and its `SSH_AUTH_SOCK` pass-through are the only built
-   pieces.
+   seat-account design; the accepted accounts amendment. Proof at those refs: none; the herdr
+   server's clean-server environment and its `SSH_AUTH_SOCK` pass-through were the only built
+   pieces. On the 0.5.12 line (from int/0.5.11) the forge shim of §3.6 is built: a session
+   server's environment puts a team-owned forge CLI first on `PATH`, and it runs the real CLI only
+   when `GH_TOKEN` holds a non-empty value, so a credential helper cannot fall back to the account login
+   stored on this machine. The shim is a mechanism, on by default, with `off` as its only
+   disabling word; it never reads, prints or forwards the token's value, a call by absolute path
+   bypasses it, and the rest of the end state remains unbuilt. Proof: `test/no-owner-credential-fallback.test.ts`.
 
 9. **Not built at v0.5.0 or at int/0.5.1 (8acb470b).** `team check` MUST apply the account rule
    over selected commits: merges MUST be exempt, declared humans MUST be exempt, a trailer naming

@@ -21,6 +21,7 @@ import {
 import { get as getProject, list as listProjects, projectsFile } from '../src/registry/projects.ts';
 import { ISSUE_TRACKER_LIMITS } from '../src/registry/issue-tracker.ts';
 import { gitEnv, testIo } from './helpers.ts';
+import { unreadableTeamFolder } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-16T12:00:00Z');
 const AT = '2026-10-16T12:00:00.000Z';
@@ -165,6 +166,28 @@ describe('the registry file', () => {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(teamsFile(home), 'teams:\n\tbad: 1\n');
     expect(() => readTeams(home)).toThrow(/teams\.yaml: line 2:/);
+  });
+
+  // Absence is ENOENT alone. A team folder this user cannot search makes the registry file
+  // invisible to an existence check while the file is still there, and reading that as "no
+  // registry" is the loosening direction: `rosterOf` then answers `unregistered`, and the
+  // bridge admits the team file's own declaration where the registry would have refused it.
+  // The valid registry is held inside the unreadable folder, so the scene proves both sides.
+  test('a team folder that cannot be read is unreadable, not an empty registry', () => {
+    upsertTeam(home, 'abcdef012345', { ...seed, at: AT });
+    expect(Object.keys(readTeams(home))).toEqual(['abcdef012345']);
+    const held = unreadableTeamFolder(home);
+    try {
+      expect(() => readTeams(home)).toThrow(TeamsError);
+      expect(() => readTeams(home)).toThrow(/teams\.yaml: .*EACCES|teams\.yaml: .*permission denied/i);
+    } finally {
+      held.restore();
+    }
+    expect(Object.keys(readTeams(home))).toEqual(['abcdef012345']);
+    // A home that holds no team folder at all is still no teams: absence stays absence.
+    const empty = join(base, 'no-registry');
+    mkdirSync(empty);
+    expect(readTeams(empty)).toEqual({});
   });
 
   test('a stale lock left by a dead run does not block a write', () => {

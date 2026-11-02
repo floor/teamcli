@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { byName, get, list, ofTeam, projectIdOf, projectsFile, ProjectsError, readProjects, upsertProject } from '../../src/registry/projects.ts';
+import { unreadableTeamFolder } from '../helpers/registry-team.ts';
 
 const AT = '2026-10-17T00:30:00.000Z';
 
@@ -64,6 +65,25 @@ describe('the project registry file', () => {
   test('an empty file is no projects', () => {
     writeProjects('');
     expect(readProjects(home)).toEqual({});
+  });
+
+  // Absence is ENOENT alone, as for the team registry. A folder this user cannot search makes
+  // `projects.yaml` invisible to an existence check while it is still there; reading that as no
+  // projects is the loosening direction — a team no project names is read as its own project.
+  test('a team folder that cannot be read refuses instead of reading as no projects', () => {
+    writeProjects(twoProjects());
+    expect(Object.keys(readProjects(home)).sort()).toEqual(['site', 'teamcli']);
+    const held = unreadableTeamFolder(home);
+    try {
+      expect(() => readProjects(home)).toThrow(ProjectsError);
+    } finally {
+      held.restore();
+    }
+    expect(Object.keys(readProjects(home)).sort()).toEqual(['site', 'teamcli']);
+    // A home that holds no team folder at all is still no projects.
+    const empty = join(base, 'no-registry');
+    mkdirSync(empty);
+    expect(readProjects(empty)).toEqual({});
   });
 
   test('what the file holds reads back whole, the ID filled from the key', () => {
@@ -321,7 +341,7 @@ describe('delivery_order', () => {
     writeProjects(record('delivery_order: typed'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must be a list of legs/);
     writeProjects(record('delivery_order: [telepathy]'));
-    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, mcp-inbox, typed, drop, headless-resume/);
+    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session/);
     writeProjects(record('delivery_order: [typed, typed]'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" names a leg twice/);
   });
@@ -350,7 +370,7 @@ describe('delivery_order', () => {
     upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
     const before = readFileSync(projectsFile(home), 'utf8');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: [] })).toThrow('"delivery_order" must name at least one leg');
-    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, mcp-inbox, typed, drop, headless-resume');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['typed', 'typed'] })).toThrow('"delivery_order" names a leg twice');
     expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
   });

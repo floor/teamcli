@@ -1631,7 +1631,9 @@ function hostOf(input: {
         const model = (isTarget ? seat.model : undefined) ?? prior.model;
         const version = (isTarget ? seat.version : undefined) ?? prior.version;
         const effort = (isTarget ? seat.effort : undefined) ?? prior.effort;
-        const launch_line = (isTarget ? seat.launch : undefined) ?? prior.launch_line;
+        // The line this run launched the target with, pins included when its profile has them;
+        // any other seat keeps the line its own record holds.
+        const launch_line = patch.launch_line ?? (isTarget ? seat.launch : undefined) ?? prior.launch_line;
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);

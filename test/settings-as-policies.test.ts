@@ -59,7 +59,7 @@ describe('the settings are catalogue policies', () => {
   });
 
   test('the delivery legs are the full vocabulary, wider than the default order', () => {
-    expect(DELIVERY_LEGS).toEqual(['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume']);
+    expect(DELIVERY_LEGS).toEqual(['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session']);
     for (const leg of DELIVERY_ORDER.fallback) expect(DELIVERY_LEGS).toContain(leg);
   });
 

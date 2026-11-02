@@ -4,12 +4,16 @@
 // `projects.yaml`, the team's in the file's `policies:`. A legacy unsigned word is read where
 // its level holds no signed record — the team file's own `delivery_order` at the top level or
 // on a seat, and the registry project record's `delivery_order` — and a signed record shadows
-// the legacy word at its level: expired or unreadable, it leaves the level silent rather than
-// reviving what it replaced. A seat that declares no word of its own takes the one its shape
-// implies: a human's pane walks the drop file alone, and a CLI whose launch installs no watcher
-// never walks the drop leg at all. A seat's signed settings, when the caller has read them, say
-// `delivery_order` and `human` in the file's place. runSend resolves `host.delivery` when a
-// caller hands a chain in — tests do — and this reading otherwise.
+// the legacy word at its level: expired, or a value the catalogue cannot read, it leaves the
+// level silent rather than reviving what it replaced. The project level is not silent when its
+// record cannot be read at all: the project's word can only narrow the order, so a reader that
+// fell through to the fallback could widen the legs a send travels. The chain refuses there
+// (`DeliveryChainUnreadable`) and the caller says so in its own words.
+// A seat that declares no word of its own takes the one its shape implies: a human's pane walks
+// the drop file alone, and a CLI whose launch installs no watcher never walks the drop leg at
+// all. A seat's signed settings, when the caller has read them, say `delivery_order` and `human`
+// in the file's place. runSend resolves `host.delivery` when a caller hands a chain in — tests
+// do — and this reading otherwise.
 import type { SeatOverrides } from '../config/apply.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -25,6 +29,20 @@ import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
 
 /**
+ * A project registry or project policy record this reader cannot read. A project's word can
+ * only narrow the order — a drop-only project is the shape — so reading an unreadable record as
+ * no word would let the fallback behind it name legs the project keeps out. `deliveryChainOf`
+ * throws this instead of widening, and every caller refuses the send or reports it in words of
+ * its own. The message is the plain reason.
+ */
+export class DeliveryChainUnreadable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeliveryChainUnreadable';
+  }
+}
+
+/**
  * Reads the chain the receiving seat's files declare. `file` is the receiving team's validated
  * file when the caller already holds it; otherwise the file at `root` is loaded, tolerantly — a
  * file this reader cannot load declares nothing and the default order stands, because the order
@@ -34,11 +52,13 @@ export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] 
  * legacy unsigned word fills in only where no signed record is held. The project's word is
  * asked of the registry record for the project the team sits in: its `id` names the project
  * policy's target and its `delivery_order` is the legacy word. A registry that cannot answer —
- * a file that does not read, or a team two projects name — is read as no word rather than
- * failing the send, the same way a team file that cannot be loaded is. A signed word that is
- * expired, or a value the catalogue cannot read, leaves its level silent. The seat's word is
- * the signed settings' or the file's; when neither gives one, the seat's shape supplies one — a
- * human's drop-only order, and a watcherless CLI's order without the drop leg.
+ * a file that does not read, or a team two projects name — and a project policy record that
+ * exists and does not read throw `DeliveryChainUnreadable`: unlike the team file, whose loss
+ * only leaves the default standing, the project's word can only narrow, and its loss would
+ * widen the legs a send may travel. A signed word that is expired, or a value the catalogue
+ * cannot read, leaves its level silent. The seat's word is the signed settings' or the file's;
+ * when neither gives one, the seat's shape supplies one — a human's drop-only order, and a
+ * watcherless CLI's order without the drop leg.
  */
 export function deliveryChainOf(input: {
   /** The receiving team's root. */
@@ -75,10 +95,22 @@ export function deliveryChainOf(input: {
     const record = input.projectOfTeam(teamIdOf(input.root));
     projectId = record?.id ?? null;
     project = record?.deliveryOrder;
-  } catch {
-    project = undefined;
+  } catch (error) {
+    // The project's word can only narrow. A registry that cannot name the team's project — an
+    // unreadable or corrupt file, or a team two projects name — leaves a bound this reader
+    // cannot see, and the default behind it may travel where the project forbids. Refuse.
+    throw new DeliveryChainUnreadable(
+      `the project registry cannot name this team's project: ${(error as Error).message}`,
+    );
   }
-  const projectPolicy = signedOrderOf(readProjectPolicySource(input.home, projectId), now);
+  const projectSource = readProjectPolicySource(input.home, projectId);
+  if (!projectSource.ok && projectId !== null) {
+    // The record names a project whose own delivery-order policies do not read; the legacy word
+    // the registry carries is not what the signed record would have said. Refuse for the same
+    // reason: no level here may widen on a record that exists and cannot be read.
+    throw new DeliveryChainUnreadable(`the project's delivery-order record cannot be read: ${projectSource.why}`);
+  }
+  const projectPolicy = signedOrderOf(projectSource, now);
   if (projectPolicy !== undefined) project = projectPolicy ?? undefined;
   // The team source carries the file's legacy word itself when no signed record is held; the
   // fallback covers a source that cannot be read, where the validated file's word still stands.

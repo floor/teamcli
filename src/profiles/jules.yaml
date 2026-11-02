@@ -1,7 +1,8 @@
 # Jules's TUI, captured from @google/jules 0.1.42 (herdr 0.7.1, a 54x23 pane, 2026-10-17).
 #
 # `jules` with no subcommand opens the session table; `jules new "<task>"` creates a session
-# without the TUI and is not this cut. `jules version` printed `Version: v0.1.42`; the binary
+# without the TUI, and that call is the `session_cli` block below. `jules version` printed
+# `Version: v0.1.42`; the binary
 # answers no `--version` (`Error: unknown flag: --version`, exit 1), which is what `doctor`
 # runs, so its version reads unread for this CLI.
 #
@@ -9,9 +10,10 @@
 # ` > Search sessions or type / to use`. A new session's task box asks
 # `What do you want Jules to work on?` under the ` Type the task description` label.
 #
-# The TUI has no standing session: every brief is a new remote session, created through the
-# TUI's own screens, so `rules: prepend` rides the rules with each brief a send types, and
-# the compose module walks the screens (`jules-compose.ts`).
+# The TUI has no standing session: every brief is a new remote session. A send creates it with
+# the CLI's own `session_cli` call below — the whole body as one argument, never the screens.
+# The seat is public-only (below): the rules are never prepended, and a send reads the body
+# against the machine's private lists before the call, so nothing private reaches the service.
 format: 1
 cli: jules
 binary: jules
@@ -26,11 +28,20 @@ tested:
 # walks them.
 unattended: []
 rules: prepend
+# Every jules session runs on Google's service, not on this machine, so every seat of this CLI
+# is public-only: the team's rules never ride a brief, a send reads the whole body against the
+# machine's private lists before the CLI's session call, and the target repository must be proven
+# public by one credential-free read of the forge's own record before the call — the CLI clones
+# it, so a private repository would hand the service the code the brief is about. A refusal
+# names its reason and the walk then falls through to the leg behind it. A team file can mark one
+# seat the same way; nothing can turn it off for this CLI.
+public_only: true
 # The delivery class a run measured: a fresh session per brief means no runtime holds a queue
 # for it, and no MCP inbox is registered; an idle seat cannot be woken.
 delivery: none
 # The TUI's `ctrl+d` deletes a session for the whole account, not just this seat, and a delete
-# cannot be undone. The profile never sends it, and this line rides every brief the seat gets.
+# cannot be undone. The profile never sends it; the standing line below states the rule for any
+# delivery that carries this profile's rules.
 standing_rules:
   - Never delete a Jules session.
 # herdr 0.7.1 reports a jules pane as no agent, or `unknown`, while the TUI runs (captured: a
@@ -48,5 +59,23 @@ timeouts:
   idle: 90s
   exit: 30s
 compose_module: jules-compose.ts
+# The CLI's own session call, from `jules new --help` (0.1.42, run 2026-11-01): "Assign a new
+# session to Jules (defaults to current working directory)", the task a positional argument, and
+# `--repo string` "Which repo you want Jules to work on (defaults to current working directory)".
+# `jules remote new` takes the same task as `--session`'s value; the positional form is the one
+# this profile names. The created line is the one the 2026-10-17 screen capture records:
+# `Session created: https://jules.google.com/session/<id>`. `jules remote pull --session <id>
+# --apply` "Apply the patch to the local repository"; the operator runs it from the worktree it
+# belongs in, never a send.
+session_cli:
+  argv:
+    - jules
+    - new
+  repo_flag: --repo
+  created: "Session created: "
+  pull:
+    - jules
+    - remote
+    - pull
 screen:
   screen_module: jules-screen.ts
