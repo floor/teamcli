@@ -192,7 +192,7 @@ for (const json of [false, true]) {
     writeFileSync(grant, grantContents, { mode: 0o600 });
     const io = testIo(fixture.root, { kind: 'owner' });
     const code = await runDaemon(['install', '--root', fixture.root, '--presence', '--watch', ...(json ? ['--json'] : [])], {
-      ...io, general: { key, grant },
+      ...io, general: { key, grant, grantId: 'gg_synthetic', clientId: 'synthetic-client' },
     }, { home: fixture.home, program: fixture.program, service: fixture.manager, health: fixture.health, sleep: fixture.healthSleep });
 
     expect(code).toBe(1);

@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readState, updateState } from '../state.ts';
 import { readTeamConfig, resolveTeamConfigSource } from './team-config.ts';
+import { readLaunchedTeam } from './team-text.ts';
 import { listedTeam, withRecordedSession } from './recorded-session.ts';
-import type { Deprecation, Problem, TeamFile } from './types.ts';
+import type { Deprecation, LoadResult, Problem, TeamFile } from './types.ts';
 import { validateTeamFile } from './validate.ts';
 
 // The team as the commands that must keep working read it: `status`, `watch`, `down`. A valid
@@ -41,11 +42,31 @@ export function currentTeam(
    *  session's recorded lobby. Absent reads the file's own. */
   session?: string,
 ): Current {
-  const loaded = readTeamConfig(cwd, {
+  return currentFrom(readTeamConfig(cwd, {
     ...(file ? { file } : {}),
     ...(home ? { home } : {}),
     ...(session !== undefined ? { session } : {}),
-  });
+  }), now, home, remember);
+}
+
+/** The same read for a launched pointer: where a session was launched from is not a copy to
+ *  read, so the team is read where the edits write it — the registry's record when the pointer
+ *  names this checkout's own team file and the registry holds it, the file otherwise — with the
+ *  same remembering and the same last-valid fallback. */
+export function currentLaunchedTeam(
+  launched: string,
+  now: Date,
+  home?: string,
+  remember = true,
+  session?: string,
+): Current {
+  return currentFrom(readLaunchedTeam(launched, {
+    ...(home ? { home } : {}),
+    ...(session !== undefined ? { session } : {}),
+  }), now, home, remember);
+}
+
+function currentFrom(loaded: LoadResult, now: Date, home: string | undefined, remember: boolean): Current {
   if (loaded.ok) {
     const dir = dirname(loaded.path);
     // Remember the text this read validated. A registry team has no `.agents/team.yaml` to

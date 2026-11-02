@@ -126,7 +126,7 @@ async function run(where: Place, argv: string[], caller: Caller = owner): Promis
 /** A run the dispatcher's general door admitted: the verified grant's path rides on io.general. */
 async function runGranted(where: Place, argv: string[], grant: string): Promise<Ran> {
   const io: Io & { out: string; err: string } = testIo(where.root, owner);
-  io.general = { grant, key: join(where.base, 'client.key') };
+  io.general = { grant, key: join(where.base, 'client.key'), grantId: 'gg_synthetic', clientId: 'synthetic-client' };
   return { code: await runAgents(argv, io, { home: where.home, now: () => NOW }), out: io.out, err: io.err };
 }
 

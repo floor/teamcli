@@ -132,6 +132,7 @@ function managerOfThisProcess(): ServiceManager {
     unit: (at) => thisProcessUnitRecord(join(at, 'unit.plist')),
     install: (at) => ({ ok: true, unitPath: join(at, 'unit.plist') }),
     uninstall: (at) => ({ ok: true, unitPath: join(at, 'unit.plist'), removed: true }),
+    restart: () => ({ ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null }),
   };
 }
 
@@ -213,6 +214,7 @@ describe('the presence opt-in default and the service unit', () => {
         return { ok: true, unitPath: join(at, 'unit.plist') };
       },
       uninstall: (at) => ({ ok: true, unitPath: join(at, 'unit.plist'), removed: true }),
+      restart: () => ({ ok: false, reason: 'refused', why: 'a restart is not part of this scene', detail: null }),
     };
 
     const plain = testIo(root, owner);

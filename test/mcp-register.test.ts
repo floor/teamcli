@@ -28,6 +28,11 @@ function folder(options: { repo?: 'plain' | 'ignored'; ignore?: string; text?: s
   return dir;
 }
 
+/** The team file a folder holds: the file a launch that read this folder names. A registration
+ *  that names no file resolves the registry instead, so every scene that wants the folder's team
+ *  names the file, exactly as a file team's launch does. */
+const fileOf = (dir: string): string => join(dir, '.agents', 'team.yaml');
+
 /** Gemini's own add as the launch runs it: write the file the command is measured to write. */
 function fakeAdd(writes = true): { run: (command: string, args: readonly string[], cwd: string) => InboxRun; calls: { command: string; args: readonly string[]; cwd: string }[] } {
   const calls: { command: string; args: readonly string[]; cwd: string }[] = [];
@@ -69,18 +74,18 @@ describe('registerInbox', () => {
     const dir = folder();
     const { run, calls } = fakeAdd();
     const runner = selfRunner();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run })).toEqual({ ok: true });
     expect(calls).toEqual([{
       command: 'gemini',
       cwd: dir,
-      args: ['mcp', 'add', '-s', 'project', 'team-inbox', runner.command, '--', runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+      args: ['mcp', 'add', '-s', 'project', 'team-inbox', runner.command, '--', runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', fileOf(dir)],
     }]);
   });
 
   test('a work tree that does not ignore the file excludes it and then registers', () => {
     const dir = folder({ repo: 'plain' });
     const { run, calls } = fakeAdd();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run })).toEqual({ ok: true });
     expect(calls).toHaveLength(1);
     expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('.gemini/settings.json\n');
   });
@@ -88,7 +93,7 @@ describe('registerInbox', () => {
   test('a work tree that ignores the file registers', () => {
     const dir = folder({ repo: 'ignored' });
     const { run, calls } = fakeAdd();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run })).toEqual({ ok: true });
     expect(calls).toHaveLength(1);
   });
 
@@ -98,7 +103,7 @@ describe('registerInbox', () => {
     writeFileSync(join(dir, '.gemini', 'settings.json'), '{}\n');
     execFileSync('git', ['add', '-f', '--', '.gemini/settings.json'], { cwd: dir, stdio: 'ignore' });
     const { run, calls } = fakeAdd();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run })).toEqual({
       ok: false,
       reason: 'its project tracks .gemini/settings.json',
     });
@@ -107,7 +112,7 @@ describe('registerInbox', () => {
 
   test('a non-json target the add does not write names that target', () => {
     const dir = folder({ repo: 'plain' });
-    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, run: () => ({ code: 0 }) })).toEqual({
+    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: 0 }) })).toEqual({
       ok: false,
       reason: '.grok/config.toml was not written',
     });
@@ -116,13 +121,13 @@ describe('registerInbox', () => {
 
   test('a json add that exits falls back to writing the project file', () => {
     const dir = folder();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run: () => ({ code: 1 }) })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: 1 }) })).toEqual({ ok: true });
     expect(JSON.parse(readFileSync(join(dir, '.gemini', 'settings.json'), 'utf8')).mcpServers['team-inbox']).toBeDefined();
   });
 
   test('a refused add of a non-json target names the command and its exit', () => {
     const dir = folder();
-    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, run: () => ({ code: 1 }) })).toEqual({
+    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, file: fileOf(dir), run: () => ({ code: 1 }) })).toEqual({
       ok: false,
       reason: '`grok mcp add` exited 1',
     });
@@ -131,19 +136,19 @@ describe('registerInbox', () => {
   test('an add that says it wrote the file and did not is a refusal', () => {
     const dir = folder();
     const { run } = fakeAdd(false);
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, file: fileOf(dir), run })).toEqual({
       ok: false,
       reason: '.gemini/settings.json was not written',
     });
   });
 
-  test('a folder with no team file refuses: the server could not resolve the team there', () => {
+  test('a launch that names no file and no registered team refuses: the folder is not read as the team', () => {
     const dir = mkdtempSync(join(tmpdir(), 'team-mcp-register-'));
     dirs.push(dir);
     const { run, calls } = fakeAdd();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, home: dir, run })).toEqual({
       ok: false,
-      reason: 'no team file could be read from its folder',
+      reason: 'no registered team holds seat "helper"',
     });
     expect(calls).toEqual([]);
   });
@@ -249,12 +254,12 @@ describe('the cursor file route', () => {
   test('a folder outside a repository gets the file, holding the runner and the seat', () => {
     const dir = folder();
     const runner = selfRunner();
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({ ok: true });
     expect(JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8'))).toEqual({
       mcpServers: {
         'team-inbox': {
           command: runner.command,
-          args: [runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web'],
+          args: [runner.entry, 'mcp', 'serve', '--seat', 'helper', '--session', 'acme-web', '--file', fileOf(dir)],
         },
       },
     });
@@ -298,7 +303,7 @@ describe('the cursor file route', () => {
     const dir = folder();
     mkdirSync(join(dir, '.cursor'));
     writeFileSync(join(dir, '.cursor', 'mcp.json'), JSON.stringify({ theme: 'dark', mcpServers: { other: { command: 'x', args: [] } } }));
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({ ok: true });
     const written = JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8'));
     expect(written.theme).toBe('dark');
     expect(Object.keys(written.mcpServers).sort()).toEqual(['other', 'team-inbox']);
@@ -307,21 +312,21 @@ describe('the cursor file route', () => {
 
   test('a work tree that does not ignore the file excludes it and then writes it', () => {
     const dir = folder({ repo: 'plain' });
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({ ok: true });
     expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('.cursor/mcp.json\n');
     expect(JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8')).mcpServers['team-inbox']).toBeDefined();
   });
 
   test('a work tree that ignores the file registers', () => {
     const dir = folder({ repo: 'ignored', ignore: '.cursor/\n' });
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({ ok: true });
   });
 
   test('a file that is not JSON is left exactly as it is', () => {
     const dir = folder();
     mkdirSync(join(dir, '.cursor'));
     writeFileSync(join(dir, '.cursor', 'mcp.json'), 'not json\n');
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({
       ok: false,
       reason: '.cursor/mcp.json is not JSON, so it was left as it is',
     });
@@ -332,7 +337,7 @@ describe('the cursor file route', () => {
     const dir = folder();
     mkdirSync(join(dir, '.cursor'));
     writeFileSync(join(dir, '.cursor', 'mcp.json'), '{"mcpServers": []}\n');
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({
       ok: false,
       reason: '.cursor/mcp.json holds mcpServers that is not an object, so it was left as it is',
     });
@@ -345,7 +350,7 @@ describe('the cursor file route', () => {
     const outside = join(dir, 'outside.json');
     writeFileSync(outside, '{"untouched": true}\n');
     symlinkSync(outside, join(dir, '.cursor', 'mcp.json'));
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir, file: fileOf(dir) })).toEqual({
       ok: false,
       reason: '.cursor/mcp.json is not a regular file',
     });
