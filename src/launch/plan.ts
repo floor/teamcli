@@ -3,7 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { cliWordList, launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -961,19 +961,32 @@ export function upPlan(input: UpInput): Step[] {
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine);
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
+      // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
+      // options after it; the seat says so on the launch step rather than losing the words.
+      notice = notice ? `${notice}; ${text}` : text;
+    });
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
     // than probed past. Nothing is recorded when the policy is off or unreadable.
+    // The collision is read from the CLI's own decoded words: a flag inside a trailing quoted
+    // script is one the CLI will read, a quoted flag name is the flag, and the shell's words
+    // before it are not. A line this version cannot prove is asked 0.5.10's question of the
+    // whole line: a collision it plainly names still stops the managed endpoint, and one only a
+    // quoted flag name appears to name does not.
+    const managedWords = cliWordList(profile.cli, command);
+    const managedFlag = managedWords === null
+      ? (flag: string): boolean => new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(command)
+      : (flag: string): boolean => managedWords.some((word) => word === flag || word.startsWith(`${flag}=`));
     const managedCodex = profile.cli === 'codex'
       && codexDaemon === 'on'
       && input.stateDir !== undefined
       && launchedCliBinary(seat.launch) === profile.binary
-      && !/(^|\s)--remote(=|\s|$)/.test(command)
+      && !managedFlag('--remote')
       // A resume line attaches too: the attach sheds its permission overrides
       // (`remoteCodexCommand`), which codex-cli 0.161.0 refuses on a remote resume.
-      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
+      && !managedFlag('--no-daemon');
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (wouldLaunch) {
