@@ -904,10 +904,8 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
           ok: true,
           thread: {
             id: THREAD_ID,
-            status: {
-              type: 'active',
-              activeFlags: ['waitingOnApproval'],
-            },
+            status: { type: 'idle' },
+            canAcceptDirectInput: false,
           },
         }),
         codexSpawn: async () => {
@@ -960,6 +958,48 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
       );
       expect(eventsAfterSweep).toHaveLength(2);
     }
+  });
+
+  test('spawns the Codex queue for an active thread awaiting approval, since the queue holds the pointer across the turn', async () => {
+    const scene = createScene();
+    const msgId = '88888888-9999-4aaa-8bbb-cccccccccccc';
+    const signed = makeSignedMessage(scene, msgId, 'worker-codex');
+    let spawnCalls = 0;
+
+    const delivered = await handleDaemonRelaySend(
+      {
+        route: scene.route,
+        team: scene.team,
+        home: scene.home,
+        record: signed,
+        agentSession: THREAD_ID,
+        caller: { kind: 'seat', name: 'lead', pane: '%1' },
+        now: () => NOW,
+      },
+      {
+        codexLiveProbe: async () => ({
+          ok: true,
+          thread: {
+            id: THREAD_ID,
+            status: {
+              type: 'active',
+              activeFlags: ['waitingOnApproval'],
+            },
+            canAcceptDirectInput: true,
+          },
+        }),
+        codexSpawn: async () => {
+          spawnCalls += 1;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      },
+    );
+
+    expect(spawnCalls).toBe(1);
+    expect(delivered.ok).toBe(true);
+    if (!delivered.ok) return;
+    expect(delivered.outcome).toBe('delivered');
+    expect(delivered.deliveredRoute).toBe('native');
   });
 
   test('deliverDaemonRelayRoute handles missing socket path as unreachable without dialing', async () => {
