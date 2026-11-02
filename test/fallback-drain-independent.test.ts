@@ -1,6 +1,6 @@
-// Independent scenes for (B) the retirement backlog drain (writer-04, fix/fallback-marker-drain
-// b64d9d74f on int/0.5.12). Written against the change's claims, not the builder's tests: the
-// threshold is strictly-greater and the bulk limit only ever widens a pass; a pending, unsettled or
+// Independent scenes for the retirement backlog drain. Written against the change's claims, not
+// the builder's tests: the threshold is strictly-greater and the bulk limit only ever widens a pass;
+// a pending, unsettled or
 // linked marker is never a candidate and an archive-ladder link refuses the whole retirement; a
 // retired episode is archived byte for byte — marker and attempt ledger — while its publication
 // ledger stays; and a two-thousand-episode pass is measured, because loop starvation is the bug
@@ -33,9 +33,9 @@ import { historyPath } from '../src/send/history.ts';
 const AT = '2026-10-20T10:00:00.000Z';
 const DIGEST = 'c'.repeat(64);
 const TEAM_YAML = `format: 1
-entity: floor
-project: writer04
-session: writer04-dev
+entity: acme
+project: acme
+session: acme-dev
 coordinator: crew-lead
 operator: crew-lead
 workspace:
@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 function makeWorld(tag: string): World {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), `team-drain-writer04-${tag}-`)));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), `team-drain-${tag}-`)));
   dirs.push(base);
   const root = join(base, 'repo');
   const entityRoot = join(base, 'entity-repo');
@@ -95,16 +95,16 @@ function makeWorld(tag: string): World {
     entityRoot,
     home,
     team: validated.team,
-    ctx: { caller: { kind: 'seat', name: 'worker-1', pane: 'p1', session: 'writer04-dev' }, team: validated.team, root, home, now: () => new Date(AT) },
+    ctx: { caller: { kind: 'seat', name: 'worker-1', pane: 'p1', session: 'acme-dev' }, team: validated.team, root, home, now: () => new Date(AT) },
     sweep: {
       team: validated.team,
       root,
       home,
       now: () => new Date(AT),
       // The target lead fixed, so the fixture needs no entity registry record.
-      orchestrator: { seat: 'entity-lead', team: 'floor', root: entityRoot, session: 'floor-hq' },
+      orchestrator: { seat: 'entity-lead', team: 'acme', root: entityRoot, session: 'acme-hq' },
     },
-    recipient: { team: 'writer04', seat: 'worker-2', toId: 'agt_worker2', session: 'writer04-dev', root },
+    recipient: { team: 'acme', seat: 'worker-2', toId: 'agt_worker2', session: 'acme-dev', root },
   };
 }
 
@@ -191,7 +191,7 @@ function eventCount(world: World, recordId: string): number {
   return read.events.filter((event) => (event.payload as { record_id?: string }).record_id === recordId).length;
 }
 
-describe('writer-04: the retirement backlog drain against its own claims', () => {
+describe('the retirement backlog drain against its own claims', () => {
   test('the threshold is strictly greater, the bulk limit only widens, and the whole arc drains', () => {
     // Exactly at the threshold: the steady limit rules.
     const atThreshold = makeWorld('bound256');
@@ -362,7 +362,7 @@ describe('writer-04: the retirement backlog drain against its own claims', () =>
     const warmMs = performance.now() - warmStart;
     expect(second.roots[0]!.retirement!.retired).toHaveLength(50);
 
-    console.log(`writer04 drain measure: cold 2,000-retire pass ${coldMs.toFixed(0)} ms, warm 50-retire pass ${warmMs.toFixed(0)} ms`);
+    console.log(`fallback drain measure: cold 2,000-retire pass ${coldMs.toFixed(0)} ms, warm 50-retire pass ${warmMs.toFixed(0)} ms`);
     // A pass must not eat a whole heartbeat, let alone the 30 s housekeeping cadence.
     expect(coldMs).toBeLessThan(5_000);
     expect(warmMs).toBeLessThan(1_000);

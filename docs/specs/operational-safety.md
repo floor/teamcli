@@ -220,7 +220,7 @@ closed.
 
 The control is a mechanism, on by default. `forge-shim: off` in
 `<home>/.config/team/settings.yaml`, or `TEAM_FORGE_SHIM=off` for one run, turns it off; the owner
-or a workflow may decide either (OD-20261101-12). Only the word `off` turns it off: a value the
+or a workflow may decide either. Only the word `off` turns it off: a value the
 setting does not know leaves it on, because a typo must not open the fallback.
 
 Its limits are part of the control. A call to the CLI by absolute path bypasses the shim. A
