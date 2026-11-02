@@ -1,7 +1,7 @@
 // Socket kind and process launch are injected: regular marker files exercise real inode,
 // permission, owner-record and link hygiene without starting a CLI or binding any live socket.
 import {afterAll,afterEach,beforeEach,expect,spyOn,test} from 'bun:test';
-import {existsSync,lstatSync,mkdirSync,mkdtempSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,lstatSync,mkdirSync,mkdtempSync,realpathSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
 import * as childProcesses from 'node:child_process';
 import {basename,dirname,join} from 'node:path';
 
@@ -16,6 +16,8 @@ process.kill=((pid:number,signal?:string|number)=>{
 const launches:string[]=[];
 const spawnGuard=spyOn(childProcesses,'spawn').mockImplementation((()=>{launches.push('spawn');throw Error('no external process may start in this fixture');}) as typeof childProcesses.spawn);
 const execGuard=spyOn(childProcesses,'execFileSync').mockImplementation((()=>{launches.push('execFileSync');throw Error('no external process may be read in this fixture');}) as typeof childProcesses.execFileSync);
+const { shortSocketBase } = await import('../helpers.ts');
+const fixturePrefix = join(shortSocketBase(), 'o3ep-');
 const endpoint=await import('../../src/launch/codex-endpoint.ts');
 const state=await import('../../src/state.ts');
 beforeEach(()=>{signals.length=0;launches.length=0;});
@@ -23,7 +25,7 @@ afterEach(()=>{expect(signals).toEqual([]);expect(launches).toEqual([]);});
 afterAll(()=>{process.kill=originalKill;spawnGuard.mockRestore();execGuard.mockRestore();});
 const session='independent-room',seat='independent-seat',binding='prs_9876543210ab';
 function world(){
- const base=mkdtempSync('/private/tmp/o3ep-');const dir=join(base,'deep'.repeat(32),'.agents');mkdirSync(dir,{recursive:true});
+ const base=realpathSync(mkdtempSync(fixturePrefix));const dir=join(base,'deep'.repeat(32),'.agents');mkdirSync(dir,{recursive:true});
  state.updateState(dir,s=>{(s.sessions[session]??=state.emptySession()).seats[seat]={stage:'launched',presence_binding:binding};});
  return{base,dir,runtime:join(base,'rt')};
 }
