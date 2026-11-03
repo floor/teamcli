@@ -115,6 +115,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
 import { busProblemNotes } from '../bus/notes.ts';
+import { pingpongLegDifferences } from './pingpong-legs.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -493,6 +494,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...hostedWatch,
     ...policyChecked.differences,
     ...modelRule.differences,
+    // The nightly harness's latest per-leg result: a class over its send-to-read target, a lost
+    // message, or a result older than a day. A team that has not run draws nothing.
+    ...pingpongLegDifferences(dir, sources.now()),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same rows `status` prints: a legacy record or one the verification refused still says
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
