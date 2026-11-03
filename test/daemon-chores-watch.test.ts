@@ -375,4 +375,143 @@ printf '{"result":{"process_info":{"shell_pid":%s,"foreground_processes":[{"pid"
       else process.env.TEAM_TEST_HERDR_PID = savedPid;
     }
   }, 30_000);
+
+  test('test read sources answer first for a standing pane watch and never invoke the fake host on PATH', async () => {
+    bind();
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-9',
+      };
+    });
+
+    const bin = join(base, 'bin-unused');
+    const herdrLog = join(base, 'herdr-unused.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 5
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+
+    const clock = { at: NOW };
+    const sourceCalls: { pane: string; session: string | undefined }[] = [];
+    const reports: HostedWatchState[] = [];
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: (_root, state) => reports.push(state),
+      pulse: () => {},
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: {
+        ...quietSources(clock),
+        processes: (pane, session) => {
+          sourceCalls.push({ pane, session });
+          return { shell: 100, foreground: [process.pid] };
+        },
+      },
+    });
+    try {
+      await waitUntil(() => sourceCalls.length >= 1);
+      expect(sourceCalls[0]).toEqual({ pane: 'fixture-pane-9', session: 'crew' });
+      expect(existsSync(herdrLog)).toBe(false);
+    } finally {
+      await watch.stop('the test is done');
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 15_000);
+
+  test('a hung and failing fake host on PATH never stalls the child heartbeat stream or blocks clean shutdown', async () => {
+    bind();
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-hung',
+      };
+    });
+
+    const bin = join(base, 'bin-hung');
+    const herdrLog = join(base, 'herdr-hung.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 2
+printf '{"type":"error","error":"host hung and failed"}\\n'
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+
+    const beats: string[] = [];
+    const watchStates: HostedWatchState[] = [];
+    let pending = '';
+    const output = new PassThrough();
+    output.setEncoding('utf8');
+    output.on('data', (chunk: string) => {
+      pending += chunk;
+      let nl = pending.indexOf('\n');
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf('\n');
+        const frame = JSON.parse(line) as { type?: string; at?: string; state?: HostedWatchState };
+        if (frame.type === 'heartbeat' && typeof frame.at === 'string') beats.push(frame.at);
+        if (frame.type === 'watch-state' && frame.state !== undefined) watchStates.push(frame.state);
+      }
+    });
+    const stdin = new PassThrough();
+    const serving = serveChoresChild({
+      config: {
+        version: 1,
+        home,
+        beatMs: 150,
+        sliceMs: 150,
+        since: iso(NOW),
+        routes: [route()],
+      },
+      stdin,
+      stdout: output,
+      pass: async () => [],
+      presence: { run: async () => ({ proofs: [], notes: [] }) },
+      markerCacheStats: () => ({ read: 0, reused: 0, cached: 0 }),
+    });
+    try {
+      await waitUntil(() => beats.length >= 6, 15_000);
+      expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').toContain(
+        '--session crew pane process-info --pane fixture-pane-hung',
+      );
+      const gaps = beats.slice(1).map((beat, index) => Date.parse(beat) - Date.parse(beats[index]!));
+      expect(Math.max(...gaps), `beat gaps (ms): ${gaps.join(', ')}`).toBeLessThan(900);
+      expect(watchStates.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      stdin.end();
+      await serving;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 30_000);
 });
