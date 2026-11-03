@@ -8,7 +8,12 @@ through its drop folder, and a seat no route can wake keeps it in the bus inbox 
 saying so. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
 A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
-answer as a record on the same thread and cites the record it answers.
+answer as a record on the same thread, cites the record it answers, and publishes the seat's
+signed read receipt beside it (ADR `zeus-message-path`, D3). A plain `team send` back to the
+sender is an answer too: it marks the newest message that sender delivered this seat read
+(`read_by: answered-by-send`), and only the newest — an older message from the same sender, a
+message from anyone else, and one delivered after this send keep waiting. `team ack <id>` marks
+a message read with no answer.
 The body is never split across several writes. A seat whose CLI builds its own work item from
 its screens — a profile with a compose module — still gets the record, but its compose path is
 refused before anything is typed, so the seat reads the message through its inbox or its drop
@@ -639,7 +644,7 @@ when it is saved, and the refusal names the placeholder:
 | `{subject}` | the sender's [`--subject`](#synopsis) line, sanitised like every field; empty when none was written |
 | `{summary}` | the body's first content line, sanitised and then cut at 80 characters — never paraphrased, and never the subject |
 | `{age}` | how long the message has waited: seconds, minutes, hours or days |
-| `{id}` | reserved for the record's id; this build leaves it empty, and the id travels in the socket frame's `msg_id` only |
+| `{id}` | reserved for the record's id; this build leaves it empty, and a socket frame carries the id in its `msg_id` and in its reader line |
 
 Every field is data: control characters, escape sequences and line breaks are neutralised, so a
 rendered header is one printable line. A body line that forges a sender header stays summary
@@ -651,15 +656,21 @@ whose seats carry an MCP inbox names the inbox tool, `Read it with: call inbox_c
 because the typed line never carries the id `inbox_read` takes — and the shipped
 `Read it with: team drops --read.` otherwise. The whole line is one printable line of at most 80
 characters; the sentence is kept whole and the header gives way to it. The template cannot remove
-the sentence — an agent seat always learns where to read the signed record — and the message's id
-is not in the line.
+the sentence — an agent seat always learns where to read the signed record — and no sentence
+carries the message's id except one: a socket delivery's single re-wake says `ack <id> or reply`,
+naming the message its frame carried, because either act settles that exact record (ADR
+`zeus-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
 sender's identity line, `Message from <name> (<seat>@<team>)` — the nickname the registry holds,
 the name the seat's written label carries before the middle dot, or its seat name, with no
 summary and no rule — then a blank line, the signed body with its own
-`from … — admitted by: …` header, and the fixed reply line,
-`Reply with: team send <address> "…"`. An ordinary send never frames a human's seat: a
+`from … — admitted by: …` header, and the reader line ADR `zeus-message-path`, D3 pins:
+`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+The id is the record's own and appears once; `team reply <id>` answers and marks it read,
+`team ack <id>` marks it read with no answer. The line is the same for every sender, the owner
+included, and carries no address — no entity or owner-reply target is resolved for it. An
+ordinary send never frames a human's seat: a
 `human: true` seat walks the drop leg alone, so no frame is dialed for it.
 
 A running watch builds the same header for the oldest waiting message; in this build the ring
@@ -726,7 +737,7 @@ message's signed steps in order.
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout; `<seat>: delivered (socket)` when the receiver's socket took the frame, reported at the frame with no look at the box; or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
 | delivered (webhook) | 0 | `<seat>: delivered (webhook, <n> ms)` on stdout, for the sender-posted webhook leg: the seat's adapter answered 2xx to the signed record this run posted, which is the leg's whole proof, and the history records `delivered` with `via: webhook`; an adapter's 2xx is not a read receipt, so this is never `delivered (read)` |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox's `inbox_read` receipt, the channel's ack, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox's `inbox_read` receipt, the channel's ack, the drop leg's watcher read, a reply's `read` (`read_by: reply`), or the seat's own later answer send (`read_by: answered-by-send`): the seat read the message, which is not a claim that it acted on it |
 | delivered (typed wake) | 0 | `<seat>: delivered (typed wake)` on stdout, for the profile-gated typed wake: the signed drop record was written under the seat lock, the one-line trigger was typed into the seat's composer and Enter pressed, and the profile's working screen appeared after that Enter; the trigger is the seat reading the drop at its next turn, never the body |
 | sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (webhook, <n> ms); webhook delivery unknown: <reason>` on stdout, for the sender-posted webhook leg whose answer was never read: the post may have been taken, the history records `via: webhook` with `sent (unconfirmed)`, and the claim keeps its place so no later pass posts the same record again |

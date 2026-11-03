@@ -411,6 +411,19 @@ bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three wait
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
 
+A socket frame carries the record's id in `msg_id` and in the reader line it ends with —
+`Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is needed.`
+The id is not a secret, the line is the same for every sender, the owner included, and it
+carries no address, so the frame resolves no entity or owner-reply target (ADR
+`zeus-message-path`, D3). The line names both acts that settle the record: `team reply <id>`
+answers and writes the seat's signed read receipt beside its `replied` receipt, and
+`team ack <id>` writes the read receipt with no answer. A seat's own later `team send` to a
+sender settles the newest delivered-unread message that sender sent it before that send
+(`read_by: answered-by-send`); an older message from the same sender, a message from anyone
+else, and one delivered after the send stay unread. A socket delivery still without a receipt
+at its unread window is re-woken once, with the line `ack <id> or reply`; after that no pass
+wakes it again, and only the report at twice the window speaks.
+
 Every send that wrote a record names the message id on its closing line: a trailing ` (id <id>)`
 on that line, or the line's own words where it already carries one (the queued answer's
 `id <id>`, the handoff's `team send --confirm <id>`). A run that wrote no record — a refusal
