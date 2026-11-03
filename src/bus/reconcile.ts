@@ -187,8 +187,11 @@ export type ReconcileState = {
    *  or gives up, and reset at the start of every pass. */
   deferred: DeferredAppend[];
   /** The refusals this state has already reported, by the path that was refused. A refusal is
-   *  reported once, not on every pass that meets the unchanged record again. */
+   *  reported once, not on every pass that meets the unchanged record again. Paths this pass
+   *  did not meet are dropped at the end of the pass, with the other caches. */
   refused: Set<string>;
+  /** The refusal paths this pass met. Cleared at the start of the pass and used to prune. */
+  refusedNow: Set<string>;
   stats: ReconcileStats;
 };
 
@@ -201,6 +204,7 @@ export function createReconcileState(): ReconcileState {
     history: null,
     deferred: [],
     refused: new Set(),
+    refusedNow: new Set(),
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
@@ -239,6 +243,7 @@ function refuseRecord(
   where: string,
   reason: string,
 ): void {
+  state.refusedNow.add(path);
   if (state.refused.has(path)) return;
   state.refused.add(path);
   options.onRefused?.({ where, reason });
@@ -390,6 +395,7 @@ function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
 export function* reconcileSteps(options: ReconcileOptions): Generator<void, ReconcileResult, void> {
   const { project, root, session, home } = options;
   const state = options.state ?? createReconcileState();
+  state.refusedNow.clear();
   const stats = state.stats;
   stats.passes += 1;
   stats.filesRead = 0;
@@ -560,6 +566,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             storeEntry(state, seatDir, file, fresh.stamp, entry);
           } else {
             stats.filesReused += 1;
+            // Still here, still refused: the path stays in the cache and is not said again.
+            if (!entry.verified) state.refusedNow.add(`record\0${fullPath}`);
           }
           if (entry.kind === 'drop' && entry.verified) {
             if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
@@ -707,6 +715,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
+          if (!entry.verified) state.refusedNow.add(`mailbox-record\0${fullPath}`);
         }
         if (!entry.verified) continue;
         const from = entry.from;
@@ -748,6 +757,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
+          if (!entry.verified) state.refusedNow.add(`mailbox-receipt\0${fullPath}`);
         }
         if (!entry.verified) continue;
         const from = messageSenders.get(id) ?? previousSenders?.get(id) ?? arrivedFrom.get(`${seat}\0${id}`);
@@ -1016,6 +1026,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   for (const key of state.signedSenders.keys()) {
     if (!visited.has(key)) state.signedSenders.delete(key);
   }
+  for (const key of state.refused) {
+    if (!state.refusedNow.has(key)) state.refused.delete(key);
+  }
+  state.refusedNow.clear();
 
   return { ok: true, raised, checked: cachedLog.checked, full: cachedLog.full };
 }
