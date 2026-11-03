@@ -824,11 +824,17 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
         reason: cls === null ? 'request refused before sending' : `request refused before sending (${cls})`,
       };
     }
-    // The sender's deadline is how long the command waits, not how long the request lives. It is
-    // the `webhook-sender-deadline-ms` policy in force for the receiving team, three seconds when
-    // nothing declares it. Read before the claim is taken, so a chain that cannot be read fails
-    // the post with no claim left behind. The request itself is bounded by the policy max.
+    // How long this caller waits. The row's own answer bound, when it names one, is that wait —
+    // a re-wake whose row says 40 ms hears unknown at 40 ms, not after the routine's later 2xx.
+    // The sender deadline caps it, so a send never waits out a longer row. Read before the claim
+    // is taken, so a chain that cannot be read fails the post with no claim left behind. A row
+    // tighter than the sender deadline aborts the request in this process, which is the row's
+    // own contract. Otherwise the request is not cut here: a real fetch runs on in the detached
+    // child to the policy max, and an injected fetch stays in this process until that same max.
     const deadlineMs = webhookSenderDeadlineMs({ home: input.home, root: input.root, team: input.team ?? null });
+    const rowMs = input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs;
+    const waitMs = Math.min(rowMs, deadlineMs);
+    const rowCuts = rowMs < deadlineMs;
     // Claim before posting, exclusively: of this send and every bus pass, exactly one posts.
     if (!takeClaim(input.dropDir, input.id)) return { kind: 'none', why: 'claim-held' };
     held = 'claimed';
@@ -846,24 +852,28 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
-    // The real fetch belongs to a detached process. This one exits at the deadline. A test's
-    // own fetch stays here, where the test can see it.
-    if (input.fetch === undefined) {
-      return await detachedArrival(input, request.url, prepared, deadlineMs);
+    // A real fetch whose row does not cut the wait belongs to a detached process. This one
+    // returns at the sender deadline. A test's own fetch stays here. A row tighter than that
+    // deadline is posted in this process and aborted at the row's bound: the request has to
+    // leave before a 40 ms bound, which a fresh process cannot promise, and the row's contract
+    // is that an answer after the bound is not read.
+    if (input.fetch === undefined && !rowCuts) {
+      return await detachedArrival(input, request.url, prepared, waitMs);
     }
-    // One request, built above. The signal is the policy max, never the deadline: aborting at
-    // the deadline is what reported unknown after the routine had already taken the body.
-    const pending = input.fetch(request.url, {
+    // One request, built above. The signal is the policy max when the sender deadline is the
+    // bound, so the injected request can still settle after this caller has returned. A tighter
+    // row aborts at its own bound.
+    const pending = (input.fetch ?? fetch)(request.url, {
       ...prepared,
       redirect: 'error',
-      signal: AbortSignal.timeout(WEBHOOK_SENDER_DEADLINE_MAX_MS),
+      signal: AbortSignal.timeout(rowCuts ? waitMs : WEBHOOK_SENDER_DEADLINE_MAX_MS),
     }).then(
       (response) => ({ kind: 'response' as const, response }),
       (error: unknown) => ({ kind: 'error' as const, error }),
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadlineHit = new Promise<{ kind: 'deadline' }>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'deadline' }), deadlineMs);
+      timer = setTimeout(() => resolve({ kind: 'deadline' }), waitMs);
     });
     const raced = await Promise.race([pending, deadlineHit]);
     if (timer !== undefined) clearTimeout(timer);
@@ -886,7 +896,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       // The body may have reached the routine and the answer was not read: the claim stays in
       // `sent`, and neither the bus nor a later pass posts the record again.
-      return { kind: 'unknown', reason: unknownReason(raced.error, deadlineMs) };
+      return { kind: 'unknown', reason: unknownReason(raced.error, waitMs) };
     }
     // The deadline won and the request is still the one above. The command returns unknown.
     // This promise settles the claim when the answer arrives, or leaves it `sent` when the max
@@ -902,7 +912,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       return { kind: 'failed', reason: `HTTP ${response.status}` };
     }).catch((): LateWebhook => ({ kind: 'unanswered' }));
-    return { kind: 'unknown', reason: `no answer within ${String(deadlineMs)} ms`, late };
+    return { kind: 'unknown', reason: `no answer within ${String(waitMs)} ms`, late };
   } catch {
     // An unexpected failure before the request was marked sent releases the claim, so the
     // fallback still posts it; after that, the claim stays and the routine is never asked twice.
