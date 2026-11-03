@@ -138,15 +138,19 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       expect(existsSync(machine)).toBe(true);
       expect(existsSync(join(root, '.agents', 'bus.sock'))).toBe(true);
       expect(existsSync(sendSocketPath('acme', root, home))).toBe(true);
-      expect(started.daemon.roots).toEqual([
-        { root, team: 'acme', send: 'serving', bus: 'serving', why: null },
-      ]);
+      // The row also carries the bus's first-pass progress, whose exact instant depends on when
+      // the background pass settled; the hosting facts are what this scene pins.
+      expect(started.daemon.roots).toHaveLength(1);
+      expect(started.daemon.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+      expect(started.daemon.roots[0]?.firstPass).toBeDefined();
 
       const health = await daemonHealth(home);
       expect(health.state).toBe('running');
       expect(health.startedBy).toBe('service-manager');
       expect(health.features).toEqual({ broker: 'absent' });
-      expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+      expect(health.roots).toHaveLength(1);
+      expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+      expect(health.roots[0]?.firstPass).toBeDefined();
 
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
@@ -655,6 +659,42 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
       expect(status.out).toContain('roots 1 (send 1, bus 1)');
       expect(status.out).not.toContain('not hosted here');
+    } finally {
+      await started.daemon.close();
+    }
+  });
+
+  test('the roots loop asks for a background first pass and records the pass once it settles', async () => {
+    const { root, home } = scratch();
+    const inputs: StartBusInput[] = [];
+    const initialBusStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      inputs.push(input);
+      return startBus(input);
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      initialBusStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The roots loop never waits for the pass: it asks for it in the background.
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.initialReconcile).toBe('background');
+      // The empty store's pass settles at once; the record then carries its instant, and both
+      // status surfaces print it, never claiming caught up without a time.
+      const done = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots[0];
+        return entry?.firstPass !== undefined && !entry.firstPass.running ? entry.firstPass : null;
+      }, 10_000);
+      expect(typeof done.doneAt).toBe('string');
+      const status = testIo(home, owner);
+      expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
+      expect(status.out).toContain(`first pass done at ${done.doneAt} for ${root}`);
     } finally {
       await started.daemon.close();
     }
@@ -1415,7 +1455,9 @@ describe('team daemon status, install, uninstall and run', () => {
     const health = await daemonHealth(home);
     expect(health.state).toBe('running');
     expect(health.startedBy).toBe('service-manager');
-    expect(health.roots).toEqual([{ root, team: 'acme', send: 'serving', bus: 'serving', why: null }]);
+    expect(health.roots).toHaveLength(1);
+    expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
+    expect(health.roots[0]?.firstPass).toBeDefined();
 
     release?.();
     expect(await running).toBe(0);

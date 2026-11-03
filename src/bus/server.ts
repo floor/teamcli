@@ -192,13 +192,35 @@ export type StartBusInput = {
    *  each seat's configured adapter row and re-reads it when the root's registry record changes;
    *  a caller may inject its own for a scene, and that one is the caller's to refresh. */
   deliver?: (record: SignedEventRecord) => void;
+  /**
+   * What the start does with the first reconcile pass. `await` (the default) runs it before the
+   * start resolves, so a bus a command started itself is caught up when it reports serving.
+   * `background` starts the same pass once the listener is bound and resolves without waiting
+   * for it: a host that brings up several roots does not serialize them behind one store's scan.
+   * The pass stays joinable through `reconcileNow` and every caller owns it until `close`, which
+   * aborts and drains it. `firstPass` says how far it has got in either mode.
+   */
+  initialReconcile?: 'await' | 'background';
 };
+
+/**
+ * How far the bus's first reconcile pass has got. While it runs, `scanned` is live: the files
+ * the pass has read or reused so far. Once it settles, `scanned` is the pass's total and
+ * `doneAt` is the instant it settled. A reader prints this beside a serving bus so that
+ * "serving" (bound and answering) is never read as "the store is caught up".
+ */
+export type BusFirstPass =
+  | { running: true; scanned: number; doneAt: null }
+  | { running: false; scanned: number; doneAt: string };
 
 export type BusHandle = {
   close(): Promise<void>;
   /** The pass in flight, or a new one started now; the pass yields between slices, so a caller
    *  that does not await it does not stop the bus's own answers. */
   reconcileNow(): Promise<SignedEventRecord[]>;
+  /** The first pass's progress. A second pass never rewrites it: the first pass's total and its
+   *  settle instant stay, so a reader is not sent back to "running" by a later scan. */
+  firstPass(): BusFirstPass;
 };
 
 export type StartBusResult =
@@ -836,6 +858,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
     // flight instead of starting a second one over the same records.
     const reconcileState = createReconcileState();
+    // The first pass's own record, kept for a reader that must not be told the bus is caught up
+    // while the scan still runs. The state's counters reset at the start of every later pass, so
+    // the total is captured when the first pass settles; `doneAt` is the settle marker, and the
+    // handle answers `running` from its absence, never from a second pass's state.
+    const firstPass: { scanned: number; doneAt: string | null } = { scanned: 0, doneAt: null };
+    const settleFirstPass = (): void => {
+      firstPass.scanned = reconcileState.stats.filesRead + reconcileState.stats.filesReused;
+      firstPass.doneAt = now().toISOString();
+    };
     // Aborted by close. A pass in flight stops between slices and before its next append, and
     // every start path refuses once it is aborted, so the closing bus writes no event after
     // close resolves. The records it did not reach are not lost: no cursor advanced past them,
@@ -901,8 +932,16 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     writeBusMarker(input.root, now());
 
     // Initial reconcile pass at bus start (Amendment 01 §4.2). The listener is already bound, so
-    // the pass's own yields let a liveness probe and a subscriber connect while it runs.
-    await runReconcile();
+    // the pass's own yields let a liveness probe and a subscriber connect while it runs. A host
+    // bringing up many roots starts it in the background and keeps ownership of it through the
+    // handle: `reconcileNow` joins it and `close` aborts and drains it.
+    const initialRun = runReconcile();
+    if ((input.initialReconcile ?? 'await') === 'await') {
+      await initialRun;
+      settleFirstPass();
+    } else {
+      void initialRun.then(settleFirstPass);
+    }
 
     const timer =
       reconcileIntervalMs > 0
@@ -916,6 +955,19 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     let closingPromise: Promise<void> | null = null;
     const handle: BusHandle = {
       reconcileNow: runReconcile,
+      firstPass: () => {
+        const doneAt = firstPass.doneAt;
+        if (doneAt === null) {
+          // Live: the pass's counters reset at the start of every pass, but this is the first,
+          // so they are the scan's own progress until `settleFirstPass` captures the total.
+          return {
+            running: true,
+            scanned: reconcileState.stats.filesRead + reconcileState.stats.filesReused,
+            doneAt: null,
+          };
+        }
+        return { running: false, scanned: firstPass.scanned, doneAt };
+      },
       close: () => {
         if (closingPromise !== null) return closingPromise;
         // Cancel before waiting: the pass in flight stops at its next boundary, and every later

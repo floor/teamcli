@@ -71,7 +71,7 @@ import { continuityIdsOf } from '../registry/resume.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
-import type { Comparison, Difference, Live } from '../status/compare.ts';
+import type { Comparison, Difference, Live, WatchDaemonReading } from '../status/compare.ts';
 import { seatWakeReadingOf, wakeAge, wakeCell, type SeatWake, type SeatWakeReading } from '../status/wake.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
@@ -561,6 +561,32 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     seats: team.seats,
     states: state.seats,
   });
+  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
+  // field, the comparison's watch note and the seats' presence qualification all come from the
+  // same snapshot, so they cannot disagree. No second probe, no server, and no exit change — the
+  // reading is a fact, not a verdict.
+  const health = sources.daemonHealth === undefined
+    ? null
+    : await sources.daemonHealth(home);
+  // Whether the seats' presence projections may be called live: only a fresh route verdict that
+  // says serving and healthy for this session. Default closed — a persisted status word or a
+  // health answer without a verdict proves nothing.
+  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
+  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
+  // by its own serving entry whose sampled binding matches the seat state's recorded one.
+  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
+  // What that same snapshot proves about the recorded watch: the process it names is alive, and
+  // a live daemon has this checkout in its own record or has not reached it yet. The liveness
+  // probe is the caller's own seam, so no scene depends on a real pid.
+  const recordedWatch = state.watch;
+  const watchDaemon: WatchDaemonReading | undefined = health === null || recordedWatch?.pid === undefined
+    ? undefined
+    : {
+        pid: health.state === 'running' ? health.pid : null,
+        hostsRoot: health.roots.some((entry) => entry.root === root),
+        firstPassRunning: health.roots.some((entry) => entry.firstPass?.running === true),
+        recordedPidAlive: (sources.alive ?? pidAlive)(recordedWatch.pid),
+      };
   const comparison = compare(
     team, session, state, live, now,
     watchInForceOf(standing, team),
@@ -578,24 +604,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // looked up under, the launch-effective settings and held-frame marks under the state folder,
     // and relative launch paths under the root.
     { dir, root, home },
+    watchDaemon,
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
   const all = args.flags.has('all');
-  // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
-  // field and the seats' presence qualification all come from the same snapshot, so they cannot
-  // disagree. No second probe, no server, and no exit change — the reading is a fact, not a
-  // verdict.
-  const health = sources.daemonHealth === undefined
-    ? null
-    : await sources.daemonHealth(home);
-  // Whether the seats' presence projections may be called live: only a fresh route verdict that
-  // says serving and healthy for this session. Default closed — a persisted status word or a
-  // health answer without a verdict proves nothing.
-  const presenceHealthy = health !== null && presenceChannelHealthy(health, root, session, now);
-  // The same fresh answer's per-seat verdicts: when the route carries them, a seat is live only
-  // by its own serving entry whose sampled binding matches the seat state's recorded one.
-  const presenceSeats = health === null ? undefined : presenceSeatsOf(health, root, session, now);
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.

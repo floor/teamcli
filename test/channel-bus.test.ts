@@ -92,6 +92,7 @@ async function bus(at: Place): Promise<BusHandle> {
       await started.handle.close();
     },
     reconcileNow: () => started.handle.reconcileNow(),
+    firstPass: () => started.handle.firstPass(),
   };
   cleanups.push(() => handle.close());
   return handle;
