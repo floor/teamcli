@@ -10,13 +10,16 @@
 // project's own rules. Those rules are decided by the project record and by the `leads`
 // capability a seat holds, never by a role's name, which is each team's own word in any language.
 // A pair whose teams share no project keeps the team rules below unchanged: nothing here ever
-// crosses projects. The one cross-team reach is the entity's own leads — a lead writes to a lead
-// of its entity, and the entity's coordinator to every team lead of that entity — read from the
-// two team records' `entity` and the `leads` capability, never from a role's word, and refused
-// across entities. And a record confers no right: registration, a lifecycle, a signing role —
-// none of it admits anything by itself; every verdict is made from the pair's own relationships
-// and capabilities, and a send with a record on each side but no rule for the pair is refused
-// exactly as a pair the registry never knew.
+// crosses projects. The cross-team reaches are the entity's own: its leads write to each other —
+// a lead to a lead of its entity, and the entity's coordinator to every team lead of that entity
+// — and the entity's main orchestrator, the lead of the team whose project is the entity itself,
+// writes to any seat of the entity's teams. Both are read from the team records' `entity` and the
+// `leads` capability, never from a role's word, and both are refused across entities. Each reads
+// the asker's own `seats_cross_teams` chain with its own default: on for both entity reaches,
+// off for the project's crossing seats. And a record confers no right: registration, a lifecycle,
+// a signing role — none of it admits anything by itself; every verdict is made from the pair's
+// own relationships and capabilities, and a send with a record on each side but no rule for the
+// pair is refused exactly as a pair the registry never knew.
 
 import type { Agent } from '../registry/agents.ts';
 import { declarationsOf, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
@@ -130,6 +133,7 @@ export const RULE_SUMMARY = [
   'an orchestrator or operator to a seat of its own team',
   'an operator to another operator of its own team',
   "an assistant seat to its entity's coordinator",
+  "the entity's main orchestrator to any seat of the entity's teams",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
   DECLARED_SEAT_RULE,
@@ -253,6 +257,20 @@ export function admitSend(
     && onMainCoordinator(target, callerTeam?.entity, teams)
   ) {
     return { ok: true, rule: "an assistant seat to its entity's coordinator" };
+  }
+  // The entity's main orchestrator writes to any seat of the entity's teams: the lead of the team
+  // whose project is the entity itself reaches every seat below it, one entity and no further.
+  // The seat is the chain place `onMainCoordinator` reads — the `leads` capability on the head
+  // team, never a role's word — and the reach is a setting: the same `seats_cross_teams` word the
+  // lead pair reads, with its own default on (the owner's OD-20261103-02) and the project as the
+  // only level that may reopen it.
+  const entity = callerTeam?.entity ?? null;
+  if (
+    entity !== null && targetTeam?.entity === entity
+    && onMainCoordinator(caller, entity, teams)
+    && mainOrchestratorReaches(context?.crossTeams ?? {})
+  ) {
+    return { ok: true, rule: "the entity's main orchestrator to any seat of the entity's teams" };
   }
   // Any seat writes to its own team's orchestrator.
   if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(target) === targetOrchestrator) {
@@ -504,10 +522,11 @@ function leadsMayWrite(
 
 /**
  * The leadership reach at the entity's edge, over the asker's own chain: open unless a level
- * closes it. It is the same `seats_cross_teams` word the project setting reads, with this reach's
- * own default — a lead pair of one entity is what carries work between a team and the team above
- * it, so it stands until the seat's own chain says otherwise. Closing is legal at every level; the
- * project may open it again, as the setting itself allows.
+ * closes it. It is the same `seats_cross_teams` word the project setting and the main
+ * orchestrator's reach read, with this reach's own default — a lead pair of one entity is what
+ * carries work between a team and the team above it, so it stands until the seat's own chain says
+ * otherwise. Closing is legal at every level; the project may open it again, as the setting
+ * itself allows.
  */
 const LEADS_ACROSS_TEAMS: SettingSpec = {
   name: 'seats_cross_teams',
@@ -518,6 +537,24 @@ const LEADS_ACROSS_TEAMS: SettingSpec = {
 
 function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
   return resolveSetting(LEADS_ACROSS_TEAMS, declarationsOf(declared)).value;
+}
+
+/**
+ * The main orchestrator's reach over the entity's teams: the same `seats_cross_teams` word the
+ * lead pair reads, with this reach's own default — on, the owner's decision that the entity's
+ * main orchestrator reaches any seat of the entity's teams (OD-20261103-02) — and the same
+ * project loosening level. A word at any level of the asker's chain that closes it closes this
+ * reach; only the project may reopen what an entity closed.
+ */
+const MAIN_ORCHESTRATOR_REACH: SettingSpec = {
+  name: 'seats_cross_teams',
+  policy: 'seats-cross-teams',
+  fallback: true,
+  looseningLevels: ['project'],
+};
+
+function mainOrchestratorReaches(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
+  return resolveSetting(MAIN_ORCHESTRATOR_REACH, declarationsOf(declared)).value;
 }
 
 /** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability

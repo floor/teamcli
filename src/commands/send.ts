@@ -112,7 +112,8 @@ those is not reached: the kind and the drop path are named, and nothing further 
 pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
 or operator to a seat of its own team; a seat whose role is operator to another such
-seat of its own team; an assistant seat to its entity's coordinator; any seat to its
+seat of its own team; an assistant seat to its entity's coordinator; the entity's main
+orchestrator to any seat of the entity's teams; any seat to its
 own team's orchestrator; or an owner-signed grant naming send. The record is signed
 with the checkout's message key, and its payload names the sender and the rule that
 admitted it. --list sends nothing: it prints
@@ -5520,9 +5521,10 @@ export function admissionOf(
   const records = admitRecordsOf(home, team, ownTeam, target);
   // The project level `admitSend` reads: the registered projects, which decide the pairs a
   // project's own rules admit, and the asker's `seats_cross_teams` chain, entity → project →
-  // team → seat, which `admitSend` resolves itself (`seatsCrossTeams`). No level's record
-  // carries a declaration of that setting yet, so the chain is empty here and the setting
-  // stands at its own default, off.
+  // team → seat, which `admitSend` resolves itself, once per reach. No level's record carries a
+  // declaration of that setting yet, so the chain is empty here and each reach stands at its own
+  // default: the project's crossing seats off, the entity's lead pair and its main orchestrator's
+  // reach on.
   const context: AdmitContext = { projects: projectRegistry.readProjects(home), crossTeams: {}, ...(reply !== undefined ? { reply } : {}) };
   const verdict = admitSend(sender, judged, records, undefined, context);
   if (verdict.ok) return { ok: true, rule: verdict.rule, sender };
