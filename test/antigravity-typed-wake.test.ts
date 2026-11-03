@@ -100,6 +100,26 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(pane.enters).toBe(1);
   });
 
+  test('a drawn line that one Enter leaves unsent is submitted again, and the line is not retyped', async () => {
+    const drawn = holding(LINE);
+    let settleReads = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters === 0) {
+        settleReads += 1;
+        return settleReads === 1 ? holding('Read') : drawn;
+      }
+      return enters === 1 ? drawn : WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(settleReads).toBe(3);
+    expect(readScreen('antigravity', drawn).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(2);
+  });
+
   test('the compacted-transcript idle frame still types: a long transcript is not a refusal', async () => {
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_COMPACTED : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);

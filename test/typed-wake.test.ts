@@ -104,6 +104,23 @@ describe('the typed wake: one line into an empty idle box', () => {
     expect(pane.enters).toBe(1);
   });
 
+  test('a line still rendering is not pressed, and an Enter that leaves it unsent is pressed again', async () => {
+    let settleReads = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters === 0) {
+        settleReads += 1;
+        return settleReads === 1 ? holding('Read') : holding(LINE);
+      }
+      return enters === 1 ? holding(LINE) : WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(settleReads).toBe(3);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 2, reason: 'the working screen showed after 2 Enters' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(2);
+  });
+
   test('a box that holds unsent text on the first read is never typed over', async () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);

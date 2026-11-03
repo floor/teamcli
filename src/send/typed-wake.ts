@@ -15,9 +15,14 @@ import { boxHoldsText } from '../launch/deliver.ts';
 import { readScreen } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS } from './native.ts';
 
-/** How long after the line is typed the box is read before the first Enter: the CLI has to have
- *  drawn the line, or the guard below would see an empty box and press nothing. */
+/** How long after the line is typed the box is read before the first Enter, and between the two
+ *  reads that have to agree before that Enter: the CLI has to have drawn the line and stopped
+ *  changing it, or the guard below would press while the row was still rendering. */
 export const WAKE_ENTER_SETTLE_MS = 250;
+
+/** How many times the wake will look again for two identical reads of its own line. Past this
+ *  the line has not settled, and no Enter is pressed. */
+const LINE_SETTLE_LOOKS = 4;
 
 /** How long one Enter is given to show the working screen, polled every `POLL_MS`. */
 export const WAKE_VERIFY_MS = 10_000;
@@ -100,11 +105,12 @@ async function pollWorking(host: TypedWakeHost, pane: string, cli: string, pollM
  * profile's working screen. Both idle reads happen before any key goes out, spaced by a settle:
  * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
  * nothing typed. After the line is typed, Enter is pressed only into a box that reads back as
- * exactly that line; a box that is empty, holds other text or cannot be read gets no Enter. Each
- * Enter is given `verifyMs` for the working screen, and the wake is delivered only when that
- * screen shows; up to `MAX_WAKE_ENTERS` Enters are tried, each still guarded by the box. The same
- * screen that would let a second Enter in is also what stops one: once the line has left the box,
- * nothing more is pressed.
+ * exactly that line; a box that is empty, holds other text or cannot be read gets no Enter.
+ * Muse and Antigravity submit with Enter, not Return, and the first Enter waits until two
+ * reads show that same drawn line. After an Enter, a box that still holds exactly the line
+ * and shows no working screen is pressed again, up to `MAX_WAKE_ENTERS`, and the line is
+ * never typed a second time. Once the line has left the box, an Enter is given `verifyMs`
+ * for the working screen, and the wake is delivered only when that screen shows.
  */
 export async function deliverTypedWake(
   host: TypedWakeHost,
@@ -132,6 +138,12 @@ export async function deliverTypedWake(
   await host.wait(enterSettleMs);
   let tries = 0;
   let screen = host.read(pane);
+  let previous: string | null = null;
+  let settleLooks = 0;
+  const heldReason = (kind: string, pressed: boolean): string => {
+    const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
+    return pressed ? `${why} and no working screen showed` : `${why} after the line was typed; no Enter was pressed`;
+  };
   for (;;) {
     if (screen === null) {
       return {
@@ -150,27 +162,52 @@ export async function deliverTypedWake(
       }
       return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
-    if (!boxHoldsText(cli, line, screen)) {
-      const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
-      return {
-        delivered: false,
-        typed: true,
-        tries,
-        reason: tries === 0
-          ? `${why} after the line was typed; no Enter was pressed`
-          : `${why} and no working screen showed`,
-      };
+    const holds = boxHoldsText(cli, line, screen);
+    // The first Enter waits until two reads draw the same line. A row that is still rendering,
+    // or a row that settles on something else, is not pressed.
+    if (tries === 0 && !(holds && previous === screen)) {
+      if (!holds && previous === screen) {
+        return { delivered: false, typed: true, tries, reason: heldReason(kind, false) };
+      }
+      if (settleLooks >= LINE_SETTLE_LOOKS) {
+        return {
+          delivered: false,
+          typed: true,
+          tries,
+          reason: holds
+            ? 'the drawn line did not settle; no Enter was pressed'
+            : heldReason(kind, false),
+        };
+      }
+      previous = screen;
+      settleLooks += 1;
+      await host.wait(enterSettleMs);
+      screen = host.read(pane);
+      continue;
+    }
+    if (!holds) {
+      return { delivered: false, typed: true, tries, reason: heldReason(kind, tries > 0) };
     }
     if (tries >= MAX_WAKE_ENTERS) {
       return { delivered: false, typed: true, tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
     }
+    // Muse and Antigravity submit with Enter. The host's enter is that key, not Return.
     if (!host.enter(pane)) {
       return { delivered: false, typed: true, tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
+    const after = host.read(pane);
+    // The line still sitting, with no working screen, means the submit did not take. Press
+    // again. Do not type the line a second time.
+    if (after !== null && boxHoldsText(cli, line, after) && readScreen(cli, after).kind !== 'working') {
+      screen = after;
+      previous = after;
+      continue;
+    }
     if (await pollWorking(host, pane, cli, pollMs, verifyMs)) {
       return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     screen = host.read(pane);
+    previous = screen;
   }
 }
