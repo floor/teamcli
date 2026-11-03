@@ -206,12 +206,14 @@ export type StartBusInput = {
 /**
  * How far the bus's first reconcile pass has got. While it runs, `scanned` is live: the files
  * the pass has read or reused so far. Once it settles, `scanned` is the pass's total and
- * `doneAt` is the instant it settled. A reader prints this beside a serving bus so that
- * "serving" (bound and answering) is never read as "the store is caught up".
+ * `doneAt` is the instant it settled; `errors` says whether the walk finished or stopped on a
+ * failure, so a reader never prints a partial pass as a clean finish. A reader prints this beside
+ * a serving bus so that "serving" (bound and answering) is never read as "the store is caught up".
+ * A pass `close` aborted settles nothing: it is never reported as done.
  */
 export type BusFirstPass =
   | { running: true; scanned: number; doneAt: null }
-  | { running: false; scanned: number; doneAt: string };
+  | { running: false; scanned: number; doneAt: string; errors: boolean };
 
 export type BusHandle = {
   close(): Promise<void>;
@@ -862,9 +864,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // while the scan still runs. The state's counters reset at the start of every later pass, so
     // the total is captured when the first pass settles; `doneAt` is the settle marker, and the
     // handle answers `running` from its absence, never from a second pass's state.
-    const firstPass: { scanned: number; doneAt: string | null } = { scanned: 0, doneAt: null };
+    const firstPass: { scanned: number; doneAt: string | null; errors: boolean } = {
+      scanned: 0, doneAt: null, errors: false,
+    };
+    // The pass answers its own failures and resolves empty, so this is the only local trace that
+    // the walk stopped on one instead of finishing it. Only the first pass's settle reads it.
+    let firstPassError = false;
     const settleFirstPass = (): void => {
       firstPass.scanned = reconcileState.stats.filesRead + reconcileState.stats.filesReused;
+      firstPass.errors = firstPassError;
       firstPass.doneAt = now().toISOString();
     };
     // Aborted by close. A pass in flight stops between slices and before its next append, and
@@ -896,8 +904,15 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         state: reconcileState,
         signal: closing.signal,
       }).then(
-        (res) => (res.ok ? res.raised : []),
+        (res) => {
+          // A cancelled pass is the closing bus's own abort, not a failure: the walk stopped
+          // between slices and left every unread record for the next pass. Only a result that
+          // failed for its own reason marks the walk as stopped on an error.
+          if (!res.ok && res.cancelled !== true) firstPassError = true;
+          return res.ok ? res.raised : [];
+        },
         (error: unknown) => {
+          firstPassError = true;
           input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
           return [];
         },
@@ -940,7 +955,11 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       await initialRun;
       settleFirstPass();
     } else {
-      void initialRun.then(settleFirstPass);
+      void initialRun.then(() => {
+        // close aborted the walk: it never finished, so nothing may stamp it as done.
+        if (closing.signal.aborted) return;
+        settleFirstPass();
+      });
     }
 
     const timer =
@@ -966,7 +985,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
             doneAt: null,
           };
         }
-        return { running: false, scanned: firstPass.scanned, doneAt };
+        return { running: false, scanned: firstPass.scanned, doneAt, errors: firstPass.errors };
       },
       close: () => {
         if (closingPromise !== null) return closingPromise;

@@ -263,10 +263,18 @@ test('a bus serving while its first pass runs says how far the scan got, then wh
   ]);
   expect(daemonHealthy(running)).toBe(true);
   const done = health({
-    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z' } })],
+    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z', errors: false } })],
   });
   expect(daemonNotes(done)).toEqual([
     `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass done at 2026-11-03T19:14:37.449Z for /work/acme`,
+  ]);
+  // A pass that stopped on a failure is never printed as a clean finish: it says so, keeps its
+  // partial count, and names its own checkout.
+  const ended = health({
+    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z', errors: true } })],
+  });
+  expect(daemonNotes(ended)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass ended with errors at 2026-11-03T19:14:37.449Z for /work/acme (45,871 files scanned)`,
   ]);
   // Every checkout's pass is named by its own root, so a multi-root record is not ambiguous.
   const both = health({
@@ -275,7 +283,7 @@ test('a bus serving while its first pass runs says how far the scan got, then wh
       root({
         root: '/work/beta',
         team: 'beta',
-        firstPass: { running: false, scanned: 10, doneAt: '2026-11-03T19:20:00.000Z' },
+        firstPass: { running: false, scanned: 10, doneAt: '2026-11-03T19:20:00.000Z', errors: false },
       }),
     ],
   });
@@ -781,7 +789,7 @@ test('malformed firstPass state records are dropped at load and never print a fa
     { root: '/work/float', team: 'e', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 1.5, doneAt: null } },
     { root: '/work/array', team: 'f', send: 'serving', bus: 'serving', why: null, firstPass: [] },
     { root: '/work/valid-running', team: 'g', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 0, doneAt: null } },
-    { root: '/work/valid-done', team: 'h', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 1_000_000, doneAt: AT } },
+    { root: '/work/valid-done', team: 'h', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 1_000_000, doneAt: AT, errors: false } },
   ];
   writeFileSync(
     stateFile,
@@ -808,7 +816,7 @@ test('malformed firstPass state records are dropped at load and never print a fa
     expect(parsed.state.roots[i]?.firstPass).toBeUndefined();
   }
   expect(parsed.state.roots[6]?.firstPass).toEqual({ running: true, scanned: 0, doneAt: null });
-  expect(parsed.state.roots[7]?.firstPass).toEqual({ running: false, scanned: 1_000_000, doneAt: AT });
+  expect(parsed.state.roots[7]?.firstPass).toEqual({ running: false, scanned: 1_000_000, doneAt: AT, errors: false });
   expect(firstPassPhrases(parsed.state.roots)).toEqual([
     'first pass running for /work/valid-running (0 files scanned)',
     `first pass done at ${AT} for /work/valid-done`,

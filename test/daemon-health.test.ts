@@ -12,7 +12,7 @@ import {
   parseDaemonRequest,
   type DaemonHealthSnapshot,
 } from '../src/daemon/protocol.ts';
-import { writeDaemonState, type DaemonRootSeatPresenceHealth, type DaemonState } from '../src/daemon/state.ts';
+import { readDaemonState, writeDaemonState, type DaemonRootSeatPresenceHealth, type DaemonState } from '../src/daemon/state.ts';
 
 const NOW = (): Date => new Date('2026-10-20T12:00:00.000Z');
 
@@ -345,5 +345,33 @@ describe('the reading carries fresh presence by canonical root', () => {
     expect(health.roots).toEqual([{
       root: ROOT, team: 'acme-web', send: 'serving', bus: 'serving', why: null,
     }]);
+  });
+});
+
+describe("a daemon record's first-pass row fails soft", () => {
+  test('a settled pass keeps its errors flag; a settled pass that never said is left out', () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateOf(home));
+    const raw = {
+      ...stateOf(home),
+      roots: [
+        { root: '/work/a', team: 'acme', send: 'serving', bus: 'serving', why: null,
+          firstPass: { running: false, scanned: 12, doneAt: '2026-10-20T11:00:00.000Z', errors: true } },
+        // A record written before the flag existed cannot say whether the walk finished, so it
+        // is left out rather than printed as a clean finish.
+        { root: '/work/b', team: 'acme', send: 'serving', bus: 'serving', why: null,
+          firstPass: { running: false, scanned: 9, doneAt: '2026-10-20T11:01:00.000Z' } },
+        { root: '/work/c', team: 'acme', send: 'serving', bus: 'serving', why: null,
+          firstPass: { running: true, scanned: 3, doneAt: null } },
+      ],
+    };
+    writeFileSync(daemonStatePath(home), `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
+    const read = readDaemonState(home);
+    if (read.kind !== 'ok') throw new Error(`daemon state is ${read.kind}`);
+    expect(read.state.roots[0]?.firstPass).toEqual({
+      running: false, scanned: 12, doneAt: '2026-10-20T11:00:00.000Z', errors: true,
+    });
+    expect(read.state.roots[1]?.firstPass).toBeUndefined();
+    expect(read.state.roots[2]?.firstPass).toEqual({ running: true, scanned: 3, doneAt: null });
   });
 });

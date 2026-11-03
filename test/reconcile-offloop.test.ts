@@ -697,6 +697,8 @@ describe('a bus can host its first pass in the background', () => {
       if (!done.running) {
         expect(done.doneAt).not.toBeNull();
         expect(done.scanned).toBeGreaterThanOrEqual(1);
+        // The walk finished, so it is not said to have stopped on a failure.
+        expect(done.errors).toBe(false);
       }
       // A pass in flight when close lands is drained, and nothing is appended after close.
       for (let n = 0; n < 200; n += 1) signedDrop(root, home, `closing-${String(n).padStart(4, '0')}`);
@@ -800,6 +802,40 @@ describe('a bus can host its first pass in the background', () => {
       expect(events.events.map((e) => e.payload.record_id)).toContain('default-await-0001');
     } finally {
       await started.handle.close();
+    }
+  }, 15_000);
+
+  test('a first pass a closing bus aborts is never reported as done', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'aborted-0001');
+    // The held event lock keeps the first pass's append deferred, so the pass is provably still
+    // in flight when close lands.
+    const lock = holdEventLock(root, home);
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    try {
+      expect(handle.firstPass().running).toBe(true);
+      // close aborts the walk; the pass answers cancelled rather than failed, and nothing stamps
+      // it settled. A reader must never see this pass as a clean finish it never reached.
+      await handle.close();
+      const after = handle.firstPass();
+      expect(after.running).toBe(true);
+      if (after.running) expect(after.doneAt).toBeNull();
+    } finally {
+      try {
+        unlinkSync(lock);
+      } catch {}
+      await handle.close();
     }
   }, 15_000);
 });
