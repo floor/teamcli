@@ -139,14 +139,15 @@ budgets:                      # the owner's: reserve or floor per account, marks
 ```
 
 - `session` names the herdr session and defaults to `project`; `--session` overrides it.
-- `in_project` names the project this team sits in, by the project's display name, while `project:`
-  keeps meaning the team's own name; `project_lead: true` beside it marks the team that leads that
-  project — one team per project, and `team check` refuses a second. The project's record then
-  carries the lead: the agent of the seat this record's `leads: true` marks as the team's lead,
-  re-resolved on every launch, so a mark that moves in the record moves the record with it.
-- `entity` names the entity this team belongs to: the level above its project that a setting, the
-  lobby's `<entity>` folder and a lead pair's reach are read from, and the name that makes two
-  teams one entity's when both records carry it.
+- `in_project` names the project this team sits in, by the project's display name (one path
+  segment, 128 characters at most), while `project:` keeps meaning the team's own name;
+  `project_lead: true` beside it marks the team that leads that project — one team per project,
+  and `team check` refuses a second. The project's record then carries the lead: the agent of the
+  seat this record's `leads: true` marks as the team's lead, re-resolved on every launch, so a
+  mark that moves in the record moves the record with it.
+- `entity` names the entity this team belongs to (one path segment, 128 characters at most): the
+  level above its project that a setting, the lobby's `<entity>` folder and a lead pair's reach
+  are read from, and the name that makes two teams one entity's when both records carry it.
 - `lobby` names the folder every seat except a lead starts in: the record's own `lobby:` wins over
   the lobby the registry recorded for the session and over the defaults, and setting it records
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.

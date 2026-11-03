@@ -25,7 +25,8 @@
     "in_project": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
       "$comment": "the project this team belongs to, by name; absent, the team is its own project"
     },
     "project_lead": {
@@ -45,7 +46,8 @@
     "entity": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
       "$comment": "the entity the team belongs to; its lobby is ~/.config/team/lobbies/<entity>"
     },
     "lobby": {

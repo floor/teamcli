@@ -57,7 +57,7 @@ describe('a team names the project it sits in', () => {
     expect(result.errors).toEqual([
       {
         line: 3,
-        message: 'in_project must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit',
+        message: 'in_project must be a short name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most',
       },
     ]);
   });
