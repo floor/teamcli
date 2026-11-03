@@ -316,3 +316,215 @@ echo '{"result":{"sessions":[]}}'
     }
   }, 40_000);
 });
+
+describe('independent adversarial checks: restore spawn abort, deadline, spawn error, early exit, and slow-host close', () => {
+  test('abort before the listener, in the pre-check-to-listener window, and after the listener all discard the token and reject', async () => {
+    const { base, root, home } = scratch();
+    const sleeperEntry = join(base, 'sleeper-entry.ts');
+    // A child entry that sleeps without claiming its token, so only the parent's discard removes the token.
+    writeFileSync(
+      sleeperEntry,
+      `await new Promise((resolve) => setTimeout(resolve, 10_000));\n`,
+    );
+
+    // 1. Abort before the listener (`AbortSignal.abort()`): refuses before writing a token.
+    await expect(
+      runRestoreSweepInChild({
+        home,
+        root,
+        entry: sleeperEntry,
+        signal: AbortSignal.abort(),
+      }),
+    ).rejects.toThrow('the restore pass was not started because the daemon is closing');
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 2. Abort in the window between the pre-check (line 104) and the post-listener check (line 216):
+    //    `aborted` reads false on the first read and true on the second read without firing an event.
+    let abortedReads = 0;
+    const windowSignal = {
+      get aborted(): boolean {
+        abortedReads += 1;
+        return abortedReads >= 2;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+    await expect(
+      runRestoreSweepInChild({
+        home,
+        root,
+        entry: sleeperEntry,
+        signal: windowSignal,
+      }),
+    ).rejects.toThrow('the restore pass was ended because the daemon is closing');
+    expect(abortedReads).toBeGreaterThanOrEqual(2);
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 3. Abort after the listener while the child is running: rejects and discards the token.
+    const controller = new AbortController();
+    const running = runRestoreSweepInChild({
+      home,
+      root,
+      entry: sleeperEntry,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 60);
+    await expect(running).rejects.toThrow('the restore pass was ended because the daemon is closing');
+    expect(tokenFiles(home)).toEqual([]);
+  }, 20_000);
+
+  test('deadline, spawn error, early exit, fabricated kind, and oversized frame all discard the token and never make up a result', async () => {
+    const { base, root, home } = scratch();
+
+    // 1. Deadline (`timeoutMs`): child never answers and does not claim the token -> parent discards token and rejects.
+    const hangEntry = join(base, 'hang-entry.ts');
+    writeFileSync(hangEntry, `await new Promise((resolve) => setTimeout(resolve, 10_000));\n`);
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: hangEntry, timeoutMs: 120 }),
+    ).rejects.toThrow(/did not answer within 0 s and was ended/);
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 2. Spawn error (`cwd` does not exist -> asynchronous `'error'` event on child): discards token and rejects.
+    const missingCwd = join(base, 'no-such-cwd');
+    await expect(
+      runRestoreSweepInChild({ home, root: missingCwd, entry: hangEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/the restore child (?:failed|could not be started)/);
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 3. Early exit without claiming token (exits 1 with stderr diagnostic): discards token and includes last stderr line.
+    const earlyExitEntry = join(base, 'early-exit-entry.ts');
+    writeFileSync(
+      earlyExitEntry,
+      `process.stderr.write('first line\\nfatal child diagnostic\\n');\nprocess.exit(1);\n`,
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: earlyExitEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child left before it reported (code 1): fatal child diagnostic');
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 4. Child writes non-protocol stdout or an unknown `result.kind` and exits 0: never resolves with a made-up result.
+    const bogusKindEntry = join(base, 'bogus-kind-entry.ts');
+    writeFileSync(
+      bogusKindEntry,
+      [
+        `process.stdout.write('not json\\n');`,
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'made-up-kind' } }) + '\\n');`,
+        `process.exit(0);`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: bogusKindEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child left before it reported (code 0)');
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 5. Child reports `{ ok: false, reason }` (and `{ ok: false }` without reason): rejects with the reported reason.
+    const failReportEntry = join(base, 'fail-report-entry.ts');
+    writeFileSync(
+      failReportEntry,
+      [
+        `import { readRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `process.stdout.write(JSON.stringify({ ok: false, reason: 'synthetic pass failure' }) + '\\n');`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: failReportEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child reported: synthetic pass failure');
+    expect(tokenFiles(home)).toEqual([]);
+
+    // 6. Oversized stdout line (> 64 KiB without newline): rejects with frame limit error and never fabricates a result.
+    const oversizedEntry = join(base, 'oversized-entry.ts');
+    writeFileSync(
+      oversizedEntry,
+      [
+        `import { readRestoreInherit } from ${JSON.stringify(fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url)))};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `process.stdout.write('x'.repeat(70 * 1024));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: oversizedEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
+    expect(tokenFiles(home)).toEqual([]);
+  }, 30_000);
+
+  test('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
+    const { base, root: rootA, home } = scratch();
+    const rootB = join(base, 'repo-b');
+    mkdirSync(join(rootB, '.agents'), { recursive: true });
+    spawnSync('git', ['init', '-q'], { cwd: rootB });
+    writeFileSync(join(rootB, '.agents', 'team.yaml'), TEAM.replace('project: restore-child', 'project: restore-child-b').replace('session: sweep', 'session: sweep-b'));
+    recordSeat(rootA);
+    recordSeat(rootB);
+
+    const bin = join(base, 'bin');
+    const herdrLog = join(base, 'herdr.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s|%s\\n' "$(pwd)" "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 2
+if [ "$1" = "--version" ]; then
+  echo "herdr 0.7.1"
+  exit 0
+fi
+echo '{"result":{"sessions":[]}}'
+`,
+    );
+    chmodSync(shim, 0o755);
+
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+    try {
+      // 1. Running a child token scoped to `rootA` only touches `rootA` and never `rootB`.
+      const resultA = await runRestoreSweepInChild({ home, root: rootA, timeoutMs: 15_000 });
+      expect(resultA).toEqual({ kind: 'not-running', state: 'absent' });
+      const logAfterA = existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '';
+      expect(logAfterA).toContain(`${rootA}|session list`);
+      expect(logAfterA).not.toContain(rootB);
+      expect(tokenFiles(home)).toEqual([]);
+
+      // 2. Starting the machine daemon while `herdr` sleeps 2s keeps the beat ticking, and closing the
+      //    daemon mid-call aborts the in-flight restore child cleanly with no leftover token.
+      writeFileSync(herdrLog, '');
+      const started = await startMachineDaemon({
+        home,
+        roots: [rootA],
+        startedBy: 'test',
+        version: '0.6.0-test',
+        heartbeatMs: 150,
+        choresHosting: false,
+      });
+      expect(started.kind).toBe('serving');
+      if (started.kind !== 'serving') return;
+
+      const beats: number[] = [];
+      let last = '';
+      const sampleUntil = Date.now() + 900;
+      while (Date.now() < sampleUntil) {
+        const read = readDaemonState(home);
+        if (read.kind === 'ok' && read.state.heartbeatAt !== last) {
+          last = read.state.heartbeatAt;
+          beats.push(Date.parse(last));
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      // Beat ticked multiple times while the child was inside the 2s `herdr` sleep.
+      expect(beats.length).toBeGreaterThanOrEqual(3);
+      await started.daemon.close();
+      expect(tokenFiles(home)).toEqual([]);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 40_000);
+});
+
