@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
 import { runReply, type ReplyHost } from '../src/commands/reply.ts';
+import { realHost as realSendHost, runSend } from '../src/commands/send.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { findAgent, type Agent } from '../src/registry/agents.ts';
@@ -445,5 +446,110 @@ describe("a seat's answer to the entity's main orchestrator", () => {
     const at = join(recordDir(world.roots.work, 'work', 'helper'), REPLY_ONE);
     expect(existsSync(at)).toBe(true);
     expect(recordAt(at).payload).toMatchObject({ to: 'helper', rule: REPLY_RULE, thread: SENT_TWO });
+  });
+
+  test('independent adversarial checks: same-named foreign thread opener, tampered opening record, unsigned record, copied other-seat record, idle-expired thread, and plain send refusal', async () => {
+    // 1. Plain `team send` from `worker` to `orchestrator@acme` is refused and writes nothing.
+    const caller: Caller = { kind: 'seat', name: 'worker', pane: paneOf('work'), session: 'work' };
+    const sendIo = testIo(world.roots.work, caller);
+    const sendCode = await runSend(['orchestrator@acme', 'unsolicited message'], sendIo, {
+      ...realSendHost,
+      home: world.home,
+      now: () => NOW,
+    });
+    expect(sendCode).toBe(1);
+    expect(sendIo.err).toContain('no rule admits it');
+
+    // 2. Thread opened by ANOTHER sender also named `orchestrator` (`opening.from === 'orchestrator'`,
+    //    `opening.from_id !== world.headOrch`), followed by a message from the entity's main orchestrator
+    //    on that same thread: must be refused (`opening.from_id !== answered.from_id`).
+    plantRecord(world.home, world.roots.work, 'work', 'worker', OPENED, 'same-named opener', {
+      at: NOW_ISO,
+      from: 'orchestrator',
+      from_id: 'agt_000000099999',
+      thread: OPENED,
+    });
+    fromMainOrchestrator(SENT_ONE, 'main orchestrator follow-up on foreign thread', OPENED);
+    const sameNameOpener = await answer(SENT_ONE, 'the answer', REPLY_ONE);
+    expect(sameNameOpener.code).toBe(1);
+    expect(sameNameOpener.err).toContain(`the thread ${OPENED} was not opened by the entity's main orchestrator`);
+    expect(existsSync(inHead(REPLY_ONE))).toBe(false);
+
+    // 3. Multi-message thread where the opening record was forged/tampered after signing:
+    //    `findRecord` rejects the tampered opening record (`opening === null`) and refuses.
+    const openedPath = fromMainOrchestrator(OPENED, 'authentic opening', OPENED);
+    const tamperedOpen = JSON.parse(readFileSync(openedPath, 'utf8')) as { payload: { body: string }; signature?: string };
+    tamperedOpen.payload.body = 'tampered opening body';
+    writeFileSync(openedPath, `${JSON.stringify(tamperedOpen, null, 2)}\n`);
+    const tamperedThread = await answer(SENT_ONE, 'the answer', REPLY_ONE);
+    expect(tamperedThread.code).toBe(1);
+    expect(tamperedThread.err).toContain(`the thread ${OPENED} was not opened by the entity's main orchestrator`);
+    expect(existsSync(inHead(REPLY_ONE))).toBe(false);
+
+    // 4. Answered record with `signature` stripped (unsigned JSON) or `from_id` forged after signing: refused.
+    const unsignedPath = fromMainOrchestrator(SENT_TWO, 'unsigned question', SENT_TWO);
+    const rawUnsigned = JSON.parse(readFileSync(unsignedPath, 'utf8')) as { payload: Record<string, unknown>; signature?: string };
+    delete rawUnsigned.signature;
+    writeFileSync(unsignedPath, `${JSON.stringify(rawUnsigned, null, 2)}\n`);
+    const unsignedRes = await answer(SENT_TWO, 'the answer', REPLY_ONE);
+    expect(unsignedRes.code).toBe(1);
+    expect(existsSync(inHead(REPLY_ONE))).toBe(false);
+
+    // 5. Record signed for `helper` (`to: 'helper'`) copied into `worker`'s own drop folder: still refused.
+    const helperRecordId = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+    const helperPath = plantRecord(world.home, world.roots.work, 'work', 'helper', helperRecordId, 'for helper only', {
+      at: NOW_ISO,
+      from: 'orchestrator',
+      from_id: world.headOrch,
+      thread: helperRecordId,
+    });
+    const copiedToWorker = join(recordDir(world.roots.work, 'work', 'worker'), helperRecordId);
+    writeFileSync(copiedToWorker, readFileSync(helperPath, 'utf8'));
+    const wrongRecipient = await answer(helperRecordId, 'the answer', REPLY_ONE);
+    expect(wrongRecipient.code).toBe(1);
+    expect(wrongRecipient.err).toContain(`record ${helperRecordId} is addressed to helper, not to worker`);
+    expect(existsSync(inHead(REPLY_ONE))).toBe(false);
+
+    // 6. Thread ended by the 72h idle threshold is refused and never reopened as a new thread.
+    const expiredId = '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e';
+    const fourDaysAgo = new Date(NOW.getTime() - 96 * 60 * 60 * 1000).toISOString();
+    plantRecord(
+      world.home,
+      world.roots.work,
+      'work',
+      'worker',
+      expiredId,
+      `from orchestrator@acme — admitted by: ${MAIN_SEND_RULE}\n\nold question`,
+      {
+        at: fourDaysAgo,
+        from: 'orchestrator',
+        from_id: world.headOrch,
+        to_id: world.worker,
+        rule: MAIN_SEND_RULE,
+        thread: expiredId,
+      },
+    );
+    const expiredRes = await answer(expiredId, 'late answer', REPLY_ONE);
+    expect(expiredRes.code).toBe(1);
+    expect(expiredRes.err).toContain(`the thread ${expiredId} ended: no record on it for 72h`);
+    expect(expiredRes.err).toContain("a seat answers the entity's main orchestrator only on the open thread that orchestrator opened, and never opens one");
+    expect(existsSync(inHead(REPLY_ONE))).toBe(false);
+
+    // 7. Additional `seats_cross_teams` chain checks: `seat: true` cannot reopen what `team: false`,
+    //    `project: false`, or `entity: false` (even after `project: true, team: false`) closed;
+    //    and `target === 'owner'` is refused under `main-orchestrator-thread`.
+    for (const crossTeams of [
+      { team: false, seat: true },
+      { project: false, seat: true },
+      { entity: false, seat: true },
+      { entity: false, project: true, seat: false },
+      { entity: false, project: true, team: false, seat: true },
+    ] as const) {
+      expect({ crossTeams, ok: admitSend(labsBuilder, floorOrch, teams, undefined, marked(crossTeams)).ok }).toEqual({
+        crossTeams,
+        ok: false,
+      });
+    }
+    expect(admitSend(labsBuilder, 'owner', teams, undefined, marked()).ok).toBe(false);
   });
 });
