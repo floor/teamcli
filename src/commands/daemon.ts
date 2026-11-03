@@ -464,10 +464,10 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
     // the failure instant has no age to show; losing the failure with the stamp would hide a
     // real one, so only the age is optional.
     if (root.send === 'failed') {
-      entries.push(`send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`);
+      entries.push(`send for ${root.root}: ${root.sendWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`);
     }
     if (root.bus === 'failed') {
-      entries.push(`bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`);
+      entries.push(`bus for ${root.root}: ${root.busWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`);
     }
     return entries;
   });

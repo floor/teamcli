@@ -944,7 +944,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
   for (const rootArg of input.roots) {
-    const status: MachineRootStatus = { root: rootArg, team: null, send: 'starting', bus: 'starting', why: null };
+    const status: MachineRootStatus = {
+      root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
+    };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
     const watch: EndpointWatch = {
       status,
@@ -1184,7 +1186,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     } else {
       status.send = 'failed';
       status.sendFailedAt = now().toISOString();
-      status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
+      status.sendWhy = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
     }
 
     const thresholds = eventThresholdsInForce({
@@ -1200,9 +1202,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.busStarted = true;
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) status.why = thresholds.refusals.map((refusal) => refusal.message).join('; ');
+      status.busWhy ??= thresholds.refusals.map((refusal) => refusal.message).join('; ');
       register();
-      logLine(`root ${rootArg}: bus not hosted: ${status.why}`);
+      logLine(`root ${rootArg}: bus not hosted: ${status.busWhy}`);
       continue;
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
@@ -1224,9 +1226,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.busStarted = true;
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) status.why = `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
+      status.busWhy ??= `the bus server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       register();
-      logLine(`root ${rootArg}: ${status.why}`);
+      logLine(`root ${rootArg}: ${status.busWhy}`);
       continue;
     }
     watch.busStarted = true;
@@ -1248,14 +1250,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     } else {
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
-      if (status.why === null) {
-        status.why =
-          bus.kind === 'busy'
-            ? 'another bus server holds the project socket'
-            : bus.kind === 'locked'
-              ? 'another bus server is starting'
-              : 'the bus socket could not be bound';
-      }
+      status.busWhy ??=
+        bus.kind === 'busy'
+          ? 'another bus server holds the project socket'
+          : bus.kind === 'locked'
+            ? 'another bus server is starting'
+            : 'the bus socket could not be bound';
     }
     register();
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
@@ -1865,7 +1865,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
-      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+      watch.status.busWhy = null;
       logLine(`root ${root}: bus restarted`);
     } else if (revived.kind === 'busy' || revived.kind === 'listening') {
       // Another process serves the bus here: this daemon owns no handle and has no pass to report.
@@ -1874,7 +1874,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
-      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+      watch.status.busWhy = null;
     } else if (revived.kind === 'failed') {
       logLine(`root ${root}: bus restart failed (${revived.why})`);
     }
@@ -1926,7 +1926,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.sendSocket = send.handle.socketPath;
         watch.status.send = 'serving';
         watch.status.sendFailedAt = null;
-        watch.status.why = null;
+        watch.status.sendWhy = null;
         watch.sendMisses = 0;
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
@@ -1935,7 +1935,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.sendSocket = send.socketPath;
         watch.status.send = 'already-running';
         watch.status.sendFailedAt = null;
-        watch.status.why = null;
+        watch.status.sendWhy = null;
         watch.sendMisses = 0;
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
@@ -1943,18 +1943,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       } else {
         watch.sendState.failures += 1;
         watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
-        watch.status.why = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
+        watch.status.sendWhy = send.kind === 'locked' ? 'another send server holds the project socket' : send.reason;
         watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
-        logLine(`root ${watch.status.root}: send restart failed (${watch.status.why})`);
-        if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+        logLine(`root ${watch.status.root}: send restart failed (${watch.status.sendWhy})`);
+        if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.sendWhy);
       }
     } catch (error) {
       watch.sendState.failures += 1;
       watch.sendState.nextAt = now().getTime() + sendBackoff(watch.sendState.failures);
-      watch.status.why = `the send server could not be restarted: ${messageOf(error)}`;
+      watch.status.sendWhy = `the send server could not be restarted: ${messageOf(error)}`;
       watch.status.sendFailedAt = watch.status.sendFailedAt ?? now().toISOString();
-      logLine(`root ${watch.status.root}: ${watch.status.why}`);
-      if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.why);
+      logLine(`root ${watch.status.root}: ${watch.status.sendWhy}`);
+      if (watch.sendState.failures >= sendGiveUp) fatalSend(watch, watch.status.sendWhy);
     } finally {
       watch.sendState.starting = false;
     }
@@ -1978,7 +1978,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 watch.sendMisses += 1;
                 if (watch.sendMisses >= SEND_PROBE_MISSES) {
                   watch.sendMisses = 0;
-                  status.why ??=
+                  status.sendWhy ??=
                     status.send === 'serving'
                       ? 'the hosted send endpoint stopped answering'
                       : 'the send server that was already running stopped answering';
@@ -1998,13 +1998,17 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             if (up) {
               watch.busState.failures = 0;
               watch.busState.nextAt = 0;
-              if (status.bus === 'serving') {
-                watch.busSocket = socket;
-                status.busFailedAt = null;
-              }
+              // A live socket is a serving bus whatever the last row said: another process may
+              // have started one after this daemon's own start failed (a start still holding
+              // its lock answers a live socket too). The row follows the socket, and its reason
+              // is cleared with it — the revive path never runs while the socket answers.
+              watch.busSocket = socket;
+              status.bus = 'serving';
+              status.busFailedAt = null;
+              status.busWhy = null;
             } else {
               if (status.bus === 'serving') {
-                status.why ??= 'the hosted bus endpoint stopped answering';
+                status.busWhy = status.busWhy ?? 'the hosted bus endpoint stopped answering';
                 status.bus = 'failed';
                 status.busFailedAt = now().toISOString();
                 // The bus whose pass this row carried is gone: a later revive sets its own handle,

@@ -94,7 +94,15 @@ export type DaemonRootState = {
    *  reader can see the root registered before its first attempt finishes. */
   send: 'starting' | 'serving' | 'already-running' | 'failed';
   bus: 'starting' | 'serving' | 'failed';
+  /** A row-level reason, for a failure that kept the whole route from being hosted (a team file
+   *  that cannot be read, a send start that threw). An endpoint's own failure reason lives in
+   *  `sendWhy` or `busWhy`, so one endpoint's recovery never erases the other's reason; a reader
+   *  falls back to this field, so records written before the split still show their reason. */
   why: string | null;
+  /** Why the send endpoint last failed. Cleared when it serves again; absent in older records. */
+  sendWhy?: string | null;
+  /** Why the bus endpoint last failed. Cleared when it serves again; absent in older records. */
+  busWhy?: string | null;
   /** When the endpoint was last marked failed. The age a reader prints is measured from this
    *  instant; an answer clears it. */
   sendFailedAt?: string | null;
@@ -280,6 +288,10 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     if (!['starting', 'serving', 'already-running', 'failed'].includes(entry.send as string)) return null;
     if (!['starting', 'serving', 'failed'].includes(entry.bus as string)) return null;
     if (!(entry.why === null || typeof entry.why === 'string')) return null;
+    for (const key of ['sendWhy', 'busWhy'] as const) {
+      const value = entry[key];
+      if (!(value === undefined || value === null || typeof value === 'string')) return null;
+    }
     for (const key of ['sendFailedAt', 'busFailedAt'] as const) {
       const value = entry[key];
       if (!(value === undefined || value === null || typeof value === 'string')) return null;
@@ -294,6 +306,8 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       send: entry.send as DaemonRootState['send'],
       bus: entry.bus as DaemonRootState['bus'],
       why: entry.why as string | null,
+      ...(entry.sendWhy === undefined ? {} : { sendWhy: entry.sendWhy as string | null }),
+      ...(entry.busWhy === undefined ? {} : { busWhy: entry.busWhy as string | null }),
       ...(entry.sendFailedAt === undefined ? {} : { sendFailedAt: entry.sendFailedAt as string | null }),
       ...(entry.busFailedAt === undefined ? {} : { busFailedAt: entry.busFailedAt as string | null }),
       ...(watch === null ? {} : { watch }),
