@@ -1,12 +1,18 @@
 // The record open is the folder check. A real chain is read. A folder in the chain that is a
 // link is not followed, so the bytes on the far side of the link are not the record.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { verifiedArrival } from '../src/bus/arrival.ts';
+import {
+  checkedDropRelative,
+  checkedMailboxReceiptRelative,
+  checkedMailboxRelative,
+  verifiedArrival,
+} from '../src/bus/arrival.ts';
 import { readSealedRelative } from '../src/bus/relative-read.ts';
-import { signRecord, type RecordPayload } from '../src/send/record.ts';
+import { signRecord, type ReceiptPayload, type RecordPayload } from '../src/send/record.ts';
+import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
 const made: string[] = [];
 afterEach(() => {
@@ -64,4 +70,109 @@ test('a record is read through the folder chain, and a linked folder is not foll
   expect(through.ok).toBe(false);
   if (!through.ok) expect(through.reason).toBe('a symbolic link was found and not followed');
   expect(verifiedArrival({ session: 'acme', seat: 'iris', record_id: id }, { root, session: 'acme' }, home)).toBeNull();
+});
+
+test('refuses path traversal segments, symlinked leaf records, non-directory intermediates, and directory leaves across drop and mailbox readers', () => {
+  const { base, root, home } = world();
+  const key = messageKeyOf(home);
+  const scope = { root, session: 'acme' };
+  const seatDir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  const mailboxDir = join(root, '.agents', 'messages', 'iris');
+  mkdirSync(mailboxDir, { recursive: true });
+
+  // Invalid segment names (empty, dot, dot-dot, slash, NUL) are rejected before openat.
+  for (const bad of ['', '.', '..', 'iris/rec', 'rec\0tail']) {
+    const res = readSealedRelative(root, ['.agents', 'send-drops', 'acme', 'iris'], bad);
+    expect(res).toEqual({ ok: false, reason: 'the record could not be read' });
+    const badFolder = readSealedRelative(root, ['.agents', bad, 'acme', 'iris'], 'rec-1');
+    expect(badFolder).toEqual({ ok: false, reason: 'the record could not be read' });
+  }
+
+  // A missing leaf returns { ok: true, sealed: null } (missing: true in checkedDropRelative).
+  const missingDrop = checkedDropRelative(
+    root,
+    'acme',
+    'iris',
+    'no-such-id',
+    { session: 'acme', seat: 'iris', record_id: 'no-such-id' },
+    scope,
+    key,
+  );
+  expect(missingDrop).toEqual({ ok: false, missing: true, reason: 'the record is missing' });
+
+  // A directory at the leaf record path is refused as not a regular file.
+  mkdirSync(join(seatDir, 'dir-leaf'));
+  const dirLeaf = checkedDropRelative(
+    root,
+    'acme',
+    'iris',
+    'dir-leaf',
+    { session: 'acme', seat: 'iris', record_id: 'dir-leaf' },
+    scope,
+    key,
+  );
+  expect(dirLeaf).toEqual({ ok: false, reason: 'the record is not a regular file' });
+
+  // A symlinked leaf drop record is refused with 'a symbolic link was found and not followed'.
+  const targetFile = join(base, 'target-rec.json');
+  writeFileSync(targetFile, JSON.stringify(signRecord(payload(root, 'link-leaf', 'lead'), home)));
+  symlinkSync(targetFile, join(seatDir, 'link-leaf'));
+  const linkLeaf = checkedDropRelative(
+    root,
+    'acme',
+    'iris',
+    'link-leaf',
+    { session: 'acme', seat: 'iris', record_id: 'link-leaf' },
+    scope,
+    key,
+  );
+  expect(linkLeaf).toEqual({ ok: false, reason: 'a symbolic link was found and not followed' });
+
+  // Mailbox record and receipt readers enforce the same relative-open chain and refuse symlinks.
+  writeFileSync(join(mailboxDir, 'mb-1.json'), JSON.stringify(signRecord(payload(root, 'mb-1', 'lead'), home)));
+  const receiptPayload: ReceiptPayload = {
+    kind: 'receipt',
+    status: 'read',
+    id: 'mb-1',
+    to: 'iris',
+    root,
+    session: 'acme',
+    at: '2026-11-03T00:02:00.000Z',
+  };
+  writeFileSync(
+    join(mailboxDir, 'mb-1.read.json'),
+    JSON.stringify({ payload: receiptPayload, signature: signDomain(RECEIPT_DOMAIN, receiptPayload, key) }),
+  );
+
+  const okMailbox = checkedMailboxRelative(
+    root,
+    'iris',
+    'mb-1.json',
+    { session: 'acme', seat: 'iris', record_id: 'mb-1' },
+    scope,
+    key,
+  );
+  expect(okMailbox).toEqual({ ok: true, from: 'lead', at: '2026-11-03T00:00:00.000Z' });
+
+  const okReceipt = checkedMailboxReceiptRelative(
+    root,
+    'iris',
+    'mb-1.read.json',
+    { session: 'acme', seat: 'iris', record_id: 'mb-1' },
+    scope,
+    key,
+  );
+  expect(okReceipt).toEqual({ ok: true, at: '2026-11-03T00:02:00.000Z' });
+
+  unlinkSync(join(mailboxDir, 'mb-1.read.json'));
+  symlinkSync(targetFile, join(mailboxDir, 'mb-1.read.json'));
+  const linkedReceipt = checkedMailboxReceiptRelative(
+    root,
+    'iris',
+    'mb-1.read.json',
+    { session: 'acme', seat: 'iris', record_id: 'mb-1' },
+    scope,
+    key,
+  );
+  expect(linkedReceipt).toEqual({ ok: false, reason: 'a symbolic link was found and not followed' });
 });

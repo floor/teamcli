@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 
 const made: string[] = [];
@@ -49,4 +50,85 @@ test('a refusal is kept while the path remains and dropped once the path is gone
   rmSync(second);
   pass();
   expect(state.refused.size).toBe(0);
+});
+
+test('evicts refusal cache entries across drop and mailbox trees when repaired or removed, and re-reports if broken again', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-refused-adv-')));
+  made.push(base);
+  const root = join(base, 'acme');
+  const home = join(base, 'home');
+  const dropSeat = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  const mailboxSeat = join(root, '.agents', 'messages', 'iris');
+  mkdirSync(dropSeat, { recursive: true });
+  mkdirSync(mailboxSeat, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  messageKeyOf(home);
+
+  const dropPath = join(dropSeat, 'rec-1');
+  const mailboxRecordPath = join(mailboxSeat, 'mb-1.json');
+  const mailboxReceiptPath = join(mailboxSeat, 'mb-1.read.json');
+  writeFileSync(dropPath, 'not-json\n');
+  writeFileSync(mailboxRecordPath, '{"payload":{},"signature":"bad"}\n');
+  writeFileSync(mailboxReceiptPath, '{"payload":{},"signature":"bad"}\n');
+
+  const state = createReconcileState();
+  const said: string[] = [];
+  const pass = () =>
+    reconcilePass({
+      project: 'acme',
+      root,
+      session: 'acme',
+      home,
+      state,
+      onRefused: (refusal) => said.push(`${refusal.where}:${refusal.reason}`),
+    });
+
+  pass();
+  expect(said).toEqual([
+    'iris/rec-1:the record is not JSON',
+    "iris/mb-1:the record is not signed with this checkout's message key",
+    "iris/mb-1:read:the receipt is not signed with this checkout's message key",
+  ]);
+  expect(state.refused.size).toBe(3);
+
+  // Quiet pass while all three remain unchanged: cached entries keep `refusedNow` populated.
+  said.length = 0;
+  pass();
+  expect(said).toEqual([]);
+  expect(state.refused.size).toBe(3);
+
+  // Repair `rec-1` in place with a valid signed record and remove the two broken mailbox files.
+  const validPayload: RecordPayload = {
+    kind: 'message',
+    id: 'rec-1',
+    to: 'iris',
+    to_id: null,
+    root,
+    session: 'acme',
+    at: '2026-11-03T00:05:00.000Z',
+    body: 'repaired',
+    from: 'lead',
+    from_id: null,
+    rule: 'fixture',
+    thread: 'rec-1',
+  };
+  writeFileSync(dropPath, JSON.stringify(signRecord(validPayload, home)));
+  rmSync(mailboxRecordPath);
+  rmSync(mailboxReceiptPath);
+
+  const repaired = pass();
+  expect(repaired.ok).toBe(true);
+  if (repaired.ok) {
+    expect(repaired.raised.map((e) => `${e.payload.kind}:${e.payload.record_id}`)).toEqual([
+      'message.arrived:rec-1',
+    ]);
+  }
+  expect(said).toEqual([]);
+  expect(state.refused.size).toBe(0);
+
+  // If a corrupt file reappears at the previously evicted mailbox path, it is reported afresh.
+  writeFileSync(mailboxRecordPath, 'corrupt-again\n');
+  pass();
+  expect(said).toEqual(['iris/mb-1:the record is not JSON']);
+  expect(state.refused.has(`mailbox-record\0${mailboxRecordPath}`)).toBe(true);
 });
