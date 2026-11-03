@@ -13,19 +13,28 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runBroker } from '../src/commands/broker.ts';
+import { runDaemon } from '../src/commands/daemon.ts';
+import { runDelegate } from '../src/commands/delegate.ts';
+import { runDown, type DownSources } from '../src/commands/down.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
+import { runRevoke } from '../src/commands/revoke.ts';
+import { runTempo } from '../src/commands/tempo.ts';
 import type { Caller } from '../src/caller.ts';
+import type { ServiceManager } from '../src/daemon/service.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
 import { writeDevelopmentMode } from '../src/development_mode.ts';
 import { devModeOwnerLift, devModeOwnerRoleOf, leadGatesAdmitOperator } from '../src/dev_mode.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { keyOf } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
-import { writePolicySet } from '../src/policy/index.ts';
+import { resolvePolicy, writePolicySet } from '../src/policy/index.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
@@ -423,3 +432,263 @@ describe('team answer', () => {
     expect(logOf(root)).not.toContain('admitted as');
   });
 });
+
+describe('independent adversarial checks: five command gates, tighten-only chain, and closed owner-only gates', () => {
+  const fakeService: ServiceManager = {
+    kind: 'system-service-manager',
+    unitPath: (home: string) => join(home, 'daemon.unit'),
+    plan: (home: string) => ({ unitPath: join(home, 'daemon.unit'), program: ['/bin/team', 'daemon', 'run'] }),
+    install: (home: string) => ({ ok: true, unitPath: join(home, 'daemon.unit'), program: ['/bin/team', 'daemon', 'run'] }),
+    restart: (home: string) => ({
+      ok: true,
+      unitPath: join(home, 'daemon.unit'),
+      undo: () => ({ ok: false, reason: 'refused', why: 'not run', detail: null }),
+    }),
+    uninstall: (home: string) => ({ ok: true, unitPath: join(home, 'daemon.unit'), removed: true }),
+    unit: () => null,
+    job: () => null,
+  };
+
+  test('check --repair, down --abandon, and daemon restart admit the placed operator end-to-end with warning and audit line', async () => {
+    const { root, home } = repo();
+    devModeOn(home, root);
+    leadGates(home, root, 'lead+operator');
+
+    // 1. `team check --repair`
+    const checkSources: CheckSources = {
+      home,
+      now: () => NOW,
+      standing: (r: string) => approvalStanding(r, home),
+      branch: () => 'main',
+      live: () => ({ running: false, agents: [], workspaces: [], screens: {} }),
+    };
+    const checkIo = testIo(root, OPS);
+    runTeamCheck({ repair: true }, checkIo, checkSources);
+    expect(checkIo.err).toContain("warning: --repair is the owner's; dev mode continues (dev-mode on at team level)");
+    expect(logOf(root)).toContain('check [ops]');
+    expect(logOf(root)).toContain('admitted as operator');
+
+    // 2. `team down --abandon --dry-run`
+    const downSources: DownSources = {
+      home,
+      now: () => NOW,
+      sessionRunning: () => true,
+      agents: () => [],
+      alive: () => false,
+      screen: () => ({ kind: 'idle' }) as Screen,
+      screenText: () => '',
+      status: () => 'idle',
+      foreground: () => [],
+      standing: (r: string) => approvalStanding(r, home),
+    };
+    const downIo = testIo(root, OPS);
+    expect(await runDown(['--abandon', '--dry-run'], downIo, downSources)).toBe(0);
+    expect(downIo.err).toContain('warning: only the owner abandons a team, from a terminal outside herdr; dev mode continues (dev-mode on at team level)');
+    expect(logOf(root)).toContain('down [ops]');
+    expect(logOf(root)).toContain('admitted as operator');
+
+    // 3. `team daemon restart --dry-run`
+    const restartIo = testIo(root, OPS);
+    expect(await runDaemon(['restart', '--dry-run'], restartIo, { home, now: () => NOW, service: fakeService })).toBe(0);
+    expect(restartIo.err).toContain('warning: only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is ops; dev mode continues (dev-mode on at team level)');
+    expect(logOf(root)).toContain('daemon [ops]');
+  });
+
+  test('owner-only and lead-only commands stay closed to the placed operator under lead+operator', async () => {
+    const { root, home } = repo();
+    devModeOn(home, root);
+    leadGates(home, root, 'lead+operator');
+
+    // `team delegate`
+    const delegateIo = testIo(root, OPS);
+    expect(await runDelegate(['other/pane9', '--commands', 'status'], delegateIo, { home })).toBe(1);
+    expect(delegateIo.err).toContain(OWNER_GRANT);
+    expect(delegateIo.err).not.toContain('dev mode continues');
+
+    // `team revoke`
+    const revokeIo = testIo(root, OPS);
+    expect(await runRevoke(['grant'], revokeIo, { home })).toBe(1);
+    expect(revokeIo.err).toContain(OWNER_GRANT);
+    expect(revokeIo.err).not.toContain('dev mode continues');
+
+    // `team broker`
+    const brokerIo = testIo(root, OPS);
+    expect(await runBroker([], brokerIo, { home })).toBe(1);
+    expect(brokerIo.err).toContain('only the owner runs `broker`, from a terminal outside herdr; this call is ops');
+    expect(brokerIo.err).not.toContain('dev mode continues');
+
+    // `team tempo`
+    const tempoIo = testIo(root, OPS);
+    expect(await runTempo(['urgent'], tempoIo, { home })).toBe(1);
+    expect(tempoIo.err).toContain('only the owner runs tempo, from a terminal outside herdr; this call is ops');
+    expect(tempoIo.err).not.toContain('dev mode continues');
+
+    // `team daemon install`, `uninstall`, `fault-watch`, and `run`
+    for (const argv of [
+      ['install', '--dry-run'],
+      ['uninstall'],
+      ['fault-watch', '--root', root, '--route', '0'.repeat(32)],
+      ['run'],
+    ]) {
+      const daemonIo = testIo(root, OPS);
+      expect(await runDaemon(argv, daemonIo, { home, now: () => NOW, service: fakeService }), argv.join(' ')).toBe(1);
+      expect(daemonIo.err, argv.join(' ')).not.toContain('dev mode continues');
+    }
+
+    expect(logOf(root)).toBe('');
+  });
+
+  test('lead+operator without dev-mode on admits no operator at any gate', async () => {
+    const { root, home } = repo();
+    // `lead-gates: lead+operator` is set, but `dev-mode` is off.
+    leadGates(home, root, 'lead+operator');
+
+    const policyIo = testIo(root, OPS);
+    expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], policyIo, { home })).toBe(1);
+    expect(policyIo.err).not.toContain('dev mode continues');
+
+    const restartIo = testIo(root, OPS);
+    expect(await runDaemon(['restart', '--dry-run'], restartIo, { home, now: () => NOW, service: fakeService })).toBe(1);
+    expect(restartIo.err).not.toContain('dev mode continues');
+    expect(logOf(root)).toBe('');
+  });
+
+  test('tighten-only across entity -> project -> team, seat level refusal, and corrupt chain fail-closed', async () => {
+    const { root, home } = repo();
+    devModeOn(home, root);
+
+    // Seat level is refused by both the resolver and `team policy set`.
+    const seatResolved = resolvePolicy('lead-gates', [
+      { name: 'lead-gates', value: 'lead', level: 'seat', setter: 'owner', date: NOW.toISOString(), kind: 'enforced' },
+    ]);
+    expect(seatResolved.ok).toBe(false);
+    if (!seatResolved.ok) {
+      expect(seatResolved.refusals[0]?.message).toContain('allowed: entity, project, team');
+    }
+    const ownerIo = testIo(root, { kind: 'owner' });
+    expect(await runPolicy(['set', 'seat:ops', 'lead-gates', 'lead'], ownerIo, { home })).toBe(2);
+    expect(ownerIo.err).toContain('may not be set at level seat');
+
+    // Entity `lead+operator` -> Project `lead` -> Team `lead+operator` is refused at load as a loosening.
+    const projectTightenedThenTeamLoosened = resolvePolicy('lead-gates', [
+      { name: 'lead-gates', value: 'lead+operator', level: 'entity', setter: 'owner', date: NOW.toISOString(), kind: 'enforced' },
+      { name: 'lead-gates', value: 'lead', level: 'project', setter: 'owner', date: NOW.toISOString(), kind: 'enforced' },
+      { name: 'lead-gates', value: 'lead+operator', level: 'team', setter: 'owner', date: NOW.toISOString(), kind: 'enforced' },
+    ]);
+    expect(projectTightenedThenTeamLoosened.ok).toBe(false);
+    if (!projectTightenedThenTeamLoosened.ok) {
+      expect(projectTightenedThenTeamLoosened.refusals[0]).toMatchObject({
+        kind: 'loosening',
+        policy: 'lead-gates',
+        higherLevel: 'project',
+        lowerLevel: 'team',
+      });
+    }
+
+    // Corrupting the entity policy file on disk makes `leadGatesAdmitOperator` fail closed.
+    leadGates(home, root, 'lead+operator');
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok) throw new Error(loaded.errors.map((e) => e.message).join('; '));
+    expect(leadGatesAdmitOperator(testIo(root, OPS), { home, team: loaded.team, root })).toBe(true);
+    writeFileSync(join(home, '.config', 'team', 'entities.yaml'), 'acme:\n  policies: [unreadable\n');
+    expect(leadGatesAdmitOperator(testIo(root, OPS), { home, team: loaded.team, root })).toBe(false);
+  });
+
+  test('the main-team cross-team route (roleElsewhere) admits a parent orchestrator and refuses a parent operator', () => {
+    const parent = repo();
+    const childRoot = join(parent.root, 'sub-team');
+    const childFile = join(childRoot, '.agents', 'team.yaml');
+    const lobby = resolveLobby(parent.home, { entity: 'acme' });
+    mkdirSync(join(childRoot, '.agents'), { recursive: true });
+    writeFileSync(childFile, `format: 1
+project: sub-team
+entity: acme
+session: sub-team
+coordinator: sub-lead
+operator: sub-ops
+trust:
+  - ${lobby}
+  - ${childRoot}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: sub-lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: sub-ops
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`);
+    writeFileSync(join(childRoot, '.agents', 'team.state.json'), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        'sub-team': {
+          seats: {
+            'sub-lead': { stage: 'ready', pane: 'sub-pane1' },
+            'sub-ops': { stage: 'ready', pane: 'sub-pane2' },
+          },
+          worktrees: {},
+        },
+      },
+    }, null, 2)}\n`);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: childRoot, env: gitEnv(), stdio: 'ignore' });
+
+    const parentLoaded = loadTeamFile(parent.root, { home: parent.home });
+    const childLoaded = loadTeamFile(childRoot, { home: parent.home });
+    if (!parentLoaded.ok || !childLoaded.ok) throw new Error('failed to load parent or child team');
+
+    upsertTeam(parent.home, teamIdOf(parent.root), {
+      project: 'acme',
+      root: parent.root,
+      session: 'acme',
+      entity: 'acme',
+      projectId: 'acme',
+      lifecycle: 'running',
+      lobby,
+      by: 'test',
+      at: NOW.toISOString(),
+    });
+
+    devModeOn(parent.home, parent.root);
+    devModeOn(parent.home, childRoot);
+    leadGates(parent.home, parent.root, 'lead+operator', 'entity');
+    leadGates(parent.home, parent.root, 'lead+operator', 'team');
+    leadGates(parent.home, childRoot, 'lead+operator', 'team');
+
+    // Parent's placed orchestrator (`LEAD` in session `acme`) IS admitted to the child's gate via `roleElsewhere`.
+    const parentLeadLift = devModeOwnerLift(testIo(childRoot, LEAD), {
+      command: 'check',
+      refusal: "--repair is the owner's",
+      home: parent.home,
+      team: childLoaded.team,
+      root: childLoaded.root,
+      dir: join(childRoot, '.agents'),
+      now: NOW,
+      admitsOperator: true,
+    });
+    expect(parentLeadLift.lifted).toBe(true);
+    expect(parentLeadLift.role).toBe('orchestrator');
+
+    // Parent's placed operator (`OPS` in session `acme`) is REFUSED on the child's gate: `roleElsewhere` admits only `orchestrator`.
+    const parentOpsLift = devModeOwnerLift(testIo(childRoot, OPS), {
+      command: 'check',
+      refusal: "--repair is the owner's",
+      home: parent.home,
+      team: childLoaded.team,
+      root: childLoaded.root,
+      dir: join(childRoot, '.agents'),
+      now: NOW,
+      admitsOperator: true,
+    });
+    expect(parentOpsLift.lifted).toBe(false);
+  });
+});
+
