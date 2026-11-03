@@ -108,12 +108,14 @@ function crossTeamTargetYaml(entity: string): string {
 }
 
 // The entity's head team: the team whose project is the entity itself (`onMainCoordinator`'s
-// place), its own lead seat named `orchestrator` too.
-function headTeamYaml(project: string, entity: string): string {
+// place), its own lead seat named `orchestrator` too. The lead may be spelled either way the
+// file allows — the legacy `coordinator:` key, or `leads: true` on the seat.
+function headTeamYaml(project: string, entity: string, lead: 'coordinator' | 'leads' = 'coordinator'): string {
+  const leadKey = lead === 'coordinator' ? 'coordinator: orchestrator\n' : '';
+  const leadMark = lead === 'leads' ? '    leads: true\n' : '';
   return `format: 1
 project: ${project}
-coordinator: orchestrator
-operator: ops
+${leadKey}operator: ops
 entity: ${entity}
 workspace:
   mode: shared
@@ -121,7 +123,7 @@ seats:
   - role: coordinator
     name: orchestrator
     label: orchestrator
-    cli: claude-code
+${leadMark}    cli: claude-code
     vendor: anthropic
     model: Claude Opus
     version: "5.5"
@@ -279,12 +281,12 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
 
 /** The entity's head team beside a target fixture: its own checkout, its live file, and the
  *  folder its state is written to — the three records a main-orchestrator proof reads. */
-function makeHeadTeam(base: string, project: string, entity: string): { root: string; dir: string; session: string } {
+function makeHeadTeam(base: string, project: string, entity: string, lead: 'coordinator' | 'leads' = 'coordinator'): { root: string; dir: string; session: string } {
   const root = join(base, project);
   const dir = join(root, '.agents');
   mkdirSync(dir, { recursive: true });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'init', '-q', '-b', 'main'], { cwd: root, env: gitEnv() });
-  const yaml = headTeamYaml(project, entity).replace(
+  const yaml = headTeamYaml(project, entity, lead).replace(
     'workspace:\n',
     `trust:\n  - ~/.config/team/lobby\n  - ~/.config/team/lobbies/${entity.toLowerCase()}\n  - ${root}\nworkspace:\n`,
   );
@@ -1223,6 +1225,54 @@ describe('team restart <seat>', () => {
       (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
     });
     const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
+    expect(did.typed).toEqual(['/exit']);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('team restart: restarted orchestrator; pane pane-old -> pane-new\n');
+  });
+
+  // The reach carries the sign-off half of a lead's place too: the entity's main orchestrator
+  // lifts a stopped seat of the entity's team, and the revival clears the mark in the same write
+  // that records the launch, exactly as the team's own lead does.
+  test("the entity's main orchestrator lifts a team's stopped seat", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
+    expect(readFileSync(fixture.file, 'utf8')).not.toContain('stopped: true');
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    // The target names an entity, so its own session is `<entity>-<project>`.
+    const after = readState(fixture.dir).sessions['floor-acme']?.seats['parked-seat'];
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
+  });
+
+  // The proof reads the head team's live file as the file resolves its lead: `leads: true` on the
+  // seat is the other spelling of the legacy `coordinator:` key, and the reach holds through it.
+  test('the main orchestrator is proven through a head file that spells its lead with `leads: true`', async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor', 'leads');
     recordMainOrchestrator(head.dir, head.session, 'pane-main');
     upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
     upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
