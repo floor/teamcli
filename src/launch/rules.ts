@@ -1,10 +1,11 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { isLeadSeat } from '../file/sections/lead.ts';
 import { renderSignature } from '../file/signature.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { readPolicyChain } from '../policy/sources.ts';
-import { landingRule, resolveWorkSettings, vaultRule, type WorkSettings } from '../policy/work-settings.ts';
+import { landingRule, policyRuleLines, resolveWorkSettings, vaultRule, type WorkSettings } from '../policy/work-settings.ts';
 import { ofTeam as projectOfTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 
@@ -164,7 +165,10 @@ export function rulesOf(
         branch: team.workspace.branch,
         cwd: resolve(root, seat.cwd),
       },
-      work: workLines(work, team.project),
+      work: [
+        ...workLines(work, team.project),
+        ...policyRuleLines(work, { lead: isLeadSeat(team, seat.name), entity: team.entity !== null }),
+      ],
       origin,
     },
     delivery,

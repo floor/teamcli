@@ -86,6 +86,10 @@ resolves as its lead, so a separate operator seat gains nothing.
 
 - `team grant`, `team delegate`, `team revoke`
 - `team policy set`, `team policy unset`
+- `team settings set`, `team settings unset` — a `--file` write names another record and keeps
+  the gate
+- `team config set`, `team config unset` — the `seats.<seat>.stopped` mark is the team's own
+  power, dev mode on or off, and never this admission
 - `team check --repair`
 - `team remove --abandon`, `team down --abandon`
 - `team broker`, `team tempo`
