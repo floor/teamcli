@@ -2208,11 +2208,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return delivered(io, to.seat, report, 'socket');
       }
       // The frame was taken but the walk's own write did not land: the seat was woken with no copy
-      // in its folder, so the send is unconfirmed. Nothing is retried — the frame already reached
-      // the receiver — and the ending says which half settled.
+      // in its folder, so the send is unconfirmed — `sent (unconfirmed)`, never `delivered`. The
+      // recorded attempt says which half settled rather than repeating the word the ending
+      // refused: nothing is retried, since the frame already reached the receiver.
       if (attempt.kind === 'delivered-unrecorded') {
         markLeg('socket', 'attempted', attempt.reason);
-        note(walkAttempt('socket', 'delivered', false, host.now(), startedAt, { reason: attempt.reason }));
+        note(walkAttempt('socket', 'unreachable', false, host.now(), startedAt, { reason: `the frame was taken, but the record was not written (${attempt.reason})` }));
         return sentUnconfirmed(io, to.seat, report, host.now().getTime() - startedAt, 'socket', 'the frame was taken, but the record was not written');
       }
       failures.push(`socket: ${attempt.reason}`);
@@ -2528,8 +2529,22 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       markLeg('session', 'attempted', attempt.outcome === 'created' ? undefined : attempt.reason);
       if (attempt.outcome === 'created') {
         report.sent = msgId;
-        note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
         const ms = host.now().getTime() - startedAt;
+        // `parallel` ends the send only when both settled: a session the CLI created while the
+        // walk's own write failed is `sent (unconfirmed)`, never `delivered` — the same rule the
+        // socket leg keeps when a taken frame's copy cannot be written. The call is not undone:
+        // the body reached the remote agent either way, and only the stored copy is missing.
+        const staged = stagedRecordOf();
+        if (store === 'parallel' && (staged === null || !staged.ok)) {
+          const why = staged === null ? 'the record was not staged' : staged.reason;
+          note(walkAttempt('session', 'unreachable', false, host.now(), startedAt, { reason: `the session was created, but the record was not written (${why})` }));
+          const failed = failures.length > 0 ? { failed: [...failures] } : {};
+          const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
+          logLine(dir, 'send', who, `${to.seat}: the session was created, but the record was not written (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'session', session: attempt.session, ...failed });
+          return sentUnconfirmed(io, to.seat, report, ms, 'session', 'the session was created, but the record was not written');
+        }
+        note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
         logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
@@ -6609,7 +6624,7 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  while it is idle says `queued, not woken` instead — the same word the history line carries —
  *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
  *  Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook' | 'socket', note?: string): number {
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook' | 'socket' | 'session', note?: string): number {
   const notWoken = leg === 'drop' && dropNotWoken(report);
   const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
   const summary = withId(withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);

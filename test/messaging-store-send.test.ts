@@ -7,15 +7,17 @@
 // No live pane and no real socket: the host's deliver is a fake, and the socket file only has to
 // stand where the socket lookup looks.
 import { afterEach, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { runSend } from '../src/commands/send.ts';
+import { runSend, sendDirect } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { carriedRecordOf, readRecord } from '../src/send/record.ts';
 import { updateState } from '../src/state.ts';
+import { cleanupFakeJules, fakeJulesOnPath } from './helpers/fake-jules.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
@@ -24,6 +26,7 @@ let cleanup: () => void = () => {};
 afterEach(() => {
   cleanup();
   cleanup = () => {};
+  cleanupFakeJules();
 });
 
 /** The receiving seat's `accept` declaration at the launch's own settings path, and the socket
@@ -343,4 +346,69 @@ test('none never runs the Claude handoff: its record and pending file write noth
   expect(code).toBe(1);
   expect(io.err).toContain('messaging.store is none and no route the order names carries the body itself');
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+test('parallel does not call a created session delivered when its copy could not be written', async () => {
+  const made = world(['session', 'drop'], [{ name: 'jules-seat', role: 'implementer', cli: 'jules', launch: 'jules' }]);
+  cleanup = made.cleanup;
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/site.git'], { cwd: made.root, stdio: 'ignore' });
+  const fakeJules = fakeJulesOnPath({ status: 0, stdout: 'Session created: https://jules.google.com/session/abc123\n' });
+  expect(fakeJules.firstOnPath()).toBe(fakeJules.binary);
+  const drops = dropDir(made.dir, 'jules-seat');
+  mkdirSync(drops, { recursive: true });
+  const id = 'aaaaaaaa-0000-4000-8000-000000000601';
+  // A different record already holds the name: the walk's own write refuses while the CLI's
+  // session call still creates its session. The send must say so, never `delivered`.
+  writeFileSync(join(drops, id), '');
+  const privateDir = join(dirname(made.root), 'private');
+  mkdirSync(privateDir, { recursive: true });
+  const names = join(privateDir, 'names.txt');
+  writeFileSync(names, 'Zephyrine Quillfeather\n', { mode: 0o600 });
+  const host = fake(made, {
+    store: 'parallel',
+    sendId: () => id,
+    privateLists: { names, phrases: join(privateDir, 'phrases.txt') },
+    repoVisibility: async () => 'public',
+  });
+  const io = owner(made.root);
+
+  const code = await runSend(['jules-seat', 'a brief'], io, host);
+
+  expect(code).toBe(0);
+  expect(withoutSendId(io.out)).toContain('jules-seat: sent (unconfirmed) (session,');
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  // The session was created — the remote agent has the body — but the stored copy the store
+  // promises is not there, so the send's word is the unconfirmed one and never delivered.
+  expect(history.entries.at(-1)).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'session', session: 'abc123' });
+});
+
+test('parallel hands a direct caller an unconfirmed ending when the frame was taken and the copy failed', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made);
+  const drops = dropDir(made.dir, 'lead');
+  mkdirSync(drops, { recursive: true });
+  const id = 'aaaaaaaa-0000-4000-8000-000000000701';
+  writeFileSync(join(drops, id), '');
+  const host = fake(made, {
+    store: 'parallel',
+    sendId: () => id,
+    agents: () => [{ name: 'lead', pane: 'fixture-pane-1' }],
+    deliver: async () => ({ ok: true }),
+  });
+
+  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'fixture-pane-1', cli: 'claude-code', body: 'a note' });
+
+  expect(run.code).toBe(0);
+  const result = run.result;
+  expect(result).not.toBeNull();
+  if (result === null) return;
+  // The frame was taken, so the walk ends here; the recorded ending and the caller's result say
+  // what settled — the copy did not — instead of repeating the delivered word the ending refused.
+  expect(result.outcome).toBe('unreachable');
+  expect(result.reason).toContain('the frame was taken, but the record was not written');
+  expect(result.record).toBeNull();
 });
