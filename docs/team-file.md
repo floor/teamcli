@@ -797,10 +797,11 @@ tempo: urgent
 ```
 
 - `relaxed`, `normal` or `urgent`.
-- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and
+- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and a declared
   `unread_after`, and doubles the idle window the liveness chain resolved (`idle_first`).
   `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
-  them as written.
+  them as written. The per-seat unread defaults — 30 s for a seat a message can wake while it
+  is idle, 60 s for a typed or pull-only seat — are release values, and no tempo scales them.
 - The idle window is scaled after the chain checks its word: the tempo is the owner's dial on
   the timing, so `relaxed` lengthens the resolved window without reading as a team loosening a
   liveness threshold, and `urgent` shortens it. `idle_owner` and `blind_after` are never scaled.

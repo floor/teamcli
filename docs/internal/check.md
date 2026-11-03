@@ -134,8 +134,10 @@ none of it and has no writer mode and no `--rollout` of its own.
 Unread work is named on the same pass (`unreadDifferences`, `src/check/team.ts`): every non-human
 seat's drop folder is read through `listUnread` (`src/mcp/inbox.ts`), the watch's own reading of
 what waits — a UUID-named regular file with no verified read receipt beside it, the general seat
-brief's current and superseded ids aside. A message older than `watch.unread_after` — the value in
-force, 600 s when the file omits it — is one difference for the seat,
+brief's current and superseded ids aside. A message older than the seat's unread window — the
+file's `watch.unread_after` when it moved the section, else the delivery class's default (30 s
+for a seat a message can wake while it is idle, 60 s for a typed or pull-only seat; ADR
+`zeus-message-path`, D2) — is one difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
 when others are due and the oldest named. The repair reads the seat's delivery class on this
 pass (`seatDeliveryClass`), so it cannot promise a wake the seat does not have. A seat whose

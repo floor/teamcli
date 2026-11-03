@@ -10,7 +10,7 @@ import type { ChildOptions } from '../child.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
 import { isParseError, launchTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -49,10 +49,11 @@ import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
 import { actingWatchHandover, readWatchHandover } from '../watch/handover.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
-import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
+import { declaredUnreadAfter, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
+import { seatDeliveryClass } from '../launch/delivery-class.ts';
 import { boxHoldsText, DRAW_WAIT_MS } from '../launch/deliver.ts';
 import { removeWorktree } from './worktree.ts';
 import { stateOf } from './down.ts';
@@ -1396,17 +1397,37 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
           // A delivery is a deposit until the seat's signed receipt follows: a message still
-          // unread `watch.unread_after` after it landed gets one typed wake, and one still unread
-          // at twice that window is reported to its sender and the team's lead. The report is a
-          // mailbox record, so a watch without nudges keeps that word; the wake is typing, and
-          // `--no-nudge` leaves it out.
+          // unread its seat's window after it landed gets the next leg down the cascade — the
+          // webhook adapter before the typed line (ADR zeus-message-path, D2) — and one still
+          // unread at twice that window is reported to its sender and the team's lead. The
+          // window is the file's declared word when it moved the section, else the seat class's
+          // own default: 30 s for a seat a message can wake while idle, 60 s for a typed one.
+          // The report is a mailbox record, so a watch without nudges keeps that word; the wake
+          // is typing, and `--no-nudge` leaves it out.
+          const declaredUnread = declaredUnreadAfter(inForce, watchPace);
+          const unreadWindows = new Map<string, number>();
+          const unreadWindowOf = (seat: Seat): number => {
+            const known = unreadWindows.get(seat.name);
+            if (known !== undefined) return known;
+            const seconds = unreadWindowSeconds(declaredUnread, seatDeliveryClass({
+              dir,
+              root,
+              session,
+              seat: seat.name,
+              declared: seat,
+              ...(state.seats[seat.name] === undefined ? {} : { state: state.seats[seat.name] }),
+              ...(sources.home === undefined ? {} : { home: sources.home }),
+            }).class);
+            unreadWindows.set(seat.name, seconds);
+            return seconds;
+          };
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { unreadAfter: inForce.unreadAfter, rung, ...(quiet || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
-            { unreadAfter: inForce.unreadAfter },
+            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
           );
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);

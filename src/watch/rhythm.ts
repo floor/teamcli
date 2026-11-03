@@ -12,6 +12,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { SCALED_WATCH_WAITS } from '../file/sections/tempo.ts';
 import { defaultWatch } from '../file/sections/watch.ts';
 import type { TeamFile } from '../file/types.ts';
+import { wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import {
   loadAndResolvePolicyChain,
   WATCH_RHYTHM_FACTOR,
@@ -70,6 +71,38 @@ export function applyWatchPace(
 /** The watch values a pass runs with under a pace: the team file when verified, else defaults. */
 export function watchInForceWithPace(standing: Standing, team: TeamFile, pace: WatchPace): TeamFile['watch'] {
   return applyWatchPace(standing.kind === 'verified' ? team.watch : defaultWatch(), pace);
+}
+
+/** The unread window a seat gets when no level of its chain moves the setting: a seat a message
+ *  can wake while it is idle (a channel or webhook seat) is woken at the shorter window, and a
+ *  typed or pull-only seat waits for the longer one. The owner's cascade (ADR
+ *  zeus-message-path, D2) names these defaults; the team file's own `watch.unread_after` is the
+ *  declared word that replaces them for every seat of the team. */
+export const UNREAD_AFTER_WAKEABLE_SECONDS = 30;
+export const UNREAD_AFTER_PULL_SECONDS = 60;
+
+/** The unread window in force for one seat: the team's declared word, or the seat class's
+ *  default. Everything that names a window — the wake, the report at twice it, `team status`
+ *  and `team check` — reads it through this one function. */
+export function unreadWindowSeconds(declared: number | null, cls: DeliveryClass): number {
+  if (declared !== null) return declared;
+  return wakeableWhileIdle(cls) ? UNREAD_AFTER_WAKEABLE_SECONDS : UNREAD_AFTER_PULL_SECONDS;
+}
+
+/**
+ * The team file's own unread window, or null when it did not move the section: a value equal to
+ * the paced shipped default is no word at all — the file did not write it — and the per-seat
+ * class defaults stand. The rule is the one the liveness chain reads (`watchWords` in
+ * src/settings/declared.ts), applied to the paced value so a tempo change is not mistaken for a
+ * declaration. A file that writes exactly the shipped 600 at the normal pace is indistinguishable
+ * from one that writes nothing, the same caveat that chain states.
+ */
+export function declaredUnreadAfter(
+  inForce: TeamFile['watch'],
+  pace: Pick<WatchPace, 'preset' | 'sweepSeconds'>,
+): number | null {
+  const shipped = applyWatchPace(defaultWatch(), pace).unreadAfter;
+  return inForce.unreadAfter === shipped ? null : inForce.unreadAfter;
 }
 
 /** The legacy file pair as the one structured value, its interval clamped to the sweep range. */

@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listUnacked } from '../src/commands/messages.ts';
@@ -25,7 +25,7 @@ import { listUnread, MESSAGE_ID, readMessage, receiptPath } from '../src/mcp/inb
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { readHistory } from '../src/send/history.ts';
+import { appendHistory, readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
 import { readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt } from '../src/send/record.ts';
@@ -34,6 +34,8 @@ import { takenDropPath } from '../src/send/taken.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
+import { defaultWatch } from '../src/file/sections/watch.ts';
+import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
 import { reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -50,6 +52,12 @@ let base = '';
 afterEach(() => {
   if (base) rmSync(base, { recursive: true, force: true });
   base = '';
+});
+
+/** The loopback receivers a webhook scene opened; every one is closed after its test. */
+const hookStops: (() => unknown)[] = [];
+afterEach(() => {
+  for (const stop of hookStops.splice(0)) stop();
 });
 
 function teamText(root: string, lobby: string): string {
@@ -1702,5 +1710,308 @@ describe('an acknowledged message is not woken or reported', () => {
     // The report names only the message still unread: no mailbox record was written for the ack.
     expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`))).toBe(false);
     expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_B}.json`))).toBe(true);
+  });
+});
+
+/** One loopback receiver for a synthetic webhook adapter: every request it saw, in order. */
+type HookHit = { method: string; authorization: string; body: string };
+
+function hookReceiver(answer: (hit: HookHit) => Response = () => new Response('ok')): { url: string; hits: HookHit[] } {
+  const hits: HookHit[] = [];
+  const seen = { url: '', hits };
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: async (request) => {
+      const hit: HookHit = {
+        method: request.method,
+        authorization: request.headers.get('authorization') ?? '',
+        body: await request.text(),
+      };
+      hits.push(hit);
+      return answer(hit);
+    },
+  });
+  hookStops.push(() => server.stop(true));
+  seen.url = `http://127.0.0.1:${String(server.port)}/routine`;
+  return seen;
+}
+
+/** The team file with a webhook row on the helper seat: the leg the cascade places between a
+ *  channel-class leg and the typed line (ADR zeus-message-path, D2). `body: inbox` needs no log
+ *  signer, so the scene carries no part of the bus. */
+function hookTeamText(root: string, lobby: string, cli: 'claude-code' | 'muse', urlFile: string, secretFile: string): string {
+  const row = `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      body: inbox
+`;
+  if (cli === 'muse') return typedTeamText(root, lobby, 'muse', row);
+  return teamText(root, lobby).replace(
+    `  - role: implementer
+    name: helper
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+`,
+    `  - role: implementer
+    name: helper
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+${row}`,
+  );
+}
+
+/** A world whose helper seat declares a webhook adapter pointed at `url`, with both files at
+ *  0600 under the scene's own home. Muse gives the seat a typed retry, so a typed line the pass
+ *  should not type would show at the seam. */
+function hookWorld(url: string): { made: World; team: ReturnType<typeof teamOf> } {
+  const made = world();
+  const hookDir = join(made.home, 'hook');
+  mkdirSync(hookDir, { recursive: true });
+  const urlFile = join(hookDir, 'url');
+  const secretFile = join(hookDir, 'secret');
+  writeFileSync(urlFile, `${url}\n`);
+  writeFileSync(secretFile, 'synthetic-watch-secret\n', { mode: 0o600 });
+  chmodSync(secretFile, 0o600);
+  writeFileSync(join(made.dir, 'team.yaml'), hookTeamText(made.root, lobbyDir(made.home), 'muse', urlFile, secretFile));
+  return { made, team: teamOf(readFileSync(join(made.dir, 'team.yaml'), 'utf8')) };
+}
+
+/** The send's own history line for one message: the walk the watch reads its position from. */
+function seedSendLine(at: World, seat: string, id: string, line: { via?: string; failed?: string[] }): void {
+  const wrote = appendHistory('acme', at.root, at.home, {
+    ts: new Date(NOW.getTime() - 11 * MIN).toISOString(),
+    from: 'owner',
+    to: seat,
+    body: `work ${id}`,
+    id,
+    outcome: 'delivered',
+    ms: 4,
+    ...line,
+  });
+  if (!wrote.ok) throw new Error(wrote.reason);
+}
+
+/** The wake marker beside one message, as JSON, or null when nothing stands there. */
+function wakeMark(at: World, seat: string, id: string): Record<string, unknown> | null {
+  const path = wakePath(join(at.dir, 'send-drops', 'acme', seat), id);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+}
+
+/** The history lines this home holds for one message id, in append order. */
+function linesFor(at: World, id: string) {
+  const read = readHistory('acme', at.root, at.home);
+  if (!read.ok) throw new Error(read.reason);
+  return read.entries.filter((entry) => entry.id === id);
+}
+
+describe('the cascade re-wake below a channel leg', () => {
+  test('a channel leg with no receipt is posted to the seat adapter after the window, and nothing is typed', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    // The adapter took the record once, with the message's own id, and the typed retry never ran.
+    expect(seen.hits).toHaveLength(1);
+    expect(seen.hits[0]?.method).toBe('POST');
+    expect(seen.hits[0]?.body).toContain(UNREAD_A);
+    expect(calls).toEqual([]);
+    expect(existsSync(wakeTryPath(dropDir, UNREAD_A))).toBe(false);
+    expect(wakeMark(made, 'helper', UNREAD_A)).toMatchObject({ state: 'sent', evidence: 'webhook' });
+    // The walk's own line records the leg that took it, so a later pass reads its position.
+    const lines = linesFor(made, UNREAD_A);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatchObject({ via: 'webhook', outcome: 'delivered', to: 'helper' });
+    expect(lines[1]?.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  test('a line that already names the webhook is never posted again, and the typed leg keeps its turn', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'webhook' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    expect(seen.hits).toEqual([]);
+    expect(calls).toHaveLength(1);
+    const lines = linesFor(made, UNREAD_A);
+    expect(lines[1]).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
+    expect(lines[1]?.failed).toBeUndefined();
+  });
+
+  test('a failed webhook already on the line is not retried either', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket', failed: ['webhook: HTTP 503'] });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    expect(seen.hits).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  test('a message with no send line in this home is typed, never posted', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    // A post that may already have fired is worse than the line: the walk has no position to read.
+    expect(seen.hits).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  test('a definite failure moves the walk down in the same pass and names the leg on the line', async () => {
+    const seen = hookReceiver(() => new Response('no', { status: 500 }));
+    const { made, team } = hookWorld(seen.url);
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    expect(seen.hits).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    const lines = linesFor(made, UNREAD_A);
+    expect(lines[1]).toMatchObject({ via: 'typed', failed: ['webhook: HTTP 500'] });
+    // The post's claim was released by the definite failure: the record is not marked posted.
+    expect(existsSync(join(join(made.dir, 'send-drops', 'acme', 'helper'), `${UNREAD_A}.posted`))).toBe(false);
+  });
+
+  test('a claim another poster holds leaves the message for a later pass, marked nowhere', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    writeFileSync(join(dropDir, `${UNREAD_A}.posting`), JSON.stringify({ state: 'claimed' }));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    // The bus is posting it: neither a second post nor a typed line, and no marker that would
+    // claim the wake was spent.
+    expect(seen.hits).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(wakeMark(made, 'helper', UNREAD_A)).toBeNull();
+
+    // Once the bus's claim goes, the post this watch was holding takes its turn.
+    unlinkSync(join(dropDir, `${UNREAD_A}.posting`));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(seen.hits).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  test('the report at twice the window says the adapter took the wake', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 25 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const live = liveWith('helper', 'helper-pane');
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED]));
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    const said: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, said, { sources, live }), { unreadAfter: N });
+
+    expect(seen.hits).toHaveLength(1);
+    // The record the sender reads names the leg the wake took, not a typed line that never ran.
+    const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(owner.body).toContain(`its webhook adapter took the wake at ${NOW.toISOString()}`);
+    expect(said.some((line) => line.includes('was still unread after 25 min'))).toBe(true);
+  });
+
+  test('the seat window decides per seat, so a short one wakes only the seat it names', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'muse'));
+    const helperDir = seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 5 * MIN));
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 5 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const live = liveWith('helper', 'helper-pane');
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+
+    // The pass's own window is ten minutes; the helper's seat window is one. Five minutes is due
+    // for the helper alone, and the one typed retry is the helper's.
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, [], { sources, live }),
+      { unreadAfter: N, seatWindow: (seat) => (seat.name === 'helper' ? 60 : N) },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.pane).toBe('helper-pane');
+    expect(existsSync(wakePath(helperDir, UNREAD_B))).toBe(true);
+  });
+
+  test('the report gate reads the same per-seat window', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const leadDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 5 * MIN));
+    const helperDir = seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 5 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    // Twice the helper's one-minute window has passed; the lead's ten-minute one has not.
+    reportUnreadDrops(
+      sceneOf(made, team, one, said),
+      { unreadAfter: N, seatWindow: (seat) => (seat.name === 'helper' ? 60 : N) },
+    );
+
+    expect(existsSync(reportedPath(helperDir, UNREAD_B))).toBe(true);
+    expect(existsSync(reportedPath(leadDir, UNREAD_A))).toBe(false);
+  });
+});
+
+describe('the unread window a seat earns', () => {
+  test('without a declared word the class decides: 30 s wakeable, 60 s otherwise', () => {
+    expect(UNREAD_AFTER_WAKEABLE_SECONDS).toBe(30);
+    expect(UNREAD_AFTER_PULL_SECONDS).toBe(60);
+    expect(unreadWindowSeconds(null, 'push')).toBe(30);
+    expect(unreadWindowSeconds(null, 'between-turns')).toBe(30);
+    expect(unreadWindowSeconds(null, 'pull-on-turn')).toBe(60);
+    expect(unreadWindowSeconds(null, 'none')).toBe(60);
+    expect(unreadWindowSeconds(45, 'push')).toBe(45);
+    expect(unreadWindowSeconds(90, 'none')).toBe(90);
+  });
+
+  test('a file that left the section at its paced default declares nothing', () => {
+    const pace = { preset: 'normal' as const, sweepSeconds: 120 };
+    expect(declaredUnreadAfter(defaultWatch(), pace)).toBeNull();
+    expect(declaredUnreadAfter({ ...defaultWatch(), unreadAfter: 90 }, pace)).toBe(90);
   });
 });
