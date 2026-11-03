@@ -1560,6 +1560,8 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(health.roots).toHaveLength(1);
     expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
     expect(health.roots[0]?.firstPass).toBeDefined();
+    // The row carries the chores report beside the hosting facts; its mode is the release default.
+    expect(health.roots[0]?.chores?.mode).toBe('per-root');
 
     release?.();
     expect(await running).toBe(0);
