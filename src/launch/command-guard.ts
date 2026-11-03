@@ -39,7 +39,8 @@ export type GuardRule =
   | 'git-clean'
   | 'git-branch-force-delete'
   | 'npm-publish'
-  | 'github-actions';
+  | 'github-actions'
+  | 'github-comment-delete';
 
 /** What a denied command is and what the model is told instead. */
 export type GuardMatch = { rule: GuardRule; guidance: string };
@@ -61,6 +62,7 @@ const GUIDANCE: Record<GuardRule, string> = {
   'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
   'npm-publish': 'refused in team seats: the release moves only on the owner\'s word',
   'github-actions': 'refused in team seats: the actions-commands policy does not allow that Actions command',
+  'github-comment-delete': 'refused in team seats: post a superseding comment instead',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -493,15 +495,48 @@ function ghExplicitMethod(args: readonly string[]): string | null {
       if (verb !== '') method = verb.toUpperCase();
       continue;
     }
+    // pflag accepts `-X=VERB` for a shorthand flag. `-XVERB` is the glued form without the equals.
+    if (arg.startsWith('-X=')) {
+      const verb = arg.slice(3);
+      if (verb !== '') method = verb.toUpperCase();
+      continue;
+    }
     if (/^-X[A-Za-z]+$/.test(arg)) method = arg.slice(2).toUpperCase();
   }
   return method;
 }
 
-/** A write verb on `gh api`, from `-X`, `-XPOST`, `--method` and `--method=`. */
-function ghWriteMethod(args: readonly string[]): boolean {
-  const method = ghExplicitMethod(args);
-  return method !== null && GH_WRITE_METHODS.has(method);
+/** The verb `gh api` sends, read once for every fence. The last explicit spelling wins:
+ *  `-X VERB`, `-X=VERB`, `-XVERB`, `--method VERB`, `--method=VERB`, any case. With no explicit
+ *  verb, a field or `--input` is POST. A graphql call is not that implied POST — its query is
+ *  judged on its own. An explicit GET stays GET beside a field. */
+function ghMethod(
+  args: readonly string[],
+  call: { sub: string | null; positionals: readonly string[] },
+): string {
+  const explicit = ghExplicitMethod(args);
+  if (explicit !== null) return explicit;
+  if (ghGraphql(call)) return 'GET';
+  if (ghHasRequestParameters(args)) return 'POST';
+  return 'GET';
+}
+
+/** A flag as its own word or glued to a value (`--delete-last`, `--delete-last=true`). */
+function ghFlag(args: readonly string[], name: string): boolean {
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+/** Deleting or dismissing a GitHub comment. An HTTP DELETE is refused on every path, not only
+ *  Actions: the comment, the review and the record stay, and the seat posts a later comment.
+ *  Adding and editing stay allowed. */
+function githubCommentDelete(args: readonly string[]): boolean {
+  const call = ghCall(args);
+  if (call === null) return false;
+  if (call.group === 'api') return ghMethod(args, call) === 'DELETE';
+  if ((call.group === 'pr' || call.group === 'issue') && call.sub === 'comment' && ghFlag(args, '--delete-last')) {
+    return true;
+  }
+  return call.group === 'pr' && call.sub === 'review' && ghFlag(args, '--dismiss');
 }
 
 /** `-fquery=…` and `-Fquery=…`: the short flag glued to its value. Null for `-f`, `-f=`, and other words. */
@@ -632,7 +667,8 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
   const call = ghCall(args);
   if (call === null) return true;
   if (call.group === 'api') {
-    if (ghWriteMethod(args)) return false;
+    // One verb for the write fence and the comment fence: explicit spellings, then the implied POST.
+    if (GH_WRITE_METHODS.has(ghMethod(args, call))) return false;
     if (args.some((arg) => arg.includes('/dispatches'))) return false;
     if (ghGraphql(call)) {
       const queries = graphqlQueries(args);
@@ -640,8 +676,6 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
       if (queries.some((query) => /mutation/i.test(query))) return false;
       return true;
     }
-    // gh's own default: GET, and POST once a parameter or --input is present, unless the verb is GET.
-    if (ghExplicitMethod(args) !== 'GET' && ghHasRequestParameters(args)) return false;
     return true;
   }
   if (call.group === 'run' && call.sub !== null && GH_READ_RUN.has(call.sub)) return true;
@@ -712,6 +746,9 @@ function matchSegment(words: readonly string[], actions: readonly ActionsCommand
   if (word === 'npm' && npmPublishes(args)) {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
+  if (word === 'gh' && githubCommentDelete(args)) {
+    return { rule: 'github-comment-delete', guidance: GUIDANCE['github-comment-delete'] };
+  }
   if (word === 'gh' && !actionsAllowed(args, actions)) {
     return { rule: 'github-actions', guidance: GUIDANCE['github-actions'] };
   }
@@ -754,8 +791,10 @@ export function lineRunsGh(line: string): boolean {
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
  * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
  * `git push --force` (and `-f`),
- * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, and an
- * Actions write outside the `actions-commands` policy.
+ * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, an
+ * Actions write outside the `actions-commands` policy, and deleting or dismissing a GitHub
+ * comment (`gh api` DELETE on any path, `gh pr comment --delete-last`,
+ * `gh issue comment --delete-last`, `gh pr review --dismiss`).
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
  * only ever sits in the arguments of the command that carries it.
