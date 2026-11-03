@@ -6,13 +6,16 @@
 //
 // Nothing below reads or writes a real home, pane or session: the read sources answer from the
 // fixture, and the process-info seam answers from those same sources before the terminal host is
-// ever consulted.
+// ever consulted. The one scene that measures a slow host puts a fake one on PATH — never the
+// machine's own — and answers from it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type { WatchSources } from '../src/commands/watch.ts';
+import { serveChoresChild } from '../src/daemon/chores/child.ts';
 import type { ChoresChildRoute } from '../src/daemon/chores/protocol.ts';
 import { createChoresWatch } from '../src/daemon/chores/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -278,4 +281,98 @@ describe('the chores child\'s hosted watch', () => {
       await watch.stop('the test is done');
     }
   }, 15_000);
+});
+
+describe('the chores child\'s beat beside a slow terminal host', () => {
+  test('a host answering in three seconds holds the watch\'s read, never the child\'s beat', async () => {
+    bind();
+    // A standing pane watch holds the route's authority record. Proving that holder is the
+    // process in its own pane is the one terminal-host read the hosted watch makes before it
+    // stands by: the record has no epoch, so it is a pane watch, and the read is asked for it.
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-7',
+      };
+    });
+    // The fake host — never the machine's own — logs every call before answering it three
+    // seconds later, and names this process as the pane's own, so the holder is proven.
+    const bin = join(base, 'bin');
+    const herdrLog = join(base, 'herdr.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 3
+printf '{"result":{"process_info":{"shell_pid":%s,"foreground_processes":[{"pid":%s}]}}}\\n' "$TEAM_TEST_HERDR_PID" "$TEAM_TEST_HERDR_PID"
+`,
+    );
+    chmodSync(shim, 0o755);
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    const savedPid = process.env.TEAM_TEST_HERDR_PID;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+    process.env.TEAM_TEST_HERDR_PID = String(process.pid);
+    // The child's own beats, as it wrote them: the instant each heartbeat frame carries, on the
+    // child's own clock. The frames come from its real heartbeat timer.
+    const beats: string[] = [];
+    let pending = '';
+    const output = new PassThrough();
+    output.setEncoding('utf8');
+    output.on('data', (chunk: string) => {
+      pending += chunk;
+      let nl = pending.indexOf('\n');
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf('\n');
+        const frame = JSON.parse(line) as { type?: string; at?: string };
+        if (frame.type === 'heartbeat' && typeof frame.at === 'string') beats.push(frame.at);
+      }
+    });
+    const stdin = new PassThrough();
+    const serving = serveChoresChild({
+      config: {
+        version: 1,
+        home,
+        beatMs: 200,
+        sliceMs: 200,
+        since: iso(NOW),
+        routes: [route()],
+      },
+      stdin,
+      stdout: output,
+      // The chores and presence are quiet stand-ins: this scene measures the child's beat, and
+      // the only read that may reach the fake host is the watch's own pane read.
+      pass: async () => [],
+      presence: { run: async () => ({ proofs: [], notes: [] }) },
+      markerCacheStats: () => ({ read: 0, reused: 0, cached: 0 }),
+    });
+    try {
+      // The child writes one heartbeat, builds the route's watch, and only then installs its
+      // beat timer. Across the first three beats, the watch's pane read is in flight.
+      await waitUntil(() => beats.length >= 3, 15_000);
+      // The fake was reached: the watch asked the host for the recorded pane.
+      expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').toContain('pane process-info');
+      // No gap between the child's beats came near that call: a read made on the loop would
+      // hold the whole child for its three seconds. The seam beat is 200 ms; a quarter of the
+      // call's three seconds is the honest bound for a loaded machine.
+      const gaps = beats.slice(1).map((beat, index) => Date.parse(beat) - Date.parse(beats[index]!));
+      expect(beats.length).toBeGreaterThanOrEqual(3);
+      expect(Math.max(...gaps), `beat gaps (ms): ${gaps.join(', ')}`).toBeLessThan(1_250);
+    } finally {
+      stdin.end();
+      await serving;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+      if (savedPid === undefined) delete process.env.TEAM_TEST_HERDR_PID;
+      else process.env.TEAM_TEST_HERDR_PID = savedPid;
+    }
+  }, 30_000);
 });

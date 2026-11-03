@@ -23,7 +23,7 @@
 // daemon hosts the broker (`features.broker` is never `on`), so the child's watch keeps that
 // reading explicitly unknown, exactly as a daemon without a broker reader does.
 import type { WatchSources } from '../../commands/watch.ts';
-import { paneProcesses } from '../../herdr.ts';
+import { paneProcessesAsync } from '../../herdr.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../../watch/authority.ts';
 import { loggedWatchDirectIo, sendWatchDirect } from '../../watch/direct-send.ts';
 import type { HostedWatchState } from '../../watch/hosted.ts';
@@ -92,7 +92,9 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
     // Proving a recorded pane watch is the process in its own pane is the same terminal-host
     // read the daemon makes; a pane it cannot read stays unproven and is never asked to hand over.
     // A test's read sources answer first, so a scene never probes the machine's own sessions.
-    processInfo: (pane) => input.base?.processes?.(pane, hosted.session) ?? paneProcesses(pane, hosted.session),
+    // The fallback read is awaited: a slow host must hold this read, never this child's loop and
+    // the beat it owes the daemon. The wrapper already awaits a read that is a promise.
+    processInfo: (pane) => input.base?.processes?.(pane, hosted.session) ?? paneProcessesAsync(pane, hosted.session),
     ...(watch.presence
       ? {
           presenceChannelHealthy: (seat: string): boolean =>
