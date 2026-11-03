@@ -474,6 +474,19 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
+| `order.done` | `order` | 0 | the sidebar was brought to roster order (the moving seats were closed and re-created through team restart) | `team order` |
+| `order.dry-run` | `order` | 0 | the moving set was printed; nothing was closed | `team order --dry-run` |
+| `order.match` | `order` | 0 | the sidebar already read in roster order; nothing was closed | `team order` |
+| `order.busy` | `order` | 1 | a seat of the moving set is working or blocked at a prompt; nothing was closed | `team order` |
+| `order.caller` | `order` | 1 | not the owner or `leads` for this team, or an owner-only flag from another caller | `team order` |
+| `order.detached` | `order` | 1 | a run with no terminal | `team order` |
+| `order.herdr` | `order` | 1 | the pane host did not answer | `team order` |
+| `order.no-session` | `order` | 1 | the session is not running | `team order` |
+| `order.self` | `order` | 1 | the run sits in a seat of the moving set, and closing it would end the pass | `team order` |
+| `order.stopped` | `order` | 1 | a team restart inside the pass exited nonzero; the pass stopped there | `team order` |
+| `order.unordered` | `order` | 1 | after the pass the sidebar still does not read in roster order | `team order` |
+| `order.configuration` | `order` | 2 | the team file or its state record can't be read | `team order` |
+| `order.usage` | `order` | 2 | the invocation can't be read | `team order` |
 | `owner-seat.done` | `owner-seat` | 0 | the owner seat was read, set up, its security profile signed or proposed, or the owner page served | `team owner-seat status` |
 | `owner-seat.refused` | `owner-seat` | 1 | no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds | `team owner-seat profile relaxed` |
 | `owner-seat.invocation` | `owner-seat` | 2 | the command arguments are invalid | `team owner-seat profile maybe` |
