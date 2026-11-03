@@ -121,6 +121,15 @@ describe('messaging.store resolution', () => {
     expect(resolved.refused).toEqual([{ level: 'seat', value: 'none' }]);
   });
 
+  test("a seat word that would loosen a team's first is refused", () => {
+    // The team closed the entity's none back to first — tightening, so any level may do it; the
+    // seat's none would keep less than the team's word, and the seat is not a listed level.
+    const resolved = resolveWordSetting(MESSAGING_STORE, wordDeclarationsOf<MessagingStore>({ entity: 'none', team: 'first', seat: 'none' }));
+    expect(resolved.value).toBe('first');
+    expect(resolved.source).toBe('team');
+    expect(resolved.refused).toEqual([{ level: 'seat', value: 'none' }]);
+  });
+
   test('tightening is the safe side: every level may close back toward first', () => {
     expect(messagingStore({ entity: 'none', team: 'parallel' })).toBe('parallel');
     expect(messagingStore({ entity: 'none', project: 'first' })).toBe('first');
