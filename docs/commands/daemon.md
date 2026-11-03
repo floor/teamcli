@@ -184,7 +184,7 @@ request's nonce. A request still pending when the daemon closes is answered `not
 | --- | --- |
 | `status` | anyone; it reads the machine's daemon record and no team file |
 | `run` | the owner, or the start the system's service manager makes with `--started-by service-manager`, admitted only from the manager's own record of the job; a seat or a pane never starts the machine daemon |
-| `install`, `restart` | a verified general grant whose ops name `daemon`, the owner, or the dev-mode admission for a placed lead; neither command needs a terminal |
+| `install`, `restart` | a verified general grant whose ops name `daemon`, the owner, or the dev-mode admission for a placed lead; neither command needs a terminal — and `restart` alone of the two admits the placed operator too, while dev mode is on and the `lead-gates` policy reads `lead+operator` (the development-mode page) |
 | `uninstall` | the owner, or the dev-mode admission for a placed lead |
 | `fault-watch` | the same admission as `uninstall`: the owner, or the dev-mode admission for a placed lead; it signals no process and grants nothing |
 

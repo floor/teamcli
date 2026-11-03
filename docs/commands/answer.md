@@ -34,6 +34,7 @@ key is pressed and no line is typed; left as it is.
 | the owner, from outside the terminal host | answer the dialog; `--file` and `--session` are the owner's alone, refused before the flagged file or session is read at all |
 | a run with no terminal | nothing: `team answer: only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat` |
 | the orchestrator, from its own seat | the same, in a session this project's state records, on the pane the state records for that name |
+| the operator, from its own seat | the same, while dev mode is on and the `lead-gates` policy reads `lead+operator` for the caller's chain — the same placement proof, its own warning, and an audit line naming `admitted as operator` beside the answered one (the development-mode page names the policy) |
 | anyone else | nothing |
 
 Both words admit the same callers. Dialog answering is the owner's to turn on, and the switch

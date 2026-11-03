@@ -615,7 +615,7 @@ function executePolicySet(
   if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir(), admitsOperator: true });
     // Without the owner terminal, the owner's device: once an owner seat exists, one Touch ID from it.
     const consent = (lift === null || !lift.lifted) && (flags.has('owner-device') || readOwnerSeat(options.home ?? homedir()) !== null)
       ? ownerDeviceConsent(options.home ?? homedir(), options.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(options.home ?? homedir())), { act: 'policy set', args: rest }, `TeamCLI: policy set ${rest.join(' ')}`)
@@ -852,7 +852,7 @@ function executePolicyUnset(
   if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
-    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir(), admitsOperator: true });
     // Without the owner terminal, the owner's device: once an owner seat exists, one Touch ID from it.
     const consent = (lift === null || !lift.lifted) && (flags.has('owner-device') || readOwnerSeat(options.home ?? homedir()) !== null)
       ? ownerDeviceConsent(options.home ?? homedir(), options.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(options.home ?? homedir())), { act: 'policy unset', args: rest }, `TeamCLI: policy unset ${rest.join(' ')}`)
