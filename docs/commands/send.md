@@ -76,6 +76,23 @@ order in force stands. The words are read from the receiving seat's own files: t
 sits in ([the team file](../team-file.md#delivery_order)). A team file that writes a word with no
 leg, an unknown leg, or a leg twice is refused when the file is read.
 
+A second word on the same chain decides what the send leaves behind: `messaging.store`, read from
+the entity's and the project's signed records, the team file's `messaging` map and the seat's own
+([the team file](../team-file.md#messagingstore)). The shipped `first` writes the signed record
+into the seat's folder before any leg wakes it and keeps it there. `parallel` starts that same
+write beside the first waking leg and ends the send only when both settled, so a frame the
+receiver took while its copy could not be written is `sent (unconfirmed)`, never `delivered`.
+`none` keeps no copy at all: the walk is narrowed to the legs that carry the body themselves —
+`socket`, `native`, `headless-resume` and `session` — every other leg the order names is set
+aside with its reason, and an order left with no body-carrying leg refuses before anything is
+written. A socket frame under `none` carries the signed record's exact bytes in its `record`
+field: they are signed, never stored, and a receiver verifies them with the same key check it
+applies to the folder copy. What the copy would have carried is given up — the retry, the unread
+re-wake, the read receipt and the `queued, not woken` flag — and a send to a seat marked
+`human: true` is refused, because a person's pane is reached by the stored copy alone. Only the
+entity or the project may loosen the word toward `none`; the team and the seat may always tighten
+it back toward `first`, and `team check` notes every seat whose chain declares `none`.
+
 A receiving Claude session's `socket` leg is the one implied default outside a declared word:
 with no level of its chain declaring an order, a seat whose own launch declares
 `crossSessionInbound: accept` is walked `socket` first, then the default order. For a seat

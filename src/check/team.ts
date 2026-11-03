@@ -100,7 +100,8 @@ import { defaultSocketsDirs } from '../send/address.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { launchWords, socketEligible } from '../send/inbound.ts';
 import { SOCKET_SEND } from '../send/uds.ts';
-import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
+import { messagingStoreChainOf } from '../send/store.ts';
+import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg, type MessagingStore, type SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
@@ -596,6 +597,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A delivery_order word still naming `mcp-inbox`: the inbox is the store's reader, not a leg
     // (ADR D1), and the word is read so the walk can report it unavailable.
     ...deliveryOrderInboxNotes(team),
+    // A seat whose chain declares `messaging.store: none`: what its sends stop keeping, named
+    // once per seat where the word is in force.
+    ...messagingStoreNotes(team, root, sources.home, sources.now()),
     ...policyChecked.notes,
     ...modelRule.notes,
     ...socketSkipped.notes,
@@ -1940,6 +1944,62 @@ function deliveryOrderInboxNotes(team: TeamFile): string[] {
     if (seat.deliveryOrder === undefined || !seat.deliveryOrder.includes('mcp-inbox')) continue;
     notes.push(
       `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited`,
+    );
+  }
+  return notes;
+}
+
+/**
+ * A seat whose chain declares `messaging.store: none`: its sends keep no copy, and the note
+ * names exactly what that gives up. The word is a choice, never a fault — the walk still works
+ * through the legs that carry the body themselves, and a socket frame still carries the signed
+ * record's bytes, which a receiver verifies as it would the folder copy. What the copy would
+ * have carried is gone: the retry, the unread re-wake, the read receipt and the `queued, not
+ * woken` flag. A person's pane is reached by the stored copy alone, so a send to a human seat
+ * under `none` is refused, and the note says that instead. Notes only, never a difference. A
+ * chain that cannot be read says nothing here: the policy and registry readings name that once.
+ */
+function messagingStoreNotes(team: TeamFile, root: string, home: string | undefined, now: Date): string[] {
+  if (home === undefined) return [];
+  let agentOf: (seat: string) => Agent | null;
+  try {
+    agentOf = seatRecordsOf(home, root, team);
+  } catch {
+    return [];
+  }
+  const notes: string[] = [];
+  for (const seat of team.seats) {
+    let record: Agent | null;
+    try {
+      record = agentOf(seat.name);
+    } catch {
+      continue;
+    }
+    let store: MessagingStore;
+    let source: SettingLevel | null;
+    try {
+      const resolved = messagingStoreChainOf({
+        root,
+        seat: seat.name,
+        agentId: record?.id ?? null,
+        home,
+        file: team,
+        projectOfTeam: (id) => ofTeam(home, id),
+        now,
+      });
+      store = resolved.value;
+      source = resolved.source;
+    } catch {
+      continue;
+    }
+    if (store !== 'none') continue;
+    const by = source === null ? '' : ` by the ${source}`;
+    const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
+    const human = (overrides.ok ? overrides.overrides.human : undefined) ?? (seat.human === true);
+    notes.push(
+      human
+        ? `${seat.name}: messaging.store is none${by}; a person's pane is reached by the stored copy alone, so a send to this seat is refused`
+        : `${seat.name}: messaging.store is none${by}; its sends keep no copy — the frame still carries the signed record's bytes and a receiver verifies them, but the retry, the unread re-wake, the read receipt and the "queued, not woken" flag are given up`,
     );
   }
   return notes;

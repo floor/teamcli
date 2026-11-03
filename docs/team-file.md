@@ -13,8 +13,8 @@ one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, m
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
-documents the sections one by one: `tasks`, `seats`, `delivery_order`, `webhook`,
-`sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
+documents the sections one by one: `tasks`, `seats`, `delivery_order`, `messaging.store`,
+`webhook`, `sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
 
 ## Editing with team config
 
@@ -597,6 +597,64 @@ delivery_order: [typed]
 - What a walk does with each leg — a leg takes the send or is recorded as a failure and the next
   one is tried — is [team send](commands/send.md)'s. A `--wait` send walks the same order and
   then awaits a reply record on the thread.
+
+## `messaging.store`
+
+The store a send leaves for this team's seats. It is not an owner section: writing or changing it
+is an ordinary change, and a file that writes none keeps the shipped value. It is written under
+the file's `messaging` key, or on a seat's own, and takes one of three values, ordered by how
+much a send keeps — the safe side is the default:
+
+- `first` (the shipped value) writes the signed record into the receiving seat's folder before any
+  leg wakes it, and leaves it there. The record is what the retry, the unread re-wake, the read
+  receipt and the `queued, not woken` flag read, and it is there for a seat no wake reached.
+- `parallel` starts that same write beside the first waking leg and ends the send only when both
+  settle: a frame the receiver took while the copy could not be written is `sent (unconfirmed)`,
+  never `delivered`, and a write that settles leaves the record and the wake in exactly the
+  `first` shape.
+- `none` keeps no copy at all. The walk is narrowed to the legs that carry the body themselves —
+  `socket`, `native`, `headless-resume` and `session` — and every other leg the order names is
+  set aside with its reason; an order left with no body-carrying leg refuses the send before
+  anything is written. A socket frame under `none` carries the signed record's exact bytes in its
+  `record` field: they are signed, never stored, and a receiver verifies them with the same key
+  check it applies to the folder copy. What the copy would have carried is given up: the retry,
+  the unread re-wake, the read receipt and the `queued, not woken` flag. A person's pane is
+  reached by the stored copy alone, so a send to a seat the file marks `human: true` under `none`
+  is refused.
+
+```yaml
+messaging:
+  store: parallel
+```
+
+```yaml
+seats:
+  - role: implementer
+    name: helper
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Sonnet
+    version: "5.5"
+    launch: claude --model claude-sonnet-5-5
+    messaging:
+      store: none
+```
+
+A seat's word is a field of the built seat, so it is in the seat's digest — writing or changing
+it changes the digest, like its `delivery_order` — and it is omitted when the file writes none,
+so every file that wrote no word keeps the digest it had.
+
+The receiving seat's chain is read outermost first: the entity's signed record, the project's, the
+file's own word, then the seat's own. A signed record at a level shadows the file's word at that
+level — a record that is expired or holds a value the catalogue cannot read leaves the level
+silent rather than reviving the word it replaced. Durability is the safe side, so only the entity
+or the project may loosen the shipped `first`: a team or seat word that loosens (`first` toward
+`parallel` or `none`, `parallel` toward `none`) is set aside and the value in force stands, while
+either level may always tighten back toward `first`. A signed record the chain cannot read at the
+project, team or seat level refuses the send — it could hide a tightening word — while an entity
+source that cannot be read leaves `first` standing, which keeps at least as much as any word it
+could have held. `team check` notes every seat whose chain declares `none`, naming what its sends
+give up, or that a send to a person's seat is refused.
 
 ## `webhook`
 
