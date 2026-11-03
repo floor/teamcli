@@ -312,14 +312,17 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 5. an orchestrator to another orchestrator;
 6. an orchestrator or operator to a seat of its own team;
 7. an assistant seat to its entity's coordinator;
-8. a seat to its own team's orchestrator;
-9. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
-   its agent id, never a runner or process name; the record is signed with the owner's approval
-   key and verified on every read, and its `to` may be the reserved `orchestrator@<entity>`, the
-   lead seat of a team of the sender's own entity. A record that names the pair but does not
-   verify admits nothing and refuses with `send.grant-invalid`, naming the record and the line
-   that re-issues it signed;
-10. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
+8. the entity's main orchestrator to any seat of the entity's teams — the lead of the team whose
+   project is the entity itself, the `seats_cross_teams` declaration with its own default on
+   (OD-20261103-02), never across entities;
+9. a seat to its own team's orchestrator;
+10. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
+    its agent id, never a runner or process name; the record is signed with the owner's approval
+    key and verified on every read, and its `to` may be the reserved `orchestrator@<entity>`, the
+    lead seat of a team of the sender's own entity. A record that names the pair but does not
+    verify admits nothing and refuses with `send.grant-invalid`, naming the record and the line
+    that re-issues it signed;
+11. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
     after every rule above, the grant, and the open-thread reply rule.
 
 The project rules are asked first and are decided by the project record and the `leads`
