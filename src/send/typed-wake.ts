@@ -1,7 +1,9 @@
 // The typed wake: one line, one guarded Enter, one acknowledgement. A profile that declares
 // `typed_wake: screen` lets a send type one trigger line into a composer two reads showed as the
 // empty idle prompt; Enter is pressed only while the box still holds exactly that line, and the
-// send is delivered only when the profile's own working screen shows. Nothing else is typed: no
+// send is delivered only when the profile's own working screen shows and that line has left the
+// box. A working screen that still holds the line is the CLI busy with other work, not a
+// submission. Nothing else is typed: no
 // draft is moved, cleared or pasted, and a wake that cannot deliver leaves the message where it
 // already is, in the bus inbox. Every other messaging path still refuses to type
 // (src/send/no-pane-messaging.ts), and this module is the single exemption the scan in
@@ -88,16 +90,42 @@ function seenOf(cli: string, screen: string | null): string {
   return screen === null ? 'unreadable' : readScreen(cli, screen).kind;
 }
 
-/** The working screen, polled for `verifyMs` at `pollMs`. A read that cannot be taken is not a
- *  working screen: the wake never claims an acknowledgement it did not see. */
-async function pollWorking(host: TypedWakeHost, pane: string, cli: string, pollMs: number, verifyMs: number): Promise<boolean> {
+/** The bound ran out on a working screen that still held the wake's line. The Enter did not
+ *  submit it, so the message stays in the inbox for a later wake. */
+function stillHeldReason(tries: number): string {
+  return `the working screen showed with the line still in the box after ${String(tries)} Enter${tries === 1 ? '' : 's'}; the line was not submitted`;
+}
+
+/** What the post-Enter poll saw. `submitted` is a working screen whose box no longer holds the
+ *  wake's line. `held` is that the bound ran out while a working screen still held the line.
+ *  `absent` is every other miss: no working screen, so the caller may press again. */
+type WakeAck = 'submitted' | 'held' | 'absent';
+
+/** The working screen, polled for `verifyMs` at `pollMs`. A working screen that still holds the
+ *  wake's line is not a submission: the poll keeps looking until the box empties or the bound
+ *  runs out. A read that cannot be taken is not a working screen. */
+async function pollSubmitted(
+  host: TypedWakeHost,
+  pane: string,
+  cli: string,
+  line: string,
+  pollMs: number,
+  verifyMs: number,
+): Promise<WakeAck> {
   const polls = Math.max(1, Math.ceil(verifyMs / pollMs));
+  let sawWorkingWhileHeld = false;
+  let lastHolds = false;
   for (let i = 0; i < polls; i += 1) {
     await host.wait(pollMs);
     const screen = host.read(pane);
-    if (screen !== null && readScreen(cli, screen).kind === 'working') return true;
+    if (screen === null) continue;
+    const holds = boxHoldsText(cli, line, screen);
+    lastHolds = holds;
+    const working = readScreen(cli, screen).kind === 'working';
+    if (working && holds) sawWorkingWhileHeld = true;
+    if (working && !holds) return 'submitted';
   }
-  return false;
+  return sawWorkingWhileHeld && lastHolds ? 'held' : 'absent';
 }
 
 /**
@@ -109,8 +137,10 @@ async function pollWorking(host: TypedWakeHost, pane: string, cli: string, pollM
  * Muse and Antigravity submit with Enter, not Return, and the first Enter waits until two
  * reads show that same drawn line. After an Enter, a box that still holds exactly the line
  * and shows no working screen is pressed again, up to `MAX_WAKE_ENTERS`, and the line is
- * never typed a second time. Once the line has left the box, an Enter is given `verifyMs`
- * for the working screen, and the wake is delivered only when that screen shows.
+ * never typed a second time. After an Enter, a working screen that still holds the line is
+ * not a submission: the wake keeps polling for `verifyMs` until the box empties, and delivers
+ * only then. The bound ending with the line still in the box is not delivered, and the line
+ * is not typed again.
  */
 export async function deliverTypedWake(
   host: TypedWakeHost,
@@ -160,6 +190,9 @@ export async function deliverTypedWake(
       if (tries === 0) {
         return { delivered: false, typed: true, tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
       }
+      if (boxHoldsText(cli, line, screen)) {
+        return { delivered: false, typed: true, tries, reason: stillHeldReason(tries) };
+      }
       return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     const holds = boxHoldsText(cli, line, screen);
@@ -204,8 +237,12 @@ export async function deliverTypedWake(
       previous = after;
       continue;
     }
-    if (await pollWorking(host, pane, cli, pollMs, verifyMs)) {
+    const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs);
+    if (ack === 'submitted') {
       return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+    }
+    if (ack === 'held') {
+      return { delivered: false, typed: true, tries, reason: stillHeldReason(tries) };
     }
     screen = host.read(pane);
     previous = screen;
