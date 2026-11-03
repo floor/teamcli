@@ -721,6 +721,59 @@ describe('the chores fleet', () => {
     expect(made2[0]!.kills[0]).toContain('missed 2 heartbeats');
   });
 
+  test('a beat heard late starts the child\'s grace at the read, not at the beat\'s own time', () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4280 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4280, at: AT });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    tickAt(1000);
+    expect(made2[0]!.kills).toHaveLength(0);
+
+    // The child wrote this beat at NOW+1000; the daemon's held loop did not read it until
+    // NOW+2000. The pipe delay is the daemon's, not the child's, so the child is not charged
+    // for it: the beat is heard now, and the row still reports the child's own `at`.
+    clock.at = NOW + 2000;
+    made2[0]!.emit({
+      type: 'heartbeat', at: new Date(NOW + 1000).toISOString(), rssBytes: rss, busy: null, markerCache: null,
+    });
+    tickAt(2000);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 1000).toISOString(),
+    });
+    tickAt(3000);
+    // Two on-time ticks after the read: the beat's own `at` is two beats old, the read is not.
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0 });
+    tickAt(4000);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'late', missed: 1 });
+    expect(made2[0]!.kills).toHaveLength(0);
+    // The grace is bounded: the same two-overdue-beats rule still ends a silent child.
+    tickAt(5000);
+    expect(fleet.stateFor(made.root)?.why).toContain('missed 2 heartbeats');
+    expect(made2[0]!.kills).toHaveLength(1);
+  });
+
   test('a child that beats twice resets the doubling wait to its first step', async () => {
     const made = world();
     const clock = { at: NOW };

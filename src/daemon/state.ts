@@ -138,9 +138,9 @@ export type DaemonRootState = {
 
 /**
  * One route's chores record: the mode in force, what the supervised child is doing, the resident
- * size its own heartbeat reported, and the last completed pass. `missed` counts heartbeats
- * currently overdue, capped at the policy's own kill threshold; a record at that cap is about to
- * be ended and restarted. This is display evidence for an operator, never a hosting fact.
+ * size its own heartbeat reported, and the last completed pass. `missed` counts heartbeats the
+ * daemon has not heard, capped at the policy's own kill threshold; a record at that cap is about
+ * to be ended and restarted. This is display evidence for an operator, never a hosting fact.
  */
 export type DaemonChoresState = {
   mode: 'per-root' | 'shared' | 'inline';
