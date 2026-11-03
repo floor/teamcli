@@ -115,7 +115,13 @@ type Group = {
   child: ChoresChild | null;
   unsubscribe: (() => void) | null;
   startedAtMs: number;
+  /** The `at` of the child's latest heartbeat, as the child wrote it: what the row shows. */
   lastBeatMs: number | null;
+  /** When this daemon last read a heartbeat from the child, on the daemon's own clock. Silence
+   *  is judged from here, never from the child's `at`: a frame that sat unread in the pipe while
+   *  this daemon's loop was held is heard the moment it is read, and a child is charged only for
+   *  silence the daemon could hear. */
+  lastBeatReadMs: number | null;
   rssBytes: number | null;
   busy: string | null;
   ready: boolean;
@@ -186,6 +192,7 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     unsubscribe: null,
     startedAtMs: 0,
     lastBeatMs: null,
+    lastBeatReadMs: null,
     rssBytes: null,
     busy: null,
     ready: false,
@@ -273,9 +280,14 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // A beat that itself arrived late is the daemon's own loop having been held, not a child that
   // stopped beating: the heartbeats sent during the stall are still unread in its pipe, and a
   // reading this daemon could not hear must not end the child. The next on-time beat reads the
-  // backlog and judges again.
+  // backlog and judges again. The tick interval is one beat, so `stalled` means one beat of
+  // lateness beyond that cadence, not one bare beat: a guard at one interval would trip on every
+  // on-time tick and no judgement would ever run.
   if (stalled) return;
-  const missed = overdueBeats(group.lastBeatMs, group.startedAtMs, ms, input.beatMs);
+  // Silence is measured from when this daemon last read a beat, never from the beat's own `at`:
+  // a frame that waited unread in the pipe during a held loop starts the child's grace when it
+  // is finally heard, and a child that truly stopped beating stops updating this clock.
+  const missed = overdueBeats(group.lastBeatReadMs, group.startedAtMs, ms, input.beatMs);
   if (missed < group.policy.missedBeats) return;
   group.killing = true;
   group.why = `the child missed ${String(group.policy.missedBeats)} heartbeats`;
@@ -316,6 +328,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.child = child;
   group.startedAtMs = at.getTime();
   group.lastBeatMs = null;
+  group.lastBeatReadMs = null;
   group.rssBytes = null;
   group.busy = null;
   group.ready = false;
@@ -351,8 +364,14 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       group.ready = true;
       return;
     case 'heartbeat':
+      // The daemon's own clock at the read, before the frame's `at` is parsed: a beat the child
+      // wrote before a daemon stall is heard now, and the silence that follows it is counted from
+      // now. A frame written while this loop was held must not be charged to the child's own
+      // cadence, which is what reading the child's `at` as the reference did.
+      const readAt = input.now().getTime();
+      group.lastBeatReadMs = readAt;
       group.lastBeatMs = Date.parse(message.at);
-      if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = input.now().getTime();
+      if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
       group.rssBytes = message.rssBytes;
       group.busy = message.busy;
       group.markerCache = message.markerCache;
@@ -423,6 +442,7 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   group.ready = false;
   group.killing = false;
   group.lastBeatMs = null;
+  group.lastBeatReadMs = null;
   group.rssBytes = null;
   group.busy = null;
   // The dead child's chore row leaves with it: its cache was that process's memory, and the
@@ -456,11 +476,14 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
 /** One row for one root of a group, at this reading's instant. */
 function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonChoresState {
   const ms = input.now().getTime();
-  const missed = group.child === null || group.lastBeatMs === null
+  // The cap is the kill threshold, so it must count what the supervisor counts: beats this
+  // daemon has not heard, from its own read clock. `heartbeatAt` below stays the child's `at`,
+  // which is what the child last said about itself.
+  const missed = group.child === null || group.lastBeatReadMs === null
     ? 0
     : Math.min(
         group.policy.missedBeats,
-        overdueBeats(group.lastBeatMs, group.startedAtMs, ms, input.beatMs),
+        overdueBeats(group.lastBeatReadMs, group.startedAtMs, ms, input.beatMs),
       );
   const state: DaemonChoresState['state'] = group.stopping
     ? 'stopped'
@@ -541,7 +564,8 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
   let stopRun: Promise<void> | null = null;
   let presenceSeq = 0;
   /** The previous beat's instant, kept to tell a beat that arrived on time from one this
-   *  daemon's own loop delivered late. */
+   *  daemon's own loop delivered late. The tick runs once per beat, so more than two intervals
+   *  is one full beat late: a one-interval guard would trip on every on-time tick. */
   let lastTickMs: number | null = null;
   return {
     tick(at: Date): void {
