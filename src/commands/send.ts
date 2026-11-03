@@ -40,6 +40,7 @@ import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
 import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
 import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
@@ -598,6 +599,16 @@ function deliveryWordsOf(input: {
     input.seat,
     wake,
   );
+}
+
+/** The send's id on the end of its closing line, so the one thing a sender needs to `team trace`
+ *  is on the line it quotes back. A run with no record (a refusal before the record was written,
+ *  a dry run) has no id to print; a line that already names the id — the queued answer's — is
+ *  left as it stands rather than naming it twice. */
+function withId(summary: string, report: Report): string {
+  const id = report.sent;
+  if (id === null || id === '' || summary.includes(id)) return summary;
+  return `${summary} (id ${id})`;
 }
 
 /** A console summary with the receiving seat's delivery class appended when the run read one: a
@@ -1590,7 +1601,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         reason: "the sender's own walk wakes the seat; the serving channel runs another install",
       });
     }
-    stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now);
+    stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now, to.project);
     if (!stagedWalk.ok) return;
     const begun = beginFallbackWalk({
       caller,
@@ -1609,6 +1620,28 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // sender's line: the fact is written beside the record and the next drain pass records it.
       const noted = begun.noteSoon(attempt);
       if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
+      // One signed step per attempted leg, filed in the receiving team's store beside the bus's
+      // own `message.arrived`, so `team trace <id>` prints the walk in order. The append is
+      // bounded (`STEP_APPEND_MS`); a step that cannot be written is a missing trace line, never
+      // a failed send, and it is logged here where the send's own log folder is in hand.
+      const step = legStep(
+        {
+          store: { project: to.project, root: to.root, home: host.home },
+          id: msgId,
+          session: to.session,
+          from: who,
+          to: to.seat,
+          thread: record.thread,
+          ts: attempt.at.toISOString(),
+        },
+        {
+          route: attempt.route,
+          outcome: attempt.outcome,
+          ms: attempt.ms,
+          ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
+        },
+      );
+      if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
       // A direct-only caller hears the walk's ending here: the attempt that took the send, or
       // the last route's failure. The record was staged before the first attempt, whatever it was.
       if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
@@ -1667,7 +1700,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // delivered on this leg, so the walk moves on to the next one.
       markLeg('channel', 'attempted');
       await ensureEpisode();
-      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs);
+      const staged = await stageChannelRecord(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, to.project);
       const grace = host.channelGraceMs ?? CHANNEL_PUSH_GRACE_MS;
       const miss = staged ?? (await awaitChannelPush(dropDir, msgId, grace, host) ? null : `no push receipt within ${String(grace)} ms`);
       if (miss !== null) {
@@ -1727,6 +1760,24 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       markLeg('webhook', 'attempted');
       const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now);
+      if (posted.kind !== 'none') {
+        // The walk's own post is one signed event beside the bus's arrival; a `none` is another
+        // poster's claim, whose post the bus records as its own step. A step that cannot be
+        // written is a missing trace line, never a failed send.
+        const step = webhookStep(
+          {
+            store: { project: to.project, root: to.root, home: host.home },
+            id: msgId,
+            session: to.session,
+            from: who,
+            to: to.seat,
+            thread: record.thread,
+            ts: host.now().toISOString(),
+          },
+          posted.kind === 'posted' ? { kind: 'posted', ms: posted.ms } : { kind: posted.kind, reason: posted.reason },
+        );
+        if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the webhook step was not written (${step.reason})`, host.now());
+      }
       const hookMs = host.now().getTime() - startedAt;
       const hookEntry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
       const hookFailures = (): { failed?: string[] } => (failures.length > 0 ? { failed: [...failures] } : {});
@@ -2745,8 +2796,13 @@ async function postArrivalNow(
  * This is the staging half alone: it posts nothing and tells the bus nothing, so a caller that
  * walks the owner's cascade decides when the webhook is tried (its own leg, after every
  * channel-class leg) and when the arrival is announced.
+ *
+ * The staging is one signed event in the receiving team's log (`message.staged`), bound to the
+ * message id; `project` is that team's project, the key the post's own `webhook.posted` shares.
+ * The event is a record, never a delivery fact: an append that cannot be written is logged and
+ * changes nothing about the send.
  */
-async function stageSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
+async function stageSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, project: string): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
@@ -2756,13 +2812,27 @@ async function stageSendRecord(dropDir: string, payload: RecordPayload, home: st
   const record = `${JSON.stringify(signed, null, 2)}\n`;
   const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
+  // The step fields are the record's own: the receiving team's store, the message id, the
+  // session, the pair and the thread. `ts` differs per step — the record's signed `at` for the
+  // staging, the post's own instant for the webhook.
+  const fields = (ts: string): StepFields => ({
+    store: { project, root: payload.root, home },
+    id: payload.id,
+    session: payload.session,
+    from: payload.from,
+    to: payload.to,
+    thread: payload.thread,
+    ts,
+  });
   if (staged.receipt.existing) {
     // Admission still decides whether the file at the name is this message's record: `ensureRecord`
     // reads it and, while the name is held, writes nothing.
     const held = ensureRecord(dropDir, signed);
     if (!held.ok) return { ok: false, reason: held.reason };
+    stagedStep(fields(payload.at));
     return { ok: true, path: held.path, existing: true, record, signed };
   }
+  stagedStep(fields(payload.at));
   return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
 }
 
@@ -2774,12 +2844,29 @@ async function stageSendRecord(dropDir: string, payload: RecordPayload, home: st
  * claim, so the bus and the seat's pull still carry the fallback; a post whose fate is unknown
  * leaves the claim in `sent`, so the record is reported rather than posted a second time. A
  * record whose name already existed is left exactly as it was.
+ *
+ * The post is one signed event in the receiving team's log (`webhook.posted`), beside the
+ * staging's own; `project` is that team's project, as `stageSendRecord` takes it.
  */
-async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report): Promise<RecordWritten> {
-  const written = await stageSendRecord(dropDir, payload, home, now);
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report, project: string): Promise<RecordWritten> {
+  const written = await stageSendRecord(dropDir, payload, home, now, project);
   if (!written.ok || written.existing === true) return written;
   const posted = await postArrivalNow(dropDir, payload, written.signed, home, now);
-  if (posted.kind !== 'none') report.webhookPost = posted;
+  if (posted.kind !== 'none') {
+    report.webhookPost = posted;
+    webhookStep(
+      {
+        store: { project, root: payload.root, home },
+        id: payload.id,
+        session: payload.session,
+        from: payload.from,
+        to: payload.to,
+        thread: payload.thread,
+        ts: now().toISOString(),
+      },
+      posted.kind === 'posted' ? { kind: 'posted', ms: posted.ms } : { kind: posted.kind, reason: posted.reason },
+    );
+  }
   await announceArrival(payload);
   return written;
 }
@@ -2870,6 +2957,7 @@ async function handOff(
     host.home,
     host.now,
     report,
+    to.project,
   );
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
@@ -3054,7 +3142,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
  *  0, always. */
 function recorded(io: Io, seat: string, ms: number, id: string, report: Report): number {
   report.sent = id;
-  const summary = `${seat}: recorded (native, ${String(ms)} ms)`;
+  const summary = withId(`${seat}: recorded (native, ${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: 'recorded', summary, channel: 'native' });
   } else {
@@ -3220,7 +3308,7 @@ function confirmed(
   report: Report,
 ): number {
   report.sent = id;
-  const summary = withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report);
+  const summary = withId(withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: outcome, summary, channel: 'native' });
   } else {
@@ -3553,6 +3641,8 @@ async function storeDropRecord(
   startedAt: number,
   note: WalkNote,
   heldReason: string,
+  /** The receiving team's project: the store key its record's step events are filed under. */
+  project: string,
 ): Promise<DropStore> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) return { ok: false, busy: lock.held };
@@ -3564,7 +3654,7 @@ async function storeDropRecord(
       lock.release();
       return { ok: false, reason: 'the record could not be written' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       lock.release();
@@ -3645,7 +3735,7 @@ async function deliverDropped(
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
-  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken');
+  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project);
   if (stored.ok) {
     stored.release();
     if (wait) {
@@ -3683,7 +3773,7 @@ async function deliverDropped(
     note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
     return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
   }
-  const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+  const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
   if (!queuedWrite.ok) {
     setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
     note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3786,7 +3876,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!queuedWrite.ok) {
       setLegState(report, 'typed', 'refused', `the record could not be written (${queuedWrite.reason})`);
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
@@ -3816,7 +3906,7 @@ async function deliverNative(
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -3961,7 +4051,7 @@ async function deliverTypedWakeSeat(
     } catch {
       return { delivered: false, reason: 'the record could not be written; nothing was typed' };
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
@@ -4014,13 +4104,14 @@ async function stageChannelRecord(
   host: SendHost,
   report: Report,
   sentAs: SentAs | null,
+  project: string,
 ): Promise<string | null> {
   try {
     sealDropTree(dir, session, seatName);
   } catch {
     return 'the record could not be written';
   }
-  const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+  const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
   if (!written.ok) return `the record could not be written (${written.reason})`;
   report.sent = payload.id;
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body: payload.body, id: payload.id, thread: payload.thread };
@@ -4099,7 +4190,7 @@ async function deliverComposeSeat(
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
       return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
     }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
       note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
       return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was typed`, host, report);
@@ -4584,7 +4675,7 @@ function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, 
 /** A send that typed its line and was never taken: the trigger line of a drop-file send, or a
  *  compose seat's brief. One site, one exit id: both are the same outcome to a caller. */
 function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
-  const message = `${seat}: not-submitted: ${reason}`;
+  const message = withId(`${seat}: not-submitted: ${reason}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.not-submitted', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -4904,7 +4995,7 @@ async function deliverSocketFrame(
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
   const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
-  const written = await writeSendRecord(copy.dir, payload, host.home, host.now, report);
+  const written = await writeSendRecord(copy.dir, payload, host.home, host.now, report, to.project);
   if (!written.ok) return { kind: 'fallback', reason: `the record could not be written (${written.reason})` };
   // One frame on the socket, through the relay's socket route. The caller's own dial is handed in,
   // so an injected host's transport is the transport this attempt uses. A recorded address whose
@@ -5593,7 +5684,7 @@ function seatList(team: TeamFile): string {
  *  `delivered (read)`: the seat read the message, which is not a claim that it acted on it.
  *  `via` names the channel the read came through. */
 function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native' | 'headless-resume'): number {
-  const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
+  const summary = withId(`${seat}: delivered${note === undefined ? '' : ` (${note})`}`, report);
   const read = note === 'read';
   if (report.json) {
     writeAction(io, report, {
@@ -5613,7 +5704,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
  *  own remote session, which writes no team record — so the printed line is the whole proof, and
  *  the id is what the sender and the history line keep. Exit 0. */
 function deliveredSession(io: Io, seat: string, report: Report, session: string): number {
-  const summary = withDelivery(`${seat}: delivered (session ${session})`, report);
+  const summary = withId(withDelivery(`${seat}: delivered (session ${session})`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'delivered', summary, channel: 'session' });
   } else {
@@ -5629,7 +5720,7 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  receipt that has not come back. The `note` says which — a typed send's names the
  *  trigger and the receipt. Exit 0, always. */
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
-  const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
+  const summary = withId(withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
   } else {
@@ -5643,7 +5734,7 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
  *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
  *  a channel ending is never `delivered (read)`. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report);
+  const summary = withId(withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {
@@ -5677,7 +5768,7 @@ function answered(
   channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook' = 'socket',
   thread: string | null = report.sent,
 ): number {
-  const summary = `${seat}: answered`;
+  const summary = withId(`${seat}: answered`, report);
   if (report.json) {
     writeAction(io, report, { status: 'answered', summary, channel, reply: read.reply, replyId: read.msg_id, thread });
   } else {
@@ -5690,7 +5781,7 @@ function answered(
 /** The record was sent, and the wait window closed with no reply on the thread (the thread stays open). Exit 1, always. */
 function timedOut(io: Io, seat: string, seconds: number, report: Report): number {
   const why = `sent, no reply on the thread within ${String(seconds)}s; the thread stays open`;
-  const message = `${seat}: timeout: ${why}`;
+  const message = withId(`${seat}: timeout: ${why}`, report);
   if (report.json) writeSendError(io, 'send.timeout', message, report);
   else io.stderr(`team send: ${message}\n`);
   return 1; // exit: send.timeout
@@ -5701,7 +5792,7 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
  *  the path, in the delivery lines' own shape (`socket`). */
 function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
   const label = note === undefined ? 'held' : `held (${note})`;
-  const message = `${seat}: ${label}: ${reason}`;
+  const message = withId(`${seat}: ${label}: ${reason}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.held', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -5761,7 +5852,7 @@ function unreachable(
   dialog?: string,
 ): number {
   const words = dialog === undefined ? `unreachable: ${reason}` : `unreachable now (the screen reads ${dialog}); ${reason}`;
-  const message = `${seat}: ${words}`;
+  const message = withId(`${seat}: ${words}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.unreachable', message, report);
   else io.stderr(`team send: ${message}\n`);

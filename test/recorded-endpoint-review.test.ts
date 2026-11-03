@@ -38,6 +38,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
 import { pushPointer } from '../src/send/push.ts';
 import { testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-20T04:00:00.000Z');
 const MESSAGE_ID = '99999999-8888-4777-8666-555555555555';
@@ -423,7 +424,7 @@ function expectHeld(
 ): void {
   expect(sent.code).toBe(0);
   expect(sent.err).toContain('queued, no event adapter');
-  expect(sent.out).toBe(dropLine('; queued; probe-seat reads it at its next turn, and nothing here gives it one (pull-only)'));
+  expect(withoutSendId(sent.out)).toBe(dropLine('; queued; probe-seat reads it at its next turn, and nothing here gives it one (pull-only)'));
   expect(sent.calls).toEqual([]);
   for (const witness of witnesses) {
     expect(witness.connections).toBe(0);
@@ -467,7 +468,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
 
     expect(sent.code).toBe(0);
     expect(sent.err).toBe('');
-    expect(sent.out).toBe(nativeLine('; woken through its runtime queue'));
+    expect(withoutSendId(sent.out)).toBe(nativeLine('; woken through its runtime queue'));
     // The queue process is handed the record's URL verbatim.
     expect(sent.calls).toEqual([
       ['queue', '--remote', url, '--thread', THREAD_ID, '--message', pointerOf(scene)],
@@ -553,7 +554,7 @@ describe('the real sender reaches the recorded endpoint, never the shared defaul
     // The leg that took the message decides the words: the queue accepted the pointer, so even
     // an unmanaged seat names the runtime queue. The route this scene pins — the measured
     // CODEX_HOME default — is unchanged, and the queue line below still reads that socket.
-    expect(sent.out).toBe(nativeLine('; woken through its runtime queue'));
+    expect(withoutSendId(sent.out)).toBe(nativeLine('; woken through its runtime queue'));
     expect(sent.calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);

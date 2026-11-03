@@ -128,6 +128,29 @@ defaults are the table.
 The prompt kinds on `seat.at-prompt` whose default routing includes the owner: `permission`,
 `trust`, `login`, `vendor notice`, `rate limit` (`OWNER_PROMPT_KINDS`).
 
+### Step events
+
+One message's path is written down: the send, the bus, the seat and the watch each append signed
+steps for it to the receiving team's event log, so the whole story of one id can be read in
+order. Six kinds carry those steps — `message.staged` (the signed record reached the receiving
+drop folder), `message.arrived` (the bus's own verified arrival; this is the delivery),
+`webhook.posted` (a post to the seat's adapter, with its outcome and its cost), `leg.tried` (one
+leg of the walk: `via` names it, `outcome` is the walk's word, `ms` the cost), `wake.retried`
+(the watch woke a seat for a record already left behind, `via` the leg and the try number) and
+`message.read` (the seat's own read receipt). The four that are not in the table above join its
+closed list after the pinned ref; the table's own thirty stay each cited to its line. They carry
+no routing default, like `message.arrived` and `message.read`: they are records, not
+notifications, so no seat is told and no subscriber receives them.
+
+A step's record id is the message id plus the step's tail: `<id>:staged`, `<id>:webhook.posted`,
+`<id>:leg.tried:<route>`, `<id>:wake.retried:<try>:<via>`; the receipt kinds use `<id>:read`,
+`<id>:replied` and `<id>:held`, and the arrival is the bare `<id>`. A step's payload carries two
+fields the other kinds do not: `outcome`, the step's own machine word (`posted`, `delivered`,
+`refused`, `unreachable`, …), and `ms`, the whole milliseconds the step took, zero included. A
+step appended twice is one event: the log's own key (kind, record id, session) reports the second
+append as a duplicate. A step that cannot be appended is dropped with its reason; it never fails
+the step it records.
+
 ## 4. Commands and operations
 
 ### `team bus`

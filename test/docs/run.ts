@@ -128,6 +128,8 @@ function normalize(text: string, page: { fixture: Fixture }): string {
     .replace(/\b[0-9a-f]{40}\b/g, '<sha>')
     .replace(/\b[0-9a-f]{10}\b/g, '<sha>')
     .replace(/\(team [0-9a-f]{12}\)/g, '(team <id>)')
+    // A send's closing line names the generated message id its steps are filed under.
+    .replace(/\(id [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)/g, '(id <id>)')
     .replace(/^(\s+)[0-9a-f]{7,40} /gm, '$1<sha> ');
 }
 

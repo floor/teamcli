@@ -43,6 +43,7 @@ import {
   recordPendingTry,
   type PendingDrop,
 } from '../send/pending.ts';
+import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
@@ -129,6 +130,33 @@ function giveUpUnread(scene: RetryScene, dropDir: string, drop: PendingDrop, why
     ? `the drop file is at ${join(dropDir, drop.id)}`
     : `its drop file is gone from ${dropDir}`;
   scene.say(`${drop.to}: a dropped send from ${drop.from} was not read (${why}); ${where}`, true);
+}
+
+/** One retry that actually typed (or, on the channel's redelivery, wrote the socket frame): a
+ *  signed step carrying the try number, the leg and the outcome, with the wall clock's own cost.
+ *  The event's timestamp is the pass's clock, as the retry's history line is; `ms` is measured
+ *  from the step's own start, so it is the delivery's cost, not a difference of pinned times. A
+ *  pass that only settled a receipt typed nothing and writes no step: the history line is its
+ *  word. Best-effort — a step that cannot be appended never fails the retry it records. */
+function noteWake(
+  scene: RetryScene,
+  drop: PendingDrop,
+  attempt: { via: string; outcome: string; ms: number; reason?: string },
+): void {
+  const home = scene.home;
+  if (home === undefined) return;
+  wakeStep(
+    {
+      store: { project: scene.team.project, root: scene.root, home },
+      id: drop.id,
+      session: scene.session,
+      from: drop.from,
+      to: drop.to,
+      ...(drop.thread === undefined ? {} : { thread: drop.thread }),
+      ts: scene.now.toISOString(),
+    },
+    { via: attempt.via, try: drop.tries + 1, outcome: attempt.outcome, ms: attempt.ms, ...(attempt.reason === undefined ? {} : { reason: attempt.reason }) },
+  );
 }
 
 /** The watch's sources as the delivery sees one pane. */
@@ -283,10 +311,17 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     // the listener: a marker already at that name is the server's own push, and the write is
     // refused while the retry goes on.
     if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+    const began = Date.now();
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
       receipt,
+    });
+    noteWake(scene, drop, {
+      via: 'typed',
+      outcome: result.outcome,
+      ms: Date.now() - began,
+      ...(result.reason === undefined ? {} : { reason: result.reason }),
     });
     if (result.outcome === 'delivered') {
       clearPending(dropDir, drop.id);
@@ -412,7 +447,11 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
   if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
   const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
   if (scene.socketRedeliver !== undefined) {
+    const began = Date.now();
     const socket = await scene.socketRedeliver(dropDir, marked);
+    noteWake(scene, drop, socket.ok
+      ? { via: 'socket', outcome: 'delivered', ms: Date.now() - began }
+      : { via: 'socket', outcome: 'unreachable', ms: Date.now() - began, reason: socket.reason });
     if (socket.ok) {
       // The socket attempt wrote its own `delivered` history line, marked with the channel's own
       // note, and no receipt: the marker has nothing left to say, and the record stays unread for

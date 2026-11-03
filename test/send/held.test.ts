@@ -21,6 +21,7 @@ import { readHistory } from '../../src/send/history.ts';
 import { type NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 
@@ -163,7 +164,7 @@ describe('team send: a --wait frame cannot land at a dialog', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.frames.length).toBe(0);
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);
@@ -185,7 +186,7 @@ describe('team send: the plain send with no accept declaration', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
-    expect(io.out).toBe(
+    expect(withoutSendId(io.out)).toBe(
       'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     expect(host.frames).toEqual([]);

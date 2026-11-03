@@ -411,6 +411,13 @@ bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three wait
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
 
+Every send that wrote a record names the message id on its closing line: a trailing ` (id <id>)`
+on that line, or the line's own words where it already carries one (the queued answer's
+`id <id>`, the handoff's `team send --confirm <id>`). A run that wrote no record — a refusal
+before it, a dry run, the roster — names none. The id is the key to that message's trace: the
+signed steps the send, the bus, the seat and the watch write for it, in one log, which
+`team trace <id>` prints in order.
+
 ### Typing into a pane
 
 1. The only text typed into another seat's pane is the wake line, and it is measured: a trigger

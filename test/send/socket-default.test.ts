@@ -17,6 +17,7 @@ import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
 
@@ -176,7 +177,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toContain('queued, no event adapter');
     // The socket is not this path's channel: it is never tried, and the live listener at the
     // pane's pid hears nothing.
@@ -200,7 +201,7 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed).toEqual([]);
     expect(host.pane.enters).toBe(0);
@@ -218,7 +219,7 @@ describe('team send: a typed send with no socket at all', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     expect(host.pane.typed).toEqual([]);
@@ -237,7 +238,7 @@ describe('team send: --wait to a Claude Code seat never dials the socket', () =>
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.socketsTried).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.pane.typed.length).toBe(0);

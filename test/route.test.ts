@@ -26,7 +26,7 @@ import { ROUTE_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
-import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema, withoutSendId } from './helpers/output.ts';
 
 const OWNER = { kind: 'owner' as const };
 const BODY = 'the native delivery, written down after the fact';
@@ -732,7 +732,7 @@ describe('send --record: the delivery the sender made itself', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '812'], leadIo, run);
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: recorded (native, 812 ms)\n');
+    expect(withoutSendId(leadIo.out)).toBe('team acme, session "acme"\nhelper: recorded (native, 812 ms)\n');
     expect(leadIo.err).toBe('');
     const text = readFileSync(historyPath('acme', w.root, w.home), 'utf8');
     const entry = parseHistoryLine(text);
@@ -839,7 +839,7 @@ describe('send --record: the delivery the sender made itself', () => {
     };
     expect(doc.schema).toEqual({ name: 'team.send', version: 1 });
     expect(doc).toMatchObject({ seat: 'helper', status: 'recorded', dry_run: false, channel: 'native' });
-    expect(doc.action_summary).toBe('helper: recorded (native, 812 ms)');
+    expect(withoutSendId(doc.action_summary)).toBe('helper: recorded (native, 812 ms)');
     expect(doc.ids.reply).toBeNull();
     const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
     expect(entry?.id).toBe(doc.ids.sent);

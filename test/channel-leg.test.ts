@@ -43,6 +43,7 @@ import { promoteInboxDrops, retryHeldDrops, type RetryScene, type RetrySources }
 import { teamIdOf } from '../src/registry/teams.ts';
 import { claudeBox, recordBody } from './helpers.ts';
 import { NOW, dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const SESSION = 'acme';
 const CHANNEL_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
@@ -280,7 +281,7 @@ describe('the channel leg', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
     // Nothing was typed and no pane was read: the push is the delivery.
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
@@ -361,7 +362,7 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);

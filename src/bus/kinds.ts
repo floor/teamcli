@@ -59,6 +59,15 @@ export const EVENT_KINDS = [
   'message.read',
   'message.replied',
   'message.held',
+  // Message steps: one signed event per step a send, the bus or the watch takes for a message id
+  // (`message.staged` when the record lands, `webhook.posted` with the post's status,
+  // `leg.tried` per walk attempt with its outcome and cost, `wake.retried` per watch retry).
+  // `team trace <id>` reads them as one story. They are records, not notifications: like
+  // `message.arrived` they carry no routing default, so no seat is told and none can subscribe.
+  'message.staged',
+  'webhook.posted',
+  'leg.tried',
+  'wake.retried',
   // Seat lifecycle & state
   'seat.working',
   'seat.idle',

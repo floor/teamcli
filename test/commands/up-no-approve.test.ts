@@ -15,6 +15,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -292,7 +293,7 @@ describe('team up without an approval record', () => {
       expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome names the trigger sent, never a read.
-      expect(sendIo.out).toBe(
+      expect(withoutSendId(sendIo.out)).toBe(
         'team acme, session "acme"\nbuilder-1: sent (unconfirmed) (drop, 0 ms); queued; builder-1 reads it at its next turn, and nothing here gives it one (pull-only)\n',
       );
       expect(existsSync(approval(here.root, here.home))).toBe(false);

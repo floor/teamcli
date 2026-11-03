@@ -709,6 +709,13 @@ so a post the send did not make is still the bus's to report. A fallback whose w
 receiving session has no dialable socket lowers the class the line reports: it never claims a
 wake the attempt just disproved.
 
+Every line that ends a send names the message id its steps are filed under: a trailing
+` (id <id>)` on the last line, or the id in the line's own words where it already carries one —
+the queued answer's `(…; id <id>)`, the handoff's `team send --confirm <id>`. A run that wrote no
+record (a refusal before it, a dry run, the roster) names none, and the rows below quote the
+wording without the trailing tail. The id is the key to `team trace <id>`, which prints that
+message's signed steps in order.
+
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout; `<seat>: delivered (socket)` when the receiver's socket took the frame, reported at the frame with no look at the box; or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
@@ -873,7 +880,7 @@ receipt, which a running watch records as one `delivered (read)` history line.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -885,7 +892,7 @@ like any other:
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team send: operator-b: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)
+operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -915,7 +922,7 @@ finds none:
 ```console caller=claude-keeper
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team beacon, session "beacon"
-claude-scribe: delivered (native, 0 ms)
+claude-scribe: delivered (native, 0 ms) (id 22222222-2222-4222-8222-222222222222)
 exit 0
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team send: refused: 22222222-2222-4222-8222-222222222222: no pending native record holds that id; nothing was recorded
@@ -929,7 +936,7 @@ verified reply record:
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: answered
+claude-keeper: answered (id 44444444-4444-4444-8444-444444444444)
 the gate is green
 exit 0
 ```
@@ -1060,7 +1067,7 @@ own read hands it the message. The receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -1070,7 +1077,7 @@ it exits 1 and leaves the thread open:
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open
+team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open (id <id>)
 exit 1
 ```
 

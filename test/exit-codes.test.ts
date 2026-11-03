@@ -6198,7 +6198,7 @@ scene('send.answered', async (place) => {
   const host = sendHost(place);
   host.sendId = () => sentId;
   host.waitMs = 0;
-  return show(await sent(place, ['lead', 'hello', '--wait'], owner, host), 'lead: answered\nthe answer');
+  return show(await sent(place, ['lead', 'hello', '--wait'], owner, host), `lead: answered (id ${sentId})\nthe answer`);
 });
 scene('send.timeout', async (place) => {
   write(place, TEAM);
