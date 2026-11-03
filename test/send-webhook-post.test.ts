@@ -545,9 +545,10 @@ describe('the claim decides who posts', () => {
   });
 
   test("a routine that never answers is cut off at the sender's own bound, not the routine's five", async () => {
-    // The deadline is measured on the wall clock: the request is built with a 3 s abort signal
-    // even though the routine's own row allows five, so a person's send never waits out the bus's
-    // budget. The fake transport answers only when the signal aborts, the way a real fetch does.
+    // The deadline is measured on the wall clock: the command returns at three seconds even
+    // though the routine's own row allows five, so a person's send never waits out the bus's
+    // budget. The request itself is not aborted there. The fake transport answers only when the
+    // signal aborts, and that signal is the policy max.
     const hook = hookFiles('http://127.0.0.1:1/routine');
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-webhook-deadline-')));
     extras.push(base);
@@ -585,12 +586,18 @@ describe('the claim decides who posts', () => {
       fetch: hangs,
     });
     const elapsed = performance.now() - started;
-    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 3000 ms' });
-    expect(aborted).toBe(true);
+    expect(outcome.kind).toBe('unknown');
+    if (outcome.kind === 'unknown') expect(outcome.reason).toBe('no answer within 3000 ms');
+    // The deadline returned the command and left the request running.
+    expect(aborted).toBe(false);
     // The sender's bound, not the row's five seconds; the upper bound only tolerates a slow timer.
     expect(elapsed).toBeGreaterThanOrEqual(2900);
-    expect(elapsed).toBeLessThan(5000);
-  });
+    expect(elapsed).toBeLessThan(4500);
+    if (outcome.kind === 'unknown' && outcome.late !== undefined) {
+      expect(await outcome.late).toEqual({ kind: 'unanswered' });
+    }
+    expect(aborted).toBe(true);
+  }, 15_000);
 
   test('a 2xx whose posted mark cannot be written still blocks a second post', async () => {
     // The routine answers 2xx while the drop folder refuses writes, so neither the claim's
