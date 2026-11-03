@@ -35,8 +35,8 @@ session that still does not name the seats in roster order is reported, never as
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--dry-run` | — | print the moving set and the order it would be re-created in, without closing anything |
-| `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
+| `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone — the run places itself and reads the sidebar in it, and every `team restart` it delegates to runs in it too |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone — every `team restart` the pass delegates to reads it too |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Example
