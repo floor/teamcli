@@ -2,10 +2,11 @@
 // test/fixtures/cursor/2026.10.22/: the empty idle box, a draft in the box, and the `Working`
 // frame. No CLI runs and no key leaves the process.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
+import { listUnread } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
@@ -199,5 +200,77 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
     expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
+  });
+
+  test('independent adversarial: line held while working through bound in send is not delivered, never retyped, and message stays unread; box cleared or partial line mid-poll refuses', async () => {
+    // 1. Line held while working through the bound in `runSend` -> not delivered, never retyped, message still unread.
+    const made = cursorWorld();
+    const pane = wakeFake((read, enters, typed) => {
+      if (read < 2) return IDLE;
+      const line = typed[typed.length - 1] ?? '';
+      return enters === 0 ? holding(line) : workingHolding(line);
+    });
+    const host = fake(made, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+    });
+    const io = owner(made.root);
+    expect(await runSend(['cursor', 'check held'], io, host)).toBe(0);
+    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(1);
+    const drops = join(made.dir, 'send-drops', 'acme', 'cursor');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    const msgId = records[0]!;
+    expect(existsSync(join(drops, `${msgId}.read.json`))).toBe(false);
+    expect(listUnread(drops, { to: 'cursor', root: made.root, session: 'acme' }, host.home).map((m) => m.id)).toEqual([msgId]);
+    const history = readHistory('acme', made.root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
+      expect(history.entries[0]?.failed).toEqual([
+        'typed: the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+      ]);
+    }
+
+    // 2. Box cleared by someone else mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees IDLE).
+    let clearPoll = 0;
+    const clearedMidPoll = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters === 0) return holding(LINE);
+      clearPoll += 1;
+      return clearPoll <= 2 ? workingHolding(LINE) : IDLE;
+    });
+    const outCleared = await deliverTypedWake(clearedMidPoll.host, 'pane-1', LINE, 'cursor', { ...FAST, verifyMs: 4 });
+    expect(outCleared).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 1,
+      reason: 'the screen read idle and no working screen showed',
+    });
+    expect(clearedMidPoll.typed).toEqual([LINE]);
+    expect(clearedMidPoll.enters).toBe(1);
+
+    // 3. A partial line left mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees holding(partial)).
+    for (const partial of [LINE.slice(0, 12), LINE.slice(5)]) {
+      let partialPoll = 0;
+      const partialMidPoll = wakeFake((read, enters) => {
+        if (read < 2) return IDLE;
+        if (enters === 0) return holding(LINE);
+        partialPoll += 1;
+        return partialPoll <= 2 ? workingHolding(LINE) : holding(partial);
+      });
+      const outPartial = await deliverTypedWake(partialMidPoll.host, 'pane-1', LINE, 'cursor', { ...FAST, verifyMs: 4 });
+      expect(outPartial).toEqual({
+        delivered: false,
+        typed: true,
+        tries: 1,
+        reason: 'the box held text other than the line and no working screen showed',
+      });
+      expect(partialMidPoll.typed).toEqual([LINE]);
+      expect(partialMidPoll.enters).toBe(1);
+    }
   });
 });
