@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { ACTIONS_COMMANDS_DEFAULT, type ActionsCommand } from '../policy/types.ts';
-import { refusedByGuard } from './command-guard.ts';
+import { lineRunsGh, refusedByGuard } from './command-guard.ts';
 
 /** The one decision this hook can make about a tool call. */
 export type GuardDecision =
@@ -117,7 +117,7 @@ function main(argv: readonly string[]): void {
     return;
   }
   const command = bashCommand(input);
-  const gh = command !== null && /(?:^|[\s;&|/])gh(?:\s|$)/.test(command);
+  const gh = command !== null && lineRunsGh(command);
   const context = gh ? guardContext(argv) : null;
   const decision = !gh
     ? guardDecision(input)

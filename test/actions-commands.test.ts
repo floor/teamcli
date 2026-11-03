@@ -1,7 +1,7 @@
 // The Actions allowlist is a policy, not a seat. The release default is Floor's three commands.
 // A caller may set a subset. The guard allows exactly those and refuses every other Actions command.
 import { expect, test } from 'bun:test';
-import { refusedByGuard } from '../src/launch/command-guard.ts';
+import { lineRunsGh, refusedByGuard } from '../src/launch/command-guard.ts';
 import { ACTIONS_COMMANDS_DEFAULT, getPolicySpec, type ActionsCommand } from '../src/policy/types.ts';
 
 const spec = getPolicySpec('actions-commands');
@@ -40,6 +40,8 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh workflow run ci.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow enable ci.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/1')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api -X POST repos/floor/teamcli/dispatches')?.rule).toBe('github-actions');
+  expect(refusedByGuard("gh api graphql -f query='mutation { triggerWorkflow }'")?.rule).toBe('github-actions');
   expect(refusedByGuard('gh run list')?.guidance).toBe(
     'refused in team seats: the actions-commands policy does not allow that Actions command',
   );
@@ -49,6 +51,11 @@ test('a caller that drops a command removes only that command', () => {
   const rerun: readonly ActionsCommand[] = ['rerun-failed'];
   expect(refusedByGuard('gh run rerun --failed', rerun)).toBeNull();
   expect(refusedByGuard('gh workflow run deploy.yml', rerun)?.rule).toBe('github-actions');
+  expect(refusedByGuard('"gh" workflow run deploy.yml', rerun)?.rule).toBe('github-actions');
+  expect(refusedByGuard('\\gh workflow run deploy.yml', rerun)?.rule).toBe('github-actions');
+  expect(lineRunsGh('"gh" workflow run deploy.yml')).toBe(true);
+  expect(lineRunsGh('\\gh workflow run deploy.yml')).toBe(true);
+  expect(lineRunsGh('echo the letters gh')).toBe(false);
   expect(refusedByGuard('gh workflow run ci.yml --ref abc', rerun)?.rule).toBe('github-actions');
   expect(refusedByGuard('gh run rerun --failed', none)?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow run deploy.yml', none)?.rule).toBe('github-actions');

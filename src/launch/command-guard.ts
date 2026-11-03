@@ -511,7 +511,9 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
   const call = ghCall(args);
   if (call === null) return true;
   if (call.group === 'api') {
-    return !args.some((arg) => arg.includes('/actions'));
+    return !args.some((arg) =>
+      arg.includes('/actions') || arg.includes('/dispatches') || arg.includes('triggerWorkflow')
+    );
   }
   if (call.group === 'run' && call.sub === 'rerun') {
     return actions.includes('rerun-failed')
@@ -602,6 +604,16 @@ function matchSegment(words: readonly string[], actions: readonly ActionsCommand
     }
   }
   return null;
+}
+
+/** True when the parsed command word of any segment is `gh`, quotes and a leading backslash included. */
+export function lineRunsGh(line: string): boolean {
+  const parsed = segments(withoutHeredocBodies(line));
+  for (const segment of parsed) {
+    const command = commandOf(segment.words);
+    if (command.length > 0 && base(command[0]!) === 'gh') return true;
+  }
+  return false;
 }
 
 /**
