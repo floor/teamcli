@@ -1482,21 +1482,21 @@
       "code": 0,
       "command": "config",
       "id": "config.entity.unchanged",
-      "meaning": "the entity already writes that names.unique word; nothing was written",
+      "meaning": "the entity already writes that value; nothing was written",
       "trigger": "team config set <entity>.names.unique off"
     },
     {
       "code": 0,
       "command": "config",
       "id": "config.entity.value",
-      "meaning": "the entity's names.unique word is printed",
+      "meaning": "the entity's value is printed",
       "trigger": "team config get <entity>.names.unique"
     },
     {
       "code": 0,
       "command": "config",
       "id": "config.entity.written",
-      "meaning": "the entity's names.unique word was written",
+      "meaning": "the entity's value was written",
       "trigger": "team config set <entity>.names.unique off"
     },
     {
@@ -1573,14 +1573,14 @@
       "code": 1,
       "command": "config",
       "id": "config.entity.no-value",
-      "meaning": "the entity's entry writes no names.unique word",
+      "meaning": "the entity's entry writes no such value",
       "trigger": "team config get <entity>.names.unique"
     },
     {
       "code": 1,
       "command": "config",
       "id": "config.entity.not-owner",
-      "meaning": "an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant",
+      "meaning": "an entity's value was set by a caller that is neither the owner nor admitted by the owner's general grant",
       "trigger": "team config set <entity>.names.unique off"
     },
     {
@@ -1589,6 +1589,20 @@
       "id": "config.entity.path",
       "meaning": "the entity's entry cannot be set (no such entry, or a value on the way); nothing was written",
       "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.reminders-problem",
+      "meaning": "the reminder list holds a value the daemon's own parser refuses; nothing was written",
+      "trigger": "team config set <entity>.reminders '[{name: NO, at: [\"09:00\"], text: hi, to: [lead@acme]}]'"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.reminders-value",
+      "meaning": "the value is not a YAML list of reminders; nothing was written",
+      "trigger": "team config set <entity>.reminders not-a-list"
     },
     {
       "code": 1,
