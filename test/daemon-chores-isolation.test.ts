@@ -976,6 +976,189 @@ describe('the chores fleet', () => {
     expect(made2[0]!.kills).toHaveLength(1);
   });
 
+  test('a multi-second daemon stall followed by buffered pipe frames with stale timestamps spares a beating child and still ends a silent sibling', () => {
+    const made = world();
+    const second = join(made.base, 'other');
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [
+        routeInput(made.root, policy({ missedBeats: 2 })),
+        routeInput(second, policy({ missedBeats: 2 })),
+      ],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4290 + made2.length * 10);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 44 * 1024 * 1024;
+    tickAt(0);
+    for (const [idx, pid] of [
+      [0, 4290],
+      [1, 4300],
+    ] as const) {
+      made2[idx]!.emit({ type: 'ready', pid, at: AT });
+      made2[idx]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    }
+
+    // The daemon's event loop is blocked for 38 seconds; the timers phase fires first at +38_000
+    // (stalled = true) before the poll phase drains the children's buffered stdout pipes.
+    tickAt(38_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(0);
+
+    // Poll phase at +38_050 reads buffered frames written 33-35 seconds earlier during the stall.
+    clock.at = NOW + 38_050;
+    for (const staleOffset of [3000, 4000, 5000]) {
+      made2[0]!.emit({
+        type: 'heartbeat',
+        at: new Date(NOW + staleOffset).toISOString(),
+        rssBytes: rss,
+        busy: 'fallback',
+        markerCache: null,
+      });
+    }
+    made2[1]!.emit({
+      type: 'heartbeat',
+      at: new Date(NOW + 4000).toISOString(),
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+
+    // Next on-time tick at +39_000 (stalled = false, 950 ms after the pipe read): neither child
+    // is charged for the 33-34 s age of the frame's own `at`, and `heartbeatAt` preserves the
+    // child's self-reported timestamp.
+    tickAt(39_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 5000).toISOString(),
+      busy: 'fallback',
+    });
+    expect(fleet.stateFor(second)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 4000).toISOString(),
+    });
+
+    // Child 0 continues beating at +39_900 while Child 1 genuinely stops beating after +38_050.
+    clock.at = NOW + 39_900;
+    made2[0]!.emit({
+      type: 'heartbeat',
+      at: new Date(NOW + 39_900).toISOString(),
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+
+    tickAt(40_000);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 39_900).toISOString(),
+      busy: null,
+    });
+    expect(fleet.stateFor(second)).toMatchObject({
+      state: 'late',
+      missed: 1,
+      heartbeatAt: new Date(NOW + 4000).toISOString(),
+      why: 'the child has missed 1 heartbeat',
+    });
+    expect(made2[1]!.kills).toHaveLength(0);
+
+    tickAt(41_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
+  });
+
+  test('falls back heartbeatAt to the daemon read clock when a frame carries a non-ISO timestamp and resets read clock across replacement', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4310 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4310, at: AT });
+
+    // A frame with a non-ISO `at` still updates `lastBeatReadMs` to `now()` and falls back
+    // `lastBeatMs` to `readAt` so `stateFor` never throws RangeError on `toISOString()`.
+    clock.at = NOW + 1500;
+    made2[0]!.emit({
+      type: 'heartbeat',
+      at: 'not-an-iso-timestamp',
+      rssBytes: rss,
+      busy: null,
+      markerCache: null,
+    });
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'ok',
+      missed: 0,
+      heartbeatAt: new Date(NOW + 1500).toISOString(),
+    });
+
+    tickAt(2500);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0 });
+    tickAt(3500);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'late', missed: 1 });
+    expect(made2[0]!.kills).toHaveLength(0);
+    tickAt(4500);
+    expect(made2[0]!.kills).toHaveLength(1);
+
+    // Once the child leaves and a replacement starts, both `lastBeatMs` and `lastBeatReadMs`
+    // are cleared so the replacement is judged from its own `startedAtMs`.
+    made2[0]!.leave(null, 'SIGTERM');
+    await made2[0]!.child.exited;
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'restarting',
+      missed: 0,
+      heartbeatAt: null,
+    });
+    tickAt(5500);
+    expect(made2).toHaveLength(2);
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      state: 'starting',
+      pid: 4311,
+      missed: 0,
+      heartbeatAt: null,
+    });
+    tickAt(6500);
+    tickAt(7500);
+    expect(made2[1]!.kills).toHaveLength(0);
+    tickAt(8500);
+    expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
+  });
+
   test('a replacement after a proved run waits the restart floor, and the beats still reset the wait', async () => {
     const made = world();
     const clock = { at: NOW };
