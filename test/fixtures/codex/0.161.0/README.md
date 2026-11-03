@@ -99,6 +99,10 @@ rows changed, as a seat's own screen draws them.
   not the status row.
 - `near-context-used-nostatus.txt`: the idle hint with no status row. Not a composer:
   the profile declares no fallback.
+- `interrupted-idle.txt`: the interrupted banner, a blank row, `› Ask Codex to do anything`,
+  and the status row `GPT-6.1-Sol high · Context 64% left · weekly 5% left` with
+  `⚠ 3 warnings · f2 to view` on that same row. The transcript above the banner is not
+  in the file. The banner sits above the blank frame, so the box stays the empty prompt.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids
