@@ -590,8 +590,18 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             const fresh = fileStampOf(fullPath);
             if (fresh === null) {
               if (isLinkAt(fullPath)) {
-                // The marker's own sentence, the reader's, not the drop scan's.
-                refusal = 'a symbolic link was found and not followed';
+                // No stamp to reuse. The reader's own sentence is the marker's reason.
+                const checked = checkedDropRelative(
+                  root,
+                  session,
+                  seat,
+                  name,
+                  { session, seat, record_id: pending.id },
+                  scope,
+                  keyState.key,
+                );
+                if (checked.ok) arrival = checked.event;
+                else if (!checked.missing) refusal = checked.reason;
                 break;
               }
               continue;
