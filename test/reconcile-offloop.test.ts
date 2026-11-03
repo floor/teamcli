@@ -770,6 +770,7 @@ describe('a failed endpoint is a difference a reader can act on', () => {
       version: 'test',
       gitHead: null,
       heartbeatAt: '2026-11-01T00:00:12.000Z',
+      heartbeatSeconds: null,
       features: { broker: 'absent' },
       stuck: [],
       roots: [

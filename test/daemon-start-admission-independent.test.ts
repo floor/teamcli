@@ -143,6 +143,7 @@ function health(w: World, reading: Reading): DaemonHealth {
     running: reading === 'unknown' ? null : running, pid: running ? 9999 : null, uid: running ? process.getuid!() : null,
     since: running ? NOW.toISOString() : null, startedBy: running ? 'service-manager' : null, version: 'synthetic', gitHead: null,
     heartbeatAt: NOW.toISOString(), features: { broker: 'absent' }, stuck: [], roots: [], why: reading === 'unknown' ? 'synthetic unknown' : null,
+    heartbeatSeconds: null,
     probe: reading === 'answer' ? { state: 'answered', at: NOW.toISOString() } : reading === 'refused' ? { state: 'refused', at: NOW.toISOString(), code: 'synthetic.refused', message: 'synthetic refusal' }
       : { state: 'unanswered', at: NOW.toISOString(), reason: 'closed' } };
 }

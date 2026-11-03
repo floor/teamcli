@@ -3,6 +3,7 @@
 // `team check` and the daemon's own health answer read it through this module.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { pidAlive } from '../state.ts';
+import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
@@ -116,6 +117,10 @@ export type DaemonState = {
    *  changed neither. Older records carry no field and read as null. */
   gitHead?: string | null;
   heartbeatAt: string;
+  /** The whole seconds the `daemon.heartbeat` word resolved to when this record was written:
+   *  the beat the loop actually runs. A daemon on an injected test beat, and every older record,
+   *  carry no field and read as null. */
+  heartbeatSeconds?: number | null;
   socket: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
@@ -184,6 +189,13 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     version: record.version as string,
     gitHead: typeof record.gitHead === 'string' && record.gitHead !== '' ? record.gitHead : null,
     heartbeatAt: record.heartbeatAt as string,
+    heartbeatSeconds:
+      typeof record.heartbeatSeconds === 'number'
+        && Number.isInteger(record.heartbeatSeconds)
+        && record.heartbeatSeconds >= DAEMON_HEARTBEAT_SECONDS.min
+        && record.heartbeatSeconds <= DAEMON_HEARTBEAT_SECONDS.max
+        ? record.heartbeatSeconds
+        : null,
     socket: record.socket as string,
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
     stuck: requests,

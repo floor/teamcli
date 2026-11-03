@@ -61,6 +61,7 @@ function world(refuseLoad = false) {
   const reading = (answered: boolean): DaemonHealth => ({ daemon: 'teamcli', socket: join(home, 'synthetic-machine.sock'), state: 'running', running: true,
     pid: 424242, uid: 501, since: now().toISOString(), startedBy: 'service-manager', version: 'independent', gitHead: null,
     heartbeatAt: now().toISOString(), features: null, stuck: [], roots: [], why: null,
+    heartbeatSeconds: null,
     probe: answered ? { state: 'answered', at: now().toISOString() } : { state: 'unanswered', at: now().toISOString(), reason: 'timeout' } });
   const sources = { home, service: manager, now, program: { execPath: '/synthetic/runtime/node', entry },
     sleep: async (ms: number) => { waits.push(ms); }, health: async () => reading(true),

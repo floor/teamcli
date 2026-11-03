@@ -76,6 +76,10 @@ export type DaemonHealthSnapshot = {
   /** The commit the answering build was packaged from; absent or null in a source checkout. */
   gitHead?: string | null;
   heartbeatAt: string;
+  /** The whole seconds the answering daemon's loop runs at — the `daemon.heartbeat` word it
+   *  resolved. Absent or null while an injected test beat owns the loop. Additive: a v1 reader
+   *  ignores it. */
+  heartbeatSeconds?: number | null;
   stuck: DaemonStuckRequest[];
   features: DaemonFeatures;
   /**

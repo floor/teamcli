@@ -642,7 +642,7 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
       `running (pid ${String(health.pid)})`,
       `started ${health.startedBy ?? 'unknown'}`,
       `since ${health.since ?? 'unknown'}`,
-      `heartbeat ${health.heartbeatAt ?? 'unknown'}`,
+      `heartbeat ${health.heartbeatAt ?? 'unknown'}${health.heartbeatSeconds === null ? '' : ` (every ${String(health.heartbeatSeconds)}s)`}`,
     ];
     // A daemon can be running while a checkout's send or bus endpoint did not start here; the
     // one line says so instead of reporting plain health, and the detail is in --json and log.

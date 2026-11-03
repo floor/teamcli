@@ -342,6 +342,7 @@ function health(w: World, watch: HostedWatchState | undefined): DaemonHealth {
     daemon: 'teamcli', socket: join(w.home, 'synthetic.sock'), state: 'running', running: true,
     pid: 123456789, uid: 12345, since: new Date(AT - 600_000).toISOString(), startedBy: 'service-manager',
     version: 'fixture', gitHead: null, heartbeatAt: new Date(AT).toISOString(), features: { broker: 'absent' },
+    heartbeatSeconds: null,
     stuck: [], why: null, probe: { state: 'answered', at: new Date(AT).toISOString() },
     roots: [{ root: w.root, team: 'orchard', send: 'serving', bus: 'serving', why: null, ...(watch === undefined ? {} : { watch }) }],
   };

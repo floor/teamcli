@@ -363,8 +363,10 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
  * is only reachable through a running pass's host.
  */
 export type HostedBeatInput = {
-  /** The daemon's fixed heartbeat: a beat is due once this long has passed since the last one. */
-  intervalMs: number;
+  /** The daemon's heartbeat: a beat is due once this long has passed since the last one. A
+   *  number fixes it as before; a function is read on every comparison, so the daemon that
+   *  re-arms its timer on a policy word keeps the mid-pass pulse on the same beat. */
+  intervalMs: number | (() => number);
   /** Every hosted watch this daemon runs. Read on every beat: routes are added while it runs. */
   watches: () => readonly HostedWatch[];
   /** The daemon's own log: one line per route whose tick threw. */
@@ -383,6 +385,7 @@ export type HostedBeat = {
 
 export function createHostedBeat(input: HostedBeatInput): HostedBeat {
   const now = input.now ?? (() => new Date());
+  const intervalMs = typeof input.intervalMs === 'function' ? input.intervalMs : () => input.intervalMs as number;
   let last = now().getTime();
   const pulse = (at: Date, except: HostedRoute | undefined): void => {
     for (const watch of input.watches()) {
@@ -403,7 +406,7 @@ export function createHostedBeat(input: HostedBeatInput): HostedBeat {
     },
     midPass(self: HostedRoute): void {
       const at = now();
-      if (at.getTime() - last < input.intervalMs) return;
+      if (at.getTime() - last < intervalMs()) return;
       last = at.getTime();
       pulse(at, self);
     },

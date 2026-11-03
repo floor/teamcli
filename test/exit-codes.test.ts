@@ -4927,6 +4927,7 @@ function answeringHealth(): DaemonHealth {
     version: 'test',
     gitHead: null,
     heartbeatAt: '2026-10-20T10:00:05.000Z',
+    heartbeatSeconds: null,
     features: { broker: 'absent' },
     stuck: [],
     roots: [],

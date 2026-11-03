@@ -112,6 +112,7 @@ const ANSWERING: DaemonHealth = {
   version: 'test',
   gitHead: null,
   heartbeatAt: null,
+  heartbeatSeconds: null,
   features: null,
   stuck: [],
   roots: [],
