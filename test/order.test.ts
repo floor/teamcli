@@ -68,10 +68,11 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
   return { base, root, home, dir };
 }
 
-/** One seat's placement as a real launch records it: the pane and the workspace it runs in. */
-function place(fixture: Fixture, seats: Record<string, { pane: string; workspace?: string }>): void {
+/** One seat's placement as a real launch records it: the pane and the workspace it runs in, in
+ *  the session a run addresses (the file's own `acme` unless a scene says another). */
+function place(fixture: Fixture, seats: Record<string, { pane: string; workspace?: string }>, session = 'acme'): void {
   updateState(fixture.dir, (state) => {
-    const record = (state.sessions.acme ??= emptySession());
+    const record = (state.sessions[session] ??= emptySession());
     for (const [name, held] of Object.entries(seats)) {
       record.seats[name] = {
         stage: 'ready',
@@ -95,6 +96,8 @@ type World = {
   fail: Set<string>;
   /** The next workspace number the pane host hands out. */
   next: number;
+  /** Every restart argv the pass delegated, whole: the seat and any flags forwarded to it. */
+  argvs?: string[][];
 };
 
 /** The fake pane host + the fake restart: closing removes the workspace, creating pushes the new
@@ -110,12 +113,17 @@ function makeSources(fixture: Fixture, world: World): OrderSources {
     restart: async (argv, io) => {
       const name = argv[0] ?? '';
       world.restarts.push(name);
+      (world.argvs ??= []).push(argv);
       if (world.fail.has(name)) {
         io.stderr(`team restart: ${name} is working; left as it is\n`);
         return 1;
       }
+      // A delegated restart runs with the flags the pass forwarded, so the session it reads and
+      // records is the one those flags name — the file's own when none did.
+      const flag = argv.indexOf('--session');
+      const session = (flag >= 0 ? argv[flag + 1] : undefined) ?? 'acme';
       if (!world.move) return 0;
-      const held = readState(fixture.dir).sessions.acme?.seats[name];
+      const held = readState(fixture.dir).sessions[session]?.seats[name];
       const oldWorkspace = held?.workspace ?? world.agents.find((agent) => agent.name === name)?.workspace;
       const created = `w${String(world.next)}`;
       if (oldWorkspace !== undefined) {
@@ -126,7 +134,7 @@ function makeSources(fixture: Fixture, world: World): OrderSources {
       world.workspaces.push(created);
       const pane = `pane${String(world.next)}`;
       updateState(fixture.dir, (current) => {
-        const record = (current.sessions.acme ??= emptySession());
+        const record = (current.sessions[session] ??= emptySession());
         record.seats[name] = {
           ...(record.seats[name] ?? { stage: 'ready' }),
           stage: 'ready',
@@ -269,6 +277,41 @@ describe('team order', () => {
     await expect(runOrder([], io, makeSources(fixture, world))).resolves.toBe(1);
     expect(io.err).toContain('team order: only the owner or `leads` orders the sidebar; this call is worker\n');
     expect(world.restarts).toEqual([]);
+  });
+
+  test("an owner run with --session and --file places, reads and restarts in that session and file", async () => {
+    const fixture = makeFixture();
+    // ops re-added at the end, under the flag-named session: the state the file's own `acme`
+    // holds is empty, so a run judged there would see no sidebar at all and move nothing.
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } }, 'night');
+    const world: World = {
+      workspaces: ['w1', 'w2', 'w3'],
+      agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]),
+      restarts: [], move: true, fail: new Set(), next: 4,
+    };
+    const io = testIo(fixture.root, { kind: 'owner' });
+    // The host reads record the session each was asked for: every one must be the flag's own.
+    const asked: string[] = [];
+    const plain = makeSources(fixture, world);
+    const sources: OrderSources = {
+      ...plain,
+      sessionState: (session) => { asked.push(`state:${session}`); return plain.sessionState(session); },
+      workspaces: (session) => { asked.push(`workspaces:${session}`); return plain.workspaces(session); },
+      agents: (session) => { asked.push(`agents:${session}`); return plain.agents(session); },
+    };
+    const file = join(fixture.dir, 'team.yaml');
+    await expect(runOrder(['--session', 'night', '--file', file], io, sources)).resolves.toBe(0);
+    expect(asked).not.toContain('workspaces:acme');
+    expect(asked).toContain('workspaces:night');
+    // Each delegated restart carries both flags, so it reads and records in the same session.
+    expect(world.argvs).toEqual([
+      ['ops', '--session', 'night', '--file', file],
+      ['worker', '--session', 'night', '--file', file],
+    ]);
+    const state = readState(fixture.dir);
+    expect(state.sessions.night?.seats.ops?.workspace).toBe('w4');
+    expect(state.sessions.night?.seats.worker?.workspace).toBe('w5');
+    expect(state.sessions.acme?.seats.lead?.pane).toBeUndefined();
   });
 
   test('a restart that refuses mid-pass stops there and says how far it got', async () => {

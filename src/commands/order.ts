@@ -8,6 +8,7 @@ import {
   fileOwnerRefusal,
   isOwner,
   judgeCallerIn,
+  judgeCallerOf,
   logTag,
   noPaneRefusal,
   sessionOwnerRefusal,
@@ -132,7 +133,12 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
   const at = sources.now();
   const verdictOf = (who: Caller, standing: ReturnType<typeof standingOf>): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, home, 'order', standing, sources.now);
-  const judged = judgeCallerIn(io, dir, team, verdictOf);
+  // A run that named a session is judged in it, exactly as `restart` judges its own: the flag
+  // names the session whose sidebar this pass reorders, so the caller is placed there and every
+  // read below (the state record, the sidebar, the agents) follows — never the file's own session.
+  const judged = args.values.session !== undefined
+    ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
+    : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
   if (session === 'default') {
     return callerRefused(out, 'session can\'t be "default", herdr\'s own session');
@@ -242,9 +248,18 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
   }
 
   out.stdout(`team order: closing and re-creating ${sequence.join(', ')} in roster order, each through team restart\n`);
+  // The owner's own --session/--file govern the delegated restarts too: a run that named either
+  // reads and places in that session and file, and each `team restart` it delegates to must run
+  // against the same ones — else the pass would reorder one session's sidebar while restarting
+  // the seats in another.
+  const restartArgv = (name: string): string[] => [
+    name,
+    ...(args.values.session !== undefined ? ['--session', args.values.session] : []),
+    ...(args.values.file !== undefined ? ['--file', args.values.file] : []),
+  ];
   const restarted: string[] = [];
   for (const name of sequence) {
-    const code = await sources.restart([name], io);
+    const code = await sources.restart(restartArgv(name), io);
     if (code !== 0) {
       out.stderr(`team order: team restart ${plainLine(name)} exited ${code}; ${restarted.length === 0 ? 'no seat before it moved' : `${plainLine(joinList(restarted))} relaunched`}; run team order again once it clears\n`);
       logLine(dir, 'order', logTag(walked), `stopped at ${plainLine(name)}: restart exited ${code}`, at);
