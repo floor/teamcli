@@ -82,7 +82,7 @@ test('a caller that drops a command removes only that command', () => {
 });
 
 test('a graphql query in a file is read, and a mutation there is refused', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'actions-graphql-'));
+  const dir = mkdtempSync(join(tmpdir(), 'gql-fixture-'));
   try {
     const query = join(dir, 'query.graphql');
     const mutation = join(dir, 'mutation.graphql');
