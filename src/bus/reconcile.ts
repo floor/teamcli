@@ -586,23 +586,44 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let refusal: string | null = null;
         if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
           for (const name of [pending.id, `${pending.id}.json`]) {
-            const checked = checkedDropRelative(
-              root,
-              session,
-              seat,
-              name,
-              { session, seat, record_id: pending.id },
-              scope,
-              keyState.key,
-            );
-            if (checked.ok) {
-              arrival = checked.event;
+            const fullPath = join(seatDir, name);
+            const fresh = fileStampOf(fullPath);
+            if (fresh === null) {
+              if (isLinkAt(fullPath)) {
+                refusal = 'the record is a symbolic link';
+                break;
+              }
+              continue;
+            }
+            // The drop scan cached this record under its stamp. An unchanged marker reuses that
+            // entry instead of verifying the file again.
+            let entry = cachedEntry(state, seatDir, name, fresh.stamp);
+            if (entry === null || entry.kind !== 'drop') {
+              const checked = checkedDropRelative(
+                root,
+                session,
+                seat,
+                name,
+                { session, seat, record_id: pending.id },
+                scope,
+                keyState.key,
+              );
+              stats.verifies += 1;
+              if (checked.ok) {
+                entry = { kind: 'drop', verified: true, event: checked.event };
+              } else {
+                entry = { kind: 'drop', verified: false };
+                if (!checked.missing) refusal = checked.reason;
+              }
+              storeEntry(state, seatDir, name, fresh.stamp, entry);
+            } else {
+              stats.verifiesReused += 1;
+            }
+            if (entry.kind === 'drop' && entry.verified) {
+              arrival = entry.event;
               break;
             }
-            if (!checked.missing) {
-              refusal = checked.reason;
-              break;
-            }
+            if (refusal !== null) break;
           }
         }
         if (arrival !== null) {
