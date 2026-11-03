@@ -680,6 +680,10 @@ function matchesSubscriber(
 
 export async function startBus(input: StartBusInput): Promise<StartBusResult> {
   const path = busSocket(input.root);
+  // A live socket is a bus already serving, answered before the start lock is read: a starting
+  // bus holds that lock through its whole first pass while its listener already answers, so
+  // waiting the lock out would report a serving bus as still starting.
+  if ((await probeSocket(path)) === 'live') return { kind: 'busy' };
   const lock = await acquireStartLock(`${path}.lock`);
   if (lock.kind === 'timeout') return { kind: 'locked' };
   try {

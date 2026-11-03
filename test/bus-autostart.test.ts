@@ -3,9 +3,10 @@
 // process marker. Hermetic: plans are pure, markers live in a temp root, no herdr, no real home.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { downPlan, upPlan } from '../src/launch/plan.ts';
-import { busHealth, busMarkerPath, readBusMarker, startBus } from '../src/bus/server.ts';
+import { busHealth, busMarkerPath, busSocket, readBusMarker, startBus } from '../src/bus/server.ts';
 import { busProblemNotes, busStatusNotes } from '../src/bus/notes.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { busLabel } from '../src/watch/pane.ts';
@@ -122,5 +123,35 @@ describe('status and check read the bus from its marker', () => {
     const root = tempRoot();
     expect(busStatusNotes({ root, alive: () => false, autostart: true })).toEqual([]);
     expect(busProblemNotes({ root, alive: () => false, autostart: true, recorded: { pane: 'w9:p1', workspace: 'w9' } })[0]).toContain('not running');
+  });
+});
+
+describe('a live socket is a bus already serving', () => {
+  test('a start lock held by a live process does not turn a serving socket into "still starting"', async () => {
+    const root = tempRoot();
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: root });
+    const parsed = validateTeamFile(MINI);
+    if (!parsed.ok) throw new Error('fixture');
+    const socketPath = busSocket(root);
+    const live = createServer((socket) => socket.end());
+    await new Promise<void>((done) => live.listen(socketPath, () => done()));
+    try {
+      // A standalone bus holds the start lock through its whole first pass while its listener
+      // already answers. A start that waited the lock out would spend the 2 s deadline and then
+      // report "another bus server is starting" for a bus that is serving this very instant.
+      writeFileSync(`${socketPath}.lock`, `${String(process.pid)}\n`);
+      const began = Date.now();
+      const started = await startBus({
+        root,
+        team: parsed.team,
+        home: join(root, 'h'),
+        stderr: () => {},
+        reconcileIntervalMs: 0,
+      });
+      expect(started).toEqual({ kind: 'busy' });
+      expect(Date.now() - began).toBeLessThan(1000);
+    } finally {
+      await new Promise<void>((done) => live.close(() => done()));
+    }
   });
 });
