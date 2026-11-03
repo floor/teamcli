@@ -26,12 +26,6 @@ export const WAKE_VERIFY_MS = 10_000;
  *  line, so a second Enter never goes to an empty box or to someone else's text. */
 export const MAX_WAKE_ENTERS = 3;
 
-/** The line a walk types when the message is already stored in the seat's own inbox: a trigger
- *  only. The storing leg delivered the record, so this line names no file and repeats no body —
- *  it gives the seat the turn it would otherwise wait for, and the seat reads the inbox it
- *  already watches (a seat that reads at its next turn is woken without a second copy). */
-export const STORED_WAKE_LINE = 'You have mail, read your inbox.';
-
 /** The visible lines one read covers: the composer and the working line drawn above it. */
 const WAKE_LINES = 40;
 

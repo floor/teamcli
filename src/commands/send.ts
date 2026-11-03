@@ -47,6 +47,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
+import { cascadeOrder, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf } from '../send/walk-cascade.ts';
 import { webhookRouteOf } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
@@ -58,7 +59,7 @@ import {
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { deliverTypedWake, herdrTypedWakeHost, STORED_WAKE_LINE, type TypedWakeHost } from '../send/typed-wake.ts';
+import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
@@ -129,12 +130,17 @@ writes nothing, and the log records writes. Under --json its document's \`delive
 names every leg in order with \`eligible\` and the reason it would be skipped, including
 the socket leg a Claude receiver's files keep out.
 
-A send walks the receiving seat's delivery order — mcp-inbox, typed, drop by
-default. For Codex with no declared order, the runtime queue leads when its signed
-codex-daemon setting is on, followed by a typed wake before the inbox fallback; when off,
+A send walks the owner's cascade: the channel-class legs the receiving seat's delivery
+order names, then the typed leg, then the drop file. For Codex with no declared order, the
+runtime queue leads when its signed
+codex-daemon setting is on, followed by a typed wake before the drop; when off,
 the typed wake leads. A receiving CLI whose profile declares its own session call is walked
-that call first while no level declares an order. A declared order is followed as written.
-A level of that seat's own
+that call first while no level declares an order. Nothing declared leaves typed, then drop.
+A declared order names the legs the seat accepts, and the cascade sets the order they are
+tried in — a word placing the drop first still walks it last, because the channel classes
+and the typed leg are tried before it. The mcp-inbox name is not a leg in this build: the
+MCP inbox is the store's reader, and a push from an MCP server is not a wake; a word naming
+it is read and reported unavailable. A level of that seat's own
 chain, entity, project, team, seat, may drop legs from the order or put the legs it keeps in a
 different order, and may add
 native, the sender's own frame, headless-resume, a headless runtime's own turn,
@@ -153,14 +159,13 @@ says: every other leg is kept out — each one's reason is recorded — and the 
 writes the drop file, with nothing typed and no frame sent. The history line names
 the channel the send went by and the legs that failed before it.
 
-The mcp-inbox leg writes the same 0600 drop file and types nothing: it takes the
-send only when the seat's own inbox server is running (\`.inbox-listener\` beside
-the message names this seat, this session and this root, with a live pid), and is
-otherwise skipped as \`mcp-inbox: no live inbox listener\`. A live listener gets
-the message and a short wait for the receipt its \`inbox_read\` call leaves; that
-receipt is \`delivered (read)\` — the seat read the message, not that it acted on
-it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on disk
-and the walk ends rather than typing into a pane the inbox was chosen over.
+The MCP inbox is the store's reader, not a delivery leg (\`src/send/walk-cascade.ts\`):
+the signed record every leg writes is what its server reads, the same records \`team drops
+--read\` reads, and a push from an MCP server is not a wake. A \`delivery_order\` that still
+names \`mcp-inbox\` keeps the word — the catalogue reads it — and the walk reports it as
+skipped with its reason; \`team check\` notes the word. A receipt the inbox's \`inbox_read\`
+call leaves on a record the drop leg stored is still the read the watch promotes; the drop
+leg itself waits for no receipt and ends the walk.
 
 Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
 with the receiving seat's delivery class in plain words: \`woken through its event
@@ -175,14 +180,14 @@ needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, or herdr reported the
-               seat working; \`delivered (read)\` when the mcp-inbox leg's receipt came
+               seat working; \`delivered (read)\` when a transport leg's receipt came
                back inside its grace — the seat read the message, which is not a claim
                that it acted on it. A trigger typed into a composer is never delivered:
                it is \`sent (unconfirmed)\`
-  sent         a leg's success with no signed read receipt (exit 0). The mcp-inbox and
-               drop legs left the 0600 record in the seat's inbox or drop folder and
-               typed nothing; the typed leg wrote the same record and the trigger left
-               the composer, and its line says \`trigger taken, no read receipt yet\`
+  sent         a leg's success with no signed read receipt (exit 0). The drop leg left
+               the 0600 record in the seat's drop folder and typed nothing; the typed
+               leg wrote the same record and the trigger left the composer, and its
+               line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
   held         the message is safe — on disk, or in the frame a Claude Code seat's
@@ -317,8 +322,8 @@ export type DirectSendResult = {
 
 /**
  * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
- * live receiver without a keystroke — the typed and native legs type, and the drop and mcp-inbox
- * legs are stored copies rather than wakes, so none of the four is attempted. The walk's ending is
+ * live receiver without a keystroke — the typed and native legs type, and the drop leg is a
+ * stored copy rather than a wake, so none of the three is attempted. The walk's ending is
  * handed back as a result instead of only an exit code. Admission, the delivery order and every
  * remaining route's rules are the same ones an ordinary send runs.
  */
@@ -395,9 +400,10 @@ export type SendHost = {
    *  key and the seat's, and the registry project's (`src/send/delivery.ts`). A test hands in a
    *  chain to decide the order without a file to write. */
   delivery?: Partial<Record<SettingLevel, readonly (DeliveryLeg | PendingNativeFallbackLeg)[] | undefined>>;
-  /** How long the mcp-inbox leg waits for its receipt, in milliseconds. The real host leaves it
-   *  at `INBOX_GRACE_MS`; a test sets 0 (beside a listener it also writes) to see the
-   *  unconfirmed ending without waiting, or a small number to watch the receipt land. */
+  /** How long a receipt-earning transport leg (native queue, headless resume, typed) waits for
+   *  its receipt, in milliseconds. The real host leaves it at `INBOX_GRACE_MS`; a test sets 0
+   *  (beside a listener it also writes) to see the unconfirmed ending without waiting, or a
+   *  small number to watch the receipt land. */
   inboxGraceMs?: number;
   /** How long the channel leg waits for the seat server's push marker, in milliseconds. The real
    *  host leaves it at `CHANNEL_PUSH_GRACE_MS`; a test sets 0 to see the ending without waiting,
@@ -1178,8 +1184,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
 
   const dry = args.flags.has('dry-run');
-  // The receiving seat's own chain — entity, project, team, seat — decides the order the send
-  // walks; nothing declared leaves mcp-inbox, typed, drop. Each level's word is the signed
+  // The receiving seat's own chain — entity, project, team, seat — decides the legs the send
+  // may walk; nothing declared leaves typed, drop, and the walk itself is the owner's cascade
+  // (src/send/walk-cascade.ts): channel-class legs first, the sender-posted webhook second,
+  // typed third, and the mailbox last under all of them. Each level's word is the signed
   // `delivery-order` policy its record holds, and the receiving team file's own keys, the
   // seat's and the registry project's legacy words fill in where no signed record is held; the
   // seat's signed settings say `delivery_order` and `human` in the file's place; a host that
@@ -1347,43 +1355,34 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // drop leg alone: the ruling runs further than any profile.
   const typedWake = human ? null : (profileFor(to.cli)?.typedWake ?? null);
   const walkingTyped = typedWake !== null && ordered.includes('typed');
+  // The owner's cascade (src/send/walk-cascade.ts): whatever order the chain declared, the
+  // walk tries the channel-class legs first, then typed, then the mailbox — and it stops at the
+  // first leg taken. An `mcp-inbox` word is read as unavailable: the leg is never attempted,
+  // and the report says why. The mailbox sits under all three classes because the signed record
+  // is stored before the walk begins.
+  const unavailable = unavailableLegsOf(ordered);
+  const cascade = cascadeOrder(ordered);
   // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
   // adapter keeps the message in its bus inbox and the sender is told so.
-  const eventLegs: DeliveryLeg[] = ordered.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
+  const eventLegs: DeliveryLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
   const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop');
   const chosen: readonly DeliveryLeg[] = human ? ['drop'] : eventLegs;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
-  // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
-  // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
-  // wake, so none is attempted. A functional headless route would stay if this build carried
-  // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
-  // receiver offers it. A watch principal makes the walk direct by itself: the watch's own send
-  // never falls back to a route that types or stores, whatever hook its caller built.
+  // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
+  // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
+  // functional headless route would stay if this build carried one. Every remaining leg keeps
+  // its own rules, and the order's own words decide whether the receiver offers it. A watch
+  // principal makes the walk direct by itself: the watch's own send never falls back to a route
+  // that types or stores, whatever hook its caller built.
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
   const declaredWalk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
-  // A live inbox listener is walked even when the delivery order leaves it out or places it
-  // behind the drop: the listener is the seat's own server standing beside its inbox, so reaching
-  // it puts the record in front of the seat, while the drop file behind it would leave a
-  // listening seat to read the message a turn late. The rest of the order is walked exactly as
-  // written. A human's walk is the drop alone and a watch's walk stores nothing, so neither takes
-  // a leg spliced in here. The plain line beside the walk says the order did not put it there.
-  let inboxSplicedAt = -1;
-  const walk: readonly DeliveryLeg[] = (() => {
-    if (human || directWalk) return [...declaredWalk];
-    const dropAt = declaredWalk.indexOf('drop');
-    const inboxAt = declaredWalk.indexOf('mcp-inbox');
-    if (dropAt === -1 || (inboxAt !== -1 && inboxAt < dropAt)) return [...declaredWalk];
-    if (!inboxLive(dropDir, to.root, to.session, to.seat, host.build?.()).live) return [...declaredWalk];
-    inboxSplicedAt = dropAt;
-    return [
-      ...declaredWalk.slice(0, dropAt),
-      'mcp-inbox' as const,
-      ...declaredWalk.slice(dropAt).filter((leg) => leg !== 'mcp-inbox'),
-    ];
-  })();
+  // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
+  // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
+  // store's reader, and the record is already stored there for it to read.
+  const walk: readonly DeliveryLeg[] = [...declaredWalk];
   // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
   // the socket. When one of them takes the send, a channel push for the same id would wake the
   // seat a second time, so a stale serving channel is held off before the record is written.
@@ -1404,6 +1403,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     : null;
   report.delivery = [
     ...(impliedSocketReason === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocketReason }]),
+    // A word this build reads but never walks is reported first, with its reason: it is not a
+    // leg of the walk, and the states that follow are. A human's plan lists it among the legs
+    // the ruling spared instead, with the human reason.
+    ...(human ? [] : unavailable.map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE }))),
     ...planLegs.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
 
@@ -1495,15 +1498,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // remember to pass one.
   const directGuard = composedGuard(host);
 
-  // The delivery walk, in the order the receiving seat's chain resolves to. A leg that takes
+  // The delivery walk, in the owner's cascade over the legs the receiving seat's chain resolves
+  // to: the channel classes, then typed, then the mailbox. A leg that takes
   // the send ends the walk; a leg that definitely cannot take it hands the send to the next
   // one and its reason joins `failures`, which every history line this walk writes carries.
   // The typed leg looks for a live agent before it types; one it cannot find is a leg that
   // definitely cannot take the send, so the walk moves on with the reason recorded. Once the
   // typed leg types, its own outcome is the send's. The drop leg
-  // writes the typed leg's own file and stops there, with nothing typed. The mcp-inbox leg
-  // takes the send only while the seat's own inbox server is listening, and is otherwise
-  // recorded and passed. The native leg reaches a Codex seat through its own runtime queue, with
+  // writes the typed leg's own file and stops there, with nothing typed. The native leg reaches
+  // a Codex seat through its own runtime queue, with
   // nothing typed into a pane; a sender whose own file declares Claude Code gets the handoff
   // instead (unless `--wait` is set, since a handoff returns immediately to the caller before the
   // frame is sent). A human's walk is the drop leg alone; the legs this rule kept out are
@@ -1621,33 +1624,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // lowering keeps every route not yet disproved, and the class is re-read with only those.
   const walkLost: { socket?: boolean; endpoint?: boolean } = {};
   // The class in words, as the walk has disproved it so far and with the wake this run made: every
-  // ending that appends the class reads the same sentence, including the stored-wake ending, which
-  // reports the store and the wake together.
+  // ending that appends the class reads the same sentence.
   const wordsNow = (wake: WakeOutcome | undefined): string =>
     classWords(classWithout(to, host.home, walkLost, declared), to.seat, wake);
   const lowerDelivery = (): void => {
     report.deliveryWords = wordsNow(wakeOutcome);
   };
-  // A pull-on-turn seat reads at its next turn, and a storing leg alone gives it none. For such a
-  // seat the walk does not end on the stored copy: the typed leg behind it types one trigger-only
-  // line (src/send/typed-wake.ts), and the ending reports the store and the wake together. The
-  // leg that stored the record is named here; null means none has, so the typed leg is a
-  // delivery rather than a trigger for one. Only `pull-on-turn` is a target: a seat no route can
-  // wake (`none`) has a walking typed leg of its own when its order names one, but a storing leg
-  // is that walk's ending, exactly as it is for a push or between-turns seat.
-  let storedQueued: 'mcp-inbox' | 'drop' | null = null;
-  const pullOnlyTarget = (): boolean =>
-    !human && typedWake !== null && classWithout(to, host.home, walkLost, declared).cls === 'pull-on-turn';
-  const typedAhead = (from: number): boolean => walk.slice(from + 1).includes('typed');
   for (const [at, leg] of walk.entries()) {
-    // A storing leg ahead of this one already put the record in the seat's inbox: the stored copy
-    // is the send, and every leg behind it except the typed trigger would deliver a second time.
-    // The walk goes straight to the typed leg; the store only happens when one stands behind it.
-    if (storedQueued !== null && leg !== 'typed') {
-      markLeg(leg, 'skipped', 'the record is already stored by the leg ahead of it');
-      note(walkAttempt(leg, 'unreachable', true, host.now(), startedAt, { reason: 'the record is already stored by the leg ahead of it' }));
-      continue;
-    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
       // the seat's inbox first, so the push and every later reader carry the same signed copy;
@@ -1680,47 +1663,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'channel', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
       }
       return sentChannel(io, to.seat, report, ms);
-    }
-    if (leg === 'mcp-inbox') {
-      // The one line a send whose order put the drop first owes its reader: the walk is not the
-      // order, because this seat's inbox server is listening and a stored copy behind it would be
-      // read a turn late. Printed when the leg is reached, not when it takes the send.
-      if (at === inboxSplicedAt) {
-        io.stderr(`team send: ${to.seat}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
-      }
-      // The seat's own inbox, not a pane: the leg takes the send only when a listener beside
-      // the message names this seat, session and root with a live pid — and, when this process
-      // knows its own build, when that listener's marker names the same build. A listener left
-      // running from an older install has that build's parsers in memory and cannot read a
-      // record this build signs; the walk records the stale runtime and moves on.
-      const live = inboxLive(dropDir, to.root, to.session, to.seat, host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        markLeg('mcp-inbox', 'skipped', live.reason);
-        note(walkAttempt('mcp-inbox', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: live.reason }));
-        continue;
-      }
-      markLeg('mcp-inbox', 'attempted');
-      await ensureEpisode();
-      // The seat reads at its next turn: the stored copy is not the walk's ending. The record is
-      // written as this leg writes it, and the typed leg behind it types one trigger-only line.
-      // The seat's lock is released before that: the typed wake takes it again for its own type
-      // and Enter. A seat another command holds keeps the leg's own answer — nothing is typed
-      // into a seat a command is working in, and its own queued ending stores the record.
-      if (pullOnlyTarget() && typedAhead(at)) {
-        const stored = await storeInbox(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs);
-        if (stored.ok) {
-          stored.release();
-          storedQueued = 'mcp-inbox';
-          note(walkAttempt('mcp-inbox', 'delivered', true, host.now(), startedAt, { reason: "written to the seat's own MCP inbox; the typed wake behind it is this walk's" }));
-          continue;
-        }
-        if ('busy' in stored) {
-          return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
-        }
-        return refuse(io, dir, who, `${to.seat}: ${stored.reason}; nothing was sent`, host, report);
-      }
-      return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
     }
     if (leg === 'socket') {
       // The socket leg dials only a receiving Claude session whose launch declares
@@ -2149,71 +2091,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       walkLost.endpoint = true;
       lowerDelivery();
       await ensureEpisode();
-      // The seat reads at its next turn: the stored copy is not the ending, and the typed leg
-      // behind this one types one trigger-only line. A seat another command holds keeps the leg's
-      // own queued answer, which stores the record without typing into it.
-      if (pullOnlyTarget() && typedAhead(at)) {
-        const stored = await storeDropRecord(dir, who, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, human, startedAt, note, "the record is stored; the typed wake behind it is this walk's");
-        if (stored.ok) {
-          stored.release();
-          storedQueued = 'drop';
-          continue;
-        }
-        if ('busy' in stored) {
-          if (!human && !dry) {
-            io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
-          }
-          return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
-        }
-        return refuse(io, dir, who, `${to.seat}: ${stored.reason}; nothing was sent`, host, report);
-      }
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
-      // did, and the sender is told so (src/send/no-pane-messaging.ts).
+      // did, and the sender is told so (src/send/no-pane-messaging.ts). It is the cascade's last
+      // resort, under every other class (src/send/walk-cascade.ts).
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
       }
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
-    }
-    // The typed leg, when a storing leg ahead of this one already took the send: the message is
-    // in the seat's own inbox, so this leg is a trigger only — one fixed line into the profile's
-    // idle composer through the same gated module, never the body and never a second copy. The
-    // ending reports both facts: the record queued in the inbox, and the wake typed or why not.
-    // The stored record is the send's delivery; a wake that did not run leaves it for the seat's
-    // next turn, and the words say so beside the store.
-    if (storedQueued !== null) {
-      const found = findAgent(host, to.session, to.seat);
-      const wake = !found.ok
-        ? { typed: false, delivered: false, reason: found.reason }
-        : isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))
-          ? { typed: false, delivered: false, reason: 'the seat is back at its shell; nothing was typed' }
-          : await wakeStoredSeat(host, dir, to.session, to.seat, found.pane, to.cli);
-      wakeOutcome = wake.delivered
-        ? { attempted: true, woke: true, reason: wake.reason }
-        : { attempted: wake.typed, reason: wake.reason };
-      report.deliveryWords = wordsNow(wakeOutcome);
-      markLeg('typed', 'attempted', wake.reason);
-      note(walkAttempt('typed', wake.delivered ? 'delivered' : 'unreachable', false, host.now(), startedAt, { reason: wake.reason }));
-      if (!wake.delivered) failures.push(`typed: ${wake.reason}`);
-      const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), ...historySender(report), body, id: msgId, thread: record.thread };
-      if (wait) {
-        return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, storedQueued, timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
-      }
-      const failed = failures.length > 0 ? { failed: [...failures] } : {};
-      const ms = host.now().getTime() - startedAt;
-      if (storedQueued === 'mcp-inbox') {
-        const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-        if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
-          clearPending(dropDir, msgId);
-          logLine(to.dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
-          appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'delivered (read)', ms, via: 'mcp-inbox', ...failed });
-          return delivered(io, to.seat, report, 'read');
-        }
-        logLine(to.dir, 'send', who, `${to.seat}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
-        appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
-        return sentUnconfirmed(io, to.seat, report, ms, 'mcp-inbox');
-      }
-      appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'drop', ...failed });
-      return sentUnconfirmed(io, to.seat, report, ms, 'drop');
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. The line is the seat's own
@@ -2387,11 +2271,13 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
 }
 
 /** The human ruling's reason for one leg, or null for the drop file. These are the same words
- *  the history line records, without the leg prefix the report entry already carries. */
+ *  the history line records, without the leg prefix the report entry already carries.
+ *  `mcp-inbox` is not a leg at all (ADR D1): whatever the seat's pane is, the word is reported
+ *  as the store's reader, never as a leg the human ruling spared. */
 function humanSkipReason(leg: DeliveryLeg): string | null {
   if (leg === 'typed') return "the pane is a human's, and nothing is typed into it";
   if (leg === 'native' || leg === 'socket') return "the pane is a human's, and no frame is sent";
-  if (leg === 'mcp-inbox') return "the pane is a human's, and the drop leg is the only one walked";
+  if (leg === 'mcp-inbox') return MCP_INBOX_UNAVAILABLE;
   if (leg === 'channel') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'headless-resume') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'session') return "the pane is a human's, and no session is created for it";
@@ -2440,6 +2326,13 @@ function dryDeliveryPlan(input: {
   ) {
     entries.push(candidate('socket'));
   }
+  // A word this build reads but never walks is named with its reason, ahead of the walk, the
+  // same way the real send's report names it.
+  if (!input.human) {
+    for (const leg of unavailableLegsOf(input.order)) {
+      entries.push({ leg, state: 'skipped', eligible: false, reason: MCP_INBOX_UNAVAILABLE });
+    }
+  }
   const legs: readonly DeliveryLeg[] = input.human
     ? (input.order.includes('drop') ? input.order : [...input.order, 'drop'])
     : input.walk;
@@ -2457,11 +2350,10 @@ function human0(overrides: { human?: boolean }, declared: { human?: boolean } | 
  *  (src/send/uds.ts's SOCKET_SEND is off) or a seat whose CLI has no cross-session socket — is
  *  not a channel a run would take, and neither is named. The handoff counts as the native leg
  *  only for a sender whose own file declares Claude Code, since only that sender makes the call
- *  the leg is. The mcp-inbox leg is a channel: it writes the seat's inbox drop and waits for its
- *  receipt, and the legs behind it are named as the fallbacks. The where-nothing-is-carried
- *  phrase is unreachable by the default order of any seat — its legs are mcp-inbox, typed,
- *  drop, and each is either named or passed over for a reason — and only an order that holds
- *  none of them prints it. */
+ *  the leg is. A name this build only reads (`mcp-inbox`) is no channel and is never named here.
+ *  The where-nothing-is-carried phrase is unreachable by the default order of any seat — its
+ *  legs are typed and drop, and each is either named or passed over for a reason — and only an
+ *  order that holds none of them prints it. */
 function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean): string {
   // The socket leg is walkable only where this run would dial it: a Claude receiver that itself
   // declares accept. The native leg is a Codex receiver's own runtime queue, and for any other
@@ -2479,7 +2371,6 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
     }
     if (leg === 'headless-resume') return 'its headless session resume';
     if (leg === 'channel') return 'its own development channel';
-    if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
     if (leg === 'session') return 'the CLI\'s own session call, with the brief as one argument';
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
@@ -2487,7 +2378,6 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
   const walkable = order.filter(
     (leg) =>
       leg === 'drop'
-      || leg === 'mcp-inbox'
       || leg === 'channel'
       || leg === 'typed'
       || (leg === 'socket' && socketWalkable)
@@ -2495,14 +2385,20 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
       || (leg === 'headless-resume' && resumeWalkable)
       || (leg === 'session' && profileFor(cli)?.sessionCli != null),
   );
-  const [first] = walkable;
+  // The mailbox closes the walk. Behind the typed leg it is the same 0600 record the typed leg
+  // already stores, so naming it again would describe one file twice; the typed leg's own words
+  // carry it. Anywhere else the drop leg is named like every other leg.
+  const named = walkable.length >= 2 && walkable[walkable.length - 1] === 'drop' && walkable[walkable.length - 2] === 'typed'
+    ? walkable.slice(0, -1)
+    : walkable;
+  const [first] = named;
   if (first === undefined) return 'no leg of its delivery order this build can walk';
   // The drop leg is a file and no keystroke: it always takes the send, so nothing stands behind it.
   if (first === 'drop') return 'a 0600 drop file with nothing typed into the pane';
   // Every leg of the order is named: the typed leg hands the send to a leg behind it when it
   // finds no live agent, so nothing after it is dropped from the walk's description.
-  if (walkable.length === 1) return words(first);
-  return `${words(first)}, falling back to ${walkable.slice(1).map(words).join(', then ')}`;
+  if (named.length === 1) return words(first);
+  return `${words(first)}, falling back to ${named.slice(1).map(words).join(', then ')}`;
 }
 
 /** What a direct-only run reports: the command's own exit code and the walk's ending. A run
@@ -2610,14 +2506,16 @@ function stampHandoffNonce(body: string, nonce: string): string {
 /** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
  *  not confirmed within the 10m window, `team watch` walks these legs in order. The socket leg is
  *  not one of them: a frame is written by the send that walks it, and a handoff's pending record
- *  names only the legs the watcher itself can take. */
+ *  names only the legs the watcher itself can take. An `mcp-inbox` word is no leg in this build
+ *  (src/send/walk-cascade.ts), so no new record names it; the watcher still reads a record an
+ *  older build wrote. */
 function fallbackAfterNative(
   walk: readonly DeliveryLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
   return walk
     .slice(at + 1)
-    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'mcp-inbox' || leg === 'typed' || leg === 'drop');
+    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'typed' || leg === 'drop');
 }
 
 /** The registry id the sender's record carries, when it has one: the owner and the watch are
@@ -3256,7 +3154,7 @@ function queuedBusy(
   dir: string,
   who: string,
   seatName: string,
-  leg: 'typed' | 'mcp-inbox' | 'drop',
+  leg: 'typed' | 'drop',
   msgId: string,
   /** The pid holding the seat's lock, when this process met it; null for the daemon's own
    *  queue, which keeps the message itself and writes its own log line. */
@@ -3468,10 +3366,10 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   return { ok: true, pane: (named[0] as { pane: string }).pane };
 }
 
-/** What storing a record in the seat's own drop folder took. The caller owns the ending — the
- *  leg's own, or a walk that goes on to the typed wake — and releases the lock before it types.
- *  `busy` is another command holding the seat: nothing was written here, and the leg's own
- *  queued answer (which writes the record without that lock) is the caller's. */
+/** What storing a record in the seat's own drop folder took. The caller owns the ending and
+ *  releases the lock after it. `busy` is another command holding the seat: nothing was written
+ *  here, and the leg's own queued answer (which writes the record without that lock) is the
+ *  caller's. */
 type DropStore =
   | { ok: true; release: () => void }
   | { ok: false; busy: number }
@@ -3480,8 +3378,7 @@ type DropStore =
 /**
  * The drop leg's storage half, under the seat lock: the seal, the signed record written whole,
  * the durable copy confirmed, the pending marker beside it and the log line. `heldReason` is what
- * the walk's episode records for the copy this leg stored; a walk that goes on to the typed wake
- * says so in that reason, because the store is not its last route.
+ * the walk's episode records for the copy this leg stored.
  */
 async function storeDropRecord(
   dir: string,
@@ -3942,201 +3839,6 @@ async function deliverTypedWakeSeat(
   }
 }
 
-/** What storing a record in the seat's inbox did: the lock held for the write (the caller
- *  releases it), the pid of the command already holding the seat, or the reason nothing was
- *  written. */
-type InboxStore =
-  | { ok: true; release: () => void }
-  | { ok: false; busy: number }
-  | { ok: false; reason: string };
-
-/**
- * Stores the signed record in the seat's own inbox under the seat lock, without waiting for a
- * receipt and without ending the send: the walk's mcp-inbox leg uses this when the seat cannot
- * be woken while idle and a typed leg stands behind it, so the record is in place before the
- * trigger line is typed and the walk goes on to that leg. The marker is written here, as on
- * every inbox send. A held lock is the queue path: the caller ends as the busy ending does,
- * with the record and marker written without that lock. Nothing here notes the walk or appends
- * history — the caller owns the ending.
- */
-async function storeInbox(
-  dir: string,
-  session: string,
-  seatName: string,
-  dropDir: string,
-  payload: RecordPayload,
-  from: string,
-  host: SendHost,
-  report: Report,
-  sentAs: SentAs | null,
-): Promise<InboxStore> {
-  const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) return { ok: false, busy: lock.held };
-  try {
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      return { ok: false, reason: 'the record could not be written' };
-    }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
-    if (!written.ok) return { ok: false, reason: `the record could not be written (${written.reason})` };
-    report.sent = payload.id;
-    markPending(dropDir, {
-      ts: host.now().toISOString(),
-      from,
-      to: seatName,
-      ...(sentAs === null ? {} : sentAs),
-      body: payload.body,
-      id: payload.id,
-      thread: payload.thread,
-      leg: 'mcp-inbox',
-    });
-    return { ok: true, release: () => { lock.release(); } };
-  } catch (error) {
-    lock.release();
-    throw error;
-  }
-}
-
-/**
- * The trigger-only typed wake that follows a storing leg: one line into the seat's idle
- * composer, typed through the same guarded wake as every typed send (src/send/typed-wake.ts)
- * but writing no record. The storing leg already delivered the message to the seat's own
- * inbox; this line only gives the seat the turn it would otherwise wait for, so it names no
- * file and repeats no body. The seat lock is held across the typing, as the typed leg holds it,
- * so a second send cannot type into the same composer. A held lock, a bare shell and an absent
- * pane writer are reasons nothing was typed; none of them undoes the store.
- */
-async function wakeStoredSeat(
-  host: SendHost,
-  dir: string,
-  session: string,
-  seatName: string,
-  pane: string,
-  cli: string,
-): Promise<{ typed: boolean; delivered: boolean; reason: string }> {
-  const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) {
-    return { typed: false, delivered: false, reason: `another command holds the seat (pid ${String(lock.held)}); nothing was typed` };
-  }
-  try {
-    const wakeHost = host.typedWake?.(session);
-    if (wakeHost === undefined) return { typed: false, delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
-    const wake = await deliverTypedWake(wakeHost, pane, STORED_WAKE_LINE, cli);
-    return { typed: wake.typed, delivered: wake.delivered, reason: wake.reason };
-  } finally {
-    lock.release();
-  }
-}
-
-/**
- * The mcp-inbox leg: the message is written whole into the seat's own inbox — the same 0600
- * drop file the typed leg would leave — and nothing is typed. The leg takes the send whenever
- * the seat's own server is listening (`inboxLive` has just said so); the wait that follows is
- * only for the receipt, and either ending exits 0. A receipt means the seat's client read the
- * message — `delivered (read)`, never a claim that it acted on it — and clears the pending
- * record. No receipt is `sent (unconfirmed)`, with the record left beside the drop carrying its
- * leg, so a watch pass can tell the message is the seat's own to read and never types it. The
- * lock is held across the write, as the typed leg holds it across its trigger.
- */
-async function deliverInbox(
-  io: Io,
-  dir: string,
-  who: string,
-  from: string,
-  project: string,
-  root: string,
-  session: string,
-  seatName: string,
-  dropDir: string,
-  payload: RecordPayload,
-  host: SendHost,
-  report: Report,
-  startedAt: number,
-  /** The reasons the legs before this one did not take the send: every history line carries them. */
-  failures: readonly string[] = [],
-  /** The address as written, when it was a form: every history line carries it beside the seat. */
-  sentAs: SentAs | null = null,
-  wait = false,
-  timeoutS = 60,
-  extraRoot?: { root: string; session: string },
-  note: WalkNote = (_attempt) => { /* no episode */ },
-): Promise<number> {
-  const failed = failures.length > 0 ? { failed: [...failures] } : {};
-  const msgId = payload.id;
-  const body = payload.body;
-  const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) {
-    // The seat's lock is another command's, so nothing reaches its inbox server here. The record
-    // and its inbox marker are written without that lock — the id names the file, the seal is
-    // idempotent and the relay publishes each name once — and the seat's own server reads the
-    // record when the seat is free; a marker past the inbox window is the watch's typed retry.
-    // An acceptance, never a delivery.
-    setLegState(report, 'mcp-inbox', 'queued');
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      setLegState(report, 'mcp-inbox', 'refused', 'the record could not be written');
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
-    }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
-    if (!queuedWrite.ok) {
-      setLegState(report, 'mcp-inbox', 'refused', `the record could not be written (${queuedWrite.reason})`);
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
-    }
-    const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
-    markPending(dropDir, { ...queuedEntry, leg: 'mcp-inbox' });
-    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the seat's inbox and the watch` }));
-    appendHistory(project, root, host.home, {
-      ...queuedEntry,
-      ...historySender(report),
-      outcome: 'queued (receiver busy)',
-      ms: host.now().getTime() - startedAt,
-      ...failed,
-    });
-    return queuedBusy(io, dir, who, seatName, 'mcp-inbox', msgId, lock.held, host, report, startedAt);
-  }
-  const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
-  try {
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
-    }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
-    if (!written.ok) {
-      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
-    }
-    report.sent = msgId;
-    // The seat's own inbox server took the record: the transport delivered it, whether or not a
-    // read receipt follows inside the window.
-    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: "written to the seat's own MCP inbox" }));
-    // Written before the wait: a process that dies mid-wait still leaves the message marked
-    // for the watch's later pass. A receipt clears it; `sent (unconfirmed)` leaves it on disk.
-    markPending(dropDir, { ...entry, leg: 'mcp-inbox' });
-    if (!wait) {
-      const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-      if (await awaitReceipt(dropDir, msgId, { to: seatName, root, session }, host.home, grace, claimBindingIn(root, session, seatName, msgId))) {
-        clearPending(dropDir, msgId);
-        logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
-        appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'mcp-inbox', ...failed });
-        return delivered(io, seatName, report, 'read');
-      }
-      const ms = host.now().getTime() - startedAt;
-      logLine(dir, 'send', who, `${seatName}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
-      appendHistory(project, root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
-      return sentUnconfirmed(io, seatName, report, ms, 'mcp-inbox');
-    }
-  } finally {
-    lock.release();
-  }
-  return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'mcp-inbox', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
-}
-
 /**
  * Stages the channel leg before its push wait: the record is written into the seat's inbox —
  * the same signed copy every later reader and the seat's own server see — and its pending
@@ -4360,8 +4062,10 @@ export async function walkBriefDelivery(input: {
   // and the legs this ruling kept out are named first, exactly as a send's walk records them.
   const human = read.overrides.human ?? (declared?.human === true);
   // The bus inbox closes every walk: with no typed leg, the drop is where an unreached seat's
-  // message waits (src/send/no-pane-messaging.ts).
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order.includes('drop') ? order : [...order, 'drop'];
+  // message waits (src/send/no-pane-messaging.ts). The walk itself is the owner's cascade
+  // (src/send/walk-cascade.ts): channel legs, typed, then the mailbox — never a name this
+  // build only reads.
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : [...cascadeOrder(order), ...(order.includes('drop') ? [] : ['drop'] as const)];
   const report: Report = {
     json: false,
     seat: seatName,
@@ -4375,19 +4079,12 @@ export async function walkBriefDelivery(input: {
     for (const leg of order) {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
-      else if (leg === 'mcp-inbox') failures.push("mcp-inbox: the pane is a human's, and the drop leg is the only one walked");
+      else if (leg === 'mcp-inbox') failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
     }
+  } else {
+    for (const leg of unavailableLegsOf(order)) failures.push(`${leg}: ${MCP_INBOX_UNAVAILABLE}`);
   }
   for (const leg of walk) {
-    if (leg === 'mcp-inbox') {
-      const live = inboxLive(dropDir, input.root, input.session, seatName, input.host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        continue;
-      }
-      const exit = await deliverInbox(input.io, input.dir, from, from, project, input.root, input.session, seatName, dropDir, input.payload, input.host, report, startedAt, failures);
-      return { via: 'mcp-inbox', walked: true, exit, failures };
-    }
     if (leg === 'native') {
       // This build's send reads `native` as the frame on a cross-session socket — a socket write
       // SOCKET_SEND does not make here — or as a handoff to a Claude Code sender's own
@@ -4458,10 +4155,10 @@ const CLIENT_FRAME_HEADER = `Message from ${CLIENT_SLICE_DISPLAY_NAME} (owner)`;
 
 /** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
  *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
- *  transport that reaches a live receiver — its own inbox channel, the cross-session socket and
- *  the typed trigger — in the order the receiver's files name, or channel, then socket, then
- *  typed. */
-const CLIENT_LEGS: readonly DeliveryLeg[] = ['mcp-inbox', 'socket', 'typed'];
+ *  transport that reaches a live receiver — the cross-session socket and the typed trigger — in
+ *  the cascade's order, or socket, then typed. An `mcp-inbox` word is no leg in this build
+ *  (src/send/walk-cascade.ts), so a declared order's word for it is not walked. */
+const CLIENT_LEGS: readonly DeliveryLeg[] = ['socket', 'typed'];
 
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
@@ -4587,17 +4284,19 @@ async function deliverClientRecord(
   // holds them, the receiving file's own seat otherwise.
   const agentRecord = getAgent(host.home, target.recipientId);
   const cli = agentRecord?.cli ?? seat.cli;
-  const defaultWalk: DeliveryLeg[] = ['mcp-inbox'];
+  const defaultWalk: DeliveryLeg[] = [];
   if (socketNow) defaultWalk.push('socket');
   defaultWalk.push('typed');
   const walk: readonly DeliveryLeg[] = declaredOrder
-    ? order.filter((leg) => CLIENT_LEGS.includes(leg))
+    ? cascadeOrder(order.filter((leg) => CLIENT_LEGS.includes(leg)))
     : defaultWalk;
   // The implied socket default's omission is named when the walk does not carry it, the same
-  // way an ordinary send's report explains the socket it did not dial.
+  // way an ordinary send's report explains the socket it did not dial. A declared word this
+  // build only reads is named the same way, with its own reason.
   const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
   report.delivery = [
     ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
+    ...unavailableLegsOf(order).map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE })),
     ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
   const aim: Aim = {
@@ -4618,19 +4317,6 @@ async function deliverClientRecord(
   const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
   const canType = canPane && host.native !== undefined;
   for (const leg of walk) {
-    if (leg === 'mcp-inbox') {
-      // The seat's own server, not a pane: the leg takes the record only when a live listener
-      // beside the drop names this seat, session and root.
-      const live = inboxLive(dropDir, root, session, seatName, host.build?.());
-      if (!live.live) {
-        failures.push(`mcp-inbox: ${live.reason}`);
-        markLeg('mcp-inbox', 'skipped', live.reason);
-        continue;
-      }
-      markLeg('mcp-inbox', 'attempted');
-      await deliverInbox(quiet, dir, from, from, project, root, session, seatName, dropDir, record, host, report, startedAt, failures);
-      return;
-    }
     if (leg === 'socket') {
       // The socket dials only a receiving Claude session whose launch declares
       // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
@@ -5791,11 +5477,11 @@ function seatList(team: TeamFile): string {
   return names.length === 0 ? '(none)' : names.join(', ');
 }
 
-/** The socket frame was taken, the seat's inbox server returned the message, or the typed
- *  trigger's own drop read wrote a signed receipt. Exit 0, always. The note names the path —
- *  `socket` — and `read` for a signed receipt (the mcp-inbox leg's, or a typed trigger's own),
- *  whose own words are `delivered (read)`: the seat read the message, which is not a claim that
- *  it acted on it. `via` names the channel for a read that came through the typed leg. */
+/** The socket frame was taken, or a transport leg's own drop read wrote a signed receipt
+ *  (the native queue's, a headless resume's, or a typed trigger's). Exit 0, always. The note
+ *  names the path — `socket` — and `read` for a signed receipt, whose own words are
+ *  `delivered (read)`: the seat read the message, which is not a claim that it acted on it.
+ *  `via` names the channel the read came through. */
 function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native' | 'headless-resume'): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
@@ -5803,7 +5489,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
     writeAction(io, report, {
       status: read ? 'delivered (read)' : 'delivered',
       summary,
-      channel: read ? (via ?? 'mcp-inbox') : note === 'socket' ? 'socket' : 'typed',
+      channel: read ? (via ?? 'typed') : note === 'socket' ? 'socket' : 'typed',
     });
   } else {
     openText(io, report);
@@ -5827,11 +5513,12 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
   return 0; // exit: send.session-created
 }
 
-/** A leg's success with no read receipt: on the mcp-inbox and drop legs the message is the 0600
+/** A leg's success with no read receipt: on the drop leg the message is the 0600
  *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
- *  composer and the drop is still the message. The `note` says which — a typed send's names the
- *  trigger and the receipt that has not come back. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
+ *  composer and the drop is still the message; a native or headless route's record waits for a
+ *  receipt that has not come back. The `note` says which — a typed send's names the
+ *  trigger and the receipt. Exit 0, always. */
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
   const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });

@@ -1,4 +1,5 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // A send that finds the receiving seat's lock held by another command is queued, not refused:
 // the reachable legs store the signed record and the marker the watch already delivers, type
 // nothing, and answer `queued (receiver busy)` with the id the delivery keeps. The scenes here
@@ -214,11 +215,12 @@ test('a drop send queued on a held seat lock is never typed, and its watcher rea
   ]);
 });
 
-test('an inbox send queued on a held seat lock waits for its inbox read, then the fallback retry', async () => {
+test('a send queued on a held seat lock waits for the seat\'s own read, and the inbox promotes it', async () => {
   const made = world(['mcp-inbox', 'typed']);
   cleanup = made.cleanup;
   const dir = dropDir(made.dir, 'lead');
-  // A listener marker this process owns: the inbox leg is live, and the lock is what is held.
+  // A listener marker this process owns: it is the store's reader, not a delivery leg (ADR D1),
+  // and the lock is what is held.
   expect(writeListener(dir, {
     v: 1,
     seat: 'lead',
@@ -238,10 +240,10 @@ test('an inbox send queued on a held seat lock waits for its inbox read, then th
   expect(code).toBe(0);
   const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
   expect(doc.status).toBe('queued (receiver busy)');
-  expect(doc.channel).toBe('mcp-inbox');
+  expect(doc.channel).toBe('drop');
   expect(doc.delivery).toEqual([
-    { leg: 'mcp-inbox', state: 'queued' },
-    { leg: 'drop', state: 'not-reached' },
+    { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
+    { leg: 'drop', state: 'queued' },
   ]);
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');
@@ -249,7 +251,7 @@ test('an inbox send queued on a held seat lock waits for its inbox read, then th
   expect(recordBody(join(dir, id))).toBe(filed('hello'));
   const pending = readPending(dir);
   expect(pending).toHaveLength(1);
-  expect(pending[0]).toMatchObject({ id, leg: 'mcp-inbox' });
+  expect(pending[0]).toMatchObject({ id, leg: 'drop' });
 
   held.release();
   // Before its fallback window the inbox marker is the seat's client's: no watch pass types it.
@@ -272,6 +274,6 @@ test('an inbox send queued on a held seat lock waits for its inbox read, then th
   if (!history.ok) return;
   expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
     [id, 'queued (receiver busy)', undefined],
-    [id, 'delivered (read)', 'mcp-inbox'],
+    [id, 'delivered (read)', 'drop'],
   ]);
 });

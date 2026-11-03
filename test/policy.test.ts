@@ -398,7 +398,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     const delivery = resolvePolicy('delivery-order', []);
     expect(delivery.ok).toBe(true);
     if (delivery.ok) {
-      expect(delivery.effective.value).toEqual(['mcp-inbox', 'typed', 'drop']);
+      expect(delivery.effective.value).toEqual(['typed', 'drop']);
       expect(delivery.effective.level).toBe('default');
     }
 
@@ -436,7 +436,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   test('delivery-order accepts headless-resume, a leg a declared word may add and no default names', () => {
     // The headless-resume leg is opt-in: it is in the vocabulary, a word may name it, and the
     // fallback order still names neither it nor any implied default that would insert it.
-    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['mcp-inbox', 'typed', 'drop']);
+    expect(POLICY_CATALOGUE['delivery-order'].defaultValue).toEqual(['typed', 'drop']);
     const narrowed = resolvePolicy('delivery-order', [
       { name: 'delivery-order', value: ['native', 'headless-resume', 'typed'], level: 'entity', setter: 'owner', date: '2026-10-19T10:00:00Z', kind: 'enforced' },
       { name: 'delivery-order', value: ['headless-resume', 'typed'], level: 'seat', setter: 'owner', date: '2026-10-19T11:00:00Z', kind: 'enforced' },
@@ -1415,9 +1415,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     expect(delivDropReorder.ok).toBe(true);
     if (delivDropReorder.ok) expect(delivDropReorder.effective.value).toEqual(['native', 'typed']);
 
+    // `typed` is in the fallback order and may not be added by a lower level; `mcp-inbox`, by
+    // contrast, is kept (the walk reports it unavailable), so it never reaches this refusal.
     const delivAdd = resolvePolicy('delivery-order', [
-      { name: 'delivery-order', value: ['native', 'typed'], level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
-      { name: 'delivery-order', value: ['native', 'mcp-inbox', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native'], level: 'project', setter: 'owner', date: '2026-10-17T10:00:00Z', kind: 'enforced' },
+      { name: 'delivery-order', value: ['native', 'typed'], level: 'team', setter: 'owner', date: '2026-10-17T11:00:00Z', kind: 'enforced' },
     ]);
     expect(delivAdd.ok).toBe(false);
     if (!delivAdd.ok) {
@@ -1512,10 +1514,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       );
       expect(wroteProject.ok).toBe(true);
 
-      // Team file carries legacy delivery_order: [mcp-inbox, typed]
+      // Team file carries legacy delivery_order: [typed, drop], adding `drop` to the signed
+      // project word, which a team level may not do.
       const teamYamlPath = join(fx.root, '.agents', 'team.yaml');
       const baseYaml = readFileSync(teamYamlPath, 'utf8');
-      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [mcp-inbox, typed]\n`);
+      writeFileSync(teamYamlPath, `${baseYaml.trimEnd()}\ndelivery_order: [typed, drop]\n`);
 
       let out1 = '';
       let err1 = '';
@@ -1536,11 +1539,11 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code1).toBe(1);
       expect(err1).toBe('');
-      // The word adds `mcp-inbox` to the project's typed-only order, which a team level may not
+      // The word adds `drop` to the project's typed-only order, which a team level may not
       // do: the policy chain refuses it, and that one difference stands in place of the legacy
       // line taking effect.
       expect(out1).toContain(
-        'difference: policy "delivery-order" at level team ("mcp-inbox, typed") loosens level project ("typed")\n' +
+        'difference: policy "delivery-order" at level team ("typed, drop") loosens level project ("typed")\n' +
           '  repair: remove or narrow delivery_order in team config\n' +
           "  who: the team's lead\n",
       );
@@ -1699,7 +1702,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--seat', 'worker', '--file', '.agents/team.yaml'], seatIo, { home: fx.home, now: () => NOW })).toBe(0);
       expect(seatIo.out).toContain('team beacon, session "beacon" · seat worker');
       expect(seatIo.out).toMatch(
-        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: mcp-inbox, typed, drop\)/,
+        /delivery-order\s+typed\s+seat\s+owner\s+-\s+enforced \(differs from team: typed, drop\)/,
       );
       expect(seatIo.out).not.toContain('same as the team');
     } finally {

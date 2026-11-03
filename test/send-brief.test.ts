@@ -361,7 +361,8 @@ describe('a multiline body that looks like output is warned about, never changed
 // Brief transport end to end: under `brief-transport: message` a full brief sent by the ordinary
 // `team send --brief` command travels the seat's own delivery walk, not a special channel. The
 // synthetic runtime boundary is a live inbox listener marker naming this test's pid — no real
-// pane or floor session — so the mcp-inbox leg takes the record. The seat's receipt-writing
+// pane or floor session. The inbox is the store's reader, not a delivery leg (ADR D1): with no
+// pane to wake, the drop leg takes the record and the listener changes no step. The seat's receipt-writing
 // `team drops --read` then hands the whole body over once and signs the receipt; the sender's
 // history line names the leg and the outcome.
 describe('a message-transport full brief sent end to end', () => {
@@ -389,10 +390,11 @@ describe('a message-transport full brief sent end to end', () => {
     const on = io(w);
 
     // The ordinary send: the whole file becomes the body; with no live pane to wake first, the
-    // Codex walk falls back from typed to the live mcp-inbox leg, which takes it.
+    // Codex walk has no pane leg to take, so the drop leg closes it and the live listener reads
+    // the store afterwards.
     const code = await runSend([SEAT, '--brief', path], on, { ...fake(w), agents: () => [] });
     expect(code, on.err).toBe(0);
-    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     const rec = record(w);
     expect(rec.body).toBe(`${HEADER}\n\n${text}`);
 
@@ -403,7 +405,7 @@ describe('a message-transport full brief sent end to end', () => {
       expect(history.entries.at(-1)).toMatchObject({
         to: SEAT,
         id: rec.id,
-        via: 'mcp-inbox',
+        via: 'drop',
         outcome: 'sent (unconfirmed)',
       });
     }

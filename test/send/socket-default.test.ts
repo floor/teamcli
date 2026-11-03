@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../../src/send/no-pane-messaging.ts';
 // `team send` to a Claude Code seat: the 0600 drop file is the channel and nothing is typed into
 // the pane, and no path opens the seat's cross-session socket. The gate is SOCKET_SEND in
 // src/send/uds.ts, off while the channel is unattested; these scenes pin the gated state, so
@@ -237,7 +237,7 @@ describe('team send: --wait to a Claude Code seat never dials the socket', () =>
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.socketsTried).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(host.pane.typed.length).toBe(0);

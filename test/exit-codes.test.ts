@@ -6120,7 +6120,7 @@ scene('send.sent-unconfirmed', async (place) => {
   // A live listener takes the message into the seat's inbox; the grace is zero, so the receipt
   // never has time to land and the leg ends `sent (unconfirmed)` — exit 0, nothing typed.
   liveInbox(place);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (mcp-inbox, 0 ms)');
+  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (drop, 0 ms)');
 });
 /** The development channel: a Claude lead launched with the channel naming the team server, a
  *  live listener that declared it, and no declared order. The server's push marker lands while
@@ -6146,7 +6146,7 @@ scene('send.sent-channel', async (place) => {
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);

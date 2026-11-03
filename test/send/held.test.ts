@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../../src/send/no-pane-messaging.ts';
 // `team send` and the held frame: a socket write the receiving session's "Held message from
 // another session" dialog holds is `held (socket)`, never `delivered (socket)`, and no trigger
 // is typed into the blocked box — a shape the code keeps for the socket's return, unreachable
@@ -161,7 +161,7 @@ describe('team send: a --wait frame cannot land at a dialog', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.frames.length).toBe(0);
     const read = readHistory('acme', root, home);
     expect(read.ok).toBe(true);
@@ -182,7 +182,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
     expect(io.out).toBe(
       'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );

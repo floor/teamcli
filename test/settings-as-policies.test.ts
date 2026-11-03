@@ -52,10 +52,12 @@ describe('the settings are catalogue policies', () => {
     }
   });
 
-  test('the delivery order ships mcp-inbox, then typed, then drop', () => {
+  test('the delivery order ships typed, then drop', () => {
     // The literal the release ships. The catalogue default and the setting's fallback are both
-    // this value, so comparing them to each other would pin nothing.
-    expect(DELIVERY_ORDER.fallback).toEqual(['mcp-inbox', 'typed', 'drop']);
+    // this value, so comparing them to each other would pin nothing. The `mcp-inbox` name is in
+    // the vocabulary a word may keep, and no longer in the default: the inbox is the store's
+    // reader, not a leg (`src/send/walk-cascade.ts`).
+    expect(DELIVERY_ORDER.fallback).toEqual(['typed', 'drop']);
   });
 
   test('the delivery legs are the full vocabulary, wider than the default order', () => {

@@ -72,7 +72,7 @@ import { deliverCodexNativeRoute } from '../src/send/push-adapters/codex-relay.t
 import { readHistory } from '../src/send/history.ts';
 import { pushPointer } from '../src/send/push.ts';
 import { recordBody, testIo } from './helpers.ts';
-import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../src/send/no-pane-messaging.ts';
 
 const NOW = new Date('2026-10-20T04:00:00.000Z');
 const MESSAGE_ID = '11111111-2222-4333-8444-555555555555';
@@ -1228,7 +1228,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`]);
   });
 
-  test('a signed off at the team level ranks the typed wake ahead of a live inbox', async () => {
+  test('a signed off at the team level leaves the native queue out, and the walk ends on the drop', async () => {
     const scene = makeScene(null);
     const wrote = writePolicySet(
       scene.home,
@@ -1241,7 +1241,9 @@ describe('the implied native-first default for a Codex receiver', () => {
 
     expect(await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene))).toBe(0);
 
-    expect(io.out).toContain('via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane');
+    // With the queue off, a Codex seat declares no wake of its own: the live listener beside the
+    // seat is not a leg (ADR D1), so the drop file is the one route the dry run can name.
+    expect(io.out).toContain('via a 0600 drop file with nothing typed into the pane; nothing was written');
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
   });
 
@@ -1258,7 +1260,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(lastEntry(scene).via).toBe('drop');
   });
 
-  test('a declared order that places native behind the inbox is not preempted', async () => {
+  test('a declared order that names the inbox ahead of native walks the queue: the word is no leg', async () => {
     const scene = makeScene('delivery_order: [mcp-inbox, native]\n');
     liveInbox(scene);
     const server = await acceptingServer(scene);
@@ -1266,10 +1268,17 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
-    expect(calls).toEqual([]);
-    expect(server.requests).toEqual([]);
-    expect(lastEntry(scene).via).toBe('mcp-inbox');
+    // `mcp-inbox` is a name this build reads and never walks (ADR D1): the channel-class leg the
+    // order also names is what the cascade reaches, and the queue takes the send.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    expect(lastEntry(scene).via).toBe('native');
   });
 
   test('the dry run names the native queue first and writes nothing', async () => {
@@ -1279,12 +1288,12 @@ describe('the implied native-first default for a Codex receiver', () => {
     const code = await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene));
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
+    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
     expect(queueCalls(scene.queueLog)).toEqual([]);
   });
 
-  test('a live inbox behind the declared drop is walked, and one plain line says the order did not put it there', async () => {
+  test('a live inbox behind the declared drop is no leg, and the drop takes the send', async () => {
     const scene = makeScene('delivery_order: [drop, mcp-inbox]\n');
     liveInbox(scene);
     const server = await acceptingServer(scene);
@@ -1292,13 +1301,14 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, err, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    // The walk is not the order: the seat's own server is listening, so the record goes to the
-    // inbox it reads rather than to the drop file behind it, and the one line says why.
-    expect(err).toBe(`team send: ${SEAT}: the delivery order names the drop before its inbox, but its inbox server is listening; the inbox is walked before the drop\n`);
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    // The listener beside the seat is not a delivery leg in this build (ADR D1): the inbox is
+    // the store's reader, the declared drop is the one route the cascade reaches, and the drop
+    // is what the sender's line names.
+    expect(err).toBe(queuedLine(SEAT, NO_PANE_MESSAGING));
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
-    expect(lastEntry(scene).via).toBe('mcp-inbox');
+    expect(lastEntry(scene).via).toBe('drop');
     expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(true);
   });
 

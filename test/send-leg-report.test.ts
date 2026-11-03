@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -54,7 +55,7 @@ test('a real send reports the inbox it skipped and the drop that took it', async
   expect(doc.status).toBe('sent (unconfirmed)');
   expect(doc.channel).toBe('drop');
   expect(deliveryOf(io)).toEqual([
-    { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+    { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
     { leg: 'drop', state: 'attempted' },
   ]);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(true);
@@ -87,9 +88,10 @@ test('a dry run lists the implied socket leg as a candidate when the receiver ma
   const code = await runSend(['lead', 'hello', '--dry-run', '--json'], io, host);
 
   expect(code).toBe(0);
+  // The default order is typed, drop; this CLI declares no wake for the typed leg, so the dry
+  // run names the drop alone behind the implied socket candidate.
   expect(deliveryOf(io)).toEqual([
     { leg: 'socket', state: 'candidate', eligible: true },
-    { leg: 'mcp-inbox', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
   // A dry run writes nothing: no frame, no record, no history or log line.
@@ -114,7 +116,6 @@ test('a dry run lists the socket the walk would not dial with its reason instead
       eligible: false,
       reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)',
     },
-    { leg: 'mcp-inbox', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
   expect(host.frames).toEqual([]);
