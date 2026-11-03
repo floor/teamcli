@@ -18,6 +18,19 @@ admitted by the reply rule even between two seats no earlier rule pairs. The rul
 thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
 is closed or the clock or the cap ends it.
 
+A seat's answer to the entity's main orchestrator is the one reply the main orchestrator's reach
+admits in return (OD-20261103-02), and it is bound to the record that reach wrote. The answered
+record must verify, sit in the caller's own folder and name the caller as its recipient, and it
+must have been sent by the lead of the entity's head team — the team whose project is the entity
+itself, the seat that team's live file names its orchestrator. The reply stays on that record's
+thread: the thread's opening record must verify and carry the same sender, and a closed thread is
+refused rather than reopened, because reopening it would be a new thread the seat opened. A
+forged or unsigned record, a thread another sender opened, and a record addressed to another seat
+are refused, and nothing is written. The reach is the `seats_cross_teams` setting, entity →
+project → team → seat, with the same default on and the same project loosening level as the send
+direction: a level that closes it closes this reply too, and a seat still opens no thread of its
+own to the main orchestrator — a plain `team send orchestrator@<entity>` stays refused.
+
 The folder is the one the answered seat's own reader reads. A record from a seat of another team
 is answered into that team's transport tree, bound to the root and session that team's live file
 names — the same place a send to that seat writes, and the place its `team messages` and inbox
@@ -161,6 +174,8 @@ Refusals name what stopped them, and nothing is written:
     team reply: the thread <thread> is already closed; nothing was written
     team reply: the thread <thread> ended: no record on it for 72h; nothing was written
     team reply: the thread <thread> ended at its 50-record cap; nothing was written
+    team reply: the thread <thread> is already closed; a seat answers the entity's main orchestrator only on the open thread that orchestrator opened, and never opens one; nothing was written
+    team reply: <sender>: the thread <thread> was not opened by the entity's main orchestrator; a seat replying to the entity's main orchestrator on its thread is the reach's only reply, and a seat never opens a thread to the main orchestrator; nothing was written
     team reply: refused: <reason>
 
 ## Example

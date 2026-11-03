@@ -269,8 +269,11 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
 10. **Admission is checked when each record is written, replies included.** The thread adds one
     rule, `reply-on-open-thread`: a reply to the sender of a record on an open thread is admitted
     while the thread is open, neither seat has been removed, and no revocation or deny applies to
-    the pair; the rule is named on the record, and the owner may switch it off per team. A thread
-    admits nothing by itself.
+    the pair; the rule is named on the record, and the owner may switch it off per team. A
+    seat's answer to the entity's main orchestrator is the reach's own reply direction
+    (OD-20261103-02): admitted only on the thread that orchestrator opened, under the same
+    `seats_cross_teams` setting as the reach, named on the record, and never by reopening a
+    closed thread. A thread admits nothing by itself.
 11. **No typing into a pane a human types in.** A typed line is refused for the owner's own seat
     and for any pane the owner launched by hand; the leg is recorded unavailable with the reason
     and the next leg runs.
