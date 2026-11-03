@@ -22,6 +22,7 @@ import type { HostedRoute } from '../src/daemon/routes.ts';
 import type { PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { POLICY_CATALOGUE } from '../src/policy/types.ts';
 import { resolvePolicy } from '../src/policy/resolve.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -220,6 +221,16 @@ async function runThroughHost(
     release = end;
     return () => {};
   };
+  // The run command hosts the per-root chores, and the release default (`per-root`) would run
+  // each watched route's watch in its chores child, where this scene's synthetic build is never
+  // asked for. Pin the policy's `inline` rollback: the watch then stays on the daemon's own
+  // loop, which is the seam these host-level scenes exercise.
+  const pinned = writePolicySet(
+    world.home,
+    { level: 'team', target: world.root, teamRoot: world.root, name: 'daemon.chores', value: 'inline' },
+    { now: new Date() },
+  );
+  expect(pinned.ok).toBe(true);
   const io = testIo(world.root, caller);
   const done = runDaemon(argv, io, sourcesOf(world.home, { start, stop }));
   void done.then(() => {
