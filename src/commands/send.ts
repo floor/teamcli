@@ -47,8 +47,8 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
-import { cascadeOrder, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf } from '../send/walk-cascade.ts';
-import { webhookRouteOf } from '../send/webhook.ts';
+import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf, type WalkLeg } from '../send/walk-cascade.ts';
+import { webhookRefusal } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
@@ -478,7 +478,7 @@ type LegState = 'attempted' | 'queued' | 'skipped' | 'refused' | 'not-reached' |
 /** One ordered entry of a send's delivery report. The leg's own name is here, so the reason
  *  never repeats it: a reader joins the two. */
 type LegReport = {
-  leg: DeliveryLeg;
+  leg: WalkLeg;
   state: LegState;
   /** On a dry run: whether the walk would take this leg. Absent on a real send. */
   eligible?: boolean;
@@ -489,7 +489,7 @@ type LegReport = {
 /** The entry the walk left for one leg, whatever state it already holds: a leg the walk marked
  *  `attempted` before its transport answered ends as a queue or a refusal, and the report says
  *  which. A run with no resolved walk (a brief's own delivery) has no list to mark. */
-function setLegState(report: Report, leg: DeliveryLeg, state: LegState, reason?: string): void {
+function setLegState(report: Report, leg: WalkLeg, state: LegState, reason?: string): void {
   const entry = report.delivery?.find((one) => one.leg === leg && one.state !== 'not-reached');
   if (entry === undefined) return;
   entry.state = state;
@@ -572,8 +572,9 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
 /** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
  *  record wins over the team file's row; a state that cannot be read is no record, so the class
  *  falls to what the file and its launch line prove, never to a guess. A webhook-only route
- *  reads as queued whatever the bus is doing now: the bus posts it after the send returns, so
- *  no liveness check made here could truthfully upgrade the words to a wake. */
+ *  reads as queued whatever the bus is doing now: the send posts that adapter as its own
+ *  webhook leg, and the bus carries the same arrival after the send returns, so no liveness
+ *  check made here could truthfully upgrade the words to a wake. */
 function deliveryWordsOf(input: {
   dir: string;
   root: string;
@@ -1057,9 +1058,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // turns, or reads it at its next turn. The class comes from the launch's own records, never
   // from the CLI's shipped profile alone.
   //
-  // A webhook adapter is posted by the bus that announces the record, never by this send, and
-  // the send cannot watch the bus post it: the words below say queued, and the bus's own report
-  // and the seat's recorded delivery outcome say what the adapter answered.
+  // A readable webhook adapter still reads as push here: the words describe how the seat is
+  // woken, and under the cascade the send itself walks that adapter as its second leg class.
+  // An ending that names the webhook's own answer never appends these words — the walk's report
+  // already says what the routine answered, and an unconfirmed post must not claim a wake.
   report.deliveryWords = deliveryWordsOf({
     dir: to.dir,
     root: to.root,
@@ -1356,19 +1358,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const typedWake = human ? null : (profileFor(to.cli)?.typedWake ?? null);
   const walkingTyped = typedWake !== null && ordered.includes('typed');
   // The owner's cascade (src/send/walk-cascade.ts): whatever order the chain declared, the
-  // walk tries the channel-class legs first, then typed, then the mailbox — and it stops at the
-  // first leg taken. An `mcp-inbox` word is read as unavailable: the leg is never attempted,
-  // and the report says why. The mailbox sits under all three classes because the signed record
-  // is stored before the walk begins.
+  // walk tries the channel-class legs first, then the sender-posted webhook, then typed, then
+  // the mailbox — and it stops at the first leg taken. The webhook leg exists exactly when the
+  // receiving team file declares an adapter row for the seat; no order names it. An `mcp-inbox`
+  // word is read as unavailable: the leg is never attempted, and the report says why. The
+  // mailbox sits under all the classes because the signed record is stored before the walk
+  // begins.
   const unavailable = unavailableLegsOf(ordered);
-  const cascade = cascadeOrder(ordered);
+  // The human ruling keeps every pane route out of a person's walk, and the webhook is not a
+  // pane route: a person with an adapter row keeps it where the cascade puts it, before the
+  // drop file. Without one the walk is the drop leg alone.
+  const webhookWalked = declared?.webhook !== undefined;
+  // The adapter row's usability, read once before the walk runs: it decides whether the dry
+  // phrase names the webhook, whether a stale serving channel is held off (the sender's own
+  // post is a wake only when the route stands), and the leg itself re-reads it when reached.
+  const webhookReason = declared === undefined || declared.webhook === undefined ? null : webhookRefusal(declared.webhook);
+  const cascade = cascadeWalk(ordered, webhookWalked);
   // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
   // adapter keeps the message in its bus inbox and the sender is told so.
-  const eventLegs: DeliveryLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
+  const eventLegs: WalkLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
   const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
-  const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop');
-  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : eventLegs;
+  const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
+  const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
   // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
   // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
@@ -1376,18 +1388,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // its own rules, and the order's own words decide whether the receiver offers it. A watch
   // principal makes the walk direct by itself: the watch's own send never falls back to a route
   // that types or stores, whatever hook its caller built.
-  const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
+  const DIRECT_WAKE_LEGS: readonly WalkLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const declaredWalk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const declaredWalk: readonly WalkLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
   // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
   // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
   // store's reader, and the record is already stored there for it to read.
-  const walk: readonly DeliveryLeg[] = [...declaredWalk];
-  // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
-  // the socket. When one of them takes the send, a channel push for the same id would wake the
-  // seat a second time, so a stale serving channel is held off before the record is written.
-  const WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed'];
-  const wakesSeat = (legs: readonly DeliveryLeg[]): boolean => legs.some((leg) => WAKE_LEGS.includes(leg));
+  const walk: readonly WalkLeg[] = [...declaredWalk];
+  // The legs that put the message in front of the seat themselves: a typed trigger, a frame, a
+  // socket, or the seat's own webhook adapter. When one of them takes the send, a channel push
+  // for the same id would wake the seat a second time, so a stale serving channel is held off
+  // before the record is written. The webhook counts only when its route stands: a row whose
+  // files name no usable adapter is skipped by the walk, so it cannot stand in for the channel.
+  const WAKE_LEGS: readonly WalkLeg[] = ['socket', 'native', 'typed'];
+  const wakesSeat = (legs: readonly WalkLeg[]): boolean =>
+    legs.some((leg) => (leg === 'webhook' ? webhookReason === null : WAKE_LEGS.includes(leg)));
   // The ordered leg report the JSON documents carry. A real send lists the walk itself; the
   // states fill in as it runs and a leg it never reaches stays `not-reached`. A human's only
   // walked leg is the drop file, so the legs the ruling kept out are listed in the order they
@@ -1395,8 +1410,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // files do not let the socket be dialed has the implied socket default listed as skipped with
   // its reason: the omission the report used to leave unexplained. A run that resolved no walk
   // carries no list at all.
-  const planLegs: readonly DeliveryLeg[] = human
-    ? (order.includes('drop') ? order : [...order, 'drop'])
+  const planLegs: readonly WalkLeg[] = human
+    ? [...(webhookWalked ? ['webhook' as const] : []), ...(order.includes('drop') ? order : ([...order, 'drop'] as WalkLeg[]))]
     : walk;
   const impliedSocketReason = !human && to.cli === 'claude-code' && !declaredOrder && !order.includes('socket')
     ? socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true)
@@ -1422,8 +1437,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
     // would be tried: the socket default the walk did not take is listed too, with the word that
-    // kept it out, so an omitted socket always has its reason. Nothing is dialed, staged or
-    // written.
+    // kept it out, so an omitted socket always has its reason. The webhook leg's row is read the
+    // same way: a row whose files name no usable route is skipped, with the reason. Nothing is
+    // dialed, staged or written.
     report.delivery = dryDeliveryPlan({
       walk,
       order,
@@ -1431,12 +1447,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       declaredOrder,
       human,
       socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding, true),
+      webhookReason,
       handoffEligible: callerNative && !wait,
     });
     // A grant is the one rule the message's own header carries a record of: the dry run names
     // it too, so a preview says which owner-signed record admits a pair no rule reaches.
     const granted = admission.ok && admission.rule.startsWith('an owner-signed grant naming send') ? `; admitted by: ${admission.rule}` : '';
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}${dryWebhookClause(declared, human)}; nothing was written${granted}`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow, webhookReason === null)}${dryWebhookClause(webhookReason)}; nothing was written${granted}`, report);
   }
   // The display words every transport opens the message with: the receiving team's
   // `message-display` template, the sender's nickname (its seat name when the file writes none),
@@ -1520,7 +1537,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let wakeOutcome: WakeOutcome | undefined;
   // Fill in one planned leg's state. A leg is marked once: the first ending that reaches it is
   // the one the report keeps. A leg that is never marked stays `not-reached`.
-  const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
+  const markLeg = (leg: WalkLeg, state: LegState, reason?: string): void => {
     const entry = report.delivery?.find((one) => one.leg === leg && one.state === 'not-reached');
     if (entry === undefined) return;
     entry.state = state;
@@ -1554,6 +1571,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // only leaves the walk without an episode to record.
   let stagedTried = false;
   let stagedWalk: RecordWritten | null = null;
+  let announced = false;
   // A leg records through this; until a record is staged it is a no-op, so a walk that never
   // began an episode records nothing, and a leg that began one records every attempt after it.
   let note: WalkNote = (_attempt) => { /* no episode yet */ };
@@ -1562,7 +1580,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let ended = false;
   // The direct-only hook fires once, when a route's ending closes the walk.
   let directEnded = false;
-  const ensureEpisode = async (): Promise<void> => {
+  const ensureStaged = async (): Promise<void> => {
     if (stagedTried) return;
     stagedTried = true;
     // A serving channel from an install this build cannot vouch for keeps its old code in memory
@@ -1578,7 +1596,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         reason: "the sender's own walk wakes the seat; the serving channel runs another install",
       });
     }
-    stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now, report);
+    stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now);
     if (!stagedWalk.ok) return;
     const begun = beginFallbackWalk({
       caller,
@@ -1611,7 +1629,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
     };
   };
-  // The staged copy is assigned inside `ensureEpisode`'s closure, so the walk reads it through
+  // Tells the bus the record has landed, once. A walk whose first attempted leg is the webhook
+  // posts before this call, so the post's claim decides who posts and one arrival wakes the seat;
+  // every other leg announces as soon as the record is staged, which is what the write always
+  // did. A record that never staged is never announced, and neither is one the folder already
+  // held: the send that first stored a duplicate id announced that arrival.
+  const announceStaged = async (): Promise<void> => {
+    if (announced || stagedWalk === null || !stagedWalk.ok || stagedWalk.existing === true) return;
+    announced = true;
+    await announceArrival(record);
+  };
+  const ensureEpisode = async (): Promise<void> => {
+    await ensureStaged();
+    await announceStaged();
+  };
+  // The staged copy is assigned inside `ensureStaged`'s closure, so the walk reads it through
   // this call: the declared type, not the narrowing control flow takes at the declaration.
   const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   // A direct-only send stages its record before its first attempt: no route the watch can take
@@ -1663,6 +1695,112 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'channel', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
       }
       return sentChannel(io, to.seat, report, ms);
+    }
+    if (leg === 'webhook') {
+      // The sender-posted webhook is the cascade's second class (ADR D1): every channel-class
+      // leg the order names has been walked and none took the send, so this process posts the
+      // arrival itself, once, before any typed wake. A 2xx takes the send and ends the walk; a
+      // request that provably never left hands the send to the leg behind it; a request whose
+      // fate is unknown ends the walk too, because the routine is never asked twice. A record
+      // this leg staged itself is posted before the bus is told of it, so the claim decides who
+      // posts and one arrival wakes the seat once.
+      const hook = declared?.webhook;
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      if (hook === undefined || routeRefusal !== null) {
+        const why = routeRefusal ?? 'the receiving seat declares no webhook row';
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      await ensureStaged();
+      const stagedHook = stagedRecordOf();
+      if (stagedHook === null || !stagedHook.ok) {
+        const why = stagedHook === null ? 'the record could not be written' : stagedHook.reason;
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      if (stagedHook.existing === true) {
+        // A duplicate id's arrival was decided when the record first landed; this run posts
+        // nothing under a name another send holds.
+        const why = 'the record was already there; its arrival was not posted again';
+        failures.push(`webhook: ${why}`);
+        markLeg('webhook', 'skipped', why);
+        note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      markLeg('webhook', 'attempted');
+      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now);
+      const hookMs = host.now().getTime() - startedAt;
+      const hookEntry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
+      const hookFailures = (): { failed?: string[] } => (failures.length > 0 ? { failed: [...failures] } : {});
+      if (posted.kind === 'posted') {
+        // The routine answered 2xx: this leg takes the send. The bus learns of the record only
+        // now, so the `posted` mark this run just wrote is the one the bus skips.
+        report.sent = msgId;
+        await announceStaged();
+        note(walkAttempt('webhook', 'delivered', false, host.now(), startedAt, { reason: `posted in ${String(posted.ms)} ms` }));
+        logLine(dir, 'send', who, `${to.seat}: delivered to its webhook adapter (${String(posted.ms)} ms; drop ${String(body.length)} characters)`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'delivered', ms: hookMs, via: 'webhook', ...hookFailures() });
+        if (wait) {
+          return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+        }
+        return deliveredWebhook(io, to.seat, report, posted.ms);
+      }
+      await announceStaged();
+      if (posted.kind === 'unknown') {
+        // The body may have reached the routine and the answer was not read: the claim stays in
+        // `sent`, so no one posts the record again. The walk ends here — a second body for the
+        // same message is worse than a late one — and the line says the fate is unknown.
+        report.sent = msgId;
+        report.webhookPost = posted;
+        // The class's own words are never appended to a post whose fate is unknown: `woken
+        // through its event adapter` would be a wake this run cannot prove. The unknown clause
+        // beside the ending is the whole truth.
+        report.deliveryWords = undefined;
+        note(walkAttempt('webhook', 'unreachable', false, host.now(), startedAt, { reason: posted.reason }));
+        logLine(dir, 'send', who, `${to.seat}: the webhook post may have been taken; no answer was read (${posted.reason})`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'sent (unconfirmed)', ms: hookMs, via: 'webhook', ...hookFailures() });
+        return sentUnconfirmed(io, to.seat, report, hookMs, 'webhook');
+      }
+      if (posted.kind === 'none') {
+        if (posted.why === 'claim-held' || posted.why === 'already-posted') {
+          // Another poster holds the record's claim: the bus took the arrival first and is
+          // posting it now (or has finished). The webhook leg is taken either way — a typed
+          // wake now would be the second one — so the walk ends with what the claim proves.
+          report.sent = msgId;
+          const postedAlready = posted.why === 'already-posted';
+          const why = postedAlready
+            ? 'the arrival was already posted; another poster got there first'
+            : 'the bus holds the claim and is posting it';
+          note(walkAttempt('webhook', postedAlready ? 'delivered' : 'unreachable', false, host.now(), startedAt, { reason: why }));
+          logLine(dir, 'send', who, `${to.seat}: webhook ${postedAlready ? 'already posted' : 'being posted by the bus'} (drop ${String(body.length)} characters)`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: postedAlready ? 'delivered' : 'sent (unconfirmed)', ms: hookMs, via: 'webhook', ...hookFailures() });
+          if (postedAlready) {
+            if (wait) {
+              return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+            }
+            return deliveredWebhook(io, to.seat, report, hookMs);
+          }
+          return sentUnconfirmed(io, to.seat, report, hookMs, 'webhook', 'the bus is posting it');
+        }
+      }
+      // A row that provably could not deliver, or a post that did nothing without a reason to
+      // stop: the leg did not take the send, and the walk moves to the leg behind it with the
+      // reason recorded. A `failed` post released the claim, so the bus and the seat's pull keep
+      // the fallback they always had.
+      const why = posted.kind === 'failed'
+        ? posted.reason
+        : posted.kind === 'none' && posted.why === 'no-route'
+          ? 'the adapter row names no usable route'
+          : 'the post failed unexpectedly';
+      if (posted.kind === 'failed') report.webhookPost = posted;
+      failures.push(`webhook: ${why}`);
+      markLeg('webhook', 'attempted', why);
+      note(walkAttempt('webhook', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+      continue;
     }
     if (leg === 'socket') {
       // The socket leg dials only a receiving Claude session whose launch declares
@@ -2289,26 +2427,29 @@ function humanSkipReason(leg: DeliveryLeg): string | null {
  *  lists the implied socket candidate the walk did not take, so a socket omission always has
  *  its reason. Nothing here reads a pane, dials a socket or writes a file. */
 function dryDeliveryPlan(input: {
-  walk: readonly DeliveryLeg[];
+  walk: readonly WalkLeg[];
   order: readonly DeliveryLeg[];
   cli: string;
   declaredOrder: boolean;
   human: boolean;
   socketReason: string | null;
+  webhookReason: string | null;
   handoffEligible: boolean;
 }): LegReport[] {
-  const candidate = (leg: DeliveryLeg): LegReport => {
+  const candidate = (leg: WalkLeg): LegReport => {
     const reason = input.human
-      ? humanSkipReason(leg)
+      ? (leg === 'webhook' ? null : humanSkipReason(leg))
       : leg === 'socket'
         ? input.socketReason
-        : leg === 'native'
-          ? nativeIneligibleReason(input.cli, input.handoffEligible)
-          : leg === 'headless-resume'
-            ? 'this build carries no headless resume runtime'
-            : leg === 'session' && profileFor(input.cli)?.sessionCli == null
-              ? `${input.cli} has no session-creating command in this build`
-              : null;
+        : leg === 'webhook'
+          ? input.webhookReason
+          : leg === 'native'
+            ? nativeIneligibleReason(input.cli, input.handoffEligible)
+            : leg === 'headless-resume'
+              ? 'this build carries no headless resume runtime'
+              : leg === 'session' && profileFor(input.cli)?.sessionCli == null
+                ? `${input.cli} has no session-creating command in this build`
+                : null;
     return reason === null
       ? { leg, state: 'candidate', eligible: true }
       : { leg, state: 'skipped', eligible: false, reason };
@@ -2333,8 +2474,11 @@ function dryDeliveryPlan(input: {
       entries.push({ leg, state: 'skipped', eligible: false, reason: MCP_INBOX_UNAVAILABLE });
     }
   }
-  const legs: readonly DeliveryLeg[] = input.human
-    ? (input.order.includes('drop') ? input.order : [...input.order, 'drop'])
+  const legs: readonly WalkLeg[] = input.human
+    ? [
+        ...(input.walk.includes('webhook') ? ['webhook' as const] : []),
+        ...(input.order.includes('drop') ? input.order : ([...input.order, 'drop'] as WalkLeg[])),
+      ]
     : input.walk;
   for (const leg of legs) entries.push(candidate(leg));
   return entries;
@@ -2354,23 +2498,25 @@ function human0(overrides: { human?: boolean }, declared: { human?: boolean } | 
  *  The where-nothing-is-carried phrase is unreachable by the default order of any seat — its
  *  legs are typed and drop, and each is either named or passed over for a reason — and only an
  *  order that holds none of them prints it. */
-function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean): string {
+function walkPhrase(order: readonly WalkLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean, webhookWalkable: boolean): string {
   // The socket leg is walkable only where this run would dial it: a Claude receiver that itself
   // declares accept. The native leg is a Codex receiver's own runtime queue, and for any other
-  // receiver only the sender's own handoff — a sender whose own file declares Claude Code.
+  // receiver only the sender's own handoff — a sender whose own file declares Claude Code. The
+  // webhook leg is walkable when the adapter row's files name a usable route.
   const socketWalkable = SOCKET_SEND && socketDialable;
   const nativeWalkable = cli === 'codex' || (cli === 'claude-code' && handoffEligible);
   const resumeWalkable = isHeadlessResumeCli(cli);
   const typed = profileFor(cli)?.compose != null
     ? 'a typed brief through its own screens'
     : 'a 0600 drop file and one trigger line';
-  const words = (leg: DeliveryLeg): string => {
+  const words = (leg: WalkLeg): string => {
     if (leg === 'socket') return 'its cross-session socket';
     if (leg === 'native') {
       return cli === 'codex' ? 'its native runtime queue' : 'the native handoff (your own SendMessage, then --confirm)';
     }
     if (leg === 'headless-resume') return 'its headless session resume';
     if (leg === 'channel') return 'its own development channel';
+    if (leg === 'webhook') return 'its own webhook adapter';
     if (leg === 'session') return 'the CLI\'s own session call, with the brief as one argument';
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
@@ -2380,6 +2526,7 @@ function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible:
       leg === 'drop'
       || leg === 'channel'
       || leg === 'typed'
+      || (leg === 'webhook' && webhookWalkable)
       || (leg === 'socket' && socketWalkable)
       || (leg === 'native' && nativeWalkable)
       || (leg === 'headless-resume' && resumeWalkable)
@@ -2464,22 +2611,18 @@ function walkAttempt(
 /** Whether a leg after this one can still take the send: a walk's remaining routes, less the one
  *  this build carries no runtime for. A route is live when it stands; the drop leg's file always
  *  stands in front of a copy. */
-function liveRoutesAfter(walk: readonly DeliveryLeg[], at: number, cli?: string): boolean {
+function liveRoutesAfter(walk: readonly WalkLeg[], at: number, cli?: string): boolean {
   return walk
     .slice(at + 1)
     .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
 }
 
-/** The dry run's webhook clause: the queued words when the seat's adapter can post, or the
- *  reason a configured adapter cannot post right now. Empty for a seat that configures none and
- *  for a human's pane, which nothing wakes. The clause never claims a wake: a preview runs before
- *  the record exists, so the adapter has not posted anything this run. */
-function dryWebhookClause(declared: Seat | undefined, human: boolean): string {
-  if (human || declared?.webhook === undefined) return '';
-  const route = webhookRouteOf(declared.webhook);
-  if (route === null) return '';
-  if (!route.ok) return `; its webhook adapter cannot deliver: ${route.reason}`;
-  return `; ${WEBHOOK_QUEUED_WORDS}`;
+/** The dry run's webhook clause: the reason a configured adapter cannot post right now. Empty
+ *  when the row is usable — the walk phrase names the webhook among the legs it would try — and
+ *  for a seat that configures none. The clause never claims a wake: a preview runs before the
+ *  record exists, so the adapter has not posted anything this run. */
+function dryWebhookClause(reason: string | null): string {
+  return reason === null ? '' : `; its webhook adapter cannot deliver: ${reason}`;
 }
 
 /** What a native handoff leaves behind, or why the send goes to the leg behind native. */
@@ -2510,7 +2653,7 @@ function stampHandoffNonce(body: string, nonce: string): string {
  *  (src/send/walk-cascade.ts), so no new record names it; the watcher still reads a record an
  *  older build wrote. */
 function fallbackAfterNative(
-  walk: readonly DeliveryLeg[],
+  walk: readonly WalkLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
   return walk
@@ -2548,34 +2691,33 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
 }
 
 /** The record a leg wrote, with its signed text: the socket leg carries those bytes in its frame
- *  attempt's message. */
-type RecordWritten = { ok: true; path: string; existing?: true; record: string } | { ok: false; reason: string };
+ *  attempt's message, and the webhook leg posts the signed record the adapter's inbox shape
+ *  carries. */
+type RecordWritten =
+  | { ok: true; path: string; existing?: true; record: string; signed: SignedRecord }
+  | { ok: false; reason: string };
 
 /**
- * Posts the arrival to the receiving seat's own webhook adapter, when the receiving team's file
- * declares one for that seat: the send's own wake, taken right after the record is signed and
- * before the bus is told of it. The post holds the record's claim, so a bus pass that reaches the
- * record at the same moment posts nothing; a 2xx ends the claim as the `posted` mark the bus
- * skips, and a poster that cannot prove the request never left leaves the claim in `sent` so no
- * one posts the record again. Any doubt — a team file that does not read, no row, a seat with no
- * adapter — is no post, and the bus and the seat's pull stand exactly as they did. Never throws
- * and never fails the send.
+ * Posts one arrival to one seat's adapter row. The caller supplies the row: the walk's webhook
+ * leg carries the receiving team file's row itself, and the older write path reads it from the
+ * file. The post holds the record's claim, so a bus pass that reaches the record at the same
+ * moment posts nothing; a 2xx ends the claim as the `posted` mark the bus skips, and a poster
+ * that cannot prove the request never left leaves the claim in `sent` so no one posts the record
+ * again. Never throws and never fails the send.
  */
-async function postArrivalNow(
-  dropDir: string,
+async function postSeatWebhook(
+  seat: string,
+  webhook: NonNullable<Seat['webhook']>,
   payload: RecordPayload,
   message: SignedRecord,
+  dropDir: string,
   home: string,
   now: () => Date,
 ): Promise<SenderPostOutcome> {
   try {
-    const loaded = readTeamConfig(payload.root, { home });
-    if (!loaded.ok) return { kind: 'none' };
-    const seat = loaded.team.seats.find((one) => one.name === payload.to);
-    if (seat === undefined || seat.webhook === undefined) return { kind: 'none' };
     return await postArrivalWebhook({
-      seat: payload.to,
-      webhook: seat.webhook,
+      seat,
+      webhook,
       root: payload.root,
       session: payload.session,
       id: payload.id,
@@ -2587,7 +2729,32 @@ async function postArrivalNow(
       now,
     });
   } catch {
-    return { kind: 'none' };
+    return { kind: 'none', why: 'unexpected' };
+  }
+}
+
+/**
+ * Posts the arrival to the receiving seat's own webhook adapter, when the receiving team's file
+ * declares one for that seat: the write path's own wake, taken right after the record is signed
+ * and before the bus is told of it. Any doubt — a team file that does not read, no row, a seat
+ * with no adapter — is no post, and the bus and the seat's pull stand exactly as they did. Never
+ * throws and never fails the send.
+ */
+async function postArrivalNow(
+  dropDir: string,
+  payload: RecordPayload,
+  message: SignedRecord,
+  home: string,
+  now: () => Date,
+): Promise<SenderPostOutcome> {
+  try {
+    const loaded = readTeamConfig(payload.root, { home });
+    if (!loaded.ok) return { kind: 'none', why: 'no-route' };
+    const seat = loaded.team.seats.find((one) => one.name === payload.to);
+    if (seat === undefined || seat.webhook === undefined) return { kind: 'none', why: 'no-route' };
+    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now);
+  } catch {
+    return { kind: 'none', why: 'unexpected' };
   }
 }
 
@@ -2599,14 +2766,11 @@ async function postArrivalNow(
  * relay and judged here by `ensureRecord`, so a duplicate id is this message's record exactly as
  * before: a walk that falls from the socket to the typed leg writes one record, not two.
  *
- * The fresh record is also posted by this send itself, to the receiving seat's webhook adapter
- * when its team file declares one, before the bus is told of the arrival. The order is what makes
- * one wake: the post takes the record's claim and decides who posts, a 2xx ends the claim as the
- * mark the bus skips, and only then is the arrival announced. A failed post releases the claim, so
- * the bus and the seat's pull still carry the fallback; a post whose fate is unknown leaves the
- * claim in `sent`, so the record is reported rather than posted a second time.
+ * This is the staging half alone: it posts nothing and tells the bus nothing, so a caller that
+ * walks the owner's cascade decides when the webhook is tried (its own leg, after every
+ * channel-class leg) and when the arrival is announced.
  */
-async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report): Promise<RecordWritten> {
+async function stageSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date): Promise<RecordWritten> {
   let signed: SignedRecord;
   try {
     signed = signRecord(payload, home);
@@ -2621,12 +2785,27 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
     // reads it and, while the name is held, writes nothing.
     const held = ensureRecord(dropDir, signed);
     if (!held.ok) return { ok: false, reason: held.reason };
-    return { ok: true, path: held.path, existing: true, record };
+    return { ok: true, path: held.path, existing: true, record, signed };
   }
-  const posted = await postArrivalNow(dropDir, payload, signed, home, now);
+  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
+}
+
+/**
+ * Stages the record and, for the callers that transport it without walking the cascade, posts
+ * the arrival to the receiving seat's adapter and announces it, in that order. The order is what
+ * makes one wake: the post takes the record's claim and decides who posts, a 2xx ends the claim
+ * as the mark the bus skips, and only then is the arrival announced. A failed post releases the
+ * claim, so the bus and the seat's pull still carry the fallback; a post whose fate is unknown
+ * leaves the claim in `sent`, so the record is reported rather than posted a second time. A
+ * record whose name already existed is left exactly as it was.
+ */
+async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report): Promise<RecordWritten> {
+  const written = await stageSendRecord(dropDir, payload, home, now);
+  if (!written.ok || written.existing === true) return written;
+  const posted = await postArrivalNow(dropDir, payload, written.signed, home, now);
   if (posted.kind !== 'none') report.webhookPost = posted;
   await announceArrival(payload);
-  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
+  return written;
 }
 
 /** How long a send waits on the bus to take its nudge. A bus that is not running refuses the
@@ -3009,7 +3188,8 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
   // An unconfirmed confirm appends the receiving seat's class, read from the receiving team's
   // own records: the sender learns whether the seat is woken, holds the message between turns,
   // or reads it at its next turn. A verified delivery needs none. A webhook-only route reads as
-  // queued whatever the bus is doing now: the bus posts it after the send returns.
+  // queued whatever the bus is doing now: the send's own webhook leg posts it, and the bus
+  // carries the same arrival after the send returns.
   if (outcome === 'sent (unconfirmed)') {
     const receiving = readTeamConfig(record.root, { home: host.home });
     const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
@@ -3292,7 +3472,7 @@ async function finishThreadWait(
   seatName: string,
   dropDir: string,
   payload: RecordPayload,
-  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session',
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook',
   timeoutS: number,
   host: SendHost,
   report: Report,
@@ -4350,9 +4530,10 @@ async function deliverClientRecord(
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
       // the reported class, so the summary never claims a wake that did not happen. A surviving
-      // webhook-only route still reads as queued — the bus posts it, never this send — and the
-      // words keep the typed-wake exception: a profile that declares a typed wake reads the
-      // message at its next turn, not "no way to be woken".
+      // webhook-only route still reads as queued — the send's webhook leg posts it before the
+      // typed leg, and the bus carries it after the send returns — and the words keep the
+      // typed-wake exception: a profile that declares a typed wake reads the message at its
+      // next turn, not "no way to be woken".
       if (attempt.socketUnusable === true) {
         report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat);
       }
@@ -5003,7 +5184,8 @@ function noSocketReason(host: SendHost): string {
 
 function staleSocketReason(to: Aim, path: string, home: string | undefined): string {
   // The words follow the class the walk can still prove; a webhook that is the only route left
-  // reads as queued, since the bus posts it after this send returns. The typed-wake exception
+  // reads as queued, since the send's webhook leg posts it next and the bus carries it after
+  // this send returns. The typed-wake exception
   // applies here too: this sentence is read while the typed leg is still ahead of the walk, so a
   // profile that declares a typed wake says the seat reads the message at its next turn rather
   // than claiming it has no way to be woken.
@@ -5518,7 +5700,7 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  composer and the drop is still the message; a native or headless route's record waits for a
  *  receipt that has not come back. The `note` says which — a typed send's names the
  *  trigger and the receipt. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
   const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
@@ -5543,13 +5725,28 @@ function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
   return 0; // exit: send.sent-channel
 }
 
+/** The seat's own webhook adapter answered the sender's post with 2xx: the routine took the
+ *  arrival, which is the leg's whole proof — the routine's own run is not a read receipt, so the
+ *  ending is never `delivered (read)`. The ending names its own leg, so it carries its own exit
+ *  id: `send.delivered` is the channel's site above, this one is the adapter's. Exit 0, always. */
+function deliveredWebhook(io: Io, seat: string, report: Report, ms: number): number {
+  const summary = `${seat}: delivered (webhook, ${String(ms)} ms)`;
+  if (report.json) {
+    writeAction(io, report, { status: 'delivered', summary, channel: 'webhook' });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.delivered-webhook
+}
+
 /** A reply record on the thread arrived within the window: printed, and the send is over. Exit 0, always. */
 function answered(
   io: Io,
   seat: string,
   read: { reply: string; msg_id: string | null },
   report: Report,
-  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' = 'socket',
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook' = 'socket',
   thread: string | null = report.sent,
 ): number {
   const summary = `${seat}: answered`;
@@ -5690,7 +5887,7 @@ type ActionFields = {
   /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, `headless-resume`,
    *  `channel` for the seat's own development channel, `session` for the CLI's own
    *  session-creating call, or `native` for a record or handoff. */
-  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | null;
+  channel?: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' | 'headless-resume' | 'channel' | 'session' | 'webhook' | null;
   /** The reply's text, on an answered wait. */
   reply?: string;
   /** The reply record's own id, on an answered wait. */

@@ -18,15 +18,21 @@ import type { DeliveryLeg } from '../settings/inherit.ts';
  *  reads but never walks. */
 export type LegClass = 'channel' | 'webhook' | 'typed' | 'mailbox' | 'unavailable';
 
+/** A leg of the walk itself: every word a `delivery_order` can name, and the sender-posted
+ *  webhook. No order names the webhook — the receiving seat's adapter row decides whether the
+ *  leg exists — but the walk and its report name it like any other leg. */
+export type WalkLeg = DeliveryLeg | 'webhook';
+
 /** The reason every walk gives for a leg this build reads but never walks. */
 export const MCP_INBOX_UNAVAILABLE = 'not a delivery leg in this build; the inbox is the store\'s reader';
 
 /**
  * A leg's class. `mcp-inbox` is `unavailable`: the word is still read from a policy, and the
- * walk says why it was not attempted. Every other name is one of the three classes or the
+ * walk says why it was not attempted. The webhook is the second class, standing between the
+ * channel-class legs and the typed leg; every other name is one of the three classes or the
  * mailbox under them.
  */
-export function legClassOf(leg: DeliveryLeg): LegClass {
+export function legClassOf(leg: WalkLeg): LegClass {
   switch (leg) {
     case 'socket':
     case 'native':
@@ -34,6 +40,8 @@ export function legClassOf(leg: DeliveryLeg): LegClass {
     case 'channel':
     case 'session':
       return 'channel';
+    case 'webhook':
+      return 'webhook';
     case 'typed':
       return 'typed';
     case 'drop':
@@ -58,6 +66,21 @@ export function cascadeOrder(order: readonly DeliveryLeg[]): DeliveryLeg[] {
     }
   }
   return out;
+}
+
+/**
+ * The walk a send makes when the receiving seat configures a webhook adapter: the channel-class
+ * legs in declared order, the sender-posted webhook, then the typed leg, then the mailbox —
+ * {@link cascadeOrder}'s list with the webhook inserted after the last channel-class leg. No
+ * order names the webhook, so `webhook` is the seat's adapter row, and a seat without one gets
+ * exactly {@link cascadeOrder}'s list.
+ */
+export function cascadeWalk(order: readonly DeliveryLeg[], webhook: boolean): WalkLeg[] {
+  const legs: WalkLeg[] = [...cascadeOrder(order)];
+  if (!webhook) return legs;
+  const at = legs.findIndex((leg) => legClassOf(leg) !== 'channel');
+  legs.splice(at < 0 ? legs.length : at, 0, 'webhook');
+  return legs;
 }
 
 /** The words of an order this build reads but never walks, in the order declared. */

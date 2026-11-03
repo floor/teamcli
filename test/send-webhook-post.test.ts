@@ -138,7 +138,7 @@ describe('the send posts the seat webhook itself', () => {
     // The owner's scene is a wake that never waits on a bus: the post's own reported leg is the
     // bound that says so. The whole run carries unrelated work (config reads, the record write)
     // and is only held to "did not hang" here, so a loaded machine cannot blur the scene.
-    const woke = /webhook delivered \((\d+) ms\)/.exec(io.out);
+    const woke = /delivered \(webhook, (\d+) ms\)/.exec(io.out);
     expect(woke).not.toBeNull();
     expect(Number(woke?.[1] ?? '999999')).toBeLessThan(1000);
     expect(elapsed).toBeLessThan(5000);
@@ -165,7 +165,7 @@ describe('the send posts the seat webhook itself', () => {
     expect(readFileSync(join(dir, id), 'utf8')).toContain('the gate is green');
     // The line claims the delivery only because a 2xx answered, and it no longer calls the
     // arrival queued for a bus that never saw it.
-    expect(io.out).toContain('webhook delivered (');
+    expect(io.out).toContain('delivered (webhook, ');
     expect(io.out).not.toContain('queued; its webhook fires when the bus takes it');
     // The secret reached the request's authentication carrier and nowhere else.
     expect(io.out).not.toContain(SECRET);
@@ -200,7 +200,7 @@ describe('the send posts the seat webhook itself', () => {
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('webhook delivered (');
+    expect(io.out).toContain('delivered (webhook, ');
     expect(get.hits.length).toBe(1);
     // The bus announced the arrival too — and skipped the marked record instead of posting it
     // a second time. Waiting past the adapter's own scheduling is the evidence: a second POST
@@ -254,7 +254,7 @@ describe('the send posts the seat webhook itself', () => {
     expect(code, io.err).toBe(0);
     expect(get.hits.length).toBe(1);
     expect(io.out).toContain('webhook not delivered: HTTP 500');
-    expect(io.out).not.toContain('webhook delivered (');
+    expect(io.out).not.toContain('delivered (webhook,');
     // No mark: the bus and the seat's pull still carry the arrival, said in the class's words.
     expect(io.out).toContain('queued; its webhook fires when the bus takes it');
     const dir = dropDir(at.dir, 'iris');
@@ -274,7 +274,7 @@ describe('the send posts the seat webhook itself', () => {
     expect(await runSend(['iris', 'the gate is green'], io, fake(at)), io.err).toBe(0);
     expect(get.hits.length).toBe(0);
     expect(io.out).not.toContain('webhook not delivered');
-    expect(io.out).not.toContain('webhook delivered');
+    expect(io.out).not.toContain('delivered (webhook,');
   });
 });
 

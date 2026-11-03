@@ -88,7 +88,8 @@
               "typed",
               "drop",
               "headless-resume",
-              "session"
+              "session",
+              "webhook"
             ]
           },
           "state": {

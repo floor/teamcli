@@ -249,7 +249,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'drop' });
   });
 
-  test('the sender-posted webhook fires once, whatever the listener beside the seat says', async () => {
+  test('the sender-posted webhook fires once and stops the walk, whatever the listener beside the seat says', async () => {
     const hook = receiver();
     const one = world(null, [{ ...CURSOR, webhook: hookFiles(hook.url) }]);
     made.push(one);
@@ -262,8 +262,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     });
     const io = owner(one.root);
     expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    expect(io.out).toContain('cursor: sent (unconfirmed) (drop, 0 ms)');
-    expect(io.out).toContain('webhook delivered (');
+    expect(io.out).toContain('cursor: delivered (webhook, ');
     expect(pane.typed).toEqual([]);
     expect(hook.hits).toBe(1);
     expect(recordsIn(inboxOf(one))).toHaveLength(1);

@@ -6115,6 +6115,40 @@ scene('send.delivered', async (place) => {
     'lead: sent (unconfirmed) (drop, 0 ms)',
   );
 });
+scene('send.delivered-webhook', async (place) => {
+  // The seat's own adapter answers the sender's post with 2xx: a loopback listener, the two
+  // files the row names, and a launch with no socket behind it, so the walk reaches the adapter.
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('ok') });
+  try {
+    const urlFile = join(place.base, 'webhook-url');
+    const secretFile = join(place.base, 'webhook-secret');
+    writeFileSync(urlFile, `http://127.0.0.1:${String(server.port)}/routine\n`);
+    writeFileSync(secretFile, 'synthetic-webhook-secret\n', { mode: 0o600 });
+    chmodSync(secretFile, 0o600);
+    write(place, `format: 1
+project: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}  - role: implementer
+    name: remote
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: claude
+    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+delivery_order: [mcp-inbox, typed]
+`);
+    return show(await sent(place, ['remote', 'hello'], owner, sendHost(place)), 'remote: delivered (webhook, ');
+  } finally {
+    server.stop(true);
+  }
+});
 scene('send.sent-unconfirmed', async (place) => {
   write(place, TEAM);
   // A live listener takes the message into the seat's inbox; the grace is zero, so the receipt

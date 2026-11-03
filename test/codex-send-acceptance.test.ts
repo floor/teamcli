@@ -776,8 +776,8 @@ exit 1
       canAcceptDirectInput: true,
     }));
     // A managed seat whose own records bind the endpoint and the conversation its queue is
-    // addressed by, plus a readable webhook adapter. No bus serves this root, so the adapter
-    // cannot have fired; the queue is the route that actually took the send.
+    // addressed by, plus a readable webhook adapter. The queue is the route that actually took
+    // the send, so the walk stops at that channel leg and its webhook leg is never reached.
     recordSeatState(scene, recordedEndpointState(socketPath, RECORD_BINDING, RECORD_BINDING));
     withWebhookRow(scene);
 
@@ -785,12 +785,12 @@ exit 1
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    // The words follow the leg that took the message. A queued-for-bus sentence here would be the
-    // webhook's claim on a wake this send never made. The trailing clause is the send's own post:
-    // the fixture's loopback adapter is a closed port, so the post tried and failed, and the claim
-    // was released for the bus.
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue; webhook not delivered: could not connect (ConnectionRefused)\n`);
+    // The words follow the leg that took the message, and the walk stops there: a send the
+    // runtime queue took never reaches its webhook leg, so no post is made and no
+    // queued-for-bus sentence appears. The adapter's closed loopback port is never dialled.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(out).not.toContain('queued; its webhook fires');
+    expect(out).not.toContain('webhook not delivered');
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);

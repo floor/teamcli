@@ -5065,6 +5065,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.delivered-webhook",
+      "meaning": "the record is written and the seat's webhook adapter took the message",
+      "trigger": "team send worker hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.dry-run",
       "meaning": "the seat and channel were resolved and nothing was written",
       "trigger": "team send worker hello --dry-run"
