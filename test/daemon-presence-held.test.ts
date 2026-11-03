@@ -12,7 +12,7 @@
 // A synthetic home and checkout, an injected screen and agent list: no pane host is called and
 // no owner session is read.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -350,5 +350,24 @@ describe('the looks', () => {
     const raised = await step(instant(HELD_FIRST_LOOK_MS + 2 * HELD_LOOK_EVERY_MS + 10));
     expect(raised.raised).toEqual([id]);
     expect(looks).toEqual([{ pane: 'fixture-pane-lead', session: SESSION }]);
+  });
+
+  test('one pane look per seat raises held for all due unread frames of that seat and writes no read receipt', async () => {
+    const made = scene();
+    const id1 = '3f2a1b4c-0000-4000-8000-00000000000d';
+    const id2 = '3f2a1b4c-0000-4000-8000-00000000000e';
+    recordOf(made, id1);
+    recordOf(made, id2);
+    deliveredAt(made, id1, NOW);
+    deliveredAt(made, id2, NOW);
+    declareSeat(made);
+    const { step, looks } = stepOf(made, { screen: async () => HELD_DIALOG });
+
+    const out = await step(instant(HELD_FIRST_LOOK_MS + 10));
+    expect(out.failed).toBeNull();
+    expect(out.raised).toEqual([id1, id2]);
+    expect(out.watching).toBe(0);
+    expect(looks).toEqual([{ pane: 'fixture-pane-lead', session: SESSION }]);
+    expect(readdirSync(made.drop).filter((name) => name.endsWith('.read.json'))).toEqual([]);
   });
 });

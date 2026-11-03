@@ -7,12 +7,13 @@
 //
 // A synthetic world, a fake host and a scripted pane: no live session, socket or owner home.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
-import { owner, fake, scripted, world } from './send-native-fixtures.ts';
+import { heldSocketPath } from '../src/send/inbound.ts';
+import { dropDir, owner, fake, scripted, world } from './send-native-fixtures.ts';
 
 const HELD_DIALOG = 'Held message from another session\nPress enter to view';
 
@@ -75,4 +76,8 @@ test('a send through a taken frame pays the frame, not the receiver: p95 under 3
 
   const measured = p95(elapsed);
   expect(measured).toBeLessThan(BOUND_MS);
+  const drops = dropDir(made.dir, 'lead');
+  expect(readdirSync(drops).filter((name) => !name.includes('.'))).toHaveLength(SENDINGS);
+  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
+  expect(existsSync(heldSocketPath(made.dir, 'acme', 'lead'))).toBe(false);
 });
