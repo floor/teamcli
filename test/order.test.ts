@@ -124,7 +124,7 @@ function makeSources(fixture: Fixture, world: World): OrderSources {
         if (agent !== undefined) agent.workspace = created;
       }
       world.workspaces.push(created);
-      const pane = `w${String(world.next)}:p1`;
+      const pane = `pane${String(world.next)}`;
       updateState(fixture.dir, (current) => {
         const record = (current.sessions.acme ??= emptySession());
         record.seats[name] = {
@@ -141,12 +141,13 @@ function makeSources(fixture: Fixture, world: World): OrderSources {
   };
 }
 
-/** Idle agents at the panes their workspaces imply (`w2` runs at `w2:p1`). */
+/** Idle agents at the panes their workspaces imply (`w2` runs at `pane2`; the fixture's pane ids
+ *  are the neutral shape, never the terminal host's own). */
 function agentsOver(seats: { name: string; workspace: string }[], status = 'idle'): HerdrAgent[] {
   return seats.map((seat) => ({
     name: seat.name,
     agent: 'claude-code',
-    pane: `${seat.workspace}:p1`,
+    pane: `pane${seat.workspace.slice(1)}`,
     workspace: seat.workspace,
     status,
     cwd: '/tmp',
@@ -156,7 +157,7 @@ function agentsOver(seats: { name: string; workspace: string }[], status = 'idle
 describe('team order', () => {
   test('a sidebar already reading in roster order closes nothing', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, ops: { pane: 'w2:p1', workspace: 'w2' }, worker: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, ops: { pane: 'pane2', workspace: 'w2' }, worker: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'ops', workspace: 'w2' }, { name: 'worker', workspace: 'w3' }]),
@@ -174,7 +175,7 @@ describe('team order', () => {
   test('a re-added middle seat is re-created with the seats after it, in roster order', async () => {
     const fixture = makeFixture();
     // ops was re-added: its fresh workspace w3 landed at the end.
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, ops: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]),
@@ -191,14 +192,14 @@ describe('team order', () => {
     const state = readState(fixture.dir);
     expect(state.sessions.acme?.seats.ops?.workspace).toBe('w4');
     expect(state.sessions.acme?.seats.worker?.workspace).toBe('w5');
-    expect(state.sessions.acme?.seats.lead?.pane).toBe('w1:p1');
+    expect(state.sessions.acme?.seats.lead?.pane).toBe('pane1');
   });
 
   test('the orchestrator is lifted first even when the file lists it last, through the live agent list when the state predates workspaces', async () => {
     const fixture = makeFixture(ORCHESTRATOR_LAST_YAML);
     // The session was created in the file's own order. No seat's state records a workspace — the
     // mapping goes through the live agent list, the pane each seat's record names.
-    place(fixture, { worker: { pane: 'w1:p1' }, ops: { pane: 'w2:p1' }, lead: { pane: 'w3:p1' } });
+    place(fixture, { worker: { pane: 'pane1' }, ops: { pane: 'pane2' }, lead: { pane: 'pane3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'worker', workspace: 'w1' }, { name: 'ops', workspace: 'w2' }, { name: 'lead', workspace: 'w3' }]),
@@ -214,7 +215,7 @@ describe('team order', () => {
 
   test('a dry run prints the set and closes nothing', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, ops: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]),
@@ -229,7 +230,7 @@ describe('team order', () => {
 
   test('a working seat in the moving set refuses the whole pass before anything closes', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, ops: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } });
     const agents = agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]);
     const working = agents.find((agent) => agent.name === 'worker');
     if (working !== undefined) working.status = 'working';
@@ -244,13 +245,13 @@ describe('team order', () => {
   test("a lead whose own pane is in the moving set is refused: closing it would end the pass", async () => {
     const fixture = makeFixture();
     // The lead's own workspace landed last, so the moving set is the whole sidebar.
-    place(fixture, { ops: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, lead: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { ops: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, lead: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'ops', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'lead', workspace: 'w3' }]),
       restarts: [], move: true, fail: new Set(), next: 4,
     };
-    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'w3:p1', session: 'acme' });
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane3', session: 'acme' });
     await expect(runOrder([], io, makeSources(fixture, world))).resolves.toBe(1);
     expect(io.err).toContain("team order: this run sits in lead's own pane, and closing it would end the pass; another `leads` seat (or the owner) orders it\n");
     expect(world.restarts).toEqual([]);
@@ -258,13 +259,13 @@ describe('team order', () => {
 
   test('a seat that is not `leads` for this team is refused', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, ops: { pane: 'w2:p1', workspace: 'w2' }, worker: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, ops: { pane: 'pane2', workspace: 'w2' }, worker: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'ops', workspace: 'w2' }, { name: 'worker', workspace: 'w3' }]),
       restarts: [], move: true, fail: new Set(), next: 4,
     };
-    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'w3:p1', session: 'acme' });
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane3', session: 'acme' });
     await expect(runOrder([], io, makeSources(fixture, world))).resolves.toBe(1);
     expect(io.err).toContain('team order: only the owner or `leads` orders the sidebar; this call is worker\n');
     expect(world.restarts).toEqual([]);
@@ -272,7 +273,7 @@ describe('team order', () => {
 
   test('a restart that refuses mid-pass stops there and says how far it got', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, ops: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]),
@@ -286,7 +287,7 @@ describe('team order', () => {
 
   test('a pass whose restarts did not move the workspaces is reported, never assumed', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w2:p1', workspace: 'w2' }, ops: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane2', workspace: 'w2' }, ops: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w2' }, { name: 'ops', workspace: 'w3' }]),
@@ -299,7 +300,7 @@ describe('team order', () => {
 
   test('a session that is not running is refused', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' } });
     const world: World = {
       workspaces: ['w1'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }]),
@@ -313,7 +314,7 @@ describe('team order', () => {
 
   test('a pane host that does not answer is refused', async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' } });
     const world: World = {
       workspaces: ['w1'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }]),
@@ -327,7 +328,7 @@ describe('team order', () => {
 
   test("a state record that cannot be read refuses before anything closes", async () => {
     const fixture = makeFixture();
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, ops: { pane: 'w2:p1', workspace: 'w2' }, worker: { pane: 'w3:p1', workspace: 'w3' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, ops: { pane: 'pane2', workspace: 'w2' }, worker: { pane: 'pane3', workspace: 'w3' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'ops', workspace: 'w2' }, { name: 'worker', workspace: 'w3' }]),
@@ -351,7 +352,7 @@ describe('team order', () => {
   test('a watch workspace between seats never moves and does not stop the pass', async () => {
     const fixture = makeFixture();
     // ops re-added at the end; the watch's workspace w2 sits between lead and worker.
-    place(fixture, { lead: { pane: 'w1:p1', workspace: 'w1' }, worker: { pane: 'w3:p1', workspace: 'w3' }, ops: { pane: 'w4:p1', workspace: 'w4' } });
+    place(fixture, { lead: { pane: 'pane1', workspace: 'w1' }, worker: { pane: 'pane3', workspace: 'w3' }, ops: { pane: 'pane4', workspace: 'w4' } });
     const world: World = {
       workspaces: ['w1', 'w2', 'w3', 'w4'],
       agents: agentsOver([{ name: 'lead', workspace: 'w1' }, { name: 'worker', workspace: 'w3' }, { name: 'ops', workspace: 'w4' }]),

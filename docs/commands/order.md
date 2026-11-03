@@ -91,6 +91,7 @@ seats:
 ```fixture
 agents: all
 sidebar: [claude-keeper, claude-reviewer, claude-beacon]
+panes: neutral
 ```
 
 ```console
@@ -123,13 +124,13 @@ claude-beacon: turn: not working (free)
 claude-beacon: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation
 claude-beacon: stopped
 claude-beacon: ready
-team restart: restarted claude-beacon; pane w3:p1 -> w4:p1
+team restart: restarted claude-beacon; pane pane3 -> pane4
 claude-reviewer: input box: empty
 claude-reviewer: turn: not working (free)
 claude-reviewer: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation
 claude-reviewer: stopped
 claude-reviewer: ready
-team restart: restarted claude-reviewer; pane w2:p1 -> w5:p1
+team restart: restarted claude-reviewer; pane pane2 -> pane5
 team order: sidebar: claude-keeper, claude-beacon, claude-reviewer
 exit 0
 ```
