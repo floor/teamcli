@@ -19,8 +19,10 @@ import { serveChoresChild } from '../src/daemon/chores/child.ts';
 import type { ChoresChildRoute } from '../src/daemon/chores/protocol.ts';
 import { createChoresWatch } from '../src/daemon/chores/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { setHerdrRun } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { forgetIdleEpisodes } from '../src/watch/dispatch.ts';
+import { handoverPath } from '../src/watch/handover.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { Machine } from '../src/watch/machine.ts';
 
@@ -432,6 +434,52 @@ exit 1
       else process.env.PATH = savedPath;
       if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
       else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 15_000);
+
+  test('a null process answer is the seam\'s own and the host runner is not asked', async () => {
+    bind();
+    // A live pane watch, no epoch: proving it is the one read a provided seam must finish.
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-null',
+      };
+    });
+    const clock = { at: NOW };
+    const sourceCalls: string[] = [];
+    let hostCalls = 0;
+    setHerdrRun(() => {
+      hostCalls += 1;
+      return null;
+    });
+    const reports: HostedWatchState[] = [];
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: (_root, state) => reports.push(state),
+      pulse: () => {},
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: {
+        ...quietSources(clock),
+        processes: (pane) => {
+          sourceCalls.push(pane);
+          return null;
+        },
+      },
+    });
+    try {
+      await beatUntil(watch, clock, () => reports.at(-1)?.phase === 'standby');
+      expect(sourceCalls).toEqual(['fixture-pane-null']);
+      expect(hostCalls).toBe(0);
+      expect(existsSync(handoverPath(agents))).toBe(false);
+      expect(record()).toMatchObject({ pid: process.pid, pane: 'fixture-pane-null' });
+      expect(record()?.epoch).toBeUndefined();
+    } finally {
+      setHerdrRun(null);
+      await watch.stop('the test is done');
     }
   }, 15_000);
 

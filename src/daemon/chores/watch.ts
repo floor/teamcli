@@ -91,10 +91,15 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
     ...(input.base === undefined ? {} : { base: input.base }),
     // Proving a recorded pane watch is the process in its own pane is the same terminal-host
     // read the daemon makes; a pane it cannot read stays unproven and is never asked to hand over.
-    // A test's read sources answer first, so a scene never probes the machine's own sessions.
-    // The fallback read is awaited: a slow host must hold this read, never this child's loop and
-    // the beat it owes the daemon. The wrapper already awaits a read that is a promise.
-    processInfo: (pane) => input.base?.processes?.(pane, hosted.session) ?? paneProcessesAsync(pane, hosted.session),
+    // A provided reader is the reader, and null is its answer: the pane cannot be read. Only a
+    // route with no reader asks the terminal host. That read is awaited, so a slow host holds
+    // this read, never this child's loop and the beat it owes the daemon.
+    processInfo: (pane) => {
+      const processes = input.base?.processes;
+      return processes !== undefined
+        ? processes(pane, hosted.session)
+        : paneProcessesAsync(pane, hosted.session);
+    },
     ...(watch.presence
       ? {
           presenceChannelHealthy: (seat: string): boolean =>
