@@ -29,11 +29,16 @@
 // reached the routine and the owner's rule is that a routine never gets the same message twice.
 // A poster that knows the request never left (a refused connection, a non-2xx) removes the claim,
 // so the bus and the seat's pull keep the fallback they always had.
-import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
+import { appendHistory } from '../send/history.ts';
+import { webhookStep, type StepFields } from '../send/steps.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
 
@@ -689,14 +694,24 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
  *  (`already-posted`); or an unexpected failure left the claim as it was (`unexpected`). */
 export type SenderPostNone = 'no-route' | 'claim-held' | 'already-posted' | 'unexpected';
 
-/** What the send's own post ended as: the routine answered 2xx within the adapter's timeout; the
- *  one attempt provably did not reach it (a non-2xx, a refused connection); the request may have
- *  been sent and no answer was read, so it is reported and never posted again; or nothing was
- *  tried here, with the reason the walk needs to decide whether its leg was taken. */
+/** What a request that outlived the sender's deadline ended as, once its answer arrived or the
+ *  policy max elapsed. `posted` is a late 2xx and the claim is the `posted` mark. `failed` is an
+ *  answer that was not 2xx; the claim stays `sent`. `unanswered` is a cap, a kill, or a later
+ *  error: the claim is left exactly as it was. */
+export type LateWebhook =
+  | { kind: 'posted'; ms: number }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'unanswered' };
+
+/** What the send's own post ended as: the routine answered 2xx within the sender's deadline; the
+ *  one attempt provably did not reach it (a non-2xx, a refused connection); the deadline passed
+ *  with no answer read yet, so the command reports unknown and `late` keeps that same request
+ *  until the policy max; or nothing was tried here, with the reason the walk needs to decide
+ *  whether its leg was taken. */
 export type SenderPostOutcome =
   | { kind: 'posted'; ms: number }
   | { kind: 'failed'; reason: string }
-  | { kind: 'unknown'; reason: string }
+  | { kind: 'unknown'; reason: string; late?: Promise<LateWebhook> }
   | { kind: 'none'; why: SenderPostNone };
 
 export type SenderPostInput = {
@@ -718,7 +733,13 @@ export type SenderPostInput = {
   dropDir: string;
   home: string;
   now: () => Date;
-  /** The POST itself, injectable so a test can watch it without a socket. */
+  /** The receiving project, so a detached continuation can file the late step and history line
+   *  after this process has exited. */
+  project?: string;
+  /** The message body the late history line carries. */
+  body?: string;
+  /** The POST itself, injectable so a test can watch it without a socket. A test's fetch stays
+   *  in this process. The real fetch is a detached process, so `team send` can exit at the deadline. */
   fetch?: typeof fetch;
 };
 
@@ -729,11 +750,13 @@ export type SenderPostInput = {
  * fully sent is not retried here; the unchanged record stays for the bus and the seat's pull.
  *
  * The post holds the record's claim, taken exclusively, so a bus pass that reaches the same
- * record first makes this send post nothing. A 2xx ends the claim as the `posted` mark the
- * adapter skips; a non-2xx or a connection that was refused releases it, and the bus and the
- * seat's pull keep the fallback; a failure that does not prove the request never left keeps the
- * claim in `sent` and reports the outcome as unknown, so no one posts it a second time. Never
- * throws and never fails the send.
+ * record first makes this send post nothing. A 2xx within the deadline ends the claim as the
+ * `posted` mark the adapter skips; a non-2xx or a connection that was refused before the
+ * deadline releases it, and the bus and the seat's pull keep the fallback. The deadline does
+ * not abort the request. The command hears unknown and this process exits. The same request
+ * runs on in a detached process, bounded by the policy max. A late 2xx settles the claim to
+ * `posted`; any other answer leaves it `sent`. A kill leaves it `sent` as well. Nothing here
+ * posts a second time. Never throws and never fails the send.
  */
 export async function postArrivalWebhook(input: SenderPostInput): Promise<SenderPostOutcome> {
   // What the claim currently says this process may do: nothing, still provably unsent, or sent.
@@ -801,13 +824,11 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
         reason: cls === null ? 'request refused before sending' : `request refused before sending (${cls})`,
       };
     }
-    // The row's own answer bound, when it names one, as the bus delivery reads it — capped by the
-    // sender's own deadline: a send is a person's command and never waits out the bus's budget.
-    // The deadline is the `webhook-sender-deadline-ms` policy in force for the receiving team,
-    // three seconds when nothing declares it. Read before the claim is taken, so a chain that
-    // cannot be read fails the post with no claim left behind.
+    // The sender's deadline is how long the command waits, not how long the request lives. It is
+    // the `webhook-sender-deadline-ms` policy in force for the receiving team, three seconds when
+    // nothing declares it. Read before the claim is taken, so a chain that cannot be read fails
+    // the post with no claim left behind. The request itself is bounded by the policy max.
     const deadlineMs = webhookSenderDeadlineMs({ home: input.home, root: input.root, team: input.team ?? null });
-    const timeoutMs = Math.min(input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs, deadlineMs);
     // Claim before posting, exclusively: of this send and every bus pass, exactly one posts.
     if (!takeClaim(input.dropDir, input.id)) return { kind: 'none', why: 'claim-held' };
     held = 'claimed';
@@ -825,12 +846,29 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
-    try {
-      const response = await (input.fetch ?? fetch)(request.url, {
-        ...prepared,
-        redirect: 'error',
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+    // The real fetch belongs to a detached process. This one exits at the deadline. A test's
+    // own fetch stays here, where the test can see it.
+    if (input.fetch === undefined) {
+      return await detachedArrival(input, request.url, prepared, deadlineMs);
+    }
+    // One request, built above. The signal is the policy max, never the deadline: aborting at
+    // the deadline is what reported unknown after the routine had already taken the body.
+    const pending = input.fetch(request.url, {
+      ...prepared,
+      redirect: 'error',
+      signal: AbortSignal.timeout(WEBHOOK_SENDER_DEADLINE_MAX_MS),
+    }).then(
+      (response) => ({ kind: 'response' as const, response }),
+      (error: unknown) => ({ kind: 'error' as const, error }),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineHit = new Promise<{ kind: 'deadline' }>((resolve) => {
+      timer = setTimeout(() => resolve({ kind: 'deadline' }), deadlineMs);
+    });
+    const raced = await Promise.race([pending, deadlineHit]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (raced.kind === 'response') {
+      const response = raced.response;
       if (response.status >= 200 && response.status < 300) {
         finishClaim(input.dropDir, input.id, input.now);
         held = 'none';
@@ -838,8 +876,9 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       giveUp();
       return { kind: 'failed', reason: `HTTP ${response.status}` };
-    } catch (error) {
-      const unsent = unsentReason(error);
+    }
+    if (raced.kind === 'error') {
+      const unsent = unsentReason(raced.error);
       if (unsent !== null) {
         // The request provably never left: the fallback may post it.
         giveUp();
@@ -847,14 +886,322 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       // The body may have reached the routine and the answer was not read: the claim stays in
       // `sent`, and neither the bus nor a later pass posts the record again.
-      return { kind: 'unknown', reason: unknownReason(error, timeoutMs) };
+      return { kind: 'unknown', reason: unknownReason(raced.error, deadlineMs) };
     }
+    // The deadline won and the request is still the one above. The command returns unknown.
+    // This promise settles the claim when the answer arrives, or leaves it `sent` when the max
+    // elapses or the process is killed. It never releases and never posts again.
+    const late = pending.then((result): LateWebhook => {
+      if (result.kind === 'error') return { kind: 'unanswered' };
+      const response = result.response;
+      const ms = Math.max(0, input.now().getTime() - started);
+      if (response.status >= 200 && response.status < 300) {
+        finishClaim(input.dropDir, input.id, input.now);
+        held = 'none';
+        return { kind: 'posted', ms };
+      }
+      return { kind: 'failed', reason: `HTTP ${response.status}` };
+    }).catch((): LateWebhook => ({ kind: 'unanswered' }));
+    return { kind: 'unknown', reason: `no answer within ${String(deadlineMs)} ms`, late };
   } catch {
     // An unexpected failure before the request was marked sent releases the claim, so the
     // fallback still posts it; after that, the claim stays and the routine is never asked twice.
     if (held === 'claimed') giveUp();
     return { kind: 'none', why: 'unexpected' };
   }
+}
+
+type LateJob = {
+  url: string;
+  headers: [string, string][];
+  body: string;
+  capMs: number;
+  dropDir: string;
+  id: string;
+  project: string;
+  root: string;
+  home: string;
+  session: string;
+  from: string;
+  to: string;
+  thread?: string;
+  messageBody: string;
+};
+
+type LateLine = { status: number; ms: number } | { unsent: string } | { unknown: string };
+
+function headerPairs(headers: HeadersInit | undefined): [string, string][] {
+  if (headers instanceof Headers) return [...headers.entries()];
+  if (Array.isArray(headers)) return headers.map(([name, value]) => [name, value]);
+  if (headers === undefined) return [];
+  return Object.entries(headers);
+}
+
+function unrefPipe(pipe: unknown): void {
+  const socket = pipe as { unref?: () => void } | null;
+  socket?.unref?.();
+}
+
+/** The request, in its own process. The parent's pipes are unreferenced, so the parent can exit
+ *  at the deadline and this process is what finishes the claim. `took` tells the child the parent
+ *  settled the answer itself; `stop` closes the pipes so the child settles after the parent is gone. */
+function spawnLateWorker(job: LateJob): { stop: () => void; took: () => void; done: Promise<LateLine | null> } {
+  const entry = fileURLToPath(import.meta.url);
+  const child = spawn(process.execPath, [entry, '--finish-late'], {
+    detached: true,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  child.unref();
+  child.stdin?.write(`${JSON.stringify(job)}\n`);
+  // The pipe objects are sockets at runtime. Leaving them referenced is what kept `team send` up
+  // until the request finished.
+  unrefPipe(child.stdin);
+  unrefPipe(child.stdout);
+  const done = new Promise<LateLine | null>((resolve) => {
+    let buf = '';
+    let settled = false;
+    const finish = (line: LateLine | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(line);
+    };
+    const take = (text: string): void => {
+      const nl = text.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        finish(JSON.parse(text.slice(0, nl)) as LateLine);
+      } catch {
+        finish(null);
+      }
+    };
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      buf += chunk;
+      take(buf);
+    });
+    child.stdout?.on('error', () => finish(null));
+    child.stdout?.on('close', () => {
+      take(buf);
+      finish(null);
+    });
+  });
+  return {
+    done,
+    took: () => {
+      try {
+        child.stdin?.write('taken\n');
+        child.stdin?.end();
+      } catch {
+        child.stdin?.destroy();
+      }
+    },
+    stop: () => {
+      child.stdout?.destroy();
+      child.stdin?.destroy();
+    },
+  };
+}
+
+function lateFields(job: LateJob, ts: string): StepFields {
+  return {
+    store: { project: job.project, root: job.root, home: job.home },
+    id: job.id,
+    session: job.session,
+    from: job.from,
+    to: job.to,
+    ...(job.thread === undefined ? {} : { thread: job.thread }),
+    ts,
+  };
+}
+
+/** The parent has gone. A 2xx settles the claim and appends the late history line. Any other
+ *  answer is a failed step and the claim stays `sent`. No answer leaves the claim `sent`. */
+function settleDetached(job: LateJob, line: LateLine | null, ms: number): void {
+  const now = (): Date => new Date();
+  if (line !== null && 'status' in line && line.status >= 200 && line.status < 300) {
+    finishClaim(job.dropDir, job.id, now);
+    if (job.project === '') return;
+    const fields = lateFields(job, now().toISOString());
+    webhookStep(fields, { kind: 'posted', ms }, 'late');
+    appendHistory(job.project, job.root, job.home, {
+      ts: now().toISOString(),
+      from: job.from,
+      to: job.to,
+      body: job.messageBody,
+      id: job.id,
+      ...(job.thread === undefined ? {} : { thread: job.thread }),
+      outcome: 'delivered (late)',
+      ms,
+      via: 'webhook',
+    });
+    return;
+  }
+  if (line !== null && 'status' in line && job.project !== '') {
+    webhookStep(lateFields(job, now().toISOString()), { kind: 'failed', reason: `HTTP ${String(line.status)}` }, 'late');
+  }
+}
+
+async function detachedArrival(
+  input: SenderPostInput,
+  url: string,
+  prepared: RequestInit,
+  deadlineMs: number,
+): Promise<SenderPostOutcome> {
+  const job: LateJob = {
+    url,
+    headers: headerPairs(prepared.headers),
+    body: typeof prepared.body === 'string' ? prepared.body : '',
+    capMs: WEBHOOK_SENDER_DEADLINE_MAX_MS,
+    dropDir: input.dropDir,
+    id: input.id,
+    project: input.project ?? '',
+    root: input.root,
+    home: input.home,
+    session: input.session,
+    from: input.from,
+    to: input.seat,
+    ...(input.thread === undefined ? {} : { thread: input.thread }),
+    messageBody: input.body ?? '',
+  };
+  const worker = spawnLateWorker(job);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineHit = new Promise<'deadline'>((resolve) => {
+    timer = setTimeout(() => resolve('deadline'), deadlineMs);
+  });
+  const raced = await Promise.race([worker.done.then((line) => ({ kind: 'line' as const, line })), deadlineHit]);
+  if (timer !== undefined) clearTimeout(timer);
+  if (raced === 'deadline' || raced.line === null) {
+    // The child is detached and unreferenced. Closing the pipes is how it learns to finish alone.
+    // This process holds no promise for the request, so it can exit at the deadline.
+    worker.stop();
+    return { kind: 'unknown', reason: `no answer within ${String(deadlineMs)} ms` };
+  }
+  // The child wrote the line and is waiting. Saying so is what keeps it from settling too.
+  worker.took();
+  const line = raced.line;
+  if ('unsent' in line) {
+    releaseClaim(input.dropDir, input.id);
+    return { kind: 'failed', reason: line.unsent };
+  }
+  if ('unknown' in line) return { kind: 'unknown', reason: line.unknown };
+  if (line.status >= 200 && line.status < 300) {
+    finishClaim(input.dropDir, input.id, input.now);
+    return { kind: 'posted', ms: line.ms };
+  }
+  releaseClaim(input.dropDir, input.id);
+  return { kind: 'failed', reason: `HTTP ${String(line.status)}` };
+}
+
+function tellParent(line: string): boolean {
+  try {
+    if (process.stdout.destroyed) return false;
+    writeSync(process.stdout.fd, line);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** One stdin reader for the whole worker. The job is the first line; `taken` is whatever follows.
+ *  Listeners stay up, so a parent that closes the pipe while the request is in flight resolves
+ *  `taken` instead of leaving a second listener waiting on an already-ended stream. */
+function stdinFeed(): { job: Promise<string>; taken: Promise<boolean> } {
+  let buf = '';
+  let jobDone = false;
+  let takeDone = false;
+  let resolveJob: (line: string) => void = () => {};
+  let rejectJob: (error: Error) => void = () => {};
+  let resolveTaken: (yes: boolean) => void = () => {};
+  const job = new Promise<string>((resolve, reject) => {
+    resolveJob = resolve;
+    rejectJob = reject;
+  });
+  const taken = new Promise<boolean>((resolve) => {
+    resolveTaken = resolve;
+  });
+  const take = (yes: boolean): void => {
+    if (takeDone) return;
+    takeDone = true;
+    resolveTaken(yes);
+  };
+  const push = (chunk: string): void => {
+    buf += chunk;
+    if (!jobDone) {
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      jobDone = true;
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      resolveJob(line);
+    }
+    if (buf.includes('taken')) take(true);
+  };
+  const end = (): void => {
+    if (!jobDone) {
+      const nl = buf.indexOf('\n');
+      if (nl !== -1) {
+        jobDone = true;
+        resolveJob(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      } else {
+        jobDone = true;
+        rejectJob(new Error('closed'));
+      }
+    }
+    take(buf.includes('taken'));
+  };
+  const stream = process.stdin;
+  if (stream.readableEnded || stream.destroyed) {
+    const pending = stream.read();
+    if (typeof pending === 'string') push(pending);
+    else if (pending) push(pending.toString('utf8'));
+    end();
+  } else {
+    stream.on('data', (chunk: Buffer | string) => {
+      push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    });
+    stream.on('end', end);
+    stream.on('close', end);
+    stream.on('error', end);
+  }
+  return { job, taken };
+}
+
+async function finishLateWorker(): Promise<void> {
+  const feed = stdinFeed();
+  let job: LateJob;
+  try {
+    job = JSON.parse(await feed.job) as LateJob;
+  } catch {
+    return;
+  }
+  const started = Date.now();
+  let line: LateLine;
+  try {
+    const response = await fetch(job.url, {
+      method: 'POST',
+      headers: job.headers,
+      body: job.body,
+      redirect: 'error',
+      signal: AbortSignal.timeout(job.capMs),
+    });
+    line = { status: response.status, ms: Math.max(0, Date.now() - started) };
+  } catch (error) {
+    const unsent = unsentReason(error);
+    line = unsent !== null ? { unsent } : { unknown: unknownReason(error, job.capMs) };
+  }
+  process.stdout.on('error', () => {});
+  const told = tellParent(`${JSON.stringify(line)}\n`);
+  const taken = told ? await feed.taken : false;
+  if (!taken) settleDetached(job, 'status' in line ? line : null, 'status' in line ? line.ms : 0);
+}
+
+const workerEntry = fileURLToPath(import.meta.url);
+const runAsWorker = (import.meta as { main?: boolean }).main === true
+  || (process.argv[1] !== undefined && process.argv[1] === workerEntry);
+if (runAsWorker && process.argv.includes('--finish-late')) {
+  process.stdout.on('error', () => {});
+  void finishLateWorker().catch(() => {});
 }
 
 export type WebhookFactoryInput = {

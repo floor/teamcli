@@ -31,6 +31,7 @@ export const HISTORY_KEPT = 3;
 export type HistoryOutcome =
   | 'delivered'
   | 'delivered (read)'
+  | 'delivered (late)'
   | 'delivered (typed wake)'
   | 'sent (unconfirmed)'
   | 'queued, not woken'
@@ -61,6 +62,7 @@ export function statusOfOutcome(outcome: string): MessageStatus {
     case 'delivered (read)':
       return 'read';
     case 'delivered':
+    case 'delivered (late)':
       return 'delivered';
     case 'held':
       return 'held';

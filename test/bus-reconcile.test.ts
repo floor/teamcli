@@ -310,6 +310,17 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
       outcome: 'delivered (read)',
       via: 'mcp-inbox',
     });
+    // A late webhook answer is a delivery, and it is not a read.
+    dropRecord({ root, home }, 'worker-2', 'hist-late', { ts: '2026-10-18T12:02:30.000Z' });
+    appendHistory('acme', root, home, {
+      ts: '2026-10-18T12:02:30.000Z',
+      from: 'clerk',
+      to: 'worker-2',
+      body: 'late webhook body',
+      id: 'hist-late',
+      outcome: 'delivered (late)',
+      via: 'webhook',
+    });
 
     // Seat state in `.agents/team.state.json`.
     updateState(join(root, '.agents'), (state) => {
@@ -339,6 +350,8 @@ describe('bus reconciliation pass (RFC 002 Amendment 01 §4.2)', () => {
     expect(raisedKeys).toContain('message.arrived:hist-1');
     expect(raisedKeys).toContain('message.delivered:hist-1:delivered');
     expect(raisedKeys).toContain('message.read:hist-1:read');
+    expect(raisedKeys).toContain('message.delivered:hist-late:delivered');
+    expect(raisedKeys).not.toContain('message.read:hist-late:read');
     expect(raisedKeys).toContain('seat.working:seat:worker-1:ready:2026-10-18T12:03:00.000Z');
 
     // Re-running with the same state raises nothing.

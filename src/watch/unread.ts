@@ -393,6 +393,8 @@ async function wakeByWebhook(
     dropDir,
     home,
     now: () => scene.now,
+    project: scene.team.project,
+    body: payload.body,
   });
   if (posted.kind === 'posted') {
     mark(dropDir, `${message.id}.wake`, { id: message.id, at, state: 'sent', evidence: 'webhook', ms: posted.ms });
