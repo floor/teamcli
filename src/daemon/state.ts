@@ -117,6 +117,50 @@ export type DaemonRootState = {
    * read as "caught up". Display data, not a hosting fact: a malformed one is left out.
    */
   firstPass?: DaemonRootFirstPass;
+  /**
+   * Where the route's heavy chores run, and how the child that runs them is doing. Present only
+   * when the daemon was started with a chores seam; a route without the field was never started
+   * with one, and its silence is not a failed child. `inline` is the rollback: the work runs on
+   * the daemon's own loop exactly as before the isolation.
+   */
+  chores?: DaemonChoresState;
+};
+
+/**
+ * One route's chores record: the mode in force, what the supervised child is doing, the resident
+ * size its own heartbeat reported, and the last completed pass. `missed` counts heartbeats
+ * currently overdue, capped at the policy's own kill threshold; a record at that cap is about to
+ * be ended and restarted. This is display evidence for an operator, never a hosting fact.
+ */
+export type DaemonChoresState = {
+  mode: 'per-root' | 'shared' | 'inline';
+  state: 'starting' | 'ok' | 'late' | 'restarting' | 'inline' | 'stopped';
+  pid: number | null;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  rssBytes: number | null;
+  /** What the child's last heartbeat said it was doing; null when it said nothing. */
+  busy: string | null;
+  /** How many times the supervisor has replaced this child since the daemon started. */
+  restarts: number;
+  missed: number;
+  /** The last completed pass's own clock, and the notes it carried. */
+  lastPassAt: string | null;
+  lastPass: string[] | null;
+  /** The last chore this root's child finished: the name its own frame carried, the instant it
+   *  reported, and how long it took. Null until the child reports one and after a replacement
+   *  starts, because a cold process has run nothing for the root yet. */
+  lastChore: { name: string; at: string; ms: number | null } | null;
+  /** The last presence pass this root's child answered: when, how long it took, and how many
+   *  declared seats it proved or missed. Null when no accepted pass has been answered. */
+  presence: { at: string; ms: number | null; proved: number; missed: number } | null;
+  /** The child's own marker-cache reading at its latest heartbeat: files read afresh, stamps
+   *  reused, and stamps held now. A shared child keeps one cache, so its roots' rows carry the
+   *  same reading. Null when the child has not reported one. */
+  markerCache: { read: number; reused: number; cached: number } | null;
+  /** While `state` says `restarting`, when the next start is due. */
+  nextStartAt: string | null;
+  why: string | null;
 };
 
 export type DaemonState = {
@@ -241,6 +285,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const watch = watchOf(entry.watch);
     const presence = presenceOf(entry.presence);
     const firstPass = firstPassOf(entry.firstPass);
+    const chores = choresOf(entry.chores);
     roots.push({
       root: entry.root,
       team: entry.team as string | null,
@@ -252,6 +297,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       ...(watch === null ? {} : { watch }),
       ...(presence === null ? {} : { presence }),
       ...(firstPass === null ? {} : { firstPass }),
+      ...(chores === null ? {} : { chores }),
     });
   }
   return roots;
@@ -326,6 +372,115 @@ function presenceOf(raw: unknown): DaemonRootState['presence'] | null {
   if (entry.state !== 'pending') return null;
   if (typeof entry.why !== 'string' || entry.why === '') return null;
   return { state: 'pending', why: entry.why };
+}
+
+/** A field a chores row must not carry in a form this reader cannot trust. */
+const INVALID_CHORES_FIELD = Symbol('invalid chores field');
+
+/**
+ * One chores row's last-chore reading, or null when the record predates the field. A present
+ * field with a name, an instant and a whole non-negative duration is read whole; anything else
+ * makes the row unreadable rather than shown as a guess.
+ */
+function choreOf(raw: unknown): DaemonChoresState['lastChore'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.name !== 'string' || entry.name === '') return INVALID_CHORES_FIELD;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  return { name: entry.name, at: entry.at, ms: entry.ms as number | null };
+}
+
+/** One chores row's last presence answer, or null when the record predates the field. The seat
+ *  counts are whole numbers, and a row that claims more proved than were declared is unreadable. */
+function chorePresenceOf(raw: unknown): DaemonChoresState['presence'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.at !== 'string' || entry.at === '') return INVALID_CHORES_FIELD;
+  if (!(entry.ms === null || (typeof entry.ms === 'number' && Number.isFinite(entry.ms) && entry.ms >= 0))) {
+    return INVALID_CHORES_FIELD;
+  }
+  if (!Number.isInteger(entry.proved) || (entry.proved as number) < 0) return INVALID_CHORES_FIELD;
+  if (!Number.isInteger(entry.missed) || (entry.missed as number) < 0) return INVALID_CHORES_FIELD;
+  return {
+    at: entry.at,
+    ms: entry.ms as number | null,
+    proved: entry.proved as number,
+    missed: entry.missed as number,
+  };
+}
+
+/** One chores row's marker-cache reading, or null when the child has not reported one. Every
+ *  count is a whole number that cannot be negative; a present malformed reading drops the row. */
+function choreCacheOf(raw: unknown): DaemonChoresState['markerCache'] | typeof INVALID_CHORES_FIELD {
+  if (raw === undefined || raw === null) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return INVALID_CHORES_FIELD;
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['read', 'reused', 'cached'] as const) {
+    if (!Number.isInteger(entry[key]) || (entry[key] as number) < 0) return INVALID_CHORES_FIELD;
+  }
+  return {
+    read: entry.read as number,
+    reused: entry.reused as number,
+    cached: entry.cached as number,
+  };
+}
+
+/**
+ * A chores record is display data, not a hosting fact: a malformed one is left out rather than
+ * making the whole daemon record unreadable, and an absent one means the route was not started
+ * with a chores seam.
+ */
+function choresOf(raw: unknown): DaemonChoresState | null {
+  if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (!['per-root', 'shared', 'inline'].includes(entry.mode as string)) return null;
+  if (!['starting', 'ok', 'late', 'restarting', 'inline', 'stopped'].includes(entry.state as string)) return null;
+  if (!(entry.pid === null || positiveInt(entry.pid))) return null;
+  for (const key of ['startedAt', 'heartbeatAt', 'nextStartAt'] as const) {
+    if (!(entry[key] === null || typeof entry[key] === 'string')) return null;
+  }
+  if (!(entry.rssBytes === null || (typeof entry.rssBytes === 'number' && Number.isFinite(entry.rssBytes) && entry.rssBytes >= 0))) {
+    return null;
+  }
+  if (!(entry.busy === null || typeof entry.busy === 'string')) return null;
+  if (!Number.isInteger(entry.restarts) || (entry.restarts as number) < 0) return null;
+  if (!Number.isInteger(entry.missed) || (entry.missed as number) < 0) return null;
+  if (!(entry.lastPassAt === null || typeof entry.lastPassAt === 'string')) return null;
+  if (!(entry.lastPass === null || (Array.isArray(entry.lastPass) && entry.lastPass.every((note) => typeof note === 'string')))) {
+    return null;
+  }
+  if (!(entry.why === null || typeof entry.why === 'string')) return null;
+  // The step-5 readings are absent from a record written before them, which reads as "none
+  // reported"; a present field in a form this reader cannot trust drops the row.
+  const lastChore = choreOf(entry.lastChore);
+  const presence = chorePresenceOf(entry.presence);
+  const markerCache = choreCacheOf(entry.markerCache);
+  if (lastChore === INVALID_CHORES_FIELD || presence === INVALID_CHORES_FIELD || markerCache === INVALID_CHORES_FIELD) {
+    return null;
+  }
+  return {
+    mode: entry.mode as DaemonChoresState['mode'],
+    state: entry.state as DaemonChoresState['state'],
+    pid: entry.pid as number | null,
+    startedAt: entry.startedAt as string | null,
+    heartbeatAt: entry.heartbeatAt as string | null,
+    rssBytes: entry.rssBytes as number | null,
+    busy: entry.busy as string | null,
+    restarts: entry.restarts as number,
+    missed: entry.missed as number,
+    lastPassAt: entry.lastPassAt as string | null,
+    lastPass: entry.lastPass === null ? null : (entry.lastPass as string[]),
+    lastChore,
+    presence,
+    markerCache,
+    nextStartAt: entry.nextStartAt as string | null,
+    why: entry.why as string | null,
+  };
 }
 
 /** Writes the state record atomically, 0600, in a 0700 machine folder. */

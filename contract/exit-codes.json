@@ -1698,6 +1698,13 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.chores-ended",
+      "meaning": "the chores child served until its host ended its input, and left without error",
+      "trigger": "team daemon chores --inherited <token>"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.dry-run",
       "meaning": "the install plan was printed and nothing was written",
       "trigger": "team daemon install --dry-run"
@@ -1932,6 +1939,13 @@
       "id": "daemon.uninstall-failed",
       "meaning": "the system's service manager refused to stop or remove the unit",
       "trigger": "team daemon uninstall"
+    },
+    {
+      "code": 2,
+      "command": "daemon",
+      "id": "daemon.chores-refused",
+      "meaning": "a chores child was started without a readable one-use token, so it refused to run any work",
+      "trigger": "team daemon chores --inherited <token>"
     },
     {
       "code": 2,
@@ -5734,6 +5748,13 @@
       "id": "team.approve-removed",
       "meaning": "the approve command was removed in 0.5.0",
       "trigger": "team approve"
+    },
+    {
+      "code": 2,
+      "command": "team",
+      "id": "team.chores-entry-refused",
+      "meaning": "the machine daemon's chores child was started without a readable one-use token, so it served nothing",
+      "trigger": "the daemon starts its chores child entry"
     },
     {
       "code": 2,

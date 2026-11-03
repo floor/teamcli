@@ -26,6 +26,8 @@ import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
+import { serveChoresChild } from '../daemon/chores/child.ts';
+import { readChoresInherit } from '../daemon/chores/token.ts';
 import {
   FAULT_POLL_MS,
   FAULT_WAIT_MS,
@@ -34,7 +36,7 @@ import {
   writeFaultRequest,
 } from '../daemon/fault.ts';
 import { daemonHealth } from '../daemon/health.ts';
-import { failureAge, firstPassPhrases } from '../daemon/health_display.ts';
+import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
@@ -134,21 +136,25 @@ type Parsed = {
   watch: boolean;
   startedBy: string | undefined;
   extra: string | undefined;
+  /** The one-use token a chores child is started with. Internal: never a user's option. */
+  inherited: string | undefined;
   error: string | null;
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['root', 'started-by', 'route'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
-  // uses `known`; the flags and values come from `readArgs`.
+  // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
+  // verb: it is started only through a one-use token and is never printed in the usage text.
   const isStatus = verb === 'status';
   const isRun = verb === 'run';
   const isInstall = verb === 'install';
   const isRestart = verb === 'restart';
   const isUninstall = verb === 'uninstall';
   const isFaultWatch = verb === 'fault-watch';
-  const known = isStatus || isRun || isInstall || isRestart || isUninstall || isFaultWatch;
+  const isChores = verb === 'chores';
+  const known = isStatus || isRun || isInstall || isRestart || isUninstall || isFaultWatch || isChores;
   // `--root` is repeatable; `readArgs` keeps one value per option, so a second pass collects
   // every occurrence for the daemon to host.
   const roots: string[] = [];
@@ -176,6 +182,7 @@ function parse(argv: string[]): Parsed {
     watch: args.flags.has('watch'),
     startedBy: args.values['started-by'],
     extra: args.rest[1],
+    inherited: args.values['inherited'],
     error: args.error ?? null,
   };
 }
@@ -190,6 +197,19 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
+  if (parsed.verb === 'chores') {
+    // The daemon's own child verb: it runs only from a one-use token, and every option a user
+    // verb takes is refused rather than quietly ignored.
+    if (parsed.inherited === undefined || parsed.inherited === '') {
+      return 'chores is started only by the daemon, with its one-use token';
+    }
+    if (parsed.roots.length > 0) return 'chores takes no --root';
+    if (parsed.startedBy !== undefined) return 'chores takes no --started-by';
+    if (parsed.route !== undefined) return 'chores takes no --route';
+    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch) return 'chores takes no flags';
+    return null;
+  }
+  if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
   if (parsed.verb === 'fault-watch' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (parsed.verb === 'fault-watch') {
     if (parsed.roots.length === 0) return 'fault-watch needs --root <folder>';
@@ -453,12 +473,12 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
   });
   if (failed.length > 0) {
     parts.push(`${String(failed.length)} endpoint${failed.length === 1 ? '' : 's'} failed (${failed.join(', ')})`);
-    return parts;
+    return [...parts, ...choresPhrase(roots, at)];
   }
   if (notHosted > 0) {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
-  return parts;
+  return [...parts, ...choresPhrase(roots, at)];
 }
 
 /**
@@ -952,6 +972,27 @@ async function restartInstalled(
   return 1;
 }
 
+/**
+ * The daemon's own child verb. It consumes the one-use token it was started with, then serves
+ * the protocol on the standard streams and prints nothing for a person: a refused token exits 2
+ * before any work is read, and the daemon's supervisor is told what happened through its own
+ * child's exit.
+ */
+async function runInheritedChores(parsed: Parsed, home: string, io: Io, sources: DaemonCommandSources): Promise<number> {
+  const read = readChoresInherit(home, parsed.inherited ?? '');
+  if (read.kind === 'refused') {
+    io.stderr(`team daemon: ${read.why}\n`);
+    // exit: daemon.chores-refused
+    return 2;
+  }
+  return await serveChoresChild({
+    config: read.config,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    ...(sources.now === undefined ? {} : { now: sources.now }),
+  });
+}
+
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const home = sources.home ?? homedir();
@@ -961,6 +1002,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     refuse(io, parsed.json, 'daemon', { id: 'daemon.usage', message: problem, repair: null, usage: USAGE });
     // exit: daemon.usage
     return 2;
+  }
+
+  if (parsed.verb === 'chores') {
+    return await runInheritedChores(parsed, home, io, sources);
   }
 
   if (parsed.verb === 'status') {
@@ -1024,6 +1069,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // shared authority verifier and the direct sender, and no presence pipeline is implied: a
       // run may host either, both or neither.
       ...(parsed.watch ? { watchHosting: true } : {}),
+      // The heavy per-root chores run in supervised children, one child per root by default.
+      // This asks only whether children may be used at all: the route's own `daemon.chores`
+      // word decides between `per-root`, `shared` and `inline`, so `inline` remains the rollback
+      // a team can choose without changing the command. A run that left this unset swept every
+      // hosted root on its own event loop and built no fleet, while the policy page already
+      // promised the per-root default.
+      choresHosting: true,
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);

@@ -905,12 +905,29 @@ export function escalateDue(
   ctx: EscalationContext,
   options: { at?: Date; lockWaitMs?: number } = {},
 ): EscalationReport {
+  const steps = escalationSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The escalation pass one work item at a time: it yields before each marker, so a caller that
+ * must answer its own heartbeat between items can drive it a slice at a time. `escalateDue`
+ * remains the one-shot form every direct caller uses; the chores child is the sliced one.
+ */
+export function* escalationSteps(
+  ctx: EscalationContext,
+  options: { at?: Date; lockWaitMs?: number } = {},
+): Generator<void, EscalationReport> {
   const at = options.at ?? ctx.now();
   const atIso = at.toISOString();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const report: EscalationReport = { escalated: [], refused: [], deferred: [], unreadable: [], scanned: 0 };
 
   for (const found of markersUnder(ctx.root)) {
+    yield;
     if (found.kind === 'unreadable') {
       report.unreadable.push(found.path);
       continue;
@@ -1141,6 +1158,29 @@ export function retireFinished(
     backlogLimit?: number;
   } = {},
 ): RetirementReport {
+  const steps = retirementSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The retirement pass one candidate at a time: it yields before each, so a caller that must
+ * answer its own heartbeat between candidates can drive it a slice at a time. `retireFinished`
+ * remains the one-shot form.
+ */
+export function* retirementSteps(
+  ctx: EscalationContext,
+  options: {
+    at?: Date;
+    lockWaitMs?: number;
+    limit?: number;
+    /** Above this many eligible finished episodes, one pass retires up to `backlogLimit`. */
+    backlogAbove?: number;
+    backlogLimit?: number;
+  } = {},
+): Generator<void, RetirementReport> {
   const at = options.at ?? ctx.now();
   const lockWaitMs = options.lockWaitMs ?? 10_000;
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
@@ -1161,6 +1201,7 @@ export function retireFinished(
     retention: plan.retention,
   };
   for (const candidate of plan.candidates) {
+    yield;
     if (report.retired.length >= passLimit) break;
     if (!candidate.eligible) {
       report.waiting.push({
@@ -1308,6 +1349,21 @@ export function reclaimFallbackLocks(
   ctx: EscalationContext,
   options: { limit?: number; youngMs?: number } = {},
 ): { reclaimed: number; kept: number; scanned: number } {
+  const steps = reclaimSteps(ctx, options);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  if (!step.done) throw new Error('the pass did not run to its end');
+  return step.value;
+}
+
+/**
+ * The lock-reclaim pass one lock folder at a time: it yields before each, so a caller that must
+ * answer its own heartbeat between folders can drive it a slice at a time.
+ */
+export function* reclaimSteps(
+  ctx: EscalationContext,
+  options: { limit?: number; youngMs?: number } = {},
+): Generator<void, { reclaimed: number; kept: number; scanned: number }> {
   const locksDir = join(dirname(historyPath(ctx.team.project, ctx.root, ctx.home)), 'locks');
   const limit = options.limit ?? 64;
   const names = folderNames(locksDir).filter((name) => FALLBACK_LOCK_DIR.test(name));
@@ -1315,6 +1371,7 @@ export function reclaimFallbackLocks(
   let kept = 0;
   let scanned = 0;
   for (const name of names.slice(0, limit)) {
+    yield;
     scanned += 1;
     const result = reclaimLockDir(join(locksDir, name), { youngMs: options.youngMs });
     if (result === 'removed') reclaimed += 1;

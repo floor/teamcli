@@ -32,11 +32,15 @@ import { paneProcesses, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
-import { isSeatId, pidAlive, readState } from '../state.ts';
+import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
-import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { choresPolicyFor } from './chores/policy.ts';
+import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
+import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
+import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
+import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
 import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
@@ -49,12 +53,11 @@ import { createPresenceIngester, type PresenceIngester } from './presence/ingest
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
 import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
-import { isPresenceBinding, readPresenceReading } from './presence/contract.ts';
-import { presencePaths } from './presence/spool.ts';
+import { canonicalSeatOf, currentPresenceBinding } from './presence/reconcile.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
-  reconcilePresenceProof, reconciledProofHolds, unprovenSource, type PresenceCanonicalPosition,
+  reconcilePresenceProof, reconciledProofHolds, unprovenSource,
   type PresenceChannelHealth, type PresenceReconciledProof, type PresenceSource,
   type PresenceSourceRuntime, type PresenceSourceStatus,
 } from './presence/health.ts';
@@ -265,6 +268,17 @@ export type StartMachineDaemonInput = {
    * is skipped, and the sweep never cold-starts a team.
    */
   restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  /**
+   * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
+   * default, like the other hosting seams: a daemon started without it runs exactly the inline
+   * path, and a test harness that never opted in behaves as it always did. The mode per route is
+   * `daemon.chores` (`per-root`, `shared` or `inline`), so this seam only asks whether the daemon
+   * may use children at all; a route whose policy says `inline` keeps the inline path either way.
+   */
+  choresHosting?: boolean;
+  /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
+   *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
+  choresFactory?: (input: SpawnChoresInput) => ChoresChild;
 };
 
 export type StartMachineDaemonResult =
@@ -278,12 +292,6 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = DAEMON_HEARTBEAT_SECONDS.release * 1000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
-/** The store's retirement pass rides the heartbeat, but at most once per this interval: the
- *  escalation pass keeps its five-second tick, and a store's history is not rewritten that often. */
-const FALLBACK_STORE_PASS_MS = 30_000;
-/** Episodes retired and lock folders judged by one retirement pass. A store with a long history
- *  drains over several passes instead of one tick holding the event loop. */
-const FALLBACK_STORE_PASS_LIMIT = 256;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -521,6 +529,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    *  how far the scan has got, so a bus that serves while its first pass runs says so. */
   const passRefreshers: (() => void)[] = [];
   const routes: HostedRoute[] = [];
+  /** The validated team file per accepted route, by canonical root: the chores policy chain and
+   *  the child's own config are read from what the daemon accepted, never from a re-read that
+   *  could name another team. */
+  const teams = new Map<string, TeamFile>();
+  /** The supervised chores children, built after the roots loop; null until then and whenever
+   *  the daemon was not started with the isolation seam. The state writer reads it every time,
+   *  so a beat's record carries what each child said on this beat. */
+  let choresFleet: ChoresFleet | null = null;
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
    *  from its root again the way every writer resolves it. `handle` is the path the loader
@@ -706,6 +722,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed && !afterClose) return;
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
+    // Each route's chores record is this beat's reading, never a stored word: the supervisor
+    // reports what its child last said, and a route the fleet does not know keeps no field.
+    if (choresFleet !== null) {
+      for (const status of roots) {
+        const chores = choresFleet.stateFor(status.root);
+        if (chores !== undefined) status.chores = chores;
+      }
+    }
     try {
       writeDaemonState(home, {
         format: 1,
@@ -978,6 +1002,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     status.team = loaded.team.project;
     watch.busRoot = canonical;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
+    teams.set(canonical, loaded.team);
     // Registered before any endpoint is started: status can name the root, and a heartbeat
     // keeps its record fresh, while a large store or a slow start below is still in progress.
     register();
@@ -1236,73 +1261,59 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     logLine(`root ${rootArg}: send ${status.send}, bus ${status.bus}`);
   }
 
-  /** The seat's current managed binding, read at the moment of use. A missing seat record, an
-   *  absent binding or an unreadable team state means no continuity may be granted: the source's
-   *  own binding is then fenced against nothing. */
-  const currentBindingOf = (stateDir: string, session: string, seat: string): string | null => {
-    try {
-      const record = readState(stateDir).sessions[session]?.seats?.[seat];
-      return record !== undefined && isPresenceBinding(record.presence_binding)
-        ? record.presence_binding
-        : null;
-    } catch {
-      return null;
-    }
-  };
-
-  /** The exact canonical position for one seat: the applied projection (`current.json`) and the
-   *  activity reconciler's applied fence, read together from the same state door. Both must name
-   *  the same applied line; a projection the ingester wrote but activity has not fenced yet is
-   *  deliberately not enough. */
-  const canonicalSeatOf = (
-    stateDir: string,
-    session: string,
-    seat: string,
-  ): { canonical: PresenceCanonicalPosition | null; why: string | null } => {
-    let record;
-    try {
-      record = readState(stateDir).sessions[session]?.seats?.[seat];
-    } catch {
-      return { canonical: null, why: 'the team state could not be read' };
-    }
-    if (record === undefined) return { canonical: null, why: 'the seat has no state record' };
-    if (!isSeatId(record.id)) return { canonical: null, why: 'the seat record names no seat id' };
-    if (!isPresenceBinding(record.presence_binding)) {
-      return { canonical: null, why: 'the seat records no valid presence binding' };
-    }
-    const fence = record.presence_applied;
-    if (fence === undefined) return { canonical: null, why: 'the seat records no applied presence fence' };
-    if (fence.seat_id !== record.id || !isPresenceBinding(fence.binding)
-      || !Number.isInteger(fence.seq) || fence.seq < 1) {
-      return { canonical: null, why: 'the applied presence fence is not readable' };
-    }
-    const paths = presencePaths(stateDir, session, seat);
-    if (paths === null) return { canonical: null, why: 'the seat cannot name a presence folder' };
-    let text: string;
-    try {
-      text = readFileSync(paths.current, 'utf8');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      return {
-        canonical: null,
-        why: code === 'ENOENT'
-          ? 'the seat has no canonical presence projection yet'
-          : 'the canonical presence projection could not be read',
-      };
-    }
-    const read = readPresenceReading(text);
-    if (read.kind !== 'ok') return { canonical: null, why: read.why };
-    return {
-      canonical: {
-        id: read.reading.id,
-        binding: read.reading.binding,
-        seq: read.reading.seq,
-        seatId: record.id,
-        fence: { seat_id: fence.seat_id, binding: fence.binding, seq: fence.seq },
+  // The chores fleet: one supervised child per group of roots, for a daemon started with the
+  // isolation seam. Each accepted route reads its own policy chain to the team level; a chain
+  // that cannot be read keeps the release defaults and says so in the daemon log. A root that
+  // failed to load has no route and no team, so it gets no chores entry: there is no work to
+  // isolate and no policy to read.
+  if (input.choresHosting === true && routes.length > 0) {
+    choresFleet = createChoresFleet({
+      home,
+      beatMs: heartbeatMs,
+      since,
+      now,
+      routes: routes.flatMap((route) => {
+        const team = teams.get(route.root);
+        const entry = routeTeams.get(route.root);
+        return team === undefined || entry === undefined
+          ? []
+          : [{
+              route,
+              team,
+              policy: choresPolicyFor(team, route.root, home, now()),
+              // The loader's own handle names the team file; its folder is the state door and
+              // the presence spool the child's presence steps read, exactly as this daemon does.
+              stateDir: dirname(entry.handle),
+              // A watched route runs its watch in the child that serves it: the child is then the
+              // process that holds the epoch and performs the sends, and this daemon keeps the
+              // record, the diagnostic's request file and the status row. The presence flag says
+              // whether this daemon measures the route's seats and relays them with each beat.
+              // A route whose policy is inline never reaches a child, so its watch stays here.
+              ...(input.watchHosting === true
+                ? {
+                    watch: {
+                      teamFile: entry.handle,
+                      presence: presenceWork.some((one) => one.route.root === route.root),
+                    },
+                  }
+                : {}),
+            }];
+      }),
+      log: (text) => logLine(text),
+      ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
+      // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
+      // child's frame names the root; this daemon's own beat machinery decides which other
+      // routes the beat renews, exactly as it does for a pass on its own loop.
+      watchPulse: (root, at) => {
+        const route = routes.find((candidate) => candidate.root === root);
+        if (route !== undefined) hostedBeat.midPass(route);
       },
-      why: null,
-    };
-  };
+    });
+  }
+
+  // The per-seat binding and canonical-position reads live in `presence/reconcile.ts`, shared
+  // with the chores child, so the daemon's live re-check and a child's presence pass read the
+  // same state door and apply the same rules.
 
   /** The exact per-seat runtime answer a fresh health snapshot and a hosted watch's dispatcher
    *  both use. A seat with a source is qualified only while its cached reconciled proof still
@@ -1328,7 +1339,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const verdict = reconciledProofHolds({
       proof: one.proofs.get(seat),
       source: reading,
-      currentBinding: currentBindingOf(one.stateDir, one.route.session, seat),
+      currentBinding: currentPresenceBinding(one.stateDir, one.route.session, seat),
       epoch: since,
       at,
     });
@@ -1360,7 +1371,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // standing in for an answer that was never sampled); a hook seat has no sample, so its
     // current state binding is the only incarnation to show.
     const binding = source === undefined
-      ? currentBindingOf(one.stateDir, one.route.session, seat)
+      ? currentPresenceBinding(one.stateDir, one.route.session, seat)
       : one.health.seatBinding(seat);
     if (closed) return { source: kind, binding, appliedEventId: null, why: 'the daemon is closing' };
     if (source === undefined) {
@@ -1416,6 +1427,20 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // socket and a tracker team's idle reading stays explicitly unknown.
       const brokerWork = features.broker === 'on' ? input.brokerWork?.(route) : undefined;
       const extras: HostedWatchExtras = brokerWork === undefined ? {} : { brokerWork };
+      // A route whose watch this daemon asked a chores child to host answers with the child's
+      // remote handle: its state mirrors the child's frames, its tick carries this beat over the
+      // pipe, and its fault is the diagnostic's one entry. The daemon then builds no second
+      // watch for the route, and no second epoch for it exists. The presence closure is read on
+      // every beat the fleet sends, and only when the token told the child to install one.
+      const remote = choresFleet === null
+        ? null
+        : choresFleet.watchFor(route.root, () => (presence === undefined
+            ? null
+            : route.seats.map((seat) => ({ seat, healthy: seatQualified(presence, seat, now()) }))));
+      if (remote !== null) {
+        hostedWatches.push({ status, watch: remote });
+        continue;
+      }
       const build = input.hostedWatch?.(route, log, extras)
         ?? hostedWatchAuthority({
           route,
@@ -1512,7 +1537,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         };
     one.health.seatObserved({
       source: sampled,
-      currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+      currentBinding: currentPresenceBinding(one.stateDir, one.route.session, source.seat),
       epoch: since,
     }, at);
     if (!one.health.seatHealthy(source.seat, at)) {
@@ -1579,7 +1604,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         source: reading,
         canonical: canonical.canonical,
         canonicalWhy: canonical.why,
-        currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+        currentBinding: currentPresenceBinding(one.stateDir, one.route.session, source.seat),
         at,
       });
       if (verdict.ok) {
@@ -1597,6 +1622,54 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /** The JSON-safe fields of one source reading, as the chores child receives them: the source's
+   *  own measured words, never a host verdict. */
+  const presenceStatusOf = (reading: PresenceSourceStatus): ChoresPresenceStatus => ({
+    seat: reading.seat,
+    binding: reading.binding,
+    threadId: reading.threadId,
+    channel: reading.channel,
+    stream: reading.stream,
+    baseline: reading.baseline,
+    evidenceAt: reading.evidenceAt,
+    ...(reading.stagedEventId === undefined ? {} : { stagedEventId: reading.stagedEventId }),
+    ...(reading.why === undefined ? {} : { why: reading.why }),
+    ...(reading.reason === undefined ? {} : { reason: reading.reason }),
+  });
+
+  /** Mirrors a child's proof rows into the route's cache. A seat the child did not answer for is
+   *  held rather than left with an older proof: the child owns the pass's whole answer. */
+  const applyPresenceProofs = (
+    one: (typeof presenceWork)[number],
+    proofs: readonly ChoresPresenceProof[],
+  ): void => {
+    const answered = new Set<string>();
+    for (const proof of proofs) {
+      answered.add(proof.seat);
+      if ('id' in proof) {
+        one.proofs.set(proof.seat, { id: proof.id, binding: proof.binding, epoch: since });
+        one.proofMiss.delete(proof.seat);
+      } else {
+        one.proofs.delete(proof.seat);
+        one.proofMiss.set(proof.seat, proof.miss);
+      }
+    }
+    for (const source of one.sources) {
+      if (answered.has(source.seat)) continue;
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, 'the presence pass did not answer for this seat');
+    }
+  };
+
+  /** Holds every source seat with one reason, for a pass the child could not answer: a proof
+   *  from an older pass is never kept trusted behind a child that left. */
+  const holdPresenceSeats = (one: (typeof presenceWork)[number], why: string): void => {
+    for (const source of one.sources) {
+      one.proofs.delete(source.seat);
+      one.proofMiss.set(source.seat, why);
+    }
+  };
+
   /**
    * One presence pass for one route: the ingester's bounded step, then each source's own
    * independent sample, the activity reconciler over what the step appended, the per-seat
@@ -1606,6 +1679,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
    * or broken spool therefore holds only its own route, and the beat that starts it never awaits
    * it.
+   *
+   * The daemon keeps the live half — the ingest step, each source's sample, the channel health
+   * answer and the final re-check — and sends the measured readings to the root's chores child,
+   * which runs the durable half. A root with no ready child runs both halves here.
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
@@ -1634,6 +1711,37 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // sibling source, never wait for one source's step. A seat's answer never changes the
       // route's ingest answer.
       for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
+      // The readings cross to the child exactly as this daemon sampled them. A source that cannot
+      // answer, or answers for another seat, is sent as that reason, so the child holds the seat
+      // with the same words the inline steps would have used.
+      const at = now();
+      const readings: ChoresPresenceReading[] = [];
+      for (const source of one.sources) {
+        try {
+          const reading = source.status(at);
+          readings.push(reading.seat === source.seat
+            ? { seat: source.seat, status: presenceStatusOf(reading) }
+            : { seat: source.seat, failed: 'the runtime source answered for another seat' });
+        } catch (error) {
+          readings.push({ seat: source.seat, failed: `the runtime source status failed: ${messageOf(error)}` });
+        }
+      }
+      const hosted = choresFleet === null
+        ? null
+        : choresFleet.presence({ root: one.route.root, at, readings });
+      if (hosted !== null) {
+        const answer = await hosted;
+        // A close stopped the child before it answered: the close's own record names this route
+        // pending, and no step is run behind the child that may already have advanced a cursor.
+        if (closed) return;
+        if (answer.kind === 'answered') {
+          for (const note of answer.notes) logPresenceOnce(one.route, note);
+          applyPresenceProofs(one, answer.proofs);
+        } else {
+          holdPresenceSeats(one, answer.why);
+        }
+        return;
+      }
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
@@ -1963,12 +2071,26 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
     // is marked so a pass that displaced this one carries the next due beat itself.
     hostedBeat.tick();
+    // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
+    // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
+    choresFleet?.tick(now());
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
-    // pass keeps no state of its own, and close stops it with this timer.
+    // pass keeps no state of its own, and close stops it with this timer. A root a chores fleet
+    // hosts is swept in that child instead, so this beat keeps only the roots the fleet leaves
+    // inline, plus any root it does not host at all: a root never handed to a child must never
+    // go unswept here. With none left, the beat does nothing at this point.
     if (closed) return;
+    const fleet = choresFleet;
+    const inlineRoots = fleet === null
+      ? sweepRoots
+      : sweepRoots.filter((entry) => {
+          const row = fleet.stateFor(entry.root);
+          return row === undefined || row.mode === 'inline';
+        });
+    if (inlineRoots.length === 0) return;
     const beatAt = now().getTime();
     const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
     if (housekeeping) {
@@ -1979,7 +2101,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     const swept = sweepFallbackEscalations({
       home,
-      roots: sweepRoots,
+      roots: inlineRoots,
       now,
       ...(housekeeping
         ? {
@@ -2167,6 +2289,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         } catch {
           // A synchronous throw is a handle that was already closed.
         }
+      }
+      // The chores children stop with the endpoints, before any drain: a child that could still
+      // run a pass must not write one behind the close. The stop is bounded by its own kill
+      // grace, so a child that never leaves cannot hold the daemon's ownership.
+      if (choresFleet !== null) {
+        admissions.push(choresFleet.stop('the daemon is closing').catch(() => undefined));
       }
       // The endpoint refresh is joined below, after this admission block, so its wait is bounded
       // and a retry joins a run that outlived the first answer. It is not part of `admissions`:

@@ -19,13 +19,22 @@ import type { TeamFile } from '../file/types.ts';
 import { DAEMON_BACKLOG_DEFAULTS, loadAndResolvePolicyChain } from '../policy/index.ts';
 import {
   drainDeferredNotes,
-  escalateDue,
-  reclaimFallbackLocks,
-  retireFinished,
+  escalationSteps,
+  reclaimSteps,
+  retirementSteps,
   type DeferredNoteDrainReport,
   type EscalationReport,
   type RetirementReport,
 } from '../send/fallback-events.ts';
+
+/** The store's retirement pass rides the heartbeat, but at most once per this interval: the
+ *  escalation pass keeps its five-second tick, and a store's history is not rewritten that often.
+ *  The daemon's inline beat and a chores child's own pass read the same interval. */
+export const FALLBACK_STORE_PASS_MS = 30_000;
+
+/** Episodes retired and lock folders judged by one retirement pass. A store with a long history
+ *  drains over several passes instead of one tick holding the event loop. */
+export const FALLBACK_STORE_PASS_LIMIT = 256;
 
 /** A hosted checkout and the team file the daemon validated when it started. */
 export type SweepRoot = { root: string; team: TeamFile };
@@ -101,12 +110,13 @@ export type FallbackSweepResult = {
  * Sweep every hosted root once at `input.now()`. A bare root whose team file does not validate
  * is refused by name and swept not at all — a root the daemon never validated contributes
  * nothing. A throw inside one root's pass is reported for that root and never stops another root
- * or the heartbeat that called this. Each pass hands `escalateDue` that root's validated team, so
- * the delay reader resolves that root's chain, and no `Caller`, so no identity is fabricated. The
- * key lock is taken with `waitMs: 0`, and so is every bus append the pass makes, so a busy
- * episode or a busy event log is deferred to the next tick, not waited on.
+ * or the heartbeat that called this. Each pass hands the escalation steps that root's validated
+ * team, so the delay reader resolves that root's chain, and no `Caller`, so no identity is
+ * fabricated. The key lock is taken with `waitMs: 0`, so a busy episode is deferred to the next
+ * tick, not waited on. The fact a send deferred is drained first, so an exhaustion it carries
+ * schedules its escalation in the same tick rather than the next.
  */
-export function sweepFallbackEscalations(input: {
+export type FallbackSweepInput = {
   home: string;
   roots: readonly SweepRootInput[];
   now: () => Date;
@@ -123,71 +133,149 @@ export function sweepFallbackEscalations(input: {
     backlogLimit?: number;
     backlogLimitsFor?: (entry: SweepRoot) => StoreBacklogLimits;
   };
-}): FallbackSweepResult {
+};
+
+/**
+ * The bounded seam one sliced pass runs under: the slice budget it may spend at a stretch, the
+ * stop it must leave at, and the yield that lets the heartbeat out. The chores child's own
+ * `ChoresSlices` is this shape; a caller that cannot stop and has nothing to yield to uses the
+ * one-shot form instead.
+ */
+export type SweepSlices = {
+  sliceMs: number;
+  /** True once a stop is known: the pass leaves at its next slice boundary. */
+  stopping(): boolean;
+  /** Yields to the event loop; resolves false when the caller is stopping. */
+  yield(): Promise<boolean>;
+};
+
+/**
+ * Sweep every hosted root once at `input.now()`. A bare root whose team file does not validate
+ * is refused by name and swept not at all — a root the daemon never validated contributes
+ * nothing. A throw inside one root's pass is reported for that root and never stops another root
+ * or the heartbeat that called this. Each pass hands the escalation steps that root's validated
+ * team, so the delay reader resolves that root's chain, and no `Caller`, so no identity is
+ * fabricated. The key lock is taken with `waitMs: 0`, so a busy episode is deferred to the next
+ * tick, not waited on.
+ */
+export function sweepFallbackEscalations(input: FallbackSweepInput): FallbackSweepResult {
   const at = input.now();
   const roots: SweepRootResult[] = [];
   for (const given of input.roots) {
-    let entry: SweepRoot;
-    if (typeof given === 'string') {
-      const loaded = readTeamConfig(given, { home: input.home });
-      if (!loaded.ok) {
-        roots.push({
-          root: given,
-          notes: null,
-          report: null,
-          retirement: null,
-          reclaim: null,
-          why: loaded.errors[0]?.message ?? 'the team file cannot be read',
-          note: null,
-        });
-        continue;
-      }
-      entry = { root: loaded.root, team: loaded.team };
-    } else {
-      entry = given;
-    }
-    try {
-      const ctx = { team: entry.team, root: entry.root, home: input.home, now: input.now };
-      // Notes first: a fact a send deferred is recorded before this pass judges the episode, so
-      // an exhaustion it carries schedules its escalation in the same tick rather than the next.
-      const notes = drainDeferredNotes(ctx, { at, lockWaitMs: 0 });
-      const report = escalateDue(ctx, { at, lockWaitMs: 0 });
-      // Escalation first: a pending intent is flushed before retirement may archive its episode,
-      // and an intent written during the pass keeps the marker out of the retired set.
-      let retirement: RetirementReport | null = null;
-      let reclaim: { reclaimed: number; kept: number; scanned: number } | null = null;
-      let note: string | null = null;
-      if (input.retire !== undefined) {
-        const policy = input.retire.backlogLimitsFor?.(entry);
-        const backlogAbove = policy?.above ?? input.retire.backlogAbove;
-        const backlogLimit = policy?.limit ?? input.retire.backlogLimit;
-        retirement = retireFinished(ctx, {
-          at,
-          lockWaitMs: input.retire.lockWaitMs ?? 0,
-          ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
-          ...(backlogAbove !== undefined ? { backlogAbove } : {}),
-          ...(backlogLimit !== undefined ? { backlogLimit } : {}),
-        });
-        reclaim = reclaimFallbackLocks(ctx, {
-          ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
-          ...(input.retire.youngMs !== undefined ? { youngMs: input.retire.youngMs } : {}),
-        });
-        if (policy?.unknown !== undefined) {
-          note = `the store backlog word could not be read (${policy.unknown}); the release defaults apply`;
+    const steps = sweepRootSteps(input, given, at);
+    let step = steps.next();
+    while (!step.done) step = steps.next();
+    if (step.done && step.value !== null) roots.push(step.value);
+  }
+  return { at: at.toISOString(), roots };
+}
+
+/**
+ * The same sweep, driven a slice at a time for a caller that must answer its own heartbeat and
+ * presence nudges while a store is walked. Each yielded item is one marker, one retirement
+ * candidate or one lock folder; a slice ends when `sliceMs` of wall time has passed since the
+ * previous boundary, and the caller's yield is awaited at that boundary. A stop, or a yield that
+ * answers false, closes the walk where it stands: no report is written for a partly walked root,
+ * because a stopping child writes no frame, and the next child's pass starts from the store's
+ * durable markers. `sliceClock` is the wall clock that measures a slice; a test injects its own
+ * so a boundary lands exactly.
+ */
+export async function sweepFallbackEscalationsSliced(
+  input: FallbackSweepInput & { slices: SweepSlices; sliceClock?: () => number },
+): Promise<FallbackSweepResult> {
+  const clock = input.sliceClock ?? Date.now;
+  const at = input.now();
+  const roots: SweepRootResult[] = [];
+  for (const given of input.roots) {
+    if (input.slices.stopping()) break;
+    const steps = sweepRootSteps(input, given, at);
+    let sliceStart = clock();
+    let step = steps.next();
+    while (!step.done) {
+      if (clock() - sliceStart >= input.slices.sliceMs) {
+        const more = await input.slices.yield();
+        if (!more || input.slices.stopping()) {
+          steps.return(null);
+          return { at: at.toISOString(), roots };
         }
+        sliceStart = clock();
       }
-      roots.push({ root: entry.root, notes, report, retirement, reclaim, why: null, note });
-    } catch (error) {
-      roots.push({
-        root: entry.root,
+      step = steps.next();
+    }
+    if (step.done && step.value !== null) roots.push(step.value);
+  }
+  return { at: at.toISOString(), roots };
+}
+
+/** One root's pass as its work items: validation, the deferred-note drain, then each escalation
+ *  marker, each retirement candidate and each lock folder. A caller drives it to completion for
+ *  the one-shot sweep, or a slice at a time for the child. A null return means the caller closed a
+ *  stopped walk. */
+function* sweepRootSteps(
+  input: FallbackSweepInput,
+  given: SweepRootInput,
+  at: Date,
+): Generator<void, SweepRootResult | null> {
+  yield;
+  let entry: SweepRoot;
+  if (typeof given === 'string') {
+    const loaded = readTeamConfig(given, { home: input.home });
+    if (!loaded.ok) {
+      return {
+        root: given,
         notes: null,
         report: null,
         retirement: null,
         reclaim: null,
-        why: error instanceof Error ? error.message : String(error),
+        why: loaded.errors[0]?.message ?? 'the team file cannot be read',
         note: null,
-      });
+      };
     }
+    entry = { root: loaded.root, team: loaded.team };
+  } else {
+    entry = given;
   }
-  return { at: at.toISOString(), roots };
+  try {
+    const ctx = { team: entry.team, root: entry.root, home: input.home, now: input.now };
+    // Notes first: a fact a send deferred is recorded before this pass judges the episode, so an
+    // exhaustion it carries schedules its escalation in the same tick rather than the next. The
+    // drain is bounded and takes every lock with `waitMs: 0`, so it defers rather than waits.
+    const notes = drainDeferredNotes(ctx, { at, lockWaitMs: 0 });
+    const report = yield* escalationSteps(ctx, { at, lockWaitMs: 0 });
+    // Escalation first: a pending intent is flushed before retirement may archive its episode,
+    // and an intent written during the pass keeps the marker out of the retired set.
+    let retirement: RetirementReport | null = null;
+    let reclaim: { reclaimed: number; kept: number; scanned: number } | null = null;
+    let note: string | null = null;
+    if (input.retire !== undefined) {
+      const policy = input.retire.backlogLimitsFor?.(entry);
+      const backlogAbove = policy?.above ?? input.retire.backlogAbove;
+      const backlogLimit = policy?.limit ?? input.retire.backlogLimit;
+      retirement = yield* retirementSteps(ctx, {
+        at,
+        lockWaitMs: input.retire.lockWaitMs ?? 0,
+        ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+        ...(backlogAbove !== undefined ? { backlogAbove } : {}),
+        ...(backlogLimit !== undefined ? { backlogLimit } : {}),
+      });
+      reclaim = yield* reclaimSteps(ctx, {
+        ...(input.retire.limit !== undefined ? { limit: input.retire.limit } : {}),
+        ...(input.retire.youngMs !== undefined ? { youngMs: input.retire.youngMs } : {}),
+      });
+      if (policy?.unknown !== undefined) {
+        note = `the store backlog word could not be read (${policy.unknown}); the release defaults apply`;
+      }
+    }
+    return { root: entry.root, notes, report, retirement, reclaim, why: null, note };
+  } catch (error) {
+    return {
+      root: entry.root,
+      notes: null,
+      report: null,
+      retirement: null,
+      reclaim: null,
+      why: error instanceof Error ? error.message : String(error),
+      note: null,
+    };
+  }
 }

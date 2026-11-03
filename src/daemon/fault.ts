@@ -146,10 +146,13 @@ function resultOf(raw: unknown): FaultResult | null {
   };
 }
 
-/** What one hosted watch exposes to the diagnostic: its identity and the one fault seam. */
+/** What one hosted watch exposes to the diagnostic: its identity and the one fault seam.
+ *  `refused` answers a host that accepted the fault but could not reach its run — one whose
+ *  run lives in another process; a host that decides synchronously refuses by returning false
+ *  and never calls it. */
 export type FaultTarget = {
   state(): Pick<HostedWatchState, 'routeId' | 'phase' | 'required'>;
-  fault(why: string, left: (recorded: string) => void): boolean;
+  fault(why: string, left: (recorded: string) => void, refused?: (why: string) => void): boolean;
 };
 
 export type FaultInbox = {
@@ -269,6 +272,20 @@ export function createFaultInbox(input: {
         nonce: request.nonce,
         outcome: 'faulted',
         why: recorded,
+        at: now().toISOString(),
+      });
+    }, (refusedWhy) => {
+      // A host that accepted the fault but could not reach its run answers through here: the
+      // writer learns the refusal now instead of waiting for a seam that will never be reached.
+      if (!pending.has(request.routeId)) return;
+      pending.delete(request.routeId);
+      writeResult({
+        format: 1,
+        home: input.home,
+        routeId: request.routeId,
+        nonce: request.nonce,
+        outcome: 'refused',
+        why: refusedWhy,
         at: now().toISOString(),
       });
     });

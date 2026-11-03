@@ -1,6 +1,8 @@
 export {
   ADVISED_POLICY_NAMES,
   DAEMON_BACKLOG_DEFAULTS,
+  DAEMON_CHORES_DEFAULTS,
+  DAEMON_CHORES_MODES,
   DAEMON_HEARTBEAT_SECONDS,
   DELIVERY_ESCALATION_SECONDS,
   DELIVERY_TIMEOUT_DEFAULTS,
@@ -23,6 +25,7 @@ export {
   watchRhythmValueOf,
   type AdvisedPolicyName,
   type CataloguePolicyName,
+  type DaemonChoresMode,
   type DeliveryTimeoutRoute,
   type DevModeOperation,
   type EnforcedPolicyName,
