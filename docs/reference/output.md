@@ -70,11 +70,12 @@ In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for t
 | 46 | `projects` | reading | — (machine registry) | `ID  NAME  ENTITY  LEAD  TEAMS` | `<n> project` / `<n> projects` summary | `team.projects` | `schema/projects.schema.json` | `0, 1, 2` (3 rows) | `Exits 0 when the projects are listed, 1 when the project registry cannot be read, 2 when the invocation can't be read.` |
 | 47 | `policy` | reading + action (`set`/`unset`, `--dry-run`) | `team <project>, session "<session>"` (` · seat <name>` with `--seat`) | `POLICY  VALUE  LEVEL  SETTER  EXPIRY  KIND` | `same as the team` when the `--seat` view has no difference from the team; `policy: set` / `would set` / `unset` / `would unset` summary | `team.policy` | `schema/policy.schema.json` | `0, 1, 2` (4 rows) | `Exits 0 when policies are listed, updated, or planned, 1 when refused, 2 when the invocation or team file is invalid.` |
 | 48 | `rename` | action (`--renumber --dry-run`) | — (per-seat lines) | — | `from -> to` lines; the no-op run prints `team rename: all numbered seats already match the seat numbering in force` | — (`--json` prints a plain `{ dryRun, renames }`) | — | `0, 1, 2` (4 rows) | — (no `Exits` line in `--help`) |
-| 49 | `conformance-adapter` | protocol (hidden) | — | — | wire protocol | — (protocol) | — | `0` (1 row) | Hidden protocol command (not in `commands` or `--help`); exits `0` when the protocol finishes. |
+| 49 | `trace` | reading | `team <project>, session "<session>"` | `TIME  STEP  VIA  OUTCOME  MS  DELTA  NOTE` | `<n> step` / `<n> steps` summary | `team.trace` | `schema/trace.schema.json` | `0, 1, 2` (5 rows) | `Exits 0 when the trace is printed, 1 when the log holds no step under that id or the event log can't be read, 2 when the invocation or team file can't be read.` |
+| 50 | `conformance-adapter` | protocol (hidden) | — | — | wire protocol | — (protocol) | — | `0` (1 row) | Hidden protocol command (not in `commands` or `--help`); exits `0` when the protocol finishes. |
 
 ### 1.2 Context Line
 
-Team-scoped reading commands that open with a multi-row table or findings block (`status`, `seats`, `check`, `doctor`, `messages`, `issues`, `feed`, `plan`, `drops`, `policy`, `raise`, `reply`, `worktree list`, `proc list`, `send --list`) print a single context line (`contextLine(project, session)`):
+Team-scoped reading commands that open with a multi-row table or findings block (`status`, `seats`, `check`, `doctor`, `messages`, `issues`, `feed`, `trace`, `plan`, `drops`, `policy`, `raise`, `reply`, `worktree list`, `proc list`, `send --list`) print a single context line (`contextLine(project, session)`):
 
 ```text
 team <project>, session "<session>"

@@ -62,6 +62,7 @@ import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
 import { runUnlock } from '../src/commands/unlock.ts';
 import { runTempo } from '../src/commands/tempo.ts';
+import { runTrace } from '../src/commands/trace.ts';
 import { runHold } from '../src/commands/hold.ts';
 import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
@@ -129,6 +130,7 @@ import type { QuestionAnswerRecord } from '../src/profiles/question-answer.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
+import { appendEvent } from '../src/bus/log.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { analyze as analyzeSource, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
 import { runRelease } from '../src/commands/release.ts';
@@ -6371,6 +6373,53 @@ scene('feed.configuration', async (place) => {
   return inRepo;
 });
 scene('feed.usage', async (place) => show(await fed(place, ['extra']), 'unexpected "extra"'));
+
+// `team trace` reads the receiving team's verified event log: the scenes file one signed step by
+// hand where a story is needed, so no send runs and no pane is touched.
+const TRACE_ID = '33333333-3333-4333-8333-333333333333';
+async function traced(place: Place, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runTrace(argv, io, { home: place.home });
+  return { code, out: io.out, err: io.err };
+}
+
+scene('trace.shown', async (place) => {
+  write(place, TEAM);
+  const written = appendEvent('acme', place.root, place.home, {
+    ts: '2026-10-04T09:00:00.000Z',
+    kind: 'message.staged',
+    session: 'acme',
+    record_id: `${TRACE_ID}:staged`,
+    from: 'owner',
+    to: 'lead',
+  });
+  expect(written.ok).toBe(true);
+  return show(await traced(place, [TRACE_ID]), 'message.staged');
+});
+scene('trace.empty', async (place) => {
+  write(place, TEAM);
+  return show(await traced(place, [TRACE_ID]), `no step is filed under ${TRACE_ID}`);
+});
+scene('trace.unreadable', async (place) => {
+  write(place, TEAM);
+  // The log is a symbolic link: the read refuses rather than follow it, as the feed's does.
+  const log = join(storePath('acme', place.root, place.home), 'events.jsonl');
+  mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+  symlinkSync('/etc/passwd', log);
+  return show(await traced(place, [TRACE_ID]), 'the event log cannot be read: a symbolic link was found and not followed');
+});
+scene('trace.configuration', async (place) => {
+  const inRepo = show(await traced(place, [TRACE_ID]), 'no team file');
+  // Outside any checkout the same failure names only the project: trace takes no `--file`.
+  const outside = await traced({ ...place, root: place.base }, [TRACE_ID]);
+  show(outside, 'not inside a git repository');
+  expect(`${outside.out}${outside.err}`).not.toContain('--file');
+  return inRepo;
+});
+scene('trace.usage', async (place) => {
+  write(place, TEAM);
+  return show(await traced(place, ['a', 'b']), 'trace reads one message id and takes nothing else');
+});
 
 // `team drops` reads one seat's own mailbox: the scenes place the lead on the pane the fixture
 // caller runs on, and the folder is the one `team send` would write.

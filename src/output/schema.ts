@@ -1531,6 +1531,55 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team trace` (`schema/trace.schema.json`): one message's
+ *  signed steps, oldest first. A step carries the event's own fields — the step kind, its record
+ *  id, the route it tried and the writer's outcome word and measurement — and `delta_ms`, the
+ *  quiet time from the step above it (`null` on the first step, and kept negative when the log's
+ *  own instants disagree). `unverified` counts the retained records the log could not verify and
+ *  the trace therefore never saw. */
+export const TRACE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.trace',
+  fileName: 'trace.schema.json',
+  title: 'team trace --json output',
+  required: ['format', 'project', 'session', 'id', 'steps', 'summary', 'unverified'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    id: { type: 'string', minLength: 1 },
+    steps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['seq', 'ts', 'kind', 'record_id', 'delta_ms'],
+        properties: {
+          // The log's sequence, the record's instant, the closed event kind and the record id
+          // the step was filed under.
+          seq: { type: 'integer', minimum: 1 },
+          ts: { type: 'string', minLength: 1 },
+          kind: { type: 'string', minLength: 1 },
+          record_id: { type: 'string', minLength: 1 },
+          from: { type: 'string' },
+          to: { type: 'string' },
+          seat: { type: 'string' },
+          thread: { type: 'string' },
+          // The route a leg tried (`leg.tried`) or the leg a retry used (`wake.retried`).
+          via: { type: 'string' },
+          // The writer's machine word: the walk's outcome, the webhook post's, or the retry's.
+          outcome: { type: 'string' },
+          // Milliseconds the step itself took, as its writer measured them.
+          ms: { type: 'number', minimum: 0 },
+          reason: { type: 'string' },
+          delta_ms: { type: ['integer', 'null'] },
+        },
+      },
+    },
+    summary: { type: 'string', minLength: 1 },
+    unverified: { type: 'integer', minimum: 0 },
+  },
+};
+
 /** Published `--json` output schema for `team next` (`schema/next.schema.json`). */
 export const NEXT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.next',
@@ -3131,6 +3180,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ISSUES_OUTPUT_SCHEMA,
   SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
+  TRACE_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   QUEUE_OUTPUT_SCHEMA,
   GREEN_SLICE_OUTPUT_SCHEMA,
