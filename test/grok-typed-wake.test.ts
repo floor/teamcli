@@ -292,7 +292,9 @@ describe('team send: the Grok typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed question, not an empty idle prompt; nothing was typed); grok reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    // The typed wake failed and the walk ends on the drop leg, which wakes nothing: the ending is
+    // `queued, not woken`, the same word the history line carries, never `sent (unconfirmed)`.
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed question, not an empty idle prompt; nothing was typed); grok reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toBe(queuedLine('grok', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -300,7 +302,7 @@ describe('team send: the Grok typed wake', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         'typed: the first read showed question, not an empty idle prompt; nothing was typed',
       ]);
