@@ -19,10 +19,20 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
 `swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `client-bundles`,
-`client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`).
+`client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`,
+`actions-commands`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
+
+`actions-commands` is which Actions commands the command guard allows. The default is
+`rerun-failed`, `deploy` and `ci-pr-head`: `gh run rerun --failed`, `gh workflow run deploy.yml`,
+and `gh workflow run ci.yml` with a ref. A lower level may only drop a command. Every other Actions
+command is refused. So is an `api` path under `/actions` or `/dispatches`, an `api` call
+whose method is POST, PUT, PATCH or DELETE (`-X` and `--method`; the last verb named is the one
+that counts), and an `api` call that adds
+`-f`, `--field`, `-F`, `--raw-field` or `--input` without an explicit GET. A graphql read stays
+allowed, including a path that ends in `/graphql`. A graphql query that contains `mutation` is refused.
 
 `client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no
 end date) for every kind of grant, or per kind, `send=30d;up=90d;bundle=none`. Unset it is
