@@ -32,6 +32,8 @@ export type ExtraSeat = {
   cli?: string;
   launch?: string;
   label?: string;
+  /** The seat's pane is a person's: its walk is the drop leg alone, whatever the order says. */
+  human?: boolean;
   /** The seat's webhook adapter, when the scene configures one: two absolute paths. */
   webhook?: { urlFile: string; secretFile: string };
 };
@@ -50,7 +52,7 @@ function teamFile(root: string, lobby: string, order: readonly string[] | null, 
     model: Test
     version: "1"
     launch: ${seat.launch ?? 'claude'}
-${seat.label === undefined ? '' : `    label: ${JSON.stringify(seat.label)}\n`}${
+${seat.human === true ? '    human: true\n' : ''}${seat.label === undefined ? '' : `    label: ${JSON.stringify(seat.label)}\n`}${
         seat.webhook === undefined
           ? ''
           : `    webhook:

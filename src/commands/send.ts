@@ -58,7 +58,7 @@ import {
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
-import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
+import { deliverTypedWake, herdrTypedWakeHost, STORED_WAKE_LINE, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
@@ -1619,10 +1619,34 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // taken: a socket the walk found unusable, a runtime queue its attempt never reached. Each
   // lowering keeps every route not yet disproved, and the class is re-read with only those.
   const walkLost: { socket?: boolean; endpoint?: boolean } = {};
+  // The class in words, as the walk has disproved it so far and with the wake this run made: every
+  // ending that appends the class reads the same sentence, including the stored-wake ending, which
+  // reports the store and the wake together.
+  const wordsNow = (wake: WakeOutcome | undefined): string =>
+    classWords(classWithout(to, host.home, walkLost, declared), to.seat, wake);
   const lowerDelivery = (): void => {
-    report.deliveryWords = classWords(classWithout(to, host.home, walkLost, declared), to.seat, wakeOutcome);
+    report.deliveryWords = wordsNow(wakeOutcome);
   };
+  // A pull-on-turn seat reads at its next turn, and a storing leg alone gives it none. For such a
+  // seat the walk does not end on the stored copy: the typed leg behind it types one trigger-only
+  // line (src/send/typed-wake.ts), and the ending reports the store and the wake together. The
+  // leg that stored the record is named here; null means none has, so the typed leg is a
+  // delivery rather than a trigger for one. Only `pull-on-turn` is a target: a seat no route can
+  // wake (`none`) has a walking typed leg of its own when its order names one, but a storing leg
+  // is that walk's ending, exactly as it is for a push or between-turns seat.
+  let storedQueued: 'mcp-inbox' | 'drop' | null = null;
+  const pullOnlyTarget = (): boolean =>
+    !human && typedWake !== null && classWithout(to, host.home, walkLost, declared).cls === 'pull-on-turn';
+  const typedAhead = (from: number): boolean => walk.slice(from + 1).includes('typed');
   for (const [at, leg] of walk.entries()) {
+    // A storing leg ahead of this one already put the record in the seat's inbox: the stored copy
+    // is the send, and every leg behind it except the typed trigger would deliver a second time.
+    // The walk goes straight to the typed leg; the store only happens when one stands behind it.
+    if (storedQueued !== null && leg !== 'typed') {
+      markLeg(leg, 'skipped', 'the record is already stored by the leg ahead of it');
+      note(walkAttempt(leg, 'unreachable', true, host.now(), startedAt, { reason: 'the record is already stored by the leg ahead of it' }));
+      continue;
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
       // the seat's inbox first, so the push and every later reader carry the same signed copy;
@@ -1677,6 +1701,24 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
       markLeg('mcp-inbox', 'attempted');
       await ensureEpisode();
+      // The seat reads at its next turn: the stored copy is not the walk's ending. The record is
+      // written as this leg writes it, and the typed leg behind it types one trigger-only line.
+      // The seat's lock is released before that: the typed wake takes it again for its own type
+      // and Enter. A seat another command holds keeps the leg's own answer — nothing is typed
+      // into a seat a command is working in, and its own queued ending stores the record.
+      if (pullOnlyTarget() && typedAhead(at)) {
+        const stored = await storeInbox(dir, to.session, to.seat, dropDir, record, from, host, report, to.sentAs);
+        if (stored.ok) {
+          stored.release();
+          storedQueued = 'mcp-inbox';
+          note(walkAttempt('mcp-inbox', 'delivered', true, host.now(), startedAt, { reason: "written to the seat's own MCP inbox; the typed wake behind it is this walk's" }));
+          continue;
+        }
+        if ('busy' in stored) {
+          return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
+        }
+        return refuse(io, dir, who, `${to.seat}: ${stored.reason}; nothing was sent`, host, report);
+      }
       return deliverInbox(io, to.dir, who, from, to.project, to.root, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
     }
     if (leg === 'socket') {
@@ -2105,13 +2147,72 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // print are the one claim this ending disproves.
       walkLost.endpoint = true;
       lowerDelivery();
+      await ensureEpisode();
+      // The seat reads at its next turn: the stored copy is not the ending, and the typed leg
+      // behind this one types one trigger-only line. A seat another command holds keeps the leg's
+      // own queued answer, which stores the record without typing into it.
+      if (pullOnlyTarget() && typedAhead(at)) {
+        const stored = await storeDropRecord(dir, who, to.session, to.seat, dropDir, record, from, host, report, to.sentAs, human, startedAt, note, "the record is stored; the typed wake behind it is this walk's");
+        if (stored.ok) {
+          stored.release();
+          storedQueued = 'drop';
+          continue;
+        }
+        if ('busy' in stored) {
+          if (!human && !dry) {
+            io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
+          }
+          return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
+        }
+        return refuse(io, dir, who, `${to.seat}: ${stored.reason}; nothing was sent`, host, report);
+      }
       // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
       // did, and the sender is told so (src/send/no-pane-messaging.ts).
       if (!human && !dry) {
         io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
       }
-      await ensureEpisode();
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
+    }
+    // The typed leg, when a storing leg ahead of this one already took the send: the message is
+    // in the seat's own inbox, so this leg is a trigger only — one fixed line into the profile's
+    // idle composer through the same gated module, never the body and never a second copy. The
+    // ending reports both facts: the record queued in the inbox, and the wake typed or why not.
+    // The stored record is the send's delivery; a wake that did not run leaves it for the seat's
+    // next turn, and the words say so beside the store.
+    if (storedQueued !== null) {
+      const found = findAgent(host, to.session, to.seat);
+      const wake = !found.ok
+        ? { typed: false, delivered: false, reason: found.reason }
+        : isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))
+          ? { typed: false, delivered: false, reason: 'the seat is back at its shell; nothing was typed' }
+          : await wakeStoredSeat(host, dir, to.session, to.seat, found.pane, to.cli);
+      wakeOutcome = wake.delivered
+        ? { attempted: true, woke: true, reason: wake.reason }
+        : { attempted: wake.typed, reason: wake.reason };
+      report.deliveryWords = wordsNow(wakeOutcome);
+      markLeg('typed', 'attempted', wake.reason);
+      note(walkAttempt('typed', wake.delivered ? 'delivered' : 'unreachable', false, host.now(), startedAt, { reason: wake.reason }));
+      if (!wake.delivered) failures.push(`typed: ${wake.reason}`);
+      const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), ...historySender(report), body, id: msgId, thread: record.thread };
+      if (wait) {
+        return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, storedQueued, timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+      }
+      const failed = failures.length > 0 ? { failed: [...failures] } : {};
+      const ms = host.now().getTime() - startedAt;
+      if (storedQueued === 'mcp-inbox') {
+        const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
+        if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
+          clearPending(dropDir, msgId);
+          logLine(to.dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, receipt)`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'delivered (read)', ms, via: 'mcp-inbox', ...failed });
+          return delivered(io, to.seat, report, 'read');
+        }
+        logLine(to.dir, 'send', who, `${to.seat}: sent to its own MCP inbox (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+        appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'mcp-inbox', ...failed });
+        return sentUnconfirmed(io, to.seat, report, ms, 'mcp-inbox');
+      }
+      appendHistory(to.project, to.root, host.home, { ...entry, outcome: 'sent (unconfirmed)', ms, via: 'drop', ...failed });
+      return sentUnconfirmed(io, to.seat, report, ms, 'drop');
     }
     // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
     // trigger past the measured line before anything is written. The line is the seat's own
@@ -3366,6 +3467,92 @@ function findAgent(host: SendHost, session: string, seatName: string): Found {
   return { ok: true, pane: (named[0] as { pane: string }).pane };
 }
 
+/** What storing a record in the seat's own drop folder took. The caller owns the ending — the
+ *  leg's own, or a walk that goes on to the typed wake — and releases the lock before it types.
+ *  `busy` is another command holding the seat: nothing was written here, and the leg's own
+ *  queued answer (which writes the record without that lock) is the caller's. */
+type DropStore =
+  | { ok: true; release: () => void }
+  | { ok: false; busy: number }
+  | { ok: false; reason: string };
+
+/**
+ * The drop leg's storage half, under the seat lock: the seal, the signed record written whole,
+ * the durable copy confirmed, the pending marker beside it and the log line. `heldReason` is what
+ * the walk's episode records for the copy this leg stored; a walk that goes on to the typed wake
+ * says so in that reason, because the store is not its last route.
+ */
+async function storeDropRecord(
+  dir: string,
+  who: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  payload: RecordPayload,
+  from: string,
+  host: SendHost,
+  report: Report,
+  /** The address as written, when it was a form: the pending marker carries it beside the seat. */
+  sentAs: SentAs | null,
+  /** The receiving pane is a human's: a person reads the drop and writes no receipt. */
+  human: boolean,
+  startedAt: number,
+  note: WalkNote,
+  heldReason: string,
+): Promise<DropStore> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) return { ok: false, busy: lock.held };
+  try {
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+      lock.release();
+      return { ok: false, reason: 'the record could not be written' };
+    }
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    if (!written.ok) {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
+      lock.release();
+      return { ok: false, reason: `the record could not be written (${written.reason})` };
+    }
+    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
+    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
+    const attempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: payload.id } },
+      { id: payload.id, record: written.record },
+      { now: host.now },
+    );
+    if (attempt.outcome === 'refused') {
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
+      lock.release();
+      return { ok: false, reason: `the record could not be written (${attempt.reason})` };
+    }
+    // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
+    // so the delayed escalation can name a message nothing live ever took.
+    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: heldReason }));
+    if (!human) {
+      // Written before the send returns: a watcher that reads the drop a moment later still finds
+      // the marker the receipt promotes, and a process that dies here leaves the watch its record.
+      markPending(dropDir, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...(sentAs === null ? {} : sentAs),
+        body: payload.body,
+        id: payload.id,
+        leg: 'drop',
+      });
+    }
+    logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(payload.body.length)} characters); no read receipt yet`, host.now());
+    report.sent = payload.id;
+    return { ok: true, release: () => { lock.release(); } };
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+}
+
 /**
  * The drop leg: the body is written to the seat's 0600 drop file under the seat lock, and the
  * pane is not touched — no trigger line, no socket frame, no daemon round trip, so no agent has
@@ -3404,50 +3591,13 @@ async function deliverDropped(
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   const msgId = payload.id;
   const body = payload.body;
-  const lock = acquireSeatLock(dir, session, seatName);
-  if (!('release' in lock)) {
-    // Another command holds the seat, and a held seat is a queue, not a refusal. The drop is a
-    // file, not a keystroke: the record and the marker are written without that lock — the id
-    // names the file, the seal is idempotent and the relay publishes each name once — and the
-    // seat's watcher reads it when the seat is free. An acceptance, never a delivery.
-    setLegState(report, 'drop', 'queued');
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      setLegState(report, 'drop', 'refused', 'the record could not be written');
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
+  const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken');
+  if (stored.ok) {
+    stored.release();
+    if (wait) {
+      return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
-    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
-    if (!queuedWrite.ok) {
-      setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
-    }
-    const queuedAttempt = await relayDeliver(
-      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
-      { id: msgId, record: queuedWrite.record },
-      { now: host.now },
-    );
-    if (queuedAttempt.outcome === 'refused') {
-      setLegState(report, 'drop', 'refused', queuedAttempt.reason);
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
-    }
-    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
-    if (!human) {
-      // The marker is the watcher's receipt record, as on every drop send: it is never typed,
-      // and its receipt promotes the send once the seat reads the file.
-      markPending(dropDir, {
-        ts: host.now().toISOString(),
-        from,
-        to: seatName,
-        ...(sentAs === null ? {} : sentAs),
-        body,
-        id: msgId,
-        leg: 'drop',
-      });
-    }
+    const ms = host.now().getTime() - startedAt;
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -3457,60 +3607,58 @@ async function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: 'queued (receiver busy)',
-      ms: host.now().getTime() - startedAt,
+      outcome: 'sent (unconfirmed)',
+      ms,
+      via: 'drop',
       ...failed,
     });
-    return queuedBusy(io, dir, who, seatName, 'drop', msgId, lock.held, host, report, startedAt);
+    return sentUnconfirmed(io, seatName, report, ms, 'drop');
   }
+  if (!('busy' in stored)) {
+    return refuse(io, dir, who, `${seatName}: ${stored.reason}; nothing was sent`, host, report);
+  }
+  // Another command holds the seat, and a held seat is a queue, not a refusal. The drop is a
+  // file, not a keystroke: the record and the marker are written without that lock — the id
+  // names the file, the seal is idempotent and the relay publishes each name once — and the
+  // seat's watcher reads it when the seat is free. An acceptance, never a delivery.
+  setLegState(report, 'drop', 'queued');
   try {
-    try {
-      sealDropTree(dir, session, seatName);
-    } catch {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
-    }
-    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
-    if (!written.ok) {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${written.reason})` }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${written.reason}); nothing was sent`, host, report);
-    }
-    // The drop leg's one route attempt. The durable copy is the route: stored by the write above
-    // and confirmed by `deliver`, which returns `held` — a copy is never a delivery.
-    const attempt = await relayDeliver(
-      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
-      { id: msgId, record: written.record },
-      { now: host.now },
-    );
-    if (attempt.outcome === 'refused') {
-      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: attempt.reason }));
-      return refuse(io, dir, who, `${seatName}: the record could not be written (${attempt.reason}); nothing was sent`, host, report);
-    }
-    // A durable copy with no seat woken is the walk's last route's `held`: the episode counts it
-    // so the delayed escalation can name a message nothing live ever took.
-    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
-    if (!human) {
-      // Written before the send returns: a watcher that reads the drop a moment later still finds
-      // the marker the receipt promotes, and a process that dies here leaves the watch its record.
-      markPending(dropDir, {
-        ts: host.now().toISOString(),
-        from,
-        to: seatName,
-        ...(sentAs === null ? {} : sentAs),
-        body,
-        id: msgId,
-        leg: 'drop',
-      });
-    }
-    logLine(dir, 'send', who, `${seatName}: sent to its drop folder (drop ${String(body.length)} characters); no read receipt yet`, host.now());
-    report.sent = msgId;
-  } finally {
-    lock.release();
+    sealDropTree(dir, session, seatName);
+  } catch {
+    setLegState(report, 'drop', 'refused', 'the record could not be written');
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
   }
-  if (wait) {
-    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
+  const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+  if (!queuedWrite.ok) {
+    setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
   }
-  const ms = host.now().getTime() - startedAt;
+  const queuedAttempt = await relayDeliver(
+    { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+    { id: msgId, record: queuedWrite.record },
+    { now: host.now },
+  );
+  if (queuedAttempt.outcome === 'refused') {
+    setLegState(report, 'drop', 'refused', queuedAttempt.reason);
+    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
+    return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
+  }
+  note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
+  if (!human) {
+    // The marker is the watcher's receipt record, as on every drop send: it is never typed,
+    // and its receipt promotes the send once the seat reads the file.
+    markPending(dropDir, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      body,
+      id: msgId,
+      leg: 'drop',
+    });
+  }
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -3520,12 +3668,11 @@ async function deliverDropped(
     body,
     id: msgId,
     thread: payload.thread,
-    outcome: 'sent (unconfirmed)',
-    ms,
-    via: 'drop',
+    outcome: 'queued (receiver busy)',
+    ms: host.now().getTime() - startedAt,
     ...failed,
   });
-  return sentUnconfirmed(io, seatName, report, ms, 'drop');
+  return queuedBusy(io, dir, who, seatName, 'drop', msgId, stored.busy, host, report, startedAt);
 }
 
 /**
@@ -3789,6 +3936,93 @@ async function deliverTypedWakeSeat(
     // The exit belongs to the caller: `delivered` is returned there, so its marked literal is
     // the send's own exit site rather than a number carried through this result.
     return { delivered: true };
+  } finally {
+    lock.release();
+  }
+}
+
+/** What storing a record in the seat's inbox did: the lock held for the write (the caller
+ *  releases it), the pid of the command already holding the seat, or the reason nothing was
+ *  written. */
+type InboxStore =
+  | { ok: true; release: () => void }
+  | { ok: false; busy: number }
+  | { ok: false; reason: string };
+
+/**
+ * Stores the signed record in the seat's own inbox under the seat lock, without waiting for a
+ * receipt and without ending the send: the walk's mcp-inbox leg uses this when the seat cannot
+ * be woken while idle and a typed leg stands behind it, so the record is in place before the
+ * trigger line is typed and the walk goes on to that leg. The marker is written here, as on
+ * every inbox send. A held lock is the queue path: the caller ends as the busy ending does,
+ * with the record and marker written without that lock. Nothing here notes the walk or appends
+ * history — the caller owns the ending.
+ */
+async function storeInbox(
+  dir: string,
+  session: string,
+  seatName: string,
+  dropDir: string,
+  payload: RecordPayload,
+  from: string,
+  host: SendHost,
+  report: Report,
+  sentAs: SentAs | null,
+): Promise<InboxStore> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) return { ok: false, busy: lock.held };
+  try {
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      return { ok: false, reason: 'the record could not be written' };
+    }
+    const written = await writeSendRecord(dropDir, payload, host.home, host.now, report);
+    if (!written.ok) return { ok: false, reason: `the record could not be written (${written.reason})` };
+    report.sent = payload.id;
+    markPending(dropDir, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      body: payload.body,
+      id: payload.id,
+      thread: payload.thread,
+      leg: 'mcp-inbox',
+    });
+    return { ok: true, release: () => { lock.release(); } };
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
+}
+
+/**
+ * The trigger-only typed wake that follows a storing leg: one line into the seat's idle
+ * composer, typed through the same guarded wake as every typed send (src/send/typed-wake.ts)
+ * but writing no record. The storing leg already delivered the message to the seat's own
+ * inbox; this line only gives the seat the turn it would otherwise wait for, so it names no
+ * file and repeats no body. The seat lock is held across the typing, as the typed leg holds it,
+ * so a second send cannot type into the same composer. A held lock, a bare shell and an absent
+ * pane writer are reasons nothing was typed; none of them undoes the store.
+ */
+async function wakeStoredSeat(
+  host: SendHost,
+  dir: string,
+  session: string,
+  seatName: string,
+  pane: string,
+  cli: string,
+): Promise<{ typed: boolean; delivered: boolean; reason: string }> {
+  const lock = acquireSeatLock(dir, session, seatName);
+  if (!('release' in lock)) {
+    return { typed: false, delivered: false, reason: `another command holds the seat (pid ${String(lock.held)}); nothing was typed` };
+  }
+  try {
+    const wakeHost = host.typedWake?.(session);
+    if (wakeHost === undefined) return { typed: false, delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
+    const wake = await deliverTypedWake(wakeHost, pane, STORED_WAKE_LINE, cli);
+    return { typed: wake.typed, delivered: wake.delivered, reason: wake.reason };
   } finally {
     lock.release();
   }
