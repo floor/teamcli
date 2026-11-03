@@ -20,9 +20,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents } from '../src/bus/log.ts';
+import { appendEvent, eventLogPath, EVENT_DOMAIN, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { createReconcileState, reconcilePass, reconcilePassAsync, type ReconcileResult } from '../src/bus/reconcile.ts';
-import { startBus } from '../src/bus/server.ts';
+import { nudgeBus, startBus } from '../src/bus/server.ts';
 import { plantMessage, receiptFile } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { daemonDifferences, daemonNotes } from '../src/daemon/health_display.ts';
@@ -714,6 +714,94 @@ describe('a bus can host its first pass in the background', () => {
       await handle.close();
     }
   }, 30_000);
+
+  test('over a 10,050-file store, the bus serves while the first pass runs, delivers a send mid-pass, and close mid-pass leaves no dangling pass', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    seedBulkStore(root, home);
+    const dir = dropsDir(root);
+    for (let extra = 0; extra < 50; extra += 1) {
+      writeFileSync(join(dir, `bulk-extra-${String(extra).padStart(4, '0')}`), `from clerk — admitted by: lead\n\nextra ${String(extra)}`);
+    }
+    // Hold the event lock only for the last signed drop so the 10k+ scan stays in flight until we
+    // test mid-pass send and mid-pass close.
+    signedDrop(root, home, 'zz-tail-0001');
+    const delivered: SignedEventRecord[] = [];
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+      deliver: (record) => delivered.push(record),
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    try {
+      // Immediately after startBus resolves, the 10,050-file scan is still running.
+      const midPass = handle.firstPass();
+      expect(midPass.running).toBe(true);
+      expect(midPass.doneAt).toBeNull();
+      expect(midPass.scanned).toBeLessThan(10_051);
+
+      // A send landing during the 10k+ pass is nudged and delivered over the serving bus socket
+      // while the first pass is still running.
+      signedDrop(root, home, 'aa-mid-pass-send');
+      const nudged = await nudgeBus(root, { session: 'acme', seat: 'worker-1', record_id: 'aa-mid-pass-send' });
+      expect(nudged.kind).toBe('nudged');
+      if (nudged.kind === 'nudged') {
+        expect(nudged.duplicate).toBe(false);
+        expect(nudged.event?.payload.record_id).toBe('aa-mid-pass-send');
+      }
+      expect(delivered.some((record) => record.payload.record_id === 'aa-mid-pass-send')).toBe(true);
+      expect(handle.firstPass().running).toBe(true);
+
+      // Closing mid-first-pass aborts and drains the in-flight 10k+ pass; nothing continues
+      // scanning or appending after close() resolves.
+      await handle.close();
+      const scannedAtClose = handle.firstPass().scanned;
+      const eventsAtClose = readEvents('acme', root, home);
+      if (!eventsAtClose.ok) throw new Error(eventsAtClose.reason);
+      const countAtClose = eventsAtClose.events.length;
+      await sleep(40);
+      expect(handle.firstPass().scanned).toBe(scannedAtClose);
+      const eventsAfterWait = readEvents('acme', root, home);
+      if (!eventsAfterWait.ok) throw new Error(eventsAfterWait.reason);
+      expect(eventsAfterWait.events.length).toBe(countAtClose);
+    } finally {
+      await handle.close();
+    }
+  }, 60_000);
+
+  test('the default startBus mode (await) finishes the first pass before resolving', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'default-await-0001');
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    try {
+      const pass = started.handle.firstPass();
+      expect(pass.running).toBe(false);
+      if (!pass.running) {
+        expect(typeof pass.doneAt).toBe('string');
+        expect(pass.scanned).toBe(1);
+      }
+      const events = readEvents('acme', root, home);
+      if (!events.ok) throw new Error(events.reason);
+      expect(events.events.map((e) => e.payload.record_id)).toContain('default-await-0001');
+    } finally {
+      await started.handle.close();
+    }
+  }, 15_000);
 });
 
 describe('the daemon heartbeat and endpoint supervision', () => {
