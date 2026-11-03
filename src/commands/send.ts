@@ -1792,7 +1792,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         continue;
       }
       markLeg('webhook', 'attempted');
-      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now);
+      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now, receiving.ok ? receiving.team : null);
       if (posted.kind !== 'none') {
         // The walk's own post is one signed event beside the bus's arrival; a `none` is another
         // poster's claim, whose post the bus records as its own step. A step that cannot be
@@ -2774,11 +2774,13 @@ async function postSeatWebhook(
   dropDir: string,
   home: string,
   now: () => Date,
+  team: TeamFile | null,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
       seat,
       webhook,
+      team,
       root: payload.root,
       session: payload.session,
       id: payload.id,
@@ -2813,7 +2815,7 @@ async function postArrivalNow(
     if (!loaded.ok) return { kind: 'none', why: 'no-route' };
     const seat = loaded.team.seats.find((one) => one.name === payload.to);
     if (seat === undefined || seat.webhook === undefined) return { kind: 'none', why: 'no-route' };
-    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now);
+    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now, loaded.team);
   } catch {
     return { kind: 'none', why: 'unexpected' };
   }

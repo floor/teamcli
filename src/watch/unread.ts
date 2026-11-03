@@ -383,6 +383,7 @@ async function wakeByWebhook(
   const posted = await postArrivalWebhook({
     seat: seat.name,
     webhook,
+    team: scene.team,
     root: scene.root,
     session: scene.session,
     id: message.id,

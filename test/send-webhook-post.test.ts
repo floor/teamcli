@@ -537,15 +537,15 @@ describe('the claim decides who posts', () => {
       now: () => new Date(),
       fetch: timedOut as unknown as typeof fetch,
     });
-    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 1000 ms' });
+    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 3000 ms' });
     // The claim stays, naming the state that forbids a second post.
     const held = JSON.parse(readFileSync(join(dir, `${ID}.posting`), 'utf8')) as { state: string };
     expect(held.state).toBe('sent');
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
   });
 
-  test("a routine that never answers is cut off at the sender's own second, not the routine's five", async () => {
-    // The deadline is measured on the wall clock: the request is built with a 1 s abort signal
+  test("a routine that never answers is cut off at the sender's own bound, not the routine's five", async () => {
+    // The deadline is measured on the wall clock: the request is built with a 3 s abort signal
     // even though the routine's own row allows five, so a person's send never waits out the bus's
     // budget. The fake transport answers only when the signal aborts, the way a real fetch does.
     const hook = hookFiles('http://127.0.0.1:1/routine');
@@ -585,11 +585,11 @@ describe('the claim decides who posts', () => {
       fetch: hangs,
     });
     const elapsed = performance.now() - started;
-    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 1000 ms' });
+    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 3000 ms' });
     expect(aborted).toBe(true);
     // The sender's bound, not the row's five seconds; the upper bound only tolerates a slow timer.
-    expect(elapsed).toBeGreaterThanOrEqual(900);
-    expect(elapsed).toBeLessThan(3000);
+    expect(elapsed).toBeGreaterThanOrEqual(2900);
+    expect(elapsed).toBeLessThan(5000);
   });
 
   test('a 2xx whose posted mark cannot be written still blocks a second post', async () => {
