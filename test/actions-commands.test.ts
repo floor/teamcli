@@ -299,3 +299,43 @@ test('gh pr comment --edit-last is allowed', () => {
   expect(refusedByGuard('gh issue comment --edit-last')).toBeNull();
   expect(refusedByGuard('gh pr review --approve')).toBeNull();
 });
+
+test('gh api -X VERB reads the next word in any case', () => {
+  expectSupersede('gh api -X DeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api -X PuT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('gh api -X=VERB is the shorthand equals form', () => {
+  expectSupersede('gh api -X=DeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api -X=PuT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('gh api -XVERB is the glued form in any case', () => {
+  expectSupersede('gh api -XDeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api -XPuT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('gh api --method VERB reads the next word in any case', () => {
+  expectSupersede('gh api --method DeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api --method PuT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('gh api --method=VERB is the long equals form in any case', () => {
+  expectSupersede('gh api --method=DeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api --method=PuT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('the last gh api verb wins', () => {
+  expectSupersede('gh api -X GET -X=DeLeTe repos/acme/demo');
+  expect(refusedByGuard('gh api -X=DELETE --method=GET repos/acme/demo')).toBeNull();
+  expect(refusedByGuard('gh api --method GET -X=PUT repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('a field or --input with no explicit GET is POST', () => {
+  expect(refusedByGuard('gh api repos/acme/demo -f name=x')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo -F name=x')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo --field name=x')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo --raw-field name=x')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo --input body.json')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo -X GET -f name=x')).toBeNull();
+});
