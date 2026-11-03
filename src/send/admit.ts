@@ -58,6 +58,10 @@ export type AdmitProject = { lead: string | null; teams: string[] };
 /** Every registered project, by project id — `readProjects`' own shape. */
 export type AdmitProjects = Record<string, AdmitProject>;
 
+/** The two reply contexts a reply command may hand in: the general open-thread reply, and the
+ *  bound answer to the entity's main orchestrator. Nothing else sets either. */
+export type ReplyContext = 'open-thread' | 'main-orchestrator-thread';
+
 /**
  * The project level, in the caller's own hands: the registered projects, and the asker's own
  * chain of `seats_cross_teams` declarations, entity → project → team → seat, as the records
@@ -69,11 +73,13 @@ export type AdmitContext = {
   projects: AdmitProjects;
   crossTeams?: Partial<Record<SettingLevel, boolean | undefined>>;
   /**
-   * Set to `open-thread` by a reply alone, and only after the caller has verified the record it
-   * answers and the thread it sits on: the rule `reply-on-open-thread` then admits the pair when
-   * no other rule does. A send never sets it.
+   * Set by a reply alone, and only after the caller has verified the records it stands on. A
+   * send never sets it. `open-thread` is the record-and-thread check `reply-on-open-thread`
+   * asks; `main-orchestrator-thread` is the narrower one a seat's answer to the entity's main
+   * orchestrator carries — its record, its sender and the opening record of its thread — and the
+   * reach is then asked again here, as a setting and as a chain place.
    */
-  reply?: 'open-thread';
+  reply?: ReplyContext;
 };
 
 export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string };
@@ -147,6 +153,16 @@ export const RULE_SUMMARY = [
  * read alike.
  */
 export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
+
+/**
+ * The rule a seat's reply to the entity's main orchestrator is admitted by — the main
+ * orchestrator's reach (OD-20261103-02) in the direction of an answer: the main orchestrator
+ * wrote to the seat on a thread it opened, and the seat answers there, on that thread, and
+ * nowhere else. The caller sets the marker only after it verified the record, its sender and
+ * the thread's opening record; admission asks the chain place and the setting again. It is never
+ * a send's rule, so it is not in `RULE_SUMMARY`.
+ */
+export const MAIN_ORCHESTRATOR_REPLY_RULE = "a seat replying to the entity's main orchestrator on its thread";
 
 /** The project rules, in the order they are asked — ahead of the team rules above — and each
  *  names itself in the verdict as those do. All three are decided by the project record and the
@@ -277,6 +293,28 @@ export function admitSend(
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
+  // Asked before the generic reply rule and instead of it: a seat answering the entity's main
+  // orchestrator on the thread that orchestrator opened. The caller set the marker only after it
+  // verified the answered record, its sender and the thread's opening record; the place and the
+  // reach's setting are asked again here, and the marker is decisive — a marked reply whose
+  // target does not hold the place, or whose reach the asker's chain closed, is refused rather
+  // than handed to the generic rule. The reach is the same `seats_cross_teams` word the send
+  // direction reads, with the same default on and the same project loosening level.
+  if (context?.reply === 'main-orchestrator-thread') {
+    if (!onMainCoordinator(target, entity, teams)) {
+      return {
+        ok: false,
+        why: `${seatAt(caller)} may not reply to ${seatAt(target)}: ${MAIN_ORCHESTRATOR_REPLY_RULE}, and ${seatAt(target)} does not hold the entity's main orchestrator place`,
+      };
+    }
+    if (!mainOrchestratorReaches(context.crossTeams ?? {})) {
+      return {
+        ok: false,
+        why: `${seatAt(caller)} may not reply to ${seatAt(target)}: the entity's main orchestrator reach is closed by the asker's seats_cross_teams chain (${MAIN_ORCHESTRATOR_REPLY_RULE})`,
+      };
+    }
+    return { ok: true, rule: MAIN_ORCHESTRATOR_REPLY_RULE };
+  }
   // Asked last before the declared same-team rule: a reply to a record on an open thread, when
   // every rule above leaves the pair unadmitted. The caller has already verified the record and
   // the thread.
@@ -305,11 +343,13 @@ function declaredInRoster(side: SendSide, team: AdmitTeam): boolean {
   return team.roster.some((entry) => entry.seat === seat);
 }
 
-/** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
- *  only when the context asked it. A send's refusal names exactly the rules a send is judged by. */
+/** The rules a refusal names, in the order they were asked: every rule above, and the one reply
+ *  rule the context asked — the generic open-thread rule, or the bound answer to the entity's
+ *  main orchestrator. A send's refusal names exactly the rules a send is judged by. */
 function summaryFor(context: AdmitContext | undefined): string {
   const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
-  return context?.reply === undefined ? summary : `${summary}; ${REPLY_RULE}`;
+  if (context?.reply === undefined) return summary;
+  return `${summary}; ${context.reply === 'open-thread' ? REPLY_RULE : MAIN_ORCHESTRATOR_REPLY_RULE}`;
 }
 
 /**
