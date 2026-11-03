@@ -66,11 +66,21 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | the owner | run it, from a terminal outside herdr; `--session` and `--file` are the owner's own |
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's or the operator's seat, and never `--abandon` on a `working` seat |
+| the entity's main orchestrator: the lead seat of the team whose project is the entity itself | restart any declared seat of the entity's teams, as that team's own lead does — the proof is its head team's record, live file and recorded pane, never its seat name; it still never restarts a seat on the pane this call stands on |
 
 A seat the record stops (`stopped: true`, as `team remove --keep` leaves one) is signed off: `team up` keeps
-leaving it out, and the owner or a `leads` seat of that seat's own team brings it back with `team restart
-<seat>`, which clears the mark in the same write that records the launch, then relaunches it. A launch that
-does not reach ready puts the mark back, so a failed restart leaves the seat stopped.
+leaving it out, and the owner, a `leads` seat of that seat's own team, or the entity's main orchestrator
+standing as that team's lead brings it back with `team restart <seat>`, which clears the mark in the same
+write that records the launch, then relaunches it. A launch that does not reach ready puts the mark back, so
+a failed restart leaves the seat stopped.
+
+The main orchestrator's proof is read whole from its head team's own records: that team's registry record
+must name the entity as both its project and its entity, its live file must still name that entity and
+resolve its lead — the legacy `coordinator:` key or `leads: true` on the seat, either spelling — and the
+caller must be placed on that lead's recorded pane in that team's own session. A head team whose live file
+cannot be read, a record naming another entity, or a caller the placement does not put on that recorded pane
+proves nothing, and the run is judged by this team's map alone. This proof never falls back to a roster
+`leads` mark: send admission accepts one, a restart's reach does not.
 
 ## Output and exit codes
 

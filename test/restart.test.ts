@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Caller } from '../src/caller.ts';
+import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -96,6 +96,49 @@ seats:
     launch: claude --model claude-opus-5-5
     stopped: true
 `;
+
+// The target team of the entity-reach scenes: one entity's project team, its own lead seat named
+// exactly as the entity's main orchestrator is. A restart of that seat, run from the main
+// orchestrator, is the pair a name comparison refuses.
+function crossTeamTargetYaml(entity: string): string {
+  return TEAM_YAML
+    .replace('coordinator: lead', 'coordinator: orchestrator')
+    .replace('    name: lead\n', '    name: orchestrator\n')
+    .replace('workspace:\n', `entity: ${entity}\nworkspace:\n`);
+}
+
+// The entity's head team: the team whose project is the entity itself (`onMainCoordinator`'s
+// place), its own lead seat named `orchestrator` too. The lead may be spelled either way the
+// file allows — the legacy `coordinator:` key, or `leads: true` on the seat.
+function headTeamYaml(project: string, entity: string, lead: 'coordinator' | 'leads' = 'coordinator'): string {
+  const leadKey = lead === 'coordinator' ? 'coordinator: orchestrator\n' : '';
+  const leadMark = lead === 'leads' ? '    leads: true\n' : '';
+  return `format: 1
+project: ${project}
+${leadKey}operator: ops
+entity: ${entity}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: orchestrator
+    label: orchestrator
+${leadMark}    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+
+  - role: coordinator
+    name: ops
+    label: ops
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+}
 
 // The same team with a Codex worker: its profile carries no resume flag, so a restored pane can
 // only be recognized through the registry binding, never through the launch line a resume writes.
@@ -224,12 +267,61 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
     cwd: root,
     env: gitEnv(),
   });
+  // A team that names an entity trusts its entity's lobby, and the loader says so: the injected
+  // block lists it beside the default lobby.
+  const entity = /^entity:[ \t]*(\S+)/m.exec(rawYaml)?.[1];
+  const entityLobby = entity && entity !== 'null' ? `  - ~/.config/team/lobbies/${entity.toLowerCase()}\n` : '';
   const yaml = rawYaml.includes('trust:')
     ? rawYaml
-    : rawYaml.replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n  - ${root}\nworkspace:\n`);
+    : rawYaml.replace('workspace:\n', `trust:\n  - ~/.config/team/lobby\n${entityLobby}  - ${root}\nworkspace:\n`);
   const file = join(dir, 'team.yaml');
   writeFileSync(file, yaml);
   return { base, root, home, file, dir, yaml };
+}
+
+/** The entity's head team beside a target fixture: its own checkout, its live file, and the
+ *  folder its state is written to — the three records a main-orchestrator proof reads. */
+function makeHeadTeam(base: string, project: string, entity: string, lead: 'coordinator' | 'leads' = 'coordinator'): { root: string; dir: string; session: string } {
+  const root = join(base, project);
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'init', '-q', '-b', 'main'], { cwd: root, env: gitEnv() });
+  const yaml = headTeamYaml(project, entity, lead).replace(
+    'workspace:\n',
+    `trust:\n  - ~/.config/team/lobby\n  - ~/.config/team/lobbies/${entity.toLowerCase()}\n  - ${root}\nworkspace:\n`,
+  );
+  writeFileSync(join(dir, 'team.yaml'), yaml);
+  return { root, dir, session: project };
+}
+
+/** The pane the head team's own launch recorded for its orchestrator: the proof's last step. */
+function recordMainOrchestrator(dir: string, session: string, pane: string): void {
+  updateState(dir, (state) => {
+    const held = (state.sessions[session] ??= emptySession());
+    held.seats.orchestrator = { stage: 'ready', pane, workspace: 'ws-main' };
+  });
+}
+
+/**
+ * The caller's walk as one shared herdr session shows it: the entity's main orchestrator on its
+ * own pane, and the target team's seats beside it. Only the main orchestrator's pane root is
+ * among the caller's ancestors, so the walk places the caller on that pane whatever session is
+ * asked about; the target team's own `orchestrator` seat sits on a pane the walk never claims.
+ */
+function sharedFleetSources(options: { headPane: string; headRoot: string; targetRoot: string }): () => CallerSources {
+  const agents: HerdrAgent[] = [
+    { name: 'orchestrator', agent: 'claude-code', pane: options.headPane, workspace: 'ws-main', status: 'idle', cwd: options.headRoot },
+    { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: options.targetRoot },
+    { name: 'ops', agent: 'claude-code', pane: 'pane-ops', workspace: 'ws-ops', status: 'idle', cwd: options.targetRoot },
+    { name: 'orchestrator', agent: 'claude-code', pane: 'pane-old', workspace: 'ws-old', status: 'idle', cwd: options.targetRoot },
+  ];
+  return () => ({
+    ancestors: () => [{ pid: 501, name: 'zsh' }, { pid: 500, name: 'herdr' }],
+    agents: () => agents,
+    paneRootPid: (pane) => (pane === options.headPane ? 501 : null),
+    env: {},
+    stdinIsTTY: false,
+  });
 }
 
 /** A registry record torn by a write that did not finish: JSON a reader cannot parse. */
@@ -247,6 +339,9 @@ function makeHarness(
   opts: {
     initialRunning?: boolean;
     workerStatus?: string;
+    /** The name the faked herdr gives the third running seat; `worker` unless a scene restarts a
+     *  seat whose name is another team's own (the main orchestrator's, for one). */
+    workerName?: string;
     workerScreen?: 'idle' | 'working' | 'permission' | 'unsent' | 'unknown';
     /** The text the unsent box draws, when `workerScreen` is `unsent`. */
     workerDraft?: string;
@@ -285,7 +380,7 @@ function makeHarness(
     ];
     if (workerAlive) {
       list.push({
-        name: 'worker',
+        name: opts.workerName ?? 'worker',
         agent: 'claude-code',
         pane: 'pane-old',
         workspace: 'ws-old',
@@ -1117,6 +1212,130 @@ describe('team restart <seat>', () => {
     expect(await runRestart(['parked-seat'], io, sources)).toBe(1);
     expect(io.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is rival-lead\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // The entity's main orchestrator reaches the entity's teams as their lead (OD-02), and the
+  // proof is its own head team's record, live file and recorded pane — never its seat name. The
+  // target team's lead is named `orchestrator` too, so the name alone would refuse the pair.
+  test("the entity's main orchestrator restarts a team's seat named like itself", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
+    expect(did.typed).toEqual(['/exit']);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('team restart: restarted orchestrator; pane pane-old -> pane-new\n');
+  });
+
+  // The reach carries the sign-off half of a lead's place too: the entity's main orchestrator
+  // lifts a stopped seat of the entity's team, and the revival clears the mark in the same write
+  // that records the launch, exactly as the team's own lead does.
+  test("the entity's main orchestrator lifts a team's stopped seat", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
+    expect(readFileSync(fixture.file, 'utf8')).not.toContain('stopped: true');
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    // The target names an entity, so its own session is `<entity>-<project>`.
+    const after = readState(fixture.dir).sessions['floor-acme']?.seats['parked-seat'];
+    expect(after?.stage).toBe('ready');
+    expect(after?.pane).toBe('pane-new');
+  });
+
+  // The proof reads the head team's live file as the file resolves its lead: `leads: true` on the
+  // seat is the other spelling of the legacy `coordinator:` key, and the reach holds through it.
+  test('the main orchestrator is proven through a head file that spells its lead with `leads: true`', async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor', 'leads');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
+    expect(did.typed).toEqual(['/exit']);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(io.out).toContain('team restart: restarted orchestrator; pane pane-old -> pane-new\n');
+  });
+
+  // The reach never lifts a seat off the pane it stands on: the head team's own orchestrator,
+  // recorded on its own pane in its own session, is refused exactly as before.
+  test("the head team's own orchestrator on its recorded pane is still refused", async () => {
+    const fixture = makeFixture(headTeamYaml('floor', 'floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.floor ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-main', workspace: 'ws-main' };
+    });
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'floor', entity: 'floor', session: 'floor', root: fixture.root, at: NOW.toISOString() });
+    // A launched team's record carries its roster, and the record is the map's judge: a seat the
+    // roster omits has no record at all. The head orchestrator is its own team's lead here, so
+    // the caller gate admits it and the self guard — not the gate — is what refuses.
+    setRoster(fixture.home, teamIdOf(fixture.root), [
+      { agent: 'agt_000000000000', seat: 'orchestrator', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+    ]);
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: fixture.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['orchestrator'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+  });
+
+  // The reach stops at the entity's edge: another entity's main orchestrator is named
+  // `orchestrator` too, placed in this session on its own pane, and is refused the same seat.
+  test("another entity's main orchestrator is refused the same seat", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'radio', 'radio');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    // The target's record lists its own lead, named `orchestrator` too: the name is admitted by
+    // this team's map, and the pane the target's state records for that seat is another one, so
+    // the refusal is the placement's — the name proves nothing across entities.
+    setRoster(fixture.home, teamIdOf(fixture.root), [
+      { agent: 'agt_000000000000', seat: 'orchestrator', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+    ]);
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'radio', entity: 'radio', session: head.session, root: head.root, at: NOW.toISOString() });
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+
+    expect(await runRestart(['orchestrator'], io, sources)).toBe(1);
+    expect(io.err).toContain('not the pane this call is on');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
   });
