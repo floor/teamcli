@@ -12,14 +12,16 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { postArrivalWebhook, type LateWebhook } from '../src/bus/webhook.ts';
+import { deliverWebhook, postArrivalWebhook, type LateWebhook, type WebhookFacts } from '../src/bus/webhook.ts';
+import { readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { entitiesPath } from '../src/entities.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { normalizePolicyName, POLICY_CATALOGUE, writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
-import { statusOfOutcome } from '../src/send/history.ts';
+import { appendHistory, readHistory, statusOfOutcome } from '../src/send/history.ts';
+import { webhookStep } from '../src/send/steps.ts';
 import { WEBHOOK_SENDER_DEADLINE_MS } from '../src/settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../src/settings/webhook-sender-policy.ts';
 
@@ -377,5 +379,529 @@ describe("the send's own post under the deadline", () => {
     expect(exitCode).toBe(0);
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
   }, 10_000);
+
+  test('when the parent destroys child.stdin at the exact deadline while fetch is in flight and stdout stays open, the child does not hang on feed.taken and settles the claim', async () => {
+    const dir = dropFolder();
+    writeFileSync(join(dir, `${ID}.posting`), `${JSON.stringify({ state: 'sent', at: '2026-11-03T00:00:00.000Z' })}\n`, { mode: 0o600 });
+    let hitServer!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      hitServer = resolve;
+    });
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        hitServer();
+        return new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 500));
+      },
+    });
+    try {
+      const workerEntry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
+      const child = spawn(process.execPath, [workerEntry, '--finish-late'], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      const stdoutChunks: string[] = [];
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => stdoutChunks.push(chunk));
+
+      const job = {
+        url: server.url.href,
+        headers: [] as [string, string][],
+        body: '{}',
+        capMs: 10_000,
+        dropDir: dir,
+        id: ID,
+        project: 'beacon',
+        root,
+        home,
+        session: 'beacon',
+        from: 'lead',
+        to: 'iris',
+        thread: ID,
+        messageBody: messagePayload().body,
+      };
+      // Write only the job line so `feed.job` resolves and `fetch` begins while `child.stdin` is still open.
+      child.stdin?.write(`${JSON.stringify(job)}\n`);
+      await inFlight;
+      // Now `fetch` is in flight; destroy `child.stdin` at the deadline while keeping `child.stdout` open
+      // so `tellParent` returns `true` and `finishLateWorker` awaits `feed.taken`.
+      child.stdin?.destroy();
+
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          child.kill('SIGKILL');
+          resolve(null);
+        }, 3_000);
+        child.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      expect(exitCode).toBe(0);
+      expect(stdoutChunks.join('')).toContain('"status":200');
+      expect(existsSync(join(dir, `${ID}.posting`))).toBe(false);
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
+
+      const history = readHistory('beacon', root, home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries.map((one) => one.outcome)).toEqual(['delivered (late)']);
+      }
+      const events = readEvents('beacon', root, home);
+      expect(events.ok).toBe(true);
+      if (events.ok) {
+        const steps = events.events.filter((one) => one.payload.record_id === `${ID}:webhook.posted:late`);
+        expect(steps.map((one) => one.payload.outcome)).toEqual(['posted']);
+      }
+    } finally {
+      server.stop(true);
+    }
+  }, 10_000);
+
+  test('a real child that hits the 500 ms deadline writes unknown first, then the detached worker appends delivered (late) and settles the claim with one POST only', async () => {
+    signedAtTeam('webhook-sender-deadline-ms', 500);
+    const dir = dropFolder();
+    const message = signRecord(messagePayload(), home);
+    writeFileSync(join(dir, ID), `${JSON.stringify(message, null, 2)}\n`);
+    let posts = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        posts += 1;
+        return new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 1300));
+      },
+    });
+    try {
+      const hook = { urlFile: join(root, 'hook-url'), secretFile: join(root, 'hook-secret'), body: 'inbox' as const };
+      writeFileSync(hook.urlFile, `${server.url.href}\n`);
+      const spec = join(base, 'sender-late-200.json');
+      writeFileSync(spec, JSON.stringify({
+        seat: 'iris',
+        webhook: hook,
+        team: teamAt(),
+        root,
+        session: 'beacon',
+        id: ID,
+        from: 'lead',
+        thread: ID,
+        message,
+        dropDir: dir,
+        home,
+        project: 'beacon',
+        body: messagePayload().body,
+      }));
+      const measureEntry = fileURLToPath(import.meta.url);
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let mark = 0;
+      sender.stdout?.setEncoding('utf8');
+      sender.stdout?.on('data', (chunk: string) => {
+        if (mark === 0 && chunk.includes('start')) mark = performance.now();
+      });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          sender.kill('SIGKILL');
+          resolve(null);
+        }, 2000);
+        sender.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      const elapsed = mark === 0 ? 9999 : performance.now() - mark;
+      expect(exitCode).toBe(0);
+      expect(elapsed).toBeLessThan(700);
+      // At the sender's deadline exit, the claim is `sent` and `.posted` is not yet written.
+      const heldAtDeadline = JSON.parse(readFileSync(join(dir, `${ID}.posting`), 'utf8')) as { state: string };
+      expect(heldAtDeadline.state).toBe('sent');
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
+
+      // Record the deadline's own unknown step and sent (unconfirmed) history line, as `runSend` does.
+      expect(
+        webhookStep(
+          { store: { project: 'beacon', root, home }, id: ID, session: 'beacon', from: 'lead', to: 'iris', thread: ID, ts: '2026-11-03T00:00:00.500Z' },
+          { kind: 'unknown', reason: 'no answer within 500 ms' },
+        ).ok,
+      ).toBe(true);
+      expect(
+        appendHistory('beacon', root, home, {
+          ts: '2026-11-03T00:00:00.500Z',
+          from: 'lead',
+          to: 'iris',
+          body: messagePayload().body,
+          id: ID,
+          thread: ID,
+          outcome: 'sent (unconfirmed)',
+          ms: 500,
+          via: 'webhook',
+        }).ok,
+      ).toBe(true);
+
+      // A bus delivery pass running while the detached worker is still in flight skips the `sent` claim.
+      const arrivalEvent: SignedEventRecord = {
+        signature: 'synthetic',
+        payload: { v: 1, seq: 1, ts: '2026-11-03T00:00:00.500Z', kind: 'message.arrived', session: 'beacon', record_id: ID, from: 'lead', to: 'iris' },
+      };
+      let midFlightFacts: WebhookFacts | undefined;
+      expect(
+        await deliverWebhook({
+          seat: 'iris',
+          webhook: hook,
+          record: arrivalEvent,
+          root,
+          onResult: (facts) => {
+            midFlightFacts = facts;
+          },
+        }),
+      ).toBe('skipped');
+      expect(midFlightFacts?.attempts).toBe(0);
+      expect(posts).toBe(1);
+
+      // Wait for the detached worker to settle `.posted` and append `delivered (late)`.
+      const postedPath = join(dir, `${ID}.posted`);
+      const until = Date.now() + 8_000;
+      while (Date.now() < until) {
+        const hist = readHistory('beacon', root, home);
+        if (existsSync(postedPath) && hist.ok && hist.entries.length >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      expect(existsSync(postedPath)).toBe(true);
+      expect(existsSync(join(dir, `${ID}.posting`))).toBe(false);
+      expect(posts).toBe(1);
+
+      // The initial `sent (unconfirmed)` line stands untouched, and `delivered (late)` is appended after it.
+      const history = readHistory('beacon', root, home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries.map((one) => one.outcome)).toEqual(['sent (unconfirmed)', 'delivered (late)']);
+        expect(history.entries[0]?.id).toBe(ID);
+        expect(history.entries[1]?.id).toBe(ID);
+        expect(history.entries[1]?.via).toBe('webhook');
+        expect(history.entries[1]?.thread).toBe(ID);
+        expect(history.entries[1]?.ms).toBeGreaterThanOrEqual(1000);
+      }
+
+      // Both the deadline's `unknown` step and the detached worker's `:late` `posted` step are in the event log.
+      const events = readEvents('beacon', root, home);
+      expect(events.ok).toBe(true);
+      if (events.ok) {
+        const steps = events.events.filter((one) => one.payload.kind === 'webhook.posted');
+        expect(steps.map((one) => ({ id: one.payload.record_id, outcome: one.payload.outcome }))).toEqual([
+          { id: `${ID}:webhook.posted`, outcome: 'unknown' },
+          { id: `${ID}:webhook.posted:late`, outcome: 'posted' },
+        ]);
+      }
+
+      // A bus delivery pass after `.posted` also skips with 0 attempts.
+      let afterFacts: WebhookFacts | undefined;
+      expect(
+        await deliverWebhook({
+          seat: 'iris',
+          webhook: hook,
+          record: arrivalEvent,
+          root,
+          onResult: (facts) => {
+            afterFacts = facts;
+          },
+        }),
+      ).toBe('skipped');
+      expect(afterFacts?.attempts).toBe(0);
+      expect(posts).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+
+  test('a real child whose detached continuation receives a late 5xx files failed under the late step, appends no late delivery, and keeps the claim sent', async () => {
+    signedAtTeam('webhook-sender-deadline-ms', 500);
+    const dir = dropFolder();
+    const message = signRecord(messagePayload(), home);
+    writeFileSync(join(dir, ID), `${JSON.stringify(message, null, 2)}\n`);
+    let posts = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        posts += 1;
+        return new Promise((resolve) => setTimeout(() => resolve(new Response('unavailable', { status: 503 })), 1100));
+      },
+    });
+    try {
+      const hook = { urlFile: join(root, 'hook-url'), secretFile: join(root, 'hook-secret'), body: 'inbox' as const };
+      writeFileSync(hook.urlFile, `${server.url.href}\n`);
+      const spec = join(base, 'sender-late-503.json');
+      writeFileSync(spec, JSON.stringify({
+        seat: 'iris',
+        webhook: hook,
+        team: teamAt(),
+        root,
+        session: 'beacon',
+        id: ID,
+        from: 'lead',
+        thread: ID,
+        message,
+        dropDir: dir,
+        home,
+        project: 'beacon',
+        body: messagePayload().body,
+      }));
+      const measureEntry = fileURLToPath(import.meta.url);
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let mark = 0;
+      sender.stdout?.setEncoding('utf8');
+      sender.stdout?.on('data', (chunk: string) => {
+        if (mark === 0 && chunk.includes('start')) mark = performance.now();
+      });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          sender.kill('SIGKILL');
+          resolve(null);
+        }, 2000);
+        sender.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      const elapsed = mark === 0 ? 9999 : performance.now() - mark;
+      expect(exitCode).toBe(0);
+      expect(elapsed).toBeLessThan(700);
+
+      appendHistory('beacon', root, home, {
+        ts: '2026-11-03T00:00:00.500Z',
+        from: 'lead',
+        to: 'iris',
+        body: messagePayload().body,
+        id: ID,
+        thread: ID,
+        outcome: 'sent (unconfirmed)',
+        ms: 500,
+        via: 'webhook',
+      });
+
+      // Wait for the detached worker to write `<ID>:webhook.posted:late`.
+      const until = Date.now() + 8_000;
+      let lateStep: SignedEventRecord | undefined;
+      while (Date.now() < until) {
+        const ev = readEvents('beacon', root, home);
+        if (ev.ok) {
+          lateStep = ev.events.find((one) => one.payload.record_id === `${ID}:webhook.posted:late`);
+          if (lateStep !== undefined) break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      expect(lateStep).toBeDefined();
+      expect(lateStep?.payload.outcome).toBe('failed');
+      expect(lateStep?.payload.reason).toBe('HTTP 503');
+
+      // No `delivered (late)` history line was appended; only `sent (unconfirmed)` remains.
+      const history = readHistory('beacon', root, home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries.map((one) => one.outcome)).toEqual(['sent (unconfirmed)']);
+      }
+
+      // The `.posting` claim stays in `sent` and `.posted` is absent, so nobody posts a second time.
+      const held = JSON.parse(readFileSync(join(dir, `${ID}.posting`), 'utf8')) as { state: string };
+      expect(held.state).toBe('sent');
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
+      expect(posts).toBe(1);
+
+      const arrivalEvent: SignedEventRecord = {
+        signature: 'synthetic',
+        payload: { v: 1, seq: 1, ts: '2026-11-03T00:00:00.500Z', kind: 'message.arrived', session: 'beacon', record_id: ID, from: 'lead', to: 'iris' },
+      };
+      expect(await deliverWebhook({ seat: 'iris', webhook: hook, record: arrivalEvent, root })).toBe('skipped');
+      expect(posts).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+
+  test('killing the detached continuation process while the slow endpoint waits leaves the claim in sent, writes no posted mark, and appends no late history', async () => {
+    signedAtTeam('webhook-sender-deadline-ms', 500);
+    const dir = dropFolder();
+    const message = signRecord(messagePayload(), home);
+    writeFileSync(join(dir, ID), `${JSON.stringify(message, null, 2)}\n`);
+    let posts = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        posts += 1;
+        return new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 8_000));
+      },
+    });
+    try {
+      const hook = { urlFile: join(root, 'hook-url'), secretFile: join(root, 'hook-secret'), body: 'inbox' as const };
+      writeFileSync(hook.urlFile, `${server.url.href}\n`);
+      const spec = join(base, 'sender-kill-late.json');
+      writeFileSync(spec, JSON.stringify({
+        seat: 'iris',
+        webhook: hook,
+        team: teamAt(),
+        root,
+        session: 'beacon',
+        id: ID,
+        from: 'lead',
+        thread: ID,
+        message,
+        dropDir: dir,
+        home,
+        project: 'beacon',
+        body: messagePayload().body,
+      }));
+      const measureEntry = fileURLToPath(import.meta.url);
+      const workerEntry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let mark = 0;
+      sender.stdout?.setEncoding('utf8');
+      sender.stdout?.on('data', (chunk: string) => {
+        if (mark === 0 && chunk.includes('start')) mark = performance.now();
+      });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          sender.kill('SIGKILL');
+          resolve(null);
+        }, 2000);
+        sender.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      const elapsed = mark === 0 ? 9999 : performance.now() - mark;
+      expect(exitCode).toBe(0);
+      expect(elapsed).toBeLessThan(700);
+      expect(posts).toBe(1);
+
+      appendHistory('beacon', root, home, {
+        ts: '2026-11-03T00:00:00.500Z',
+        from: 'lead',
+        to: 'iris',
+        body: messagePayload().body,
+        id: ID,
+        thread: ID,
+        outcome: 'sent (unconfirmed)',
+        ms: 500,
+        via: 'webhook',
+      });
+
+      // Find the detached `--finish-late` worker for this worktree's `webhook.ts` and SIGKILL it.
+      const pgrepOut = execFileSync('pgrep', ['-f', `${workerEntry} --finish-late`], { encoding: 'utf8' }).trim();
+      const pids = pgrepOut
+        .split('\n')
+        .map((line) => Number.parseInt(line.trim(), 10))
+        .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid && pid !== sender.pid);
+      expect(pids.length).toBeGreaterThanOrEqual(1);
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already exited.
+        }
+      }
+      const killUntil = Date.now() + 2_000;
+      while (Date.now() < killUntil) {
+        const alive = pids.some((pid) => {
+          try {
+            process.kill(pid, 0);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        if (!alive) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // The `.posting` claim stays in `sent`, `.posted` does not exist, and no late history or late step was written.
+      const held = JSON.parse(readFileSync(join(dir, `${ID}.posting`), 'utf8')) as { state: string };
+      expect(held.state).toBe('sent');
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
+
+      const history = readHistory('beacon', root, home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries.map((one) => one.outcome)).toEqual(['sent (unconfirmed)']);
+      }
+      const events = readEvents('beacon', root, home);
+      expect(events.ok).toBe(true);
+      if (events.ok) {
+        expect(events.events.filter((one) => one.payload.record_id === `${ID}:webhook.posted:late`)).toEqual([]);
+      }
+
+      const arrivalEvent: SignedEventRecord = {
+        signature: 'synthetic',
+        payload: { v: 1, seq: 1, ts: '2026-11-03T00:00:00.500Z', kind: 'message.arrived', session: 'beacon', record_id: ID, from: 'lead', to: 'iris' },
+      };
+      expect(await deliverWebhook({ seat: 'iris', webhook: hook, record: arrivalEvent, root })).toBe('skipped');
+      expect(posts).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+
+  test('a real child that answers 2xx before the deadline settles in the sender and the detached worker does not double-settle', async () => {
+    signedAtTeam('webhook-sender-deadline-ms', 500);
+    const dir = dropFolder();
+    const message = signRecord(messagePayload(), home);
+    let posts = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        posts += 1;
+        return new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 80));
+      },
+    });
+    try {
+      writeFileSync(join(root, 'hook-url'), `${server.url.href}\n`);
+      const spec = join(base, 'sender-fast-200.json');
+      writeFileSync(spec, JSON.stringify({
+        seat: 'iris',
+        webhook: { urlFile: join(root, 'hook-url'), secretFile: join(root, 'hook-secret'), body: 'inbox' },
+        team: teamAt(),
+        root,
+        session: 'beacon',
+        id: ID,
+        from: 'lead',
+        thread: ID,
+        message,
+        dropDir: dir,
+        home,
+        project: 'beacon',
+        body: messagePayload().body,
+      }));
+      const measureEntry = fileURLToPath(import.meta.url);
+      const sender = spawn(process.execPath, [measureEntry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          sender.kill('SIGKILL');
+          resolve(null);
+        }, 2000);
+        sender.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      expect(exitCode).toBe(0);
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
+      expect(existsSync(join(dir, `${ID}.posting`))).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(posts).toBe(1);
+      const history = readHistory('beacon', root, home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        expect(history.entries).toEqual([]);
+      }
+      const events = readEvents('beacon', root, home);
+      expect(events.ok).toBe(true);
+      if (events.ok) {
+        expect(events.events.filter((one) => one.payload.record_id === `${ID}:webhook.posted:late`)).toEqual([]);
+      }
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
 });
 }
