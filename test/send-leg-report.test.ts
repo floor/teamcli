@@ -123,20 +123,24 @@ test('a dry run lists the socket the walk would not dial with its reason instead
   expect(existsSync(join(made.dir, LOG_FILE))).toBe(false);
 });
 
-test('a dry run reports the native leg it would walk for a Codex seat, and the one no sender here can walk', async () => {
+test('a dry run reports the native and typed legs a Codex seat walks, and the native leg a Claude seat cannot', async () => {
   const made = world(['native', 'typed', 'drop']);
   cleanup = made.cleanup;
   const host = fake(made);
 
   const codex = owner(made.root);
   expect(await runSend(['native', 'hello', '--dry-run', '--json'], codex, host)).toBe(0);
+  // Codex's profile declares `typed_wake: screen`, so the order's own `typed` word stays: the
+  // channel-class native leg first, the typed wake after it, and the drop leg closing the walk.
   expect(deliveryOf(codex)).toEqual([
     { leg: 'native', state: 'candidate', eligible: true },
+    { leg: 'typed', state: 'candidate', eligible: true },
     { leg: 'drop', state: 'candidate', eligible: true },
   ]);
 
   // The same order for a Claude receiver: the native leg is the sending session's own
   // SendMessage, and this run's sender is the owner, so the leg is skipped with that word.
+  // Claude's profile declares no typed wake, so the typed leg is not in its walk at all.
   const claude = owner(made.root);
   expect(await runSend(['lead', 'hello', '--dry-run', '--json'], claude, host)).toBe(0);
   expect(deliveryOf(claude)).toEqual([
