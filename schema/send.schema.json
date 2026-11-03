@@ -51,6 +51,7 @@
             "delivered",
             "delivered (read)",
             "sent (unconfirmed)",
+            "queued, not woken",
             "sent (channel)",
             "queued (receiver busy)",
             "answered",
