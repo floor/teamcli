@@ -147,16 +147,28 @@ async function machine(w: World, extra: Partial<Parameters<typeof startMachineDa
 test('the persisted heartbeat advances during the initial reconciliation of 2200 records', async () => {
   const w = world();
   for (let n = 0; n < 2200; n += 1) drop(w, 'bulk-' + String(n).padStart(4, '0'));
-  let startFinished = false;
+  // The start returns once the socket is bound, and the initial pass runs behind the serving
+  // bus; every beat it runs under refreshes the record. Count the beats over the pass itself:
+  // the window opens on the row's live pass and ends when the row reports it settled. The
+  // pass must actually be observed running, so a start that swallowed the scan wholesale
+  // cannot pass this scene.
+  let passSeen = false;
+  let passSettled = false;
   const beats = new Set<string>();
   const observer = setInterval(() => {
-    if (startFinished) return;
+    if (passSettled) return;
     const state = readDaemonState(w.home);
-    if (state.kind === 'ok' && state.state.roots.some(root => root.root === w.root)) beats.add(state.state.heartbeatAt);
+    if (state.kind !== 'ok') return;
+    const entry = state.state.roots.find(root => root.root === w.root);
+    if (entry === undefined) return;
+    beats.add(state.state.heartbeatAt);
+    if (entry.firstPass?.running === true) passSeen = true;
+    if (entry.firstPass?.running === false) passSettled = true;
   }, 2);
   try {
     await machine(w, { sendStart: async () => ({ kind: 'already-running', socketPath: join(w.base, 'unused-send.sock'), pid: process.pid }) });
-    startFinished = true;
+    await until(() => passSettled, 10_000);
+    expect(passSeen).toBe(true);
     expect(beats.size).toBeGreaterThanOrEqual(2);
     expect(events(w).filter(event => event.payload.kind === 'message.arrived' && event.payload.record_id.startsWith('bulk-'))).toHaveLength(2200);
     expect(w.paneEffects()).toBe(0);

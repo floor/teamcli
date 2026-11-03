@@ -940,7 +940,7 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       expect(fatal[0]).toContain('failed 2 restarts in a row');
       const written = readStateOk(home);
       expect(written.roots[0]?.send).toBe('failed');
-      expect(written.roots[0]?.why).toContain('another send server holds the project socket');
+      expect(written.roots[0]?.sendWhy).toContain('another send server holds the project socket');
       expect(typeof written.roots[0]?.sendFailedAt).toBe('string');
     } finally {
       await started.daemon.close();
