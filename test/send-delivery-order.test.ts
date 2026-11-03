@@ -325,7 +325,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     // The typed leg is the one that wakes an idle seat: one trigger line, no frame, no dial.
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
@@ -340,7 +340,7 @@ describe('the walk records the channel and the legs it skipped', () => {
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
       failed: [`typed: ${NO_PANE_MESSAGING}`],
@@ -403,7 +403,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     // The listener is the store's reader, never a wake: the send ends on the drop and records
     // no inbox leg. The typed wake runs, and this host binds no pane writer, so nothing is typed.
-    expect(io.out).toContain('native: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toContain('native: queued, not woken (drop, 0 ms)');
     expect(host.typed).toEqual([]);
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
@@ -461,7 +461,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`]);
@@ -482,7 +482,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
       channel: string;
       delivery: { leg: string; state: string; reason?: string }[];
     };
-    expect(doc.status).toBe('sent (unconfirmed)');
+    expect(doc.status).toBe('queued, not woken');
     expect(doc.channel).toBe('drop');
     expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toEqual({
       leg: 'mcp-inbox',
@@ -499,7 +499,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
       body: `${HEADER}hello`,
       id,
       thread: id,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });
@@ -533,10 +533,10 @@ describe('an mcp-inbox word is read as unavailable', () => {
 
     // The old inbox leg waited out `inboxGraceMs` and ended `delivered (read)` on this receipt.
     // Under D1 the send ends when the mailbox stores the record, and no receipt is its ending.
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.typed).toEqual([]);
     const id = inboxDrop(dir);
-    expect(lastEntry(w.root, w.home)).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(lastEntry(w.root, w.home)).toMatchObject({ id, outcome: 'queued, not woken', via: 'drop' });
     expect(existsSync(receiptPath(dir, id))).toBe(true);
     expect(existsSync(join(dir, `${id}.pending`))).toBe(true);
   });
@@ -548,7 +548,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toContain('lead: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(host.typed).toEqual([]);
@@ -565,12 +565,12 @@ describe('the chain is read from the files when the host hands none in', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     // The order in force holds the one leg, so the send goes by it and neither skip a default
     // walk records is walked: the history line has no `failed` at all.
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
-    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.outcome).toBe('queued, not woken');
     expect(entry.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`]);
     expect(entry.body).toBe(`${HEADER}hello`);
     expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
@@ -985,7 +985,7 @@ describe('the drop leg', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toBe(queuedLine('lead'));
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
@@ -1000,7 +1000,7 @@ describe('the drop leg', () => {
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });
@@ -1013,7 +1013,7 @@ describe('the drop leg', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(existsSync(dropped(w.root, 'lead'))).toBe(true);
@@ -1033,9 +1033,9 @@ describe('the drop leg', () => {
       action_summary: string;
       ids: { sent: string };
     }>(io.out, SEND_OUTPUT_SCHEMA);
-    expect(doc.status).toBe('sent (unconfirmed)');
+    expect(doc.status).toBe('queued, not woken');
     expect(doc.channel).toBe('drop');
-    expect(withoutSendId(doc.action_summary)).toBe('lead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(withoutSendId(doc.action_summary)).toBe('lead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)');
     expect(recordBody(join(dropDir(w.root, 'lead'), doc.ids.sent))).toBe(`${HEADER}hello`);
   });
 
@@ -1068,7 +1068,7 @@ describe('a human seat is never typed into', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead has no way to be woken while idle\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead has no way to be woken while idle\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -1082,7 +1082,7 @@ describe('a human seat is never typed into', () => {
       body: `${HEADER}hello`,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
       failed: [TYPED_SKIP],
@@ -1098,7 +1098,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead has no way to be woken while idle\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead has no way to be woken while idle\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -1116,7 +1116,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead has no way to be woken while idle\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead has no way to be woken while idle\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -1136,7 +1136,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead has no way to be woken while idle\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead has no way to be woken while idle\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -1152,7 +1152,7 @@ describe('a human seat is never typed into', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead has no way to be woken while idle\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead has no way to be woken while idle\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);

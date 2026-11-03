@@ -181,7 +181,7 @@ describe('the send daemon\'s boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['helper', 'you serve another session'], io, host)).toBe(0);
-    expect(io.out).toContain('helper: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toContain('helper: queued, not woken (drop, 0 ms)');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     // The daemon serves only its own team's session: beta is never asked, even though the fake
@@ -195,7 +195,7 @@ describe('the send daemon\'s boundaries', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => ({ to: entry.to, outcome: entry.outcome, via: entry.via }))).toEqual([
-      { to: 'helper', outcome: 'sent (unconfirmed)', via: 'drop' },
+      { to: 'helper', outcome: 'queued, not woken', via: 'drop' },
     ]);
     // One signed record beside its dotted markers; the history line carries its id.
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -254,7 +254,7 @@ describe('the send daemon\'s boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['native', 'kept out of the repository'], io, host)).toBe(0);
-    expect(io.out).toContain('native: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toContain('native: queued, not woken (drop, 0 ms)');
 
     // The history line lives under the state folder, 0600, and says the drop took the send.
     const log = historyPath('acme', world.root, world.home);
@@ -267,7 +267,7 @@ describe('the send daemon\'s boundaries', () => {
       from: 'owner',
       to: 'native',
       body: filed('kept out of the repository'),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       via: 'drop',
     });
     const id = history.entries[0]!.id;

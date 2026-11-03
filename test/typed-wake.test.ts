@@ -495,7 +495,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
     expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -503,7 +503,7 @@ describe('team send: the typed wake', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
       ]);

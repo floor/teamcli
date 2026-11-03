@@ -734,7 +734,7 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   // The final line follows the class the walk proved, never the one cached before it: nothing
   // was woken, and the message waits for the seat's next turn.
   expect(withoutSendId(io.out)).toBe(
-    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
+    'team acme, session "acme"\nplain: queued, not woken (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
@@ -806,7 +806,7 @@ test('a recorded socket the pane does not own is no attempt, and the line follow
   expect(dials).toEqual([]);
   expect(host.frames).toEqual([]);
   expect(withoutSendId(io.out)).toBe(
-    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
+    'team acme, session "acme"\nplain: queued, not woken (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
 });
 
@@ -882,7 +882,7 @@ test('a held socket is no wake the send reports either: the class it appends is 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
   expect(host.frames).toEqual([]);
   expect(withoutSendId(io.out)).toBe(
-    'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
+    'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
 });
 

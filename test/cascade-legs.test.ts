@@ -150,7 +150,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
     // The typed leg cannot wake a working pane, and the drop behind it takes the send; the
     // listener beside the seat is not walked, so the old inbox ending is not reachable.
-    expect(io.out).toContain('cursor: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms)');
     expect(io.out).toContain('the typed wake failed');
     expect(io.out).not.toContain('(mcp-inbox');
     // The splice line the old walk printed when a listener stood beside the seat is gone.
@@ -282,7 +282,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(await runSend(['person', 'hello'], io, host)).toBe(0);
     expect(io.out).toBe(
       'team acme, session "acme"\n'
-      + 'person: sent (unconfirmed) (drop, 0 ms); queued; person has no way to be woken while idle\n',
+      + 'person: queued, not woken (drop, 0 ms); queued; person has no way to be woken while idle\n',
     );
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);

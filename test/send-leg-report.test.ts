@@ -52,7 +52,7 @@ test('a real send reports the inbox it skipped and the drop that took it', async
 
   expect(code).toBe(0);
   const doc = assertMatchesOutputSchema<{ status: string; channel: string }>(io.out, SEND_OUTPUT_SCHEMA);
-  expect(doc.status).toBe('sent (unconfirmed)');
+  expect(doc.status).toBe('queued, not woken');
   expect(doc.channel).toBe('drop');
   expect(deliveryOf(io)).toEqual([
     { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },

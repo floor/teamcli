@@ -411,7 +411,7 @@ function nativeLine(words: string): string {
 }
 
 function dropLine(words: string): string {
-  return `team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)${words}\n`;
+  return `team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms)${words}\n`;
 }
 
 /** Every witness saw no connection and no method, the queue never ran, and the send fell to the

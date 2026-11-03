@@ -1361,7 +1361,7 @@ describe('the turn-start read, end to end', () => {
     const io = testIo(made.root, { kind: 'owner' });
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(dialled).toEqual([]);
 
     const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
@@ -1416,7 +1416,7 @@ describe('the turn-start read, end to end', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
-      [id, 'sent (unconfirmed)', 'drop'],
+      [id, 'queued, not woken', 'drop'],
       [id, 'delivered (read)', 'drop'],
     ]);
   }, 30_000);

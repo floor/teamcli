@@ -178,7 +178,7 @@ async function sendTaken(made: World, one: Pane): Promise<string> {
   const io = testIo(made.root, { kind: 'owner' });
   expect(await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW))).toBe(0);
   // No pane messaging: nothing is typed, so no taken record is left to confirm later.
-  expect(io.out).toContain('lead: sent (unconfirmed) (drop, ');
+  expect(io.out).toContain('lead: queued, not woken (drop, ');
   expect(readTaken(dropDirOf(made))).toEqual([]);
   expect(one.typed).toEqual([]);
   return '';

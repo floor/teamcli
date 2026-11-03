@@ -156,7 +156,7 @@ describe('the history names the channel that carried the send', () => {
     const id = readdirSync(dir).filter((name) => !name.includes('.'))[0] as string;
     expect(recordBody(join(dir, id))).toBe(filed('hello'));
     const entry = lastEntry(root, home);
-    expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
+    expect(entry).toMatchObject({ id, outcome: 'queued, not woken', via: 'drop', body: filed('hello') });
     expect(entry.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
@@ -179,7 +179,7 @@ describe('the history names the channel that carried the send', () => {
     const id = readdirSync(dir).filter((name) => !name.includes('.'))[0] as string;
     expect(recordBody(join(dir, id))).toBe(filed('hello'));
     const entry = lastEntry(root, home);
-    expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
+    expect(entry).toMatchObject({ id, outcome: 'queued, not woken', via: 'drop', body: filed('hello') });
     expect(entry.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',

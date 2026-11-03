@@ -20,7 +20,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -511,6 +511,11 @@ type Report = {
    *  ends without a delivery appends it, so `sent (unconfirmed)` never stands as the whole answer
    *  to whether the seat will read the message. Absent on paths that never read the class. */
   deliveryWords?: string;
+  /** The class those words came from, set wherever the words are: the drop leg's ending reads it
+   *  back to say `queued, not woken` — never `sent (unconfirmed)`, which reads like success — when
+   *  the seat it stored the record for is one nothing wakes while it is idle. Absent on the same
+   *  paths the words are. */
+  deliveryClass?: DeliveryClass;
   /** What the send's own webhook post ended as, when the receiving seat configures an adapter and
    *  the send wrote a fresh record: set right after that record is signed, and read by the
    *  summary line. Absent when nothing was posted — no adapter, a route that names nothing usable,
@@ -564,7 +569,8 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
   });
 }
 
-/** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
+/** The receiving seat's delivery class in plain words, ready for an outcome line, with the class
+ *  itself beside them: the drop leg's ending reads it back to name its own outcome. The runtime
  *  record wins over the team file's row; a state that cannot be read is no record, so the class
  *  falls to what the file and its launch line prove, never to a guess. A webhook-only route
  *  reads as queued whatever the bus is doing now: the send posts that adapter as its own
@@ -577,7 +583,7 @@ function deliveryWordsOf(input: {
   seat: string;
   declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'watchWake' | 'inbound' | 'webhook'>;
   home?: string;
-}, wake?: WakeOutcome): string {
+}, wake?: WakeOutcome): { words: string; cls: DeliveryClass } {
   const state = seatStateOf(input.dir, input.session, input.seat);
   const read = seatDeliveryClass({
     dir: input.dir,
@@ -588,17 +594,41 @@ function deliveryWordsOf(input: {
     ...(state === undefined ? {} : { state }),
     ...(input.home === undefined ? {} : { home: input.home }),
   });
-  return classWords(
-    {
-      cls: read.class,
-      webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket,
-      cli: state?.cli ?? input.declared?.cli ?? '',
-      human: read.evidence.human === true,
-      watchWake: read.evidence.watchWake,
-    },
-    input.seat,
-    wake,
-  );
+  const cls = read.class;
+  return {
+    words: classWords(
+      {
+        cls,
+        webhookOnly: read.evidence.webhook && !read.evidence.channel && !read.evidence.socket,
+        cli: state?.cli ?? input.declared?.cli ?? '',
+        human: read.evidence.human === true,
+        watchWake: read.evidence.watchWake,
+      },
+      input.seat,
+      wake,
+    ),
+    cls,
+  };
+}
+
+/** A console summary with the receiving seat's delivery class appended when the run read one: a
+ *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
+ *  whether the seat ever reads the message. The send's own webhook post is the last clause: a
+ *  delivered or fate-unknown one replaces the class's queued-for-the-bus words, which its own
+ *  post has just made untrue (a claim left in `sent` makes the bus skip the record, so nothing
+ *  will fire later), and a failed one says so beside them — the claim is released, and the record
+ *  stays where the bus and the seat's pull read it. */
+/** Whether the drop leg's ending left the seat with nothing that wakes it: the class it read is
+ *  `pull-on-turn` or `none` (or the seat is a person's, which reads `none`), so the record sits
+ *  stored and the seat reads it only at a turn nothing gives it. That ending says `queued, not
+ *  woken` — never `sent (unconfirmed)`, which reads like success while the drop waits — and the
+ *  word is written the same way on the console line, the JSON status and the history line. Every
+ *  other leg wakes the seat itself: a typed trigger starts the turn, native and headless-resume
+ *  are the sender's own runtime action, and the channel and socket legs ended the walk before
+ *  the drop. A class the run never read is no evidence either way, so the ending keeps the
+ *  ordinary `sent (unconfirmed)` there. */
+function dropNotWoken(report: Report): boolean {
+  return report.deliveryClass !== undefined && !wakeableWhileIdle(report.deliveryClass);
 }
 
 /** The send's id on the end of its closing line, so the one thing a sender needs to `team trace`
@@ -1067,7 +1097,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // woken, and under the cascade the send itself walks that adapter as its second leg class.
   // An ending that names the webhook's own answer never appends these words — the walk's report
   // already says what the routine answered, and an unconfirmed post must not claim a wake.
-  report.deliveryWords = deliveryWordsOf({
+  const classRead = deliveryWordsOf({
     dir: to.dir,
     root: to.root,
     session: to.session,
@@ -1075,6 +1105,8 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     ...(declared === undefined ? {} : { declared }),
     home: host.home,
   });
+  report.deliveryClass = classRead.cls;
+  report.deliveryWords = classRead.words;
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
   // the team file is only the roster projection and cannot override that signed record.
@@ -1687,6 +1719,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const wordsNow = (wake: WakeOutcome | undefined): string =>
     classWords(classWithout(to, host.home, walkLost, declared), to.seat, wake);
   const lowerDelivery = (): void => {
+    report.deliveryClass = classWithout(to, host.home, walkLost, declared).cls;
     report.deliveryWords = wordsNow(wakeOutcome);
   };
   for (const [at, leg] of walk.entries()) {
@@ -2007,6 +2040,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           // the seat is woken through its runtime queue whatever the class read said before the
           // walk and whatever routes stand beside it — a bound endpoint or a webhook row. The
           // adapter's bus clause belongs only to an ending where the adapter is the route left.
+          report.deliveryClass = 'between-turns';
           report.deliveryWords = deliveryWords('between-turns', to.seat);
           const failed = failures.length > 0 ? { failed: [...failures] } : {};
           const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
@@ -3257,7 +3291,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
   if (outcome === 'sent (unconfirmed)') {
     const receiving = readTeamConfig(record.root, { home: host.home });
     const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
-    report.deliveryWords = deliveryWordsOf({
+    const unconfirmedWords = deliveryWordsOf({
       dir: join(record.root, '.agents'),
       root: record.root,
       session: record.session,
@@ -3265,6 +3299,8 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
       ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
       home: host.home,
     });
+    report.deliveryClass = unconfirmedWords.cls;
+    report.deliveryWords = unconfirmedWords.words;
   }
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
@@ -3742,6 +3778,11 @@ async function deliverDropped(
       return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
     const ms = host.now().getTime() - startedAt;
+    // The drop leg stores and wakes nothing, so a seat nothing wakes while it is idle is left with
+    // a message only a turn can serve: that ending is `queued, not woken`, on the history line and
+    // the console line alike (the daemon's re-wake reads this line — `via: 'drop'` is the only leg
+    // this word ever names).
+    const notWoken = dropNotWoken(report);
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -3751,7 +3792,7 @@ async function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: 'sent (unconfirmed)',
+      outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
       ms,
       via: 'drop',
       ...failed,
@@ -4491,7 +4532,9 @@ async function deliverClientRecord(
       body: record.body,
       id: record.id,
       thread: record.thread,
-      outcome: 'sent (unconfirmed)',
+      // A person's pane is the one seat nothing ever wakes while it is idle, so the stored drop
+      // is `queued, not woken`, never `sent (unconfirmed)`.
+      outcome: 'queued, not woken',
       ms: host.now().getTime() - startedAt,
       via: 'drop',
     });
@@ -4593,7 +4636,9 @@ async function deliverClientRecord(
       // typed-wake exception: a profile that declares a typed wake reads the message at its
       // next turn, not "no way to be woken".
       if (attempt.socketUnusable === true) {
-        report.deliveryWords = classWords(classWithoutSocket(aim, host.home), aim.seat);
+        const lowered = classWithoutSocket(aim, host.home);
+        report.deliveryClass = lowered.cls;
+        report.deliveryWords = classWords(lowered, aim.seat);
       }
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
@@ -4650,9 +4695,22 @@ async function deliverClientRecord(
     return;
   }
   // The client drop is already the seat's bus inbox: no event adapter took it, so it waits there
-  // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable.
+  // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable. The class is
+  // read at the ending, the read the plain walk makes before it starts: a seat nothing wakes
+  // while it is idle is left `queued, not woken`, never `sent (unconfirmed)`.
   const why = `${QUEUED_NO_EVENT_ADAPTER}${failures.length === 0 ? '' : ` (${failures.join('; ')})`}; the client drop waits in its bus inbox`;
   logLine(dir, 'send', from, `${seatName}: ${why}`, host.now());
+  const ending = deliveryWordsOf({
+    dir,
+    root,
+    session,
+    seat: seatName,
+    ...(seat === undefined ? {} : { declared: seat }),
+    home: host.home,
+  });
+  report.deliveryClass = ending.cls;
+  report.deliveryWords = ending.words;
+  const notWoken = dropNotWoken(report);
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
     from,
@@ -4661,7 +4719,7 @@ async function deliverClientRecord(
     id: record.id,
     thread: record.thread,
     via: 'drop',
-    outcome: 'sent (unconfirmed)',
+    outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
     ms: host.now().getTime() - startedAt,
     ...(failures.length > 0 ? { failed: [...failures] } : {}),
   });
@@ -5718,11 +5776,16 @@ function deliveredSession(io: Io, seat: string, report: Report, session: string)
  *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
  *  composer and the drop is still the message; a native or headless route's record waits for a
  *  receipt that has not come back. The `note` says which — a typed send's names the
- *  trigger and the receipt. Exit 0, always. */
+ *  trigger and the receipt. The drop leg's ending to a seat nothing wakes
+ *  while it is idle says `queued, not woken` instead — the same word the history line carries —
+ *  because `sent (unconfirmed)` reads like success while the drop waits for a turn nothing gives.
+ *  Exit 0, always. */
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'drop' | 'typed' | 'native' | 'headless-resume' | 'webhook', note?: string): number {
-  const summary = withId(withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
+  const notWoken = leg === 'drop' && dropNotWoken(report);
+  const status: 'sent (unconfirmed)' | 'queued, not woken' = notWoken ? 'queued, not woken' : 'sent (unconfirmed)';
+  const summary = withId(withDelivery(`${seat}: ${status} (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report), report);
   if (report.json) {
-    writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
+    writeAction(io, report, { status, summary, channel: leg });
   } else {
     openText(io, report);
     io.stdout(`${summary}\n`);
@@ -5895,6 +5958,7 @@ type ActionFields = {
     | 'delivered'
     | 'delivered (read)'
     | 'sent (unconfirmed)'
+    | 'queued, not woken'
     | 'sent (channel)'
     | 'queued (receiver busy)'
     | 'answered'

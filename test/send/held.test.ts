@@ -187,7 +187,7 @@ describe('team send: the plain send with no accept declaration', () => {
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
     expect(withoutSendId(io.out)).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
+      'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
@@ -203,7 +203,7 @@ describe('team send: the plain send with no accept declaration', () => {
     if (!read.ok) return;
     expect(read.entries[0]).toMatchObject({
       to: 'lead',
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });

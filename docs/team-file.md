@@ -547,7 +547,7 @@ delivery_order: [typed]
   the store's reader, and the walk reports the word `unavailable` rather than attempting the
   leg; `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
   drop file and nothing typed into the pane at all — no trigger line and no socket frame, its
-  run ending `sent (unconfirmed)` until the seat's own read writes the receipt;
+  run ending `queued, not woken` until the seat's own read writes the receipt;
   `headless-resume` is the seat's own CLI resumed for one turn without a TUI pane, which no
   default names and this build cannot take yet, so a walk that reaches it records
   `headless-resume: this build carries no headless resume runtime` and moves on; `session` is

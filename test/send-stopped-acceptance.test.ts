@@ -254,12 +254,12 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
     expect(deliveredCode, said(delivered)).toBe(0);
     expect(withoutSendId(delivered.out), said(delivered)).toBe(
-      `team acme, session "${SESSION}"\n${STOPPED}: sent (unconfirmed) (drop, 0 ms); queued; ${STOPPED} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
+      `team acme, session "${SESSION}"\n${STOPPED}: queued, not woken (drop, 0 ms); queued; ${STOPPED} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
     );
     expect(host.typed.length).toBe(0);
     // No event adapter took it, so the drop waits with its pending mark beside it.
     expect(dropFiles(w).filter((path) => !path.endsWith('.fallback.json') && !path.endsWith('.pending')).length).toBe(1);
     expect(dropFiles(w).filter((path) => path.endsWith('.pending')).length).toBe(1);
-    expect(sendRecords(w)).toEqual(['sent (unconfirmed)']);
+    expect(sendRecords(w)).toEqual(['queued, not woken']);
   });
 });

@@ -8,7 +8,7 @@ timeline with the verified `presence.changed` records in the same state folder's
 log. It reads: it writes nothing, and following the logs never grows either of them.
 
 Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (typed wake)`,
-`sent (unconfirmed)`, `sent (channel)`, `answered`, `held`, `queued (receiver busy)`,
+`sent (unconfirmed)`, `queued, not woken`, `sent (channel)`, `answered`, `held`, `queued (receiver busy)`,
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per line to
 `messages.jsonl`:
 
@@ -108,7 +108,7 @@ An empty history prints the context line and `0 events` — no table. `--follow`
 header, table and count each time a pass brings new entries, so a reader can tell one arrival
 from the next.
 
-One message is one row. A send filed as `sent (unconfirmed)` and a later line for the same id —
+One message is one row. A send filed as `sent (unconfirmed)` or `queued, not woken` and a later line for the same id —
 a `delivered (read)` receipt, a typed fallback, or a taken delivery's later report — are one
 message's outcome moving: a reading shows the latest line once, and the address the send
 recorded (`spec`, `resolved`) stays on that row. The send's measured milliseconds are not
@@ -140,7 +140,7 @@ With `--json` the run prints one pretty-printed `team.feed` document:
 
 `project` and `session` are `null` when the run names no single team. `status` is derived from the
 outcome, never stored: `delivered (read)` is `read`, `delivered` is `delivered`, `held` is `held`,
-`answered` is `replied`, and every other outcome — a `sent (unconfirmed)` send, a `timeout`, a
+`answered` is `replied`, and every other outcome — a `sent (unconfirmed)` send, a `queued, not woken` send, a `timeout`, a
 `not-submitted`, an `unreachable`, a `refused` — is `sent`. `spec`, `resolved`, `from_team`, `ms`,
 `via`, `failed`, `note`, `thread` and `in_reply_to` appear on an event only when the history line
 carries them. The schema is published at `schema/feed.schema.json`.
@@ -202,27 +202,27 @@ exit 0
 ```
 
 After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and
-body. No server serves this seat's inbox, and its pane is free, so the send walks to the typed
-leg — `via typed`: the trigger is typed over the signed drop file, the line reads
-`sent (unconfirmed)` with `trigger taken, no read receipt yet`, and the seat's own read writes
-the signed receipt a running watch records as one more line, `delivered (read)`:
+body. No server serves this seat's inbox and no event adapter took it, so the send ends at the
+drop leg — `via drop`: the line reads `queued, not woken` with the pull-only class words, and the
+seat's own read writes the signed receipt a running watch records as one more line,
+`delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
+gpt-reviewer: queued, not woken (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                   SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                  SEAT                   DETAIL
+  09:00:00  queued, not woken (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                   SEAT                   DETAIL
-  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                  SEAT                   DETAIL
+  09:00:00  queued, not woken (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```

@@ -215,7 +215,7 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     const read = readHistory('acme', w.root, w.home);
     if (!read.ok) throw new Error(`the history file is unreadable: ${read.reason}`);
     expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]?.outcome).toBe('sent (unconfirmed)');
+    expect(read.entries[0]?.outcome).toBe('queued, not woken');
     expect(read.entries[0]?.via).toBe('drop');
     expect(lastOutcome(w, 'lead')).not.toBe('delivered');
   });
@@ -415,6 +415,6 @@ describe('a registry record binds a caller only where the call stands as it', ()
     // The trigger is the message-display line — sender, the body's first line as the summary,
     // the fixed read hint — never the signed body and never a path the composer names.
     expect(host.typed).toEqual([]);
-    expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
+    expect(lastOutcome(w, 'helper')).toBe('queued, not woken');
   });
 });

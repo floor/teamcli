@@ -174,7 +174,7 @@ test('a wrapper line with its own settings is unattested: no socket is dialed, a
     channel?: string;
     delivery?: { leg: string; state: string }[];
   };
-  expect(sent.status).toBe('sent (unconfirmed)');
+  expect(sent.status).toBe('queued, not woken');
   expect(sent.channel).toBe('drop');
   // The walk never had a socket leg: the route its line declares is not authorized without the
   // team file's word, so nothing was dialed and nothing stood in the pane.

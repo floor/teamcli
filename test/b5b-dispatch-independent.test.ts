@@ -228,7 +228,7 @@ describe('the class a send reports for its target', () => {
     expect(code).toBe(0);
     // The walk never reached the runtime queue this seat records: the drop leg took the send, so
     // the line says what actually happens next — its next turn — never a queue nothing addressed.
-    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a codex seat whose endpoint names no conversation is read at its next turn, and the line says so', async () => {
@@ -247,7 +247,7 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a codex seat with no managed endpoint has only its next turn, and the line says so', async () => {
@@ -255,7 +255,7 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-plain', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-plain: sent (unconfirmed) (drop, 0 ms); queued; codex-plain reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('codex-plain: queued, not woken (drop, 0 ms); queued; codex-plain reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('an MCP-inbox seat is pull-only in its profile, and the line says so', async () => {
@@ -265,7 +265,7 @@ describe('the class a send reports for its target', () => {
     expect(code).toBe(0);
     // Cursor declares the typed wake, so the class's own sentence is preceded by what this run's
     // wake did: no live agent carried the seat's name, so nothing was typed.
-    expect(io.out).toContain('cursor-seat: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); cursor-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('cursor-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); cursor-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a seat with no adapter is only read at its next turn, and the line says so', async () => {
@@ -273,7 +273,7 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['pull-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('pull-seat: sent (unconfirmed) (drop, 0 ms); queued; pull-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('pull-seat: queued, not woken (drop, 0 ms); queued; pull-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a seat with no event adapter is read at its next turn, and the line says so', async () => {
@@ -285,7 +285,7 @@ describe('the class a send reports for its target', () => {
     const code = await runSend(['none-seat', 'hello'], io, sendHost(made));
     console.log(`A4 code=${code} out=${JSON.stringify(io.out)} err=${JSON.stringify(io.err)}`);
     expect(code).toBe(0);
-    expect(io.out).toContain('none-seat: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); nothing wakes none-seat while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
+    expect(io.out).toContain('none-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); nothing wakes none-seat while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn');
   });
 });
 

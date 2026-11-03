@@ -762,7 +762,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // unread pass uses for that seat: the file's declared word, or the class's own default (ADR
   // zeus-message-path, D2). The cell's `!` marks a class nothing wakes while idle, and this line
   // says what the class means in the class's own words (`deliveryWords`), so the table and a
-  // send's console line cannot promise different things. The window is the watch's, paced exactly
+  // send's console line cannot promise different things. The line leads with the send's own
+  // outcome words — `queued, not woken` — so a lead scanning status finds the stall by the same
+  // word the send printed and the history line carries. The window is the watch's, paced exactly
   // as the check paces the same reading. A note only: `status` never fails the gate for it —
   // `check` does.
   if (compactReadings !== undefined) {
@@ -777,7 +779,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       if (age === null || age < windowSeconds) continue;
       const waits = reading.words.replace(/^queued; /, '');
       const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
-      comparison.notes.push(`${name}: its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
+      comparison.notes.push(`${name}: queued, not woken — its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);
     }
   }
 
