@@ -91,7 +91,7 @@ async function send() {
   });
   const code = await runSend(['native', 'independent wake body'], io, host);
   expect(code, io.err).toBe(0);
-  expect(io.out).toContain('queued, not woken');
+  expect(io.out).toContain('sent (unconfirmed)');
   const drop = join(at.dir, 'send-drops', 'acme', 'native', id);
   expect(existsSync(drop)).toBe(true);
   expect(existsSync(`${drop}.read.json`)).toBe(false);
