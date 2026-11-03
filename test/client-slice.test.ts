@@ -1075,7 +1075,7 @@ describe('the client send walk', () => {
     // marker is written for it, and no receipt exists.
     expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
   test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {

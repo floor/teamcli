@@ -275,7 +275,7 @@ describe('team send: the antigravity typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
-    expect(io.out).toContain('agy: sent (unconfirmed)');
+    expect(io.out).toContain('agy: queued, not woken');
     expect(io.out).toContain('the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed)');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -283,7 +283,7 @@ describe('team send: the antigravity typed wake', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'queued, not woken', via: 'drop' });
       // The declared `mcp-inbox` word is skipped, not a failure; the typed leg is the one that
       // refused, and the drop leg then took the send.
       expect(history.entries[0]?.failed).toEqual([
@@ -301,7 +301,7 @@ describe('team send: the antigravity typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
-    expect(io.out).toContain('agy: sent (unconfirmed)');
+    expect(io.out).toContain('agy: queued, not woken');
     expect(io.out).toContain('the typed wake failed (the first read showed permission, not an empty idle prompt; nothing was typed)');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -309,7 +309,7 @@ describe('team send: the antigravity typed wake', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'queued, not woken', via: 'drop' });
       // As above: the skipped `mcp-inbox` word is no failure, and the dialog is what refused the
       // typed leg.
       expect(history.entries[0]?.failed).toEqual([

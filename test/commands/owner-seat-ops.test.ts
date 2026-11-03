@@ -159,7 +159,7 @@ describe('send, down and bus through the owner seat', () => {
     const ran = ioOf(p.root, detached);
     expect(await runSend(['lead', 'hello', '--approval', id], ran, host), ran.err + ran.out).toBe(0);
     expect(ran.err).toContain(`owner-seat approval ${id} (signed by mac)`);
-    expect(ran.out).toContain('lead: sent (unconfirmed)');
+    expect(ran.out).toContain('lead: queued, not woken');
     const again = ioOf(p.root, detached);
     expect(await runSend(['lead', 'hello', '--approval', id], again, host)).toBe(1);
     expect(again.err).toContain('single-use');
@@ -174,7 +174,7 @@ describe('send, down and bus through the owner seat', () => {
     expect(approveOwnerAction(p.home, id, 'always', p.store, NOW)).toMatchObject({ ok: true, choice: 'always' });
     const ran = ioOf(p.root, detached);
     expect(await runSend(['lead', 'stand by'], ran, host), ran.err + ran.out).toBe(0);
-    expect(ran.out).toContain('lead: sent (unconfirmed)');
+    expect(ran.out).toContain('lead: queued, not woken');
     const self = ioOf(p.root, { kind: 'seat', name: 'mac', pane: 'w9:p1', session: 'acme' });
     expect(await runSend(['lead', 'mine', '--request'], self, host)).toBe(0);
     const own = requestId(self.out);

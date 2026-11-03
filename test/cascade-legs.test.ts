@@ -162,7 +162,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
       // The listener is not a leg, so it is not a failed one either.
       expect((history.entries[0]?.failed ?? []).some((line) => line.startsWith('mcp-inbox'))).toBe(false);
       expect(history.entries[0]?.failed?.[0]).toMatch(/^typed: /);
@@ -237,7 +237,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       status: string;
       delivery: { leg: string; state: string; reason?: string }[];
     };
-    expect(doc.status).toBe('sent (unconfirmed)');
+    expect(doc.status).toBe('queued, not woken');
     const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
     expect(legs.get('mcp-inbox')).toEqual({ leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE });
     expect(legs.get('drop')).toBeDefined();
@@ -247,7 +247,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
     const history = readHistory('acme', one.root, host.home);
     expect(history.ok).toBe(true);
-    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'drop' });
+    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
   });
 
   test('the sender-posted webhook fires once and stops the walk, whatever the listener beside the seat says', async () => {
