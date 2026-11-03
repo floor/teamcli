@@ -6,7 +6,7 @@
 // five seconds, the daemon's heartbeat keeps its cadence, because the pass's synchronous reads
 // hold the child alone.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -89,6 +89,32 @@ function runEntry(home: string, args: string[], cwd: string): { status: number |
   return { status: ran.status, stdout: ran.stdout ?? '', stderr: ran.stderr ?? '' };
 }
 
+/** The same child started without waiting, so two can be started with one token at once. */
+function runEntryInBackground(
+  home: string,
+  args: string[],
+  cwd: string,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [ENTRY, ...args], {
+      cwd,
+      env: { ...process.env, HOME: home },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
 const tokenFiles = (home: string): string[] => {
   const dir = machineConfigDir(home);
   if (!existsSync(dir)) return [];
@@ -168,6 +194,44 @@ describe("the restore child's authority is the one-use token", () => {
     expect(replayed.stdout).toBe('');
     expect(replayed.stderr).toContain('no one-use token names this child');
     expect(tokenFiles(home)).toEqual([]);
+  });
+
+  test('two children started with one token at once: exactly one runs the pass', async () => {
+    const { root, home } = scratch();
+    for (let round = 0; round < 4; round += 1) {
+      const nonce = writeRestoreInherit({ version: 1, home, root });
+      // Both start before either can finish: the claim is the file system's rename, which admits
+      // one mover, so the race cannot hand the same token to both.
+      const pair = await Promise.all([
+        runEntryInBackground(home, ['--inherited', nonce], root),
+        runEntryInBackground(home, ['--inherited', nonce], root),
+      ]);
+      const ran = pair.filter((one) => one.status === 0);
+      const refused = pair.filter((one) => one.status === 2);
+      expect(ran).toHaveLength(1);
+      expect(JSON.parse(ran[0]!.stdout.trim())).toEqual({ ok: true, result: { kind: 'no-recorded-session' } });
+      expect(refused).toHaveLength(1);
+      expect(refused[0]!.stdout).toBe('');
+      expect(refused[0]!.stderr).toContain('no one-use token names this child');
+    }
+    expect(tokenFiles(home)).toEqual([]);
+  }, 30_000);
+
+  test('a machine folder this child cannot claim in refuses the token', () => {
+    const { root, home } = scratch();
+    const nonce = writeRestoreInherit({ version: 1, home, root });
+    const dir = machineConfigDir(home);
+    // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
+    // is not. The token starts nothing.
+    chmodSync(dir, 0o500);
+    try {
+      const ran = runEntry(home, ['--inherited', nonce], root);
+      expect(ran.status).toBe(2);
+      expect(ran.stdout).toBe('');
+      expect(ran.stderr).toContain('no one-use token names this child');
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 
   test('the spawner runs the real pass and leaves no token behind', async () => {

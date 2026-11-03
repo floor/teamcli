@@ -1,8 +1,9 @@
 // The one-use token that proves a restore child was started by this machine daemon.
 //
 // The daemon writes it under the machine folder (mode 0600) and starts the child with its nonce
-// on the command line; the child reads it once, unlinks it, and runs the one route it carries.
-// Any token presented is consumed, readable or not: one token starts one pass. The token is the
+// on the command line; the child claims it by rename, reads the claimed copy, and runs the one
+// route it carries. The rename is atomic, so two children started with one nonce cannot both
+// claim it: exactly one runs. Any token presented is consumed, readable or not. The token is the
 // child's whole authority to act as the daemon's owner-level restore pass: a child started any
 // other way — no token, a nonce this program would not write, an already spent token, or another
 // uid that cannot read a 0600 file under this machine folder — refuses and runs nothing. Nothing
@@ -10,7 +11,7 @@
 //
 // It lives in its own module so the child's entry can read a token without loading the spawner.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 
 /** What one restore pass may act on: the route and the home its reads resolve under. */
@@ -63,23 +64,32 @@ export type RestoreInheritRead =
 /**
  * Reads and consumes the token named on a child's command line. The nonce is restricted to the
  * exact spelling this program writes, so a command line cannot point the reader at another file.
+ * The claim is a rename: the file system admits exactly one mover of that name, so a second child
+ * started with the same nonce finds no token and refuses.
  */
 export function readRestoreInherit(home: string, nonce: string): RestoreInheritRead {
   if (!/^[0-9a-f]{32}$/.test(nonce)) {
     return { kind: 'refused', why: 'the token name is not one this daemon writes' };
   }
   const path = restoreInheritPath(home, nonce);
-  let text: string;
+  const claimed = `${path}.claim.${process.pid}`;
   try {
-    text = readFileSync(path, 'utf8');
+    renameSync(path, claimed);
   } catch {
+    // No token, or a machine folder this uid cannot claim in: either way no pass runs.
     return { kind: 'refused', why: 'no one-use token names this child' };
   }
+  let text: string;
   try {
-    unlinkSync(path);
+    text = readFileSync(claimed, 'utf8');
   } catch {
-    // A token that cannot be unlinked still starts nothing twice: the child that read it is the
-    // only one this invocation runs.
+    return { kind: 'refused', why: 'the claimed token cannot be read' };
+  } finally {
+    try {
+      unlinkSync(claimed);
+    } catch {
+      // The claimed copy is spent; a file that cannot be removed grants nothing further.
+    }
   }
   let parsed: unknown;
   try {
