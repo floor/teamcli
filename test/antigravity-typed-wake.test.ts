@@ -243,9 +243,10 @@ describe('team send: the antigravity typed wake', () => {
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
     // The closing line ends with the record's id; the scene's subject is the outcome, not the id.
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
-    // One line, one Enter, and the line is the trigger that reads the drop, never the body.
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.typed[0]).toContain('team drops --read');
+    // One line, one Enter, and the line is the trigger that names the seat's own fastest read
+    // path, never the body: an antigravity seat carries an MCP inbox (`mcp_inbox: registered`),
+    // so its profile's `read_hint` sends the woken turn straight to `inbox_check`.
+    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: call inbox_check now.']);
     expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.

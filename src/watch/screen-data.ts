@@ -89,7 +89,7 @@ export type QuestionText = {
   confirmation: TextSpec | null;
 };
 
-export type Placeholder = { equals: string } | { prefix: string };
+export type Placeholder = { equals: string } | { prefix: string } | { shape: 'slash-hint' };
 
 /** How a composer continues a line onto its next row, from a capture that shows it: the
  *  continuation starts at the text column (the box's own indent), and the break folds the space

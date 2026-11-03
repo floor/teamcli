@@ -645,11 +645,14 @@ Every field is data: control characters, escape sequences and line breaks are ne
 rendered header is one printable line. A body line that forges a sender header stays summary
 text and never becomes the header.
 
-The line the typed leg would carry — never typed in this build — is the rendered header, one
-space, and the fixed sentence `Read it with: team drops --read.` The whole line is one printable
-line of at most 100 characters; the hint is kept whole and the header gives way to it. The
-template cannot remove the hint — an agent seat always learns where to read the signed record —
-and the message's id is not in the line.
+The line a typed wake carries is the rendered header, one space, and a sentence naming the
+seat's fastest read path: the receiving profile's `read_hint` when it declares one — a profile
+whose seats carry an MCP inbox names the inbox tool, `Read it with: call inbox_check now.`,
+because the typed line never carries the id `inbox_read` takes — and the shipped
+`Read it with: team drops --read.` otherwise. The whole line is one printable line of at most 80
+characters; the sentence is kept whole and the header gives way to it. The template cannot remove
+the sentence — an agent seat always learns where to read the signed record — and the message's id
+is not in the line.
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
 sender's identity line, `Message from <name> (<seat>@<team>)` — the nickname the registry holds,

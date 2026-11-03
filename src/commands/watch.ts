@@ -1650,7 +1650,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
     // The oldest waiting record's own line: its header, then the fixed read hint. A sender this
     // home cannot name falls back to the shipped nameless ring rather than ringing nothing.
     const sender = wakeTrigger(record, home, { root, session: team.session, team }, now);
-    const text = (sender === null ? null : readTriggerLine(record.to, team.session, sender))
+    const text = (sender === null ? null : readTriggerLine(record.to, team.session, sender, seat?.cli ?? ''))
       ?? ringText(record.to, team.session);
     return {
       id: record.id,

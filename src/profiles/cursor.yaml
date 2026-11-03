@@ -30,6 +30,12 @@ delivery: pull-on-turn
 # Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
 # See src/send/typed-wake.ts.
 typed_wake: screen
+# The words the wake appends so the woken turn goes straight to the seat's fastest read path: the
+# inbox registered above in `.cursor/mcp.json`. `inbox_check` is the one direct call — it lists
+# the waiting messages with their ids — and `inbox_read`, whose argument is the id inbox_check
+# returned (src/mcp/serve.ts), reads one and marks it read. The typed line never carries the
+# message id, so naming inbox_read alone would earn a refused call.
+read_hint: 'Read it with: call inbox_check now.'
 login:
   check:
     - status

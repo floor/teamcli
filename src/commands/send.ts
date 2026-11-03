@@ -2283,7 +2283,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    });
+    }, to.cli);
     if (trigger === null && compose === null && typedWake === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
       markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
@@ -4618,7 +4618,7 @@ async function deliverClientRecord(
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    });
+    }, cli);
     if (trigger === null && compose === null) {
       failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
       markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);

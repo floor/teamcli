@@ -197,6 +197,20 @@ describe('muse launch and captured screens', () => {
     expect(boxHoldsText('muse', '/goal pins a session objective with a progress bar now', draft)).toBe(true);
   });
 
+  test('a dim /command hint is an empty box, and a draft that starts with / is unsent', () => {
+    const goal = fixture1411('goal-hint-dim');
+    const loop = fixture1411('loop-hint-dim');
+    const draft = fixture1411('slash-draft-synthetic');
+    expect(readScreen('muse', goal).kind).toBe('idle');
+    expect(readBox('muse', goal)).toBeNull();
+    expect(readScreen('muse', loop).kind).toBe('idle');
+    expect(readBox('muse', loop)).toBeNull();
+    expect(boxHoldsText('muse', '/loop 10m <prompt> schedules a recurring prompt', loop)).toBe(false);
+    expect(readScreen('muse', draft).kind).toBe('unsent');
+    expect(readBox('muse', draft)?.first).toBe('/goal ship the release');
+    expect(boxHoldsText('muse', '/goal ship the release', draft)).toBe(true);
+  });
+
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {
     const patterns = quotaFor('muse');
     expect(patterns.map((pattern) => [pattern.account, pattern.window])).toEqual([
