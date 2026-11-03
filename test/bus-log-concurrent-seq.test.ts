@@ -11,6 +11,7 @@ import {
   readEvents,
   readEventsFromCursor,
 } from '../src/bus/log.ts';
+import { ensureStoreLadder } from '../src/send/history.ts';
 
 const dirs: string[] = [];
 
@@ -97,6 +98,69 @@ describe('the event log under concurrent appenders', () => {
     expect(cursor.ok).toBe(true);
     if (!cursor.ok || cursor.kind !== 'events') return;
     expect(cursor.events.map((event) => event.payload.record_id).sort()).toEqual([...ids].sort());
+  }, 30000);
+
+  test('N fresh processes racing in one Promise.all mint exactly the sequences 1..N, each once', async () => {
+    const { root, home } = makeScratch();
+    // The store exists before the race, so the empty log is the only shared state under test: the
+    // writers contend for sequence allocation, not for creating the folder ladder. The home folder
+    // itself is what an append's own mkdir makes first, so the ladder call starts from there.
+    mkdirSync(home, { recursive: true });
+    expect(ensureStoreLadder(dirname(eventLogPath('acme', root, home)), home)).toBeNull();
+    const writers = 12;
+    const ids = Array.from({ length: writers }, (_, i) => `racer-${String(i)}`);
+    const startAt = Date.now() + 500;
+    const helper = join(import.meta.dir, 'bus-log-concurrent-seq-run.ts');
+    // One Promise.all over one spawn per writer: every process is alive before the shared start
+    // instant, so all the appends reach the event lock together instead of in spawn order.
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        const proc = Bun.spawn(['bun', helper, root, home, id, String(startAt)], { stdout: 'pipe', stderr: 'pipe' });
+        const out = await new Response(proc.stdout).text();
+        const err = await new Response(proc.stderr).text();
+        await proc.exited;
+        const line = out.trim().split('\n').filter(Boolean).pop() ?? '';
+        try {
+          return {
+            exitCode: proc.exitCode,
+            ...(JSON.parse(line) as { ok?: boolean; duplicate?: boolean; seq?: number; reason?: string }),
+          };
+        } catch {
+          return {
+            exitCode: proc.exitCode,
+            ok: false,
+            reason: `unparseable output: ${line.slice(0, 80)} ${err.slice(0, 80)}`,
+          };
+        }
+      }),
+    );
+
+    const minted = results.map((result) => result.seq);
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    const exact = Array.from({ length: writers }, (_, i) => i + 1);
+    const logSeqs = read.events.map((event) => event.payload.seq);
+    // One fact object: a red run shows what each process minted beside what the log retained.
+    expect({
+      exitCodes: results.map((result) => result.exitCode),
+      ok: results.map((result) => result.ok),
+      duplicate: results.map((result) => result.duplicate),
+      reasons: results.filter((result) => result.ok !== true).map((result) => result.reason ?? null),
+      mintedDistinct: new Set(minted).size,
+      mintedSorted: minted.slice().sort((a, b) => (a ?? 0) - (b ?? 0)),
+      logSeqs,
+      logIdsSorted: read.events.map((event) => event.payload.record_id).sort(),
+    }).toEqual({
+      exitCodes: ids.map(() => 0),
+      ok: ids.map(() => true),
+      duplicate: ids.map(() => false),
+      reasons: [],
+      mintedDistinct: writers,
+      mintedSorted: exact,
+      logSeqs: exact,
+      logIdsSorted: [...ids].sort(),
+    });
   }, 30000);
 
   test('a held event lock returns the documented busy result without touching the log, and release leaves no stale state', async () => {

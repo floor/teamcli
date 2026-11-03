@@ -499,6 +499,15 @@ const OPTIONAL_STRING_FIELDS = [
 
 const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
 
+/** The shape every event's `record_id` must have: a generated token — a UUID, a digest, or a
+ *  colon-joined name — never free text. The append index searches a retained line for the id as a
+ *  literal substring before parsing it (`findVerifiedRecord`), which is sound only while
+ *  `JSON.stringify` leaves every character of the id unescaped: an id holding a quote or a
+ *  backslash would spell differently in the serialized line, and the search could miss the very
+ *  record the append is a duplicate of. Parse refuses an id outside this charset for that reason,
+ *  so the lemma is enforced where a payload enters, not assumed where a line is searched. */
+export const EVENT_RECORD_ID = /^[A-Za-z0-9:._-]{1,200}$/;
+
 const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'v',
   'seq',
@@ -521,7 +530,7 @@ export function parseEventPayload(value: unknown): EventPayload | null {
   if (typeof obj.ts !== 'string' || obj.ts === '' || !Number.isFinite(Date.parse(obj.ts))) return null;
   if (!isEventKind(obj.kind)) return null;
   if (typeof obj.session !== 'string' || obj.session === '') return null;
-  if (typeof obj.record_id !== 'string' || obj.record_id === '') return null;
+  if (typeof obj.record_id !== 'string' || !EVENT_RECORD_ID.test(obj.record_id)) return null;
 
   const payload: EventPayload = {
     v: 1,
@@ -1081,10 +1090,10 @@ function lastVerifiedRecord(
 }
 
 /** The first record in one stretch of the log that verifies under `wanted.key`. Only a line that
- *  spells the wanted id literally is parsed: every id this log records is a generated token
- *  (UUID, digest, or colon-joined name) and `JSON.stringify` escapes none of their characters, so
- *  a line this code wrote for that id always holds it as a substring. A matching line that does
- *  not verify is skipped, exactly as the full scan skips it. */
+ *  spells the wanted id literally is parsed: every id this log admits is a generated token
+ *  (`EVENT_RECORD_ID`, enforced by `parseEventPayload`), so `JSON.stringify` escapes none of its
+ *  characters and a line this code wrote for that id always holds it as a substring. A matching
+ *  line that does not verify is skipped, exactly as the full scan skips it. */
 function findVerifiedRecord(
   lines: string[],
   wanted: WantedKey,
@@ -1307,6 +1316,15 @@ export function appendEvent(
   const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
   const kept = options.kept ?? EVENT_LOG_KEPT;
   const deduplicate = options.deduplicate ?? true;
+
+  // Refused before the store is touched, with the reason a caller can act on. Parse holds the same
+  // line, so a record this check admits is one every reader will admit too.
+  if (typeof input.record_id !== 'string' || !EVENT_RECORD_ID.test(input.record_id)) {
+    return {
+      ok: false,
+      reason: 'the record id is not a generated token: letters, digits, ":", ".", "_" and "-", 200 at most',
+    };
+  }
 
   if (heldAt(home).kind === 'missing') {
     mkdirSync(home, { recursive: true });
