@@ -74,6 +74,14 @@ standing as that team's lead brings it back with `team restart <seat>`, which cl
 write that records the launch, then relaunches it. A launch that does not reach ready puts the mark back, so
 a failed restart leaves the seat stopped.
 
+The main orchestrator's proof is read whole from its head team's own records: that team's registry record
+must name the entity as both its project and its entity, its live file must still name that entity and
+resolve its lead — the legacy `coordinator:` key or `leads: true` on the seat, either spelling — and the
+caller must be placed on that lead's recorded pane in that team's own session. A head team whose live file
+cannot be read, a record naming another entity, or a caller the placement does not put on that recorded pane
+proves nothing, and the run is judged by this team's map alone. This proof never falls back to a roster
+`leads` mark: send admission accepts one, a restart's reach does not.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |
