@@ -699,6 +699,107 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       await started.daemon.close();
     }
   });
+
+  test('a slow background pass on root 1 never holds root 2 back, never says done early, and a revive uses the awaited start or clears firstPass on busy', async () => {
+    const { base, root, home } = scratch();
+    const second = join(base, 'repo-two');
+    mkdirSync(join(second, '.agents'), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: second });
+    writeFileSync(
+      join(second, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme', 'project: beta').replace('session: acme', 'session: beta'),
+    );
+
+    let root1Running = true;
+    let root1Scanned = 1_234;
+    const initialInputs: StartBusInput[] = [];
+    const reviveInputs: StartBusInput[] = [];
+    let reviveMode: 'real' | 'busy' = 'real';
+
+    const initialBusStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      initialInputs.push(input);
+      const started = await startBus(input);
+      if (started.kind !== 'serving' || input.root !== root) return started;
+      return {
+        ...started,
+        handle: {
+          ...started.handle,
+          firstPass: () =>
+            root1Running
+              ? { running: true, scanned: root1Scanned, doneAt: null }
+              : { running: false, scanned: root1Scanned, doneAt: '2026-11-03T19:45:00.000Z' },
+        },
+      };
+    };
+
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      reviveInputs.push(input);
+      if (reviveMode === 'busy') return { kind: 'busy' };
+      return startBus(input);
+    };
+
+    const started = await startMachineDaemon({
+      home,
+      roots: [root, second],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 20,
+      initialBusStart,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      expect(initialInputs.map((i) => ({ root: i.root, mode: i.initialReconcile }))).toEqual([
+        { root, mode: 'background' },
+        { root: second, mode: 'background' },
+      ]);
+
+      // Wait until root 2's empty store settles while root 1 is still running its first pass.
+      const snapshot = await waitForValue(async () => {
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        const r2 = h.roots.find((entry) => entry.root === second);
+        return r1?.firstPass?.running === true && r2?.firstPass?.running === false ? { r1, r2 } : null;
+      }, 5_000);
+      expect(snapshot.r1.firstPass).toEqual({ running: true, scanned: 1_234, doneAt: null });
+      expect(snapshot.r2.firstPass?.running).toBe(false);
+
+      // `team daemon status` reports root 1 as running (with grouped count) and root 2 as done, never claiming done early for root 1.
+      const statusRunning = testIo(home, owner);
+      expect(await runDaemon(['status'], statusRunning, sourcesOf(home))).toBe(0);
+      expect(statusRunning.out).toContain(`first pass running for ${root} (1,234 files scanned)`);
+      if (snapshot.r2.firstPass && !snapshot.r2.firstPass.running) {
+        expect(statusRunning.out).toContain(`first pass done at ${snapshot.r2.firstPass.doneAt} for ${second}`);
+      }
+      expect(statusRunning.out).not.toMatch(new RegExp(`first pass done at [^;\\n]+ for ${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:;|\\n|$)`));
+
+      // Unlinking root 1's bus socket triggers a revive through `busStart`, which omits `initialReconcile` (keeping the awaited start).
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      const revivedRoot = await waitForValue(async () => {
+        if (reviveInputs.length === 0) return null;
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        return r1?.bus === 'serving' && r1.firstPass?.running === false ? r1 : null;
+      }, 5_000);
+      expect(reviveInputs[0]?.initialReconcile).toBeUndefined();
+      expect(revivedRoot.firstPass?.running).toBe(false);
+      if (revivedRoot.firstPass && !revivedRoot.firstPass.running) {
+        expect(typeof revivedRoot.firstPass.doneAt).toBe('string');
+      }
+
+      // If a later revive finds another process serving the bus (`busy`), `firstPass` is cleared.
+      reviveMode = 'busy';
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await waitFor(async () => {
+        const h = await daemonHealth(home);
+        const r1 = h.roots.find((entry) => entry.root === root);
+        return reviveInputs.length >= 2 && r1?.bus === 'serving' && r1.firstPass === undefined;
+      }, 5_000);
+    } finally {
+      await started.daemon.close();
+    }
+  });
 });
 
 describe('the service adapter writes and registers one user unit, neutrally', () => {

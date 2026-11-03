@@ -11,8 +11,9 @@ import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { check } from '../src/commands/check.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
-import type { DaemonRootState } from '../src/daemon/state.ts';
-import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading } from '../src/daemon/health_display.ts';
+import { daemonStatePath } from '../src/daemon/paths.ts';
+import { readDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
+import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading, firstPassPhrases } from '../src/daemon/health_display.ts';
 import { hostedWatchCheckNotes, hostedWatchDifferences, hostedWatchNotes } from '../src/daemon/watch_display.ts';
 import { whoOfDifference } from '../src/output/text.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
@@ -767,3 +768,99 @@ test('a running watch whose last cycle failed is a note and changes no exit', ()
   expect(io.out).toContain('watch: the last cycle failed 3m ago');
   expect(io.out).toContain('no differences');
 });
+
+test('malformed firstPass state records are dropped at load and never print a false or timeless done phrase', () => {
+  const at = place();
+  const stateFile = daemonStatePath(at.home);
+  mkdirSync(join(at.home, '.config', 'team'), { recursive: true });
+  const rawRoots = [
+    { root: '/work/no-time', team: 'a', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 10, doneAt: null } },
+    { root: '/work/empty-time', team: 'b', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 10, doneAt: '' } },
+    { root: '/work/contradict', team: 'c', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 10, doneAt: AT } },
+    { root: '/work/negative', team: 'd', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: -1, doneAt: null } },
+    { root: '/work/float', team: 'e', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 1.5, doneAt: null } },
+    { root: '/work/array', team: 'f', send: 'serving', bus: 'serving', why: null, firstPass: [] },
+    { root: '/work/valid-running', team: 'g', send: 'serving', bus: 'serving', why: null, firstPass: { running: true, scanned: 0, doneAt: null } },
+    { root: '/work/valid-done', team: 'h', send: 'serving', bus: 'serving', why: null, firstPass: { running: false, scanned: 1_000_000, doneAt: AT } },
+  ];
+  writeFileSync(
+    stateFile,
+    `${JSON.stringify({
+      format: 1,
+      pid: 42,
+      uid: 501,
+      since: '2026-10-19T08:00:00.000Z',
+      startedBy: 'service-manager',
+      version: '0.5.4',
+      gitHead: null,
+      heartbeatAt: '2026-10-19T08:59:58.000Z',
+      socket: SOCKET,
+      features: { broker: 'absent' },
+      stuck: [],
+      roots: rawRoots,
+    })}\n`,
+  );
+  const parsed = readDaemonState(at.home);
+  expect(parsed.kind).toBe('ok');
+  if (parsed.kind !== 'ok') return;
+  expect(parsed.state.roots).toHaveLength(8);
+  for (let i = 0; i < 6; i += 1) {
+    expect(parsed.state.roots[i]?.firstPass).toBeUndefined();
+  }
+  expect(parsed.state.roots[6]?.firstPass).toEqual({ running: true, scanned: 0, doneAt: null });
+  expect(parsed.state.roots[7]?.firstPass).toEqual({ running: false, scanned: 1_000_000, doneAt: AT });
+  expect(firstPassPhrases(parsed.state.roots)).toEqual([
+    'first pass running for /work/valid-running (0 files scanned)',
+    `first pass done at ${AT} for /work/valid-done`,
+  ]);
+});
+
+test('stale watch record with dead pid is never shown as current across plain-text status, stopped daemon, and live hosted watch', async () => {
+  const at = place();
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 4242, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+    };
+  });
+  const alive = (pid: number) => pid !== 4242;
+
+  // 1. Plain-text `team status` when daemon is not running (`state: 'not-running'`):
+  //    never prints `pid 4242, last heartbeat` and never prints `root not yet hosted by daemon null`.
+  const stoppedDaemonHealth: DaemonHealth = {
+    ...notRunning(),
+    pid: 4242,
+  };
+  const plainIo = testIo(at.root, { kind: 'owner' });
+  await runStatus([], plainIo, { ...statusSources(at, async () => stoppedDaemonHealth), alive });
+  expect(plainIo.out).toContain('watch record names a stopped daemon (pid 4242)');
+  expect(plainIo.out).not.toContain('pid 4242, last heartbeat');
+  expect(plainIo.out).not.toContain('root not yet hosted');
+
+  // 2. When the recorded pid IS alive (`pid: 5151`) and the live daemon hosts this root,
+  //    even if another root on the same daemon has `firstPass.running === true`, the current
+  //    watch note stands as-is.
+  updateState(at.dir, (state) => {
+    state.sessions.acme = {
+      ...state.sessions.acme!,
+      watch: { pid: 5151, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+    };
+  });
+  const liveIo = testIo(at.root, { kind: 'owner' });
+  await runStatus([], liveIo, {
+    ...statusSources(at, async () =>
+      health({
+        pid: 5151,
+        roots: [
+          root({ root: realpathSync(at.root) }),
+          root({ root: '/work/demo', team: 'acme', firstPass: { running: true, scanned: 500, doneAt: null } }),
+        ],
+      }),
+    ),
+    alive,
+  });
+  expect(liveIo.out).toContain('watch: pane not recorded, pid 5151, last heartbeat 10s ago');
+  expect(liveIo.out).not.toContain('stopped daemon');
+  expect(liveIo.out).not.toContain('root not yet hosted');
+});
+
