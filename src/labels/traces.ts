@@ -119,22 +119,25 @@ export function commitTrace(worktree: string): SeatTrace | null {
 }
 
 /**
- * The outcomes that put the message in front of the seat: a delivery it took, an answer it gave,
- * and the native record's own word (`recorded`; its history line says `delivered`). A send that
- * never reached the seat — `unreachable`, `not-submitted`, `held`, `timeout` — is the sender's
- * trouble, not the seat's work, and is no trace: counting it would read a seat as working because
- * someone failed to reach it, and would clear a blind seat's flag without a sign it moved.
+ * The outcomes that put the message in front of the seat: a read the seat itself receipted
+ * (`delivered (read)` — written by a verified seat receipt, so the seat's own server returned
+ * the body or its watcher read it), an answer it gave, and the native record's own word
+ * (`recorded`). A bare `delivered` is the sender's word that a frame was taken or a trigger left
+ * the composer — a wrapper launch takes a frame the agent never sees, so it is no sign the seat
+ * moved. A send that never reached the seat — `unreachable`, `not-submitted`, `held`, `timeout`
+ * — is the sender's trouble, not the seat's work, and is no trace either: counting any of them
+ * would read a seat as working because someone failed to reach it, and would clear a blind seat's
+ * flag without a sign it moved.
  */
-// `delivered (read)` is the seat's own signed receipt: it read the body, so the message reached
-// it — a stronger trace than the typed leg's own delivery word.
-const REACHED_SEAT: ReadonlySet<string> = new Set(['delivered', 'delivered (read)', 'answered', 'recorded']);
+const REACHED_SEAT: ReadonlySet<string> = new Set(['delivered (read)', 'answered', 'recorded']);
 
 /**
  * The last ack or message the send history holds for the seat: the newest entry of
  * `messages.jsonl` (`src/send/history.ts`) addressed to it or sent by it, in the history's own
- * words — an `answered` outcome on a message to the seat is its ack. Only an entry whose outcome
- * reached the seat counts (`REACHED_SEAT`). A history that cannot be read has no trace. The
- * mailbox receipts (`.agents/messages/*.read.json`) are a later phase.
+ * words — an `answered` outcome on a message to the seat is its ack, and `delivered (read)` is
+ * shown as `read`. Only an entry whose outcome reached the seat counts (`REACHED_SEAT`). A
+ * history that cannot be read has no trace. The mailbox receipts (`.agents/messages/*.read.json`)
+ * are a later phase.
  */
 export function messageTrace(project: string, root: string, seat: string, home: string): SeatTrace | null {
   const read = readHistory(project, root, home);
@@ -143,12 +146,13 @@ export function messageTrace(project: string, root: string, seat: string, home: 
   for (const entry of read.entries) {
     if (entry.from !== seat && entry.to !== seat) continue;
     if (!REACHED_SEAT.has(entry.outcome)) continue;
+    const word = entry.outcome === 'delivered (read)' ? 'read' : entry.outcome;
     if (entry.to === seat && entry.outcome === 'answered') {
       found = { kind: 'ack', at: entry.ts, what: `answered a message from ${entry.from}` };
     } else if (entry.to === seat) {
-      found = { kind: 'message', at: entry.ts, what: `a message from ${entry.from} (${entry.outcome})` };
+      found = { kind: 'message', at: entry.ts, what: `a message from ${entry.from} (${word})` };
     } else {
-      found = { kind: 'message', at: entry.ts, what: `a message to ${entry.to} (${entry.outcome})` };
+      found = { kind: 'message', at: entry.ts, what: `a message to ${entry.to} (${word})` };
     }
   }
   return found;

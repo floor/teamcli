@@ -4813,10 +4813,6 @@ const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending sessi
 /** How long a socket write's pane is read for the held-message dialog, in all. */
 const HELD_READ_MS = 1000;
 
-/** The taker a socket-delivered record's read receipt names: the frame was taken, and no reader
- *  served the record. It is display for the receipt's readers and signed with the payload. */
-const SOCKET_READ_BY = 'socket delivery';
-
 /**
  * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
  * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
@@ -4981,30 +4977,12 @@ async function deliverSocketFrame(
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
     return { kind: 'held', reason: HELD_FRAME_REASON };
   }
-  // The frame was taken and no held dialog answered it: the receiving session has the message,
-  // so an ordinary send's record is read now. The signed receipt is what keeps the watch from
-  // ringing for a message the socket already delivered, and what keeps `team drops --read` and
-  // `team messages` from serving it again — the same receipt a reader would have written. A held
-  // frame returned above writes none: it was not a delivery, and the watch's retry stays the
-  // attempt.
-  //
-  // A direct-only run is the watch's own dispatch, and there the frame is a request: the
-  // receiving runtime reads it through the read gate and acts on it, so the send leaves the
-  // record unread — a receipt here would stop the very reader the push exists for.
-  if (host.direct === undefined) {
-    try {
-      const receipt = signReceiptPayload(
-        { kind: 'receipt', status: 'read', id: msgId, to: payload.to, root: payload.root, session: payload.session, at: host.now().toISOString(), read_by: SOCKET_READ_BY },
-        host.home,
-      );
-      const receiptWrite = writeReceipt(copy.dir, receipt, host.home);
-      if (!receiptWrite.ok) {
-        logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written (${receiptWrite.reason})`, host.now());
-      }
-    } catch {
-      logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written`, host.now());
-    }
-  }
+  // The frame was taken: that is the delivery, and only the seat writes a read receipt. The
+  // sender no longer marks its own frame read — a frame a wrapper launch took but the agent never
+  // saw must stay unread — so the record waits for the seat's own `inbox_read`,
+  // `team drops --read` or hook receipt, and the watch's unread pass re-wakes it like any other
+  // message. A held frame returned above writes no receipt either: it was not a delivery, and the
+  // watch's retry stays the attempt.
   if (!wait) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
   }
@@ -5019,9 +4997,10 @@ export type ChannelRedelivery = { ok: true } | { ok: false; reason: string };
  * written, dialed now with the stored signed record, and marked on its history line and in the
  * walk's words as `redelivered: channel unconfirmed`. The receiving declaration is read exactly
  * as a send's socket leg reads it — a receiver that would hold the frame is never dialed — and a
- * delivery writes the same signed read receipt a socket send writes, so the message is served
- * once and no later pass rings for it. Every refusal comes back as a reason the watch turns into
- * its typed fallback; the wrapper itself never types and never clears the marker.
+ * taken frame is the delivery: no receipt is written, so the record stays unread for the seat's
+ * own read and the unread pass re-wakes it like any other message. Every refusal comes back as a
+ * reason the watch turns into its typed fallback; the wrapper itself never types and never clears
+ * the marker.
  */
 export async function redeliverChannelOnSocket(input: {
   host: SendHost;

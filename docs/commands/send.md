@@ -543,7 +543,9 @@ word is no leg in this build.
 Every leg keeps its ordinary pane-safety checks. A human's pane is never dialed or typed into, a
 bare shell is never typed into, and a held frame keeps the socket out until the seat's
 declaration is re-confirmed. No leg writes a second record: each write accepts the record at the
-same id, and a frame the socket takes writes its one signed read receipt beside it. The frame
+same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
+the record stays unread until the seat's own read, and the watch re-wakes it like any other
+message. The frame
 names its sender `Message from Grok Bot (owner)`, with the owner's reply target as its reply
 line, so the receiving seat reads a person's message and not a seat address. The walk's ending
 never changes the invocation: the drop is on disk, the confirmation already printed, and the

@@ -1,9 +1,10 @@
-// The socket leg's read receipt, and the frame header an accepted delivery carries.
+// The socket leg's delivery, and the frame header an accepted delivery carries.
 //
-// A taken socket frame is a delivery, and a delivery is not a read: the signed `<id>.read.json`
-// receipt is what proves one. On acceptance the receipt is written at once, with
-// `read_by: "socket delivery"`, so the record leaves the unread list — no typed wake, no ring,
-// no report drop, and `team drops --read` serves nothing. A frame the box held proves nothing:
+// A taken socket frame is a delivery, and a delivery is not a read: only the seat writes the
+// signed `<id>.read.json` receipt that proves one. Acceptance writes none, so the record stays
+// unread — `team drops --read` serves it, `team messages` lists it as unacked, the watch's
+// unread pass wakes it at N, and the sender's mailbox and the lead are told at 2N. The seat's
+// own read then writes the receipt and settles it. A frame the box held proves nothing either:
 // no receipt, and the watch's one retry still comes after the normal window.
 //
 // The accepted frame opens with `Message from <name> (<seat>@<team>)`, the sender's nickname
@@ -31,7 +32,6 @@ import {
   NOW,
   readReceipt,
   receiptVerifies,
-  recordIds,
   recordOf,
   registerHelper,
   sceneOf,
@@ -54,7 +54,7 @@ function ownerIo(root: string) {
   return testIo(root, { kind: 'owner' });
 }
 
-test('an accepted socket frame writes the signed read receipt, read_by socket delivery', async () => {
+test('an accepted socket frame writes no receipt and leaves the record unread', async () => {
   const one = world(['socket']);
   made = one;
   declareEntity(one);
@@ -67,29 +67,14 @@ test('an accepted socket frame writes the signed read receipt, read_by socket de
   expect(code).toBe(0);
   expect(host.frames.length).toBe(1);
   const record = recordOf(drops);
-  const receipt = readReceipt(drops, record.id);
-  expect(receipt).not.toBeNull();
-  if (receipt === null) return;
-  // The receiver's folder holds a 0600 receipt beside the record, signing the read it claims.
-  expect(receipt.mode).toBe(0o600);
-  expect(receipt.payload).toMatchObject({
-    kind: 'receipt',
-    status: 'read',
-    id: record.id,
-    to: 'lead',
-    root: one.root,
-    session: 'acme',
-    read_by: 'socket delivery',
-  });
-  expect(typeof receipt.payload.at).toBe('string');
-  expect(Number.isFinite(Date.parse(receipt.payload.at as string))).toBe(true);
-  expect(receiptVerifies(drops, record.id, one.home)).toBe(true);
-  // The record's own receipts derive `read`; the reader's unread list is empty.
-  expect(statusAt(one, 'lead', record.id)).toBe('read');
-  expect(unreadAt(one)).toEqual([]);
+  // The frame was taken: that is the delivery, and it writes no receipt. Only the seat writes a
+  // read receipt, so the record derives `sent` and stays in the reader's unread list.
+  expect(readReceipt(drops, record.id)).toBeNull();
+  expect(statusAt(one, 'lead', record.id)).toBe('sent');
+  expect(unreadAt(one).map((message) => message.id)).toEqual([record.id]);
 });
 
-test('an accepted socket delivery is not served again, typed at, rung for, or reported', async () => {
+test('an accepted socket delivery stays unread until the seat reads it, and that read settles it', async () => {
   const one = world(['socket']);
   made = one;
   declareEntity(one);
@@ -99,26 +84,42 @@ test('an accepted socket delivery is not served again, typed at, rung for, or re
   expect(await runSend(['lead', 'the socket note'], ownerIo(one.root), host)).toBe(0);
   const record = recordOf(drops);
 
-  // The watch's ring reads `listUnacked`: the record's verifying receipt keeps it out.
-  expect(listUnacked(one.root, 'acme', one.home)).toEqual([]);
+  // The watch's ring reads `listUnacked`: with no receipt the record is still listed.
+  expect(listUnacked(one.root, 'acme', one.home).map((message) => message.id)).toEqual([record.id]);
 
-  // The seat's own read serves nothing: a verifying receipt is not served twice.
+  // The seat's own read serves the body and writes the signed receipt that proves it.
   const readIo = testIo(one.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
   const read = await runDrops(['--read', '--seat', 'lead', '--session', 'acme'], readIo, { home: one.home });
   expect(read).toBe(0);
-  expect(readIo.out).not.toContain('the socket note');
+  expect(readIo.out).toContain('the socket note');
   expect(readIo.err).toBe('');
+  expect(receiptVerifies(drops, record.id, one.home)).toBe(true);
+  expect(statusAt(one, 'lead', record.id)).toBe('read');
+  expect(unreadAt(one)).toEqual([]);
+  expect(listUnacked(one.root, 'acme', one.home)).toEqual([]);
+});
 
-  // Past the window the unread pass types no wake, and past twice it reports nothing.
+test('a socket delivery no seat reads is woken at the window and reported at twice it', async () => {
+  const one = world(['socket']);
+  made = one;
+  declareEntity(one);
+  acceptSocket(one);
+  const host = hostOf(one, book());
+  const drops = dropsOf(one);
+  expect(await runSend(['lead', 'the socket note'], ownerIo(one.root), host)).toBe(0);
+  const record = recordOf(drops);
+
+  // Past the window the unread pass wakes the record like any other. No pane messaging: the
+  // typed leg is refused, so nothing is typed and no wake marker is spent.
   const wakeBook = book();
   await wakeUnreadDrops(sceneOf(one, wakeBook, new Date(NOW.getTime() + (N + 1) * 1000)), { unreadAfter: N });
   expect(wakeBook.typed).toEqual([]);
   expect(wakeBook.enters).toBe(0);
   expect(existsSync(wakePath(drops, record.id))).toBe(false);
+
+  // Past twice the window, and still unread, the sender and the lead are told.
   reportUnreadDrops(sceneOf(one, book(), new Date(NOW.getTime() + (2 * N + 1) * 1000)), { unreadAfter: N });
-  expect(existsSync(reportedPath(drops, record.id))).toBe(false);
-  expect(recordIds(drops)).toEqual([record.id]);
-  expect(listUnacked(one.root, 'acme', one.home)).toEqual([]);
+  expect(existsSync(reportedPath(drops, record.id))).toBe(true);
 });
 
 test('a held socket frame writes no receipt, and the one watch retry still comes after the window', async () => {

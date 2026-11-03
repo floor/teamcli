@@ -76,7 +76,7 @@ The status words:
 | Status | Meaning |
 |---|---|
 | `sent` | the record exists and a transport took it |
-| `delivered` | the transport confirmed the seat's program has it (the inbox fetched it, the drop watcher receipted it, the socket frame was written, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) |
+| `delivered` | the transport took it (the inbox fetched it, the drop watcher receipted it, the socket frame was taken, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) — a delivery, never a read: only the seat's own signed receipt makes it `read` |
 | `read` | the seat's own tool showed the body |
 | `replied` | a record on the thread answers it |
 | `held` | the record waits: a dialog, unsent text in the box, or an unreachable seat; the side and reason named |

@@ -375,9 +375,10 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
  * reserved before the first wake leg, whichever install is listening; `retryOne` reserves again
  * before typing. A receipt
  * that landed first is the read itself: nothing is typed and the record is settled, exactly as
- * the promotion pass would settle it. A socket delivery writes its own receipt and history line;
- * the typed leg is the ordinary retry, whose history line carries `redelivered: channel
- * unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
+ * the promotion pass would settle it. A socket delivery writes its own `delivered` history line
+ * and no receipt — only the seat writes a read receipt, so the record stays unread and the unread
+ * pass re-wakes it like any other message; the typed leg is the ordinary retry, whose history
+ * line carries `redelivered: channel unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
  * the same: the marker says the watch tried, and the message stays where a person can send it
  * again.
  */
@@ -413,8 +414,9 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
   if (scene.socketRedeliver !== undefined) {
     const socket = await scene.socketRedeliver(dropDir, marked);
     if (socket.ok) {
-      // The socket attempt wrote the signed receipt and its own history line, marked with the
-      // channel's own note; the marker has nothing left to say.
+      // The socket attempt wrote its own `delivered` history line, marked with the channel's own
+      // note, and no receipt: the marker has nothing left to say, and the record stays unread for
+      // the seat's own read.
       clearPending(dropDir, drop.id);
       scene.say(`${drop.to}: a channel send from ${drop.from} was redelivered on the socket`, false);
       return;
