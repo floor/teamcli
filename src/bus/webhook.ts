@@ -1102,59 +1102,79 @@ function tellParent(line: string): boolean {
   }
 }
 
-function readOneLine(): Promise<string> {
-  const stream = process.stdin;
-  return new Promise((resolve, reject) => {
-    let buf = '';
-    let settled = false;
-    const finish = (value: string | null): void => {
-      if (settled) return;
-      settled = true;
-      stream.removeListener('data', onData);
-      stream.removeListener('error', onClose);
-      stream.removeListener('end', onClose);
-      if (value === null) reject(new Error('closed'));
-      else resolve(value);
-    };
-    const onData = (chunk: Buffer | string): void => {
-      buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+/** One stdin reader for the whole worker. The job is the first line; `taken` is whatever follows.
+ *  Listeners stay up, so a parent that closes the pipe while the request is in flight resolves
+ *  `taken` instead of leaving a second listener waiting on an already-ended stream. */
+function stdinFeed(): { job: Promise<string>; taken: Promise<boolean> } {
+  let buf = '';
+  let jobDone = false;
+  let takeDone = false;
+  let resolveJob: (line: string) => void = () => {};
+  let rejectJob: (error: Error) => void = () => {};
+  let resolveTaken: (yes: boolean) => void = () => {};
+  const job = new Promise<string>((resolve, reject) => {
+    resolveJob = resolve;
+    rejectJob = reject;
+  });
+  const taken = new Promise<boolean>((resolve) => {
+    resolveTaken = resolve;
+  });
+  const take = (yes: boolean): void => {
+    if (takeDone) return;
+    takeDone = true;
+    resolveTaken(yes);
+  };
+  const push = (chunk: string): void => {
+    buf += chunk;
+    if (!jobDone) {
       const nl = buf.indexOf('\n');
       if (nl === -1) return;
-      finish(buf.slice(0, nl));
-    };
-    const onClose = (): void => {
+      jobDone = true;
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      resolveJob(line);
+    }
+    if (buf.includes('taken')) take(true);
+  };
+  const end = (): void => {
+    if (!jobDone) {
       const nl = buf.indexOf('\n');
-      finish(nl === -1 ? null : buf.slice(0, nl));
-    };
-    stream.on('data', onData);
-    stream.on('error', onClose);
-    stream.on('end', onClose);
-  });
-}
-
-/** True when the parent read the result line and settled it. A closed pipe means the parent has
- *  gone, and this process is the one that settles. */
-function parentTookIt(): Promise<boolean> {
-  return new Promise((resolve) => {
-    let buf = '';
-    let settled = false;
-    const finish = (yes: boolean): void => {
-      if (settled) return;
-      settled = true;
-      resolve(yes);
-    };
-    process.stdin.on('data', (chunk: Buffer | string) => {
-      buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      if (buf.includes('taken')) finish(true);
+      if (nl !== -1) {
+        jobDone = true;
+        resolveJob(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      } else {
+        jobDone = true;
+        rejectJob(new Error('closed'));
+      }
+    }
+    take(buf.includes('taken'));
+  };
+  const stream = process.stdin;
+  if (stream.readableEnded || stream.destroyed) {
+    const pending = stream.read();
+    if (typeof pending === 'string') push(pending);
+    else if (pending) push(pending.toString('utf8'));
+    end();
+  } else {
+    stream.on('data', (chunk: Buffer | string) => {
+      push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
     });
-    process.stdin.on('end', () => finish(buf.includes('taken')));
-    process.stdin.on('close', () => finish(buf.includes('taken')));
-    process.stdin.on('error', () => finish(false));
-  });
+    stream.on('end', end);
+    stream.on('close', end);
+    stream.on('error', end);
+  }
+  return { job, taken };
 }
 
 async function finishLateWorker(): Promise<void> {
-  const job = JSON.parse(await readOneLine()) as LateJob;
+  const feed = stdinFeed();
+  let job: LateJob;
+  try {
+    job = JSON.parse(await feed.job) as LateJob;
+  } catch {
+    return;
+  }
   const started = Date.now();
   let line: LateLine;
   try {
@@ -1172,33 +1192,16 @@ async function finishLateWorker(): Promise<void> {
   }
   process.stdout.on('error', () => {});
   const told = tellParent(`${JSON.stringify(line)}\n`);
-  const taken = told ? await parentTookIt() : false;
+  const taken = told ? await feed.taken : false;
   if (!taken) settleDetached(job, 'status' in line ? line : null, 'status' in line ? line.ms : 0);
 }
 
-if (import.meta.main && process.argv.includes('--finish-late')) {
+const workerEntry = fileURLToPath(import.meta.url);
+const runAsWorker = (import.meta as { main?: boolean }).main === true
+  || (process.argv[1] !== undefined && process.argv[1] === workerEntry);
+if (runAsWorker && process.argv.includes('--finish-late')) {
   process.stdout.on('error', () => {});
-  void finishLateWorker().then(
-    () => process.exit(0),
-    () => process.exit(0),
-  );
-}
-
-// A measurement driver: one real post, then the process ends the way `team send` does — by the
-// event loop draining, not by `process.exit`. A leaked request handle keeps it alive and the
-// deadline test fails.
-if (import.meta.main && process.argv.includes('--measure-exit')) {
-  const specPath = process.argv[process.argv.indexOf('--measure-exit') + 1] ?? '';
-  const spec = JSON.parse(readFileSync(specPath, 'utf8')) as Omit<SenderPostInput, 'now'>;
-  process.stdout.write('start\n');
-  void postArrivalWebhook({ ...spec, now: () => new Date() }).then(
-    () => {
-      process.exitCode = 0;
-    },
-    () => {
-      process.exitCode = 1;
-    },
-  );
+  void finishLateWorker().catch(() => {});
 }
 
 export type WebhookFactoryInput = {

@@ -47,6 +47,12 @@ let base = '';
 let root = '';
 let home = '';
 
+if (process.argv.includes('--measure-exit')) {
+  const specPath = process.argv[process.argv.indexOf('--measure-exit') + 1] ?? '';
+  const spec = JSON.parse(readFileSync(specPath, 'utf8')) as Omit<Parameters<typeof postArrivalWebhook>[0], 'now'>;
+  process.stdout.write('start\n');
+  void postArrivalWebhook({ ...spec, now: () => new Date() });
+} else {
 beforeEach(() => {
   base = realpathSync(mkdtempSync(join('/private/tmp', 'team-webhook-deadline-')));
   root = join(base, 'acme');
@@ -297,7 +303,7 @@ describe("the send's own post under the deadline", () => {
         project: 'beacon',
         body: messagePayload().body,
       }));
-      const entry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
+      const entry = fileURLToPath(import.meta.url);
       const sender = spawn(process.execPath, [entry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
       let mark = 0;
       sender.stdout?.setEncoding('utf8');
@@ -330,4 +336,46 @@ describe("the send's own post under the deadline", () => {
       server.stop(true);
     }
   }, 15_000);
+
+  test('a child whose stdin closes before the answer still settles and exits', async () => {
+    const dir = dropFolder();
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 300)),
+    });
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url)), '--finish-late'], {
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    const job = {
+      url: server.url.href,
+      headers: [] as [string, string][],
+      body: '{}',
+      capMs: 10_000,
+      dropDir: dir,
+      id: ID,
+      project: '',
+      root,
+      home,
+      session: 'beacon',
+      from: 'lead',
+      to: 'iris',
+      messageBody: 'hello',
+    };
+    child.stdin?.end(`${JSON.stringify(job)}\n`);
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const killer = setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve(null);
+      }, 3_000);
+      child.on('exit', (code) => {
+        clearTimeout(killer);
+        resolve(code);
+      });
+    });
+    server.stop(true);
+    expect(exitCode).toBe(0);
+    expect(existsSync(join(dir, `${ID}.posted`))).toBe(true);
+  }, 10_000);
 });
+}
