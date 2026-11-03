@@ -1129,6 +1129,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       refusal: 'only the owner abandons a team, from a terminal outside herdr',
       ...(sources.home !== undefined ? { home: sources.home } : {}),
       now: sources.now(),
+      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      admitsOperator: true,
     });
     if (lift === null || !lift.lifted) {
       refusals.push({

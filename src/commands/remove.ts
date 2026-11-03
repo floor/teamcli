@@ -436,6 +436,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       root,
       dir,
       now: sources.now(),
+      // Ruling D5: the placed operator may abandon, under the lead-gates policy.
+      admitsOperator: true,
     });
     if (!lift.lifted) {
       refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
