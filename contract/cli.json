@@ -4145,6 +4145,63 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "order",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team order [--dry-run] [--session <name>] [--file <path>]"
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "the `restart` row per out-of-order seat: reordering the sidebar closes and relaunches seats, one `restart` each"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--general",
           "repeatable": false,
           "takesValue": true

@@ -1979,6 +1979,34 @@ Usage:
 
 None.
 
+## `order`
+
+Hidden: no
+
+Usage:
+
+    team order [--dry-run] [--session <name>] [--file <path>]
+
+### Who may run it
+
+`owner-or-leads` — the `restart` row per out-of-order seat: reordering the sidebar closes and relaunches seats, one `restart` each
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `owner-seat`
 
 Hidden: no

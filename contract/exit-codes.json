@@ -3279,6 +3279,97 @@
     },
     {
       "code": 0,
+      "command": "order",
+      "id": "order.done",
+      "meaning": "the sidebar was brought to roster order (the moving seats were closed and re-created through team restart)",
+      "trigger": "team order"
+    },
+    {
+      "code": 0,
+      "command": "order",
+      "id": "order.dry-run",
+      "meaning": "the moving set was printed; nothing was closed",
+      "trigger": "team order --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "order",
+      "id": "order.match",
+      "meaning": "the sidebar already read in roster order; nothing was closed",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.busy",
+      "meaning": "a seat of the moving set is working or blocked at a prompt; nothing was closed",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.caller",
+      "meaning": "not the owner or `leads` for this team, or an owner-only flag from another caller",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.detached",
+      "meaning": "a run with no terminal",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.herdr",
+      "meaning": "the pane host did not answer",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.no-session",
+      "meaning": "the session is not running",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.self",
+      "meaning": "the run sits in a seat of the moving set, and closing it would end the pass",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.stopped",
+      "meaning": "a team restart inside the pass exited nonzero; the pass stopped there",
+      "trigger": "team order"
+    },
+    {
+      "code": 1,
+      "command": "order",
+      "id": "order.unordered",
+      "meaning": "after the pass the sidebar still does not read in roster order",
+      "trigger": "team order"
+    },
+    {
+      "code": 2,
+      "command": "order",
+      "id": "order.configuration",
+      "meaning": "the team file or its state record can't be read",
+      "trigger": "team order"
+    },
+    {
+      "code": 2,
+      "command": "order",
+      "id": "order.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team order"
+    },
+    {
+      "code": 0,
       "command": "owner-seat",
       "id": "owner-seat.done",
       "meaning": "the owner seat was read, set up, its security profile signed or proposed, or the owner page served",

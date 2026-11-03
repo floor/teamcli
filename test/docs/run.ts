@@ -38,6 +38,7 @@ import { runReply } from '../../src/commands/reply.ts';
 import { runResume } from '../../src/commands/resume.ts';
 import { runRemove } from '../../src/commands/remove.ts';
 import { runRename } from '../../src/commands/rename.ts';
+import { runOrder } from '../../src/commands/order.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -428,6 +429,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       });
     case 'restart':
       return runRestart(rest, io, world.restartSources());
+    case 'order':
+      return runOrder(rest, io, world.orderSources());
     case 'send': {
       // Every seat of the page's file is a live agent, so a native-CLI example resolves.
       // `reply="…"` on the fence is the fake seat's answer on the thread: with it, the wait
