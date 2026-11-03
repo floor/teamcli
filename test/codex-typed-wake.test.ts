@@ -297,7 +297,9 @@ describe('team send: the Codex typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed permission, not an empty idle prompt; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    // The typed wake failed and the walk ends on the drop leg, which wakes nothing: the ending is
+    // `queued, not woken`, the same word the history line carries, never `sent (unconfirmed)`.
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed permission, not an empty idle prompt; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -305,7 +307,7 @@ describe('team send: the Codex typed wake', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'native', outcome: 'queued, not woken', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         NATIVE_MISSED,
         'typed: the first read showed permission, not an empty idle prompt; nothing was typed',
