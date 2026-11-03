@@ -84,6 +84,7 @@ import { runReload, type ReloadSources } from '../src/commands/reload.ts';
 import { runReply } from '../src/commands/reply.ts';
 import { runResume } from '../src/commands/resume.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
+import { runOrder, type OrderSources } from '../src/commands/order.ts';
 import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
@@ -123,7 +124,7 @@ import { overridesPath } from '../src/profiles/overrides.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
-import { emptySession, updateState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import type { Profile } from '../src/profiles/profile.ts';
 import type { QuestionAnswerRecord } from '../src/profiles/question-answer.ts';
@@ -7023,6 +7024,174 @@ scene('batch.done', async (place) => {
   expect(approveOwnerAction(place.home, id, 'oui', store, new Date())).toMatchObject({ ok: true });
   return show(await batchRun(place, ['--approval', id], owner, store), 'revoked');
 });
+
+// `team order` — the sidebar read in roster order, the orchestrator first. The pane host and the
+// delegated restart stand in exactly as test/order.test.ts does: the fake restart moves a
+// workspace as a real relaunch does (close, create at the end, record the new pane and workspace
+// in the state), so the command's own divergence, ordering and verification run for real and each
+// row pins one outcome.
+const ORDER_TEAM = `format: 1
+project: acme
+coordinator: lead
+operator: ops
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: operator
+    name: ops
+    label: ops
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+const orderLead = { kind: 'seat', name: 'lead', pane: 'pane1', session: 'acme' } as const;
+
+/** The three seats placed as a real launch records them, in the session the run addresses. */
+function orderPlaced(place: Place): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    const record = (state.sessions.acme ??= emptySession());
+    record.seats.lead = { stage: 'ready', pane: 'pane1', workspace: 'w1' };
+    record.seats.ops = { stage: 'ready', pane: 'pane2', workspace: 'w2' };
+    record.seats.worker = { stage: 'ready', pane: 'pane3', workspace: 'w3' };
+  });
+}
+
+type OrderWorld = {
+  workspaces: string[];
+  working?: string[];
+  fail?: Set<string>;
+  move?: boolean;
+  next?: number;
+};
+
+/** Idle agents at the panes their workspaces imply, the named seats working. */
+function orderAgents(world: OrderWorld): HerdrAgent[] {
+  return (['lead', 'ops', 'worker'] as const).map((name, index) => ({
+    name,
+    agent: 'claude-code',
+    pane: `pane${String(index + 1)}`,
+    workspace: `w${String(index + 1)}`,
+    status: world.working?.includes(name) ? 'working' : 'idle',
+    cwd: '/tmp',
+  }));
+}
+
+function orderSources(place: Place, world: OrderWorld): OrderSources {
+  const held = { workspaces: world.workspaces, next: world.next ?? 4 };
+  return {
+    home: place.home,
+    now: () => NOW,
+    sessionState: () => 'running',
+    workspaces: () => held.workspaces.map((id) => ({ id })),
+    agents: () => orderAgents(world),
+    state: (dir) => readState(dir),
+    restart: async (argv, io) => {
+      const name = argv[0] ?? '';
+      if (world.fail?.has(name)) return 1;
+      if (world.move === false) return 0;
+      const seated = readState(join(place.root, '.agents')).sessions.acme?.seats[name];
+      const oldWorkspace = seated?.workspace;
+      const created = `w${String(held.next)}`;
+      if (oldWorkspace !== undefined) held.workspaces = held.workspaces.filter((id) => id !== oldWorkspace);
+      held.workspaces.push(created);
+      const pane = `pane${String(held.next)}`;
+      updateState(join(place.root, '.agents'), (current) => {
+        const record = (current.sessions.acme ??= emptySession());
+        record.seats[name] = { ...(record.seats[name] ?? { stage: 'ready' }), stage: 'ready', pane, workspace: created };
+      });
+      held.next += 1;
+      io.stdout(`team restart: restarted ${name}; pane -> ${pane}\n`);
+      return 0;
+    },
+  };
+}
+
+async function ordered(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  world: OrderWorld = { workspaces: ['w1', 'w3', 'w2'] },
+  over: Partial<OrderSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const code = await runOrder(argv, io, { ...orderSources(place, world), ...over });
+  return { code, out: io.out, err: io.err };
+}
+
+scene('order.usage', async (place) => show(await ordered(place, ['nonsense']), 'unexpected "nonsense"'));
+scene('order.configuration', async (place) => show(await ordered(place, ['--file', 'missing.yaml']), 'no team file'));
+scene('order.detached', async (place) => show(await ordered(place, [], detachedCaller), LEADS));
+scene('order.caller', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], other), 'orders the sidebar');
+});
+scene('order.herdr', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, undefined, { sessionState: () => null }), 'the pane host does not answer');
+});
+scene('order.no-session', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, undefined, { sessionState: () => 'absent' }), 'is not running');
+});
+scene('order.self', async (place) => {
+  // The lead sits in the moving set from the first divergence, so closing it would end the pass.
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], orderLead, { workspaces: ['w2', 'w1', 'w3'] }), 'would end the pass');
+});
+scene('order.busy', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, { workspaces: ['w1', 'w3', 'w2'], working: ['worker'] }), 'is working');
+});
+scene('order.stopped', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, { workspaces: ['w1', 'w3', 'w2'], fail: new Set(['ops', 'worker']) }), 'exited 1');
+});
+scene('order.unordered', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, { workspaces: ['w1', 'w3', 'w2'], move: false }), 'does not read in roster order after the pass');
+});
+scene('order.dry-run', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, ['--dry-run']), 'nothing was closed');
+});
+scene('order.match', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, [], owner, { workspaces: ['w1', 'w2', 'w3'] }), 'already reads in roster order');
+});
+scene('order.done', async (place) => {
+  write(place, ORDER_TEAM);
+  orderPlaced(place);
+  return show(await ordered(place, []), 'sidebar: lead, ops, worker');
+});
+
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
 scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));
