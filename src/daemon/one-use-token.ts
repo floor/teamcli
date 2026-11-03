@@ -10,27 +10,38 @@
 // them. A sweep looks only at regular files directly inside the folder: a link is never followed.
 import { lstatSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { claimedTokenPath, INHERIT_KINDS, INHERIT_NONCE_PATTERN } from './paths.ts';
 
-/** Whether a pid names a process this machine still has. A process this uid cannot signal still
- *  exists, so anything but "no such process" counts as alive. */
-export function pidAlive(pid: number): boolean {
+/** The signal a liveness probe asks with: 0 asks whether the pid exists and sends nothing. */
+export type KillProbe = (pid: number, signal: number) => unknown;
+
+/** Whether a pid names a process this machine still has. The default `kill` is this module's
+ *  one real probe: signal 0 reaches the kernel and carries nothing. A process this uid cannot
+ *  signal still exists, so anything but "no such process" counts as alive. */
+export function pidAlive(pid: number, kill: KillProbe = process.kill): boolean {
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
-/** The claimed copy's name: the source token path plus `.claim.<pid>`. */
-const CLAIMED_NAME = /\.claim\.(\d+)$/;
+/** What a sweep asks about a claimed pid; a writer's default is `pidAlive`. */
+export type LivenessProbe = (pid: number) => boolean;
+
+/** The claimed copy's name: exactly the token spelling a writer produces, plus `.claim.<pid>`.
+ *  Built from the same parts as the path builders, so the sweep and the writers cannot drift. */
+const CLAIMED_NAME = new RegExp(
+  `^(?:${INHERIT_KINDS.join('|')})\\.inherit\\.${INHERIT_NONCE_PATTERN}\\.json\\.claim\\.([1-9][0-9]*)$`,
+);
 
 /**
  * Removes the claimed copies under `dir` whose process is gone. Only regular files directly in
  * `dir` are candidates: a link is never followed, an entry whose pid is still alive stays, and
  * nothing outside `dir` is touched. Never throws.
  */
-export function sweepSpentClaims(dir: string, isAlive: (pid: number) => boolean = pidAlive): void {
+export function sweepSpentClaims(dir: string, isAlive: LivenessProbe): void {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -41,8 +52,9 @@ export function sweepSpentClaims(dir: string, isAlive: (pid: number) => boolean 
   for (const name of names) {
     const match = CLAIMED_NAME.exec(name);
     if (match === null) continue;
+    // The pattern already rejects a zero or signed pid; only the safe-integer bound is left.
     const pid = Number(match[1]);
-    if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+    if (!Number.isSafeInteger(pid)) continue;
     if (isAlive(pid)) continue;
     // A name read from the folder cannot carry a separator; refuse one anyway rather than build
     // a path out of the folder.
@@ -65,9 +77,13 @@ export type OneUseClaim =
   | { kind: 'ok'; text: string }
   | { kind: 'refused'; why: string };
 
+/** Since a writer sweeps before it writes, its liveness answer is injectable: the spawners use
+ *  the real probe, and a scene that plants a claimed copy answers through a fake. */
+export type WriteTokenOptions = { isAlive?: LivenessProbe };
+
 /** Claims the token at `path` and returns its text, or refuses. Never throws. */
 export function claimOneUseToken(path: string): OneUseClaim {
-  const claimed = `${path}.claim.${process.pid}`;
+  const claimed = claimedTokenPath(path, process.pid);
   try {
     renameSync(path, claimed);
   } catch {

@@ -2,8 +2,10 @@
 // rename, so of two children started with one nonce exactly one passes and the other refuses.
 // The restore child's own scenes live beside its spawner; these pin the chores child (which
 // serves until its input ends, so "ran" is a live child that answers `ready` and exits 0 when
-// its input ends) and the claim helper itself. The last scene is the other side of the same
-// rule: a machine folder this uid cannot claim in starts nothing.
+// its input ends) and the claim helper itself. The last scenes cover the sweep that removes the
+// claimed copies a process left when it died between the claim and the unlink. No scene asks the
+// machine whether a pid exists: every scene that plants a claimed copy injects its own answer,
+// and `pidAlive` is exercised only with an injected `kill`.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -11,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
-import { claimOneUseToken, pidAlive } from '../src/daemon/one-use-token.ts';
+import { claimOneUseToken, pidAlive, type KillProbe, type LivenessProbe } from '../src/daemon/one-use-token.ts';
 import { readChoresInherit, writeChoresInherit } from '../src/daemon/chores/token.ts';
 import { acceptRestoreDoor, restoreDoorText, restoreRequestProblem, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import type { ChoresChildConfig } from '../src/daemon/chores/protocol.ts';
@@ -23,6 +25,14 @@ const ENTRY = fileURLToPath(new URL('../src/daemon/chores/entry.ts', import.meta
 
 const bases: string[] = [];
 const live: ChildProcess[] = [];
+
+/** A liveness answer from the scene: only the pids named are alive. */
+function aliveOnly(...pids: number[]): LivenessProbe {
+  return (pid) => pids.includes(pid);
+}
+
+/** A liveness answer from the scene: every pid is gone. */
+const noneAlive: LivenessProbe = () => false;
 
 function scratch(): { base: string; root: string; home: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-one-use-token-')));
@@ -103,7 +113,7 @@ describe('one nonce starts one child', () => {
   test('two children started with one token at once: exactly one serves', async () => {
     const { root, home } = scratch();
     for (let round = 0; round < 4; round += 1) {
-      const nonce = writeChoresInherit(configOf(home, root));
+      const nonce = writeChoresInherit(configOf(home, root), { isAlive: noneAlive });
       const first = startChild(home, nonce, root);
       const second = startChild(home, nonce, root);
       // The claim is the file system's rename, which admits one mover, so one child refuses
@@ -130,7 +140,7 @@ describe('one nonce starts one child', () => {
 
   test('a machine folder this child cannot claim in refuses the token', () => {
     const { root, home } = scratch();
-    const nonce = writeChoresInherit(configOf(home, root));
+    const nonce = writeChoresInherit(configOf(home, root), { isAlive: noneAlive });
     const dir = machineConfigDir(home);
     // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
     // is not. The child must refuse rather than serve.
@@ -323,23 +333,16 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
 });
 
 describe('the claimed copies a process left when it died between claim and unlink', () => {
-  /** A pid the machine no longer has: a child started and waited for leaves one behind. */
-  function deadPid(): number {
-    const left = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
-    expect(left.pid).toBeDefined();
-    const pid = left.pid as number;
-    expect(pidAlive(pid)).toBe(false);
-    return pid;
-  }
+  const DEAD = 900_001;
+  const LIVE = 900_002;
 
-  test('a token write removes them and leaves live, malformed, linked and neighbouring files alone', () => {
+  test("a token write removes a dead pid's claimed copy and leaves every other shape alone", () => {
     const { base, root, home } = scratch();
     const dir = machineConfigDir(home);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const dead = deadPid();
-    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${dead}`);
+    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${DEAD}`);
     writeFileSync(stale, '{"stale":true}\n');
-    const live = join(dir, `restore.inherit.${'b'.repeat(32)}.json.claim.${process.pid}`);
+    const live = join(dir, `restore.inherit.${'b'.repeat(32)}.json.claim.${LIVE}`);
     writeFileSync(live, '{"live":true}\n');
     const notAPid = join(dir, `restore.inherit.${'c'.repeat(32)}.json.claim.not-a-pid`);
     writeFileSync(notAPid, 'x\n');
@@ -347,12 +350,15 @@ describe('the claimed copies a process left when it died between claim and unlin
     writeFileSync(unrelated, '{}\n');
     const target = join(base, 'outside-target.txt');
     writeFileSync(target, 'target\n');
-    const link = join(dir, `restore.inherit.${'d'.repeat(32)}.json.claim.${dead}`);
+    const link = join(dir, `restore.inherit.${'d'.repeat(32)}.json.claim.${DEAD}`);
     symlinkSync(target, link);
-    const neighbour = join(home, `restore.inherit.${'e'.repeat(32)}.json.claim.${dead}`);
+    const neighbour = join(home, `restore.inherit.${'e'.repeat(32)}.json.claim.${DEAD}`);
     writeFileSync(neighbour, 'neighbour\n');
+    // A folder carrying the exact claimed spelling: only a regular file is a claim.
+    const folder = join(dir, `restore.inherit.${'9'.repeat(32)}.json.claim.${DEAD}`);
+    mkdirSync(folder);
 
-    writeRestoreDoor({ version: 1, home, root });
+    writeRestoreDoor({ version: 1, home, root }, { isAlive: aliveOnly(LIVE) });
 
     // The dead process's claimed copy is the only thing the write removed.
     expect(existsSync(stale)).toBe(false);
@@ -363,17 +369,94 @@ describe('the claimed copies a process left when it died between claim and unlin
     expect(existsSync(target)).toBe(true);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(existsSync(neighbour)).toBe(true);
+    expect(lstatSync(folder).isDirectory()).toBe(true);
     // The write's own token is there.
     expect(readdirSync(dir).some((name) => /^restore\.inherit\.[0-9a-f]{32}\.json$/.test(name))).toBe(true);
+  });
+
+  /** Plants one file under the machine folder and sweeps with every pid dead: the file stays
+   *  unless its whole name is the spelling a claim produces. */
+  function sweepOne(name: string): boolean {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, name);
+    writeFileSync(path, 'x\n');
+    writeRestoreInherit({ version: 1, home, root }, { isAlive: noneAlive });
+    return existsSync(path);
+  }
+
+  test('a file ending in a dead claim but headed by another name stays', () => {
+    expect(sweepOne('foo.claim.99999')).toBe(true);
+  });
+
+  test('a file whose whole name is a claim tail stays', () => {
+    expect(sweepOne('.claim.123')).toBe(true);
+  });
+
+  test('a claimed name whose pid has a leading zero stays: no claim writes that spelling', () => {
+    expect(sweepOne(`restore.inherit.${'f'.repeat(32)}.json.claim.0900001`)).toBe(true);
+  });
+
+  test('a pid the machine refuses to signal is alive: its claimed copy stays', () => {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const protectedPid = 900_003;
+    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${protectedPid}`);
+    writeFileSync(stale, '{}\n');
+    const asked: Array<[number, number]> = [];
+    const kill: KillProbe = (pid, signal) => {
+      asked.push([pid, signal]);
+      // The process exists; this uid is simply not allowed to signal it.
+      throw Object.assign(new Error('not permitted'), { code: 'EPERM' });
+    };
+    writeRestoreInherit({ version: 1, home, root }, { isAlive: (pid) => pidAlive(pid, kill) });
+    expect(existsSync(stale)).toBe(true);
+    expect(asked).toEqual([[protectedPid, 0]]);
   });
 
   test('the chores token write sweeps the same way', () => {
     const { root, home } = scratch();
     const dir = machineConfigDir(home);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const stale = join(dir, `chores.inherit.${'a'.repeat(32)}.json.claim.${deadPid()}`);
+    const stale = join(dir, `chores.inherit.${'a'.repeat(32)}.json.claim.${DEAD}`);
     writeFileSync(stale, '{}\n');
-    writeChoresInherit(configOf(home, root));
+    const live = join(dir, `chores.inherit.${'b'.repeat(32)}.json.claim.${LIVE}`);
+    writeFileSync(live, '{}\n');
+    writeChoresInherit(configOf(home, root), { isAlive: aliveOnly(LIVE) });
     expect(existsSync(stale)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  });
+});
+
+describe('pidAlive asks with signal 0 and only "no such process" means gone', () => {
+  test('a pid that answers the probe is alive, and the probe asked with signal 0', () => {
+    const asked: Array<[number, number]> = [];
+    const kill: KillProbe = (pid, signal) => {
+      asked.push([pid, signal]);
+    };
+    expect(pidAlive(4242, kill)).toBe(true);
+    expect(asked).toEqual([[4242, 0]]);
+  });
+
+  test('ESRCH is the one dead answer', () => {
+    const kill: KillProbe = () => {
+      throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    };
+    expect(pidAlive(4242, kill)).toBe(false);
+  });
+
+  test('every other error counts as alive: this uid cannot signal a process it has', () => {
+    for (const code of ['EPERM', 'EINVAL', 'EACCES']) {
+      const kill: KillProbe = () => {
+        throw Object.assign(new Error(code), { code });
+      };
+      expect(pidAlive(4242, kill)).toBe(true);
+    }
+    const codeless: KillProbe = () => {
+      throw new Error('no code');
+    };
+    expect(pidAlive(4242, codeless)).toBe(true);
   });
 });

@@ -47,6 +47,10 @@ const ENTRY = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.met
 const bases: string[] = [];
 const ORIGINAL_PATH = process.env.PATH;
 
+/** Liveness answers come from the scene, never the machine: these scenes plant no claimed copy,
+ *  so the sweep has nothing to ask about. */
+const noneAlive = (): boolean => false;
+
 function scratch(): { base: string; root: string; home: string; bin: string } {
   const base = realpathSync(mkdtempSync(join(BASE, 'team-restore-child-')));
   bases.push(base);
@@ -180,7 +184,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test('the daemon writes it 0600 and reading it consumes it', () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     const path = restoreInheritPath(home, nonce);
     expect(existsSync(path)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -246,7 +250,7 @@ describe("the restore child's authority is the one-use token", () => {
       why: 'no one-use token names this child',
     });
     // Nothing was consumed by the refusals: a real token still reads.
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     expect(
       acceptRestoreDoor({
         home,
@@ -302,7 +306,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test.skipIf(offDarwin)('a replayed token starts no second pass', async () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     const first = await runEntryInBackground(home, ['--inherited', nonce], root, restoreDoorText(nonce, secret));
     expect(first.status).toBe(0);
     expect(JSON.parse(first.stdout.trim())).toEqual({ ok: true, result: { kind: 'no-recorded-session' } });
@@ -317,7 +321,7 @@ describe("the restore child's authority is the one-use token", () => {
   test.skipIf(offDarwin)('two children started with one token at once: exactly one runs the pass', async () => {
     const { root, home } = scratch();
     for (let round = 0; round < 4; round += 1) {
-      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+      const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
       const doorText = restoreDoorText(nonce, secret);
       // Both start before either can finish: the claim is the file system's rename, which admits
       // one mover, so the race cannot hand the same token to both.
@@ -338,7 +342,7 @@ describe("the restore child's authority is the one-use token", () => {
 
   test.skipIf(offDarwin)('a machine folder this child cannot claim in refuses the token', async () => {
     const { root, home } = scratch();
-    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid });
+    const { nonce, secret } = writeRestoreDoor({ version: 1, home, root, daemonPid }, { isAlive: noneAlive });
     const dir = machineConfigDir(home);
     // Traversal and reading stay possible for this uid; only the claim (a rename in the folder)
     // is not. The token starts nothing.
