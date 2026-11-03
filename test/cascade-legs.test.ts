@@ -14,13 +14,14 @@
 // Fixtures only: the team is a synthetic world under a temp folder, the pane is a script of the
 // captured Cursor 2026.10.22 frames, and the one webhook receiver is a loopback listener.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deliverWebhook } from '../src/bus/webhook.ts';
 import { runSend } from '../src/commands/send.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
 import { readHistory } from '../src/send/history.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
+import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf } from '../src/send/walk-cascade.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { fake, filed, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
@@ -290,5 +291,188 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     const records = recordsIn(dir);
     expect(records).toHaveLength(1);
     expect(recordBody(join(dir, records[0] as string))).toBe(filed('hello'));
+  });
+
+  test('cascadeWalk orders channel classes, then webhook, then typed, then drop, and omits mcp-inbox', () => {
+    expect(legClassOf('socket')).toBe('channel');
+    expect(legClassOf('native')).toBe('channel');
+    expect(legClassOf('headless-resume')).toBe('channel');
+    expect(legClassOf('channel')).toBe('channel');
+    expect(legClassOf('session')).toBe('channel');
+    expect(legClassOf('webhook')).toBe('webhook');
+    expect(legClassOf('typed')).toBe('typed');
+    expect(legClassOf('drop')).toBe('mailbox');
+    expect(legClassOf('mcp-inbox')).toBe('unavailable');
+
+    const scrambled = ['drop', 'mcp-inbox', 'typed', 'native', 'socket', 'channel', 'headless-resume', 'session'] as const;
+    expect(unavailableLegsOf(scrambled)).toEqual(['mcp-inbox']);
+    expect(cascadeOrder(scrambled)).toEqual(['native', 'socket', 'channel', 'headless-resume', 'session', 'typed', 'drop']);
+    expect(cascadeWalk(scrambled, true)).toEqual([
+      'native',
+      'socket',
+      'channel',
+      'headless-resume',
+      'session',
+      'webhook',
+      'typed',
+      'drop',
+    ]);
+    expect(cascadeWalk(['drop', 'typed'], true)).toEqual(['webhook', 'typed', 'drop']);
+    expect(cascadeWalk(['socket', 'native'], true)).toEqual(['socket', 'native', 'webhook']);
+  });
+
+  test('a definite webhook failure after a channel leg releases the claim and walks typed then drop', async () => {
+    let status = 503;
+    let hits = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => {
+        hits += 1;
+        return new Response('unavailable', { status });
+      },
+    });
+    stops.push(() => server.stop(true));
+    const url = `http://127.0.0.1:${String(server.port)}/routine`;
+
+    // Declared order scrambles drop, mcp-inbox, typed, socket; cascade walks socket -> webhook -> typed -> drop.
+    const one = world(['drop', 'mcp-inbox', 'typed', 'socket'], [{ ...CURSOR, webhook: hookFiles(url) }]);
+    made.push(one);
+    liveInbox(one);
+
+    // 1. Idle pane: socket skipped -> webhook HTTP 503 (claim released) -> typed delivers.
+    const idlePane = wakeFake(wakeScript());
+    const io1 = owner(one.root);
+    const host1 = fake(one, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => idlePane.host,
+      inboxGraceMs: 0,
+    });
+    expect(await runSend(['cursor', 'first', '--json'], io1, host1)).toBe(0);
+    const doc1 = JSON.parse(io1.out) as {
+      status: string;
+      channel: string;
+      delivery: { leg: string; state: string; reason?: string }[];
+    };
+    expect(doc1.status).toBe('delivered');
+    expect(doc1.channel).toBe('typed');
+    expect(hits).toBe(1);
+    expect(idlePane.typed).toHaveLength(1);
+    expect(idlePane.enters).toBe(1);
+    expect(doc1.delivery.map((entry) => [entry.leg, entry.state])).toEqual([
+      ['mcp-inbox', 'skipped'],
+      ['socket', 'skipped'],
+      ['webhook', 'attempted'],
+      ['typed', 'attempted'],
+      ['drop', 'not-reached'],
+    ]);
+    const dir = inboxOf(one);
+    const firstId = recordsIn(dir)[0]!;
+    expect(existsSync(join(dir, `${firstId}.posting`))).toBe(false);
+    expect(existsSync(join(dir, `${firstId}.posted`))).toBe(false);
+
+    // 2. Working pane: socket skipped -> webhook HTTP 503 -> typed fails -> mailbox (drop) under all.
+    status = 502;
+    const workingPane = wakeFake(() => WORKING);
+    const io2 = owner(one.root);
+    const host2 = fake(one, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => workingPane.host,
+      inboxGraceMs: 0,
+    });
+    expect(await runSend(['cursor', 'second'], io2, host2)).toBe(0);
+    expect(hits).toBe(2);
+    expect(workingPane.typed).toEqual([]);
+    expect(io2.out).toContain('cursor: sent (unconfirmed) (drop, ');
+    expect(io2.out).toContain('webhook not delivered: HTTP 502');
+    const history = readHistory('acme', one.root, host2.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(2);
+      expect(history.entries[0]).toMatchObject({
+        to: 'cursor',
+        via: 'typed',
+        outcome: 'delivered (typed wake)',
+        failed: ['socket: cursor sessions have no cross-session socket', 'webhook: HTTP 503'],
+      });
+      expect(history.entries[1]?.via).toBe('drop');
+      expect(history.entries[1]?.outcome).toBe('sent (unconfirmed)');
+      expect(history.entries[1]?.failed?.[0]).toBe('socket: cursor sessions have no cross-session socket');
+      expect(history.entries[1]?.failed?.[1]).toBe('webhook: HTTP 502');
+      expect(history.entries[1]?.failed?.[2]).toMatch(/^typed: /);
+    }
+  });
+
+  test('a webhook post whose fate is unknown (sent-unknown) stops the cascade before typed and is never repeated', async () => {
+    let hits = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async () => {
+        hits += 1;
+        await Bun.sleep(250);
+        return new Response('late', { status: 200 });
+      },
+    });
+    stops.push(() => server.stop(true));
+    const url = `http://127.0.0.1:${String(server.port)}/routine`;
+    const files = hookFiles(url);
+    const one = world(['socket', 'typed', 'drop'], [{ ...CURSOR, webhook: files }]);
+    made.push(one);
+    // Set `timeout_ms: 40` on the seat's webhook row so the sender's POST times out into `sent-unknown`.
+    const teamYamlPath = join(one.dir, 'team.yaml');
+    writeFileSync(
+      teamYamlPath,
+      readFileSync(teamYamlPath, 'utf8').replace(
+        `      secret_file: ${JSON.stringify(files.secretFile)}\n`,
+        `      secret_file: ${JSON.stringify(files.secretFile)}\n      timeout_ms: 40\n`,
+      ),
+    );
+    const pane = wakeFake(wakeScript());
+    const host = fake(one, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+      inboxGraceMs: 0,
+    });
+    const io = owner(one.root);
+    expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
+    // The walk stops at webhook: it never types into the idle pane, and reports the unknown fate.
+    expect(hits).toBe(1);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    expect(io.out).toContain('cursor: sent (unconfirmed) (webhook, ');
+    expect(io.out).toContain('webhook delivery unknown: no answer within 40 ms');
+
+    const dir = inboxOf(one);
+    const records = recordsIn(dir);
+    expect(records).toHaveLength(1);
+    const id = records[0]!;
+    // The claim beside the record stays in `sent` so no later pass repeats the POST.
+    const claim = JSON.parse(readFileSync(join(dir, `${id}.posting`), 'utf8')) as { state: string };
+    expect(claim.state).toBe('sent');
+    expect(existsSync(join(dir, `${id}.posted`))).toBe(false);
+
+    // Even when the bus adapter encounters the same record (including after the stale age), it skips without posting.
+    const busOutcome = await deliverWebhook({
+      seat: 'cursor',
+      webhook: files,
+      record: {
+        signature: 'synthetic',
+        payload: {
+          v: 1,
+          seq: 1,
+          ts: '2026-11-03T00:00:00.000Z',
+          kind: 'message.arrived',
+          session: 'acme',
+          record_id: id,
+          from: 'owner',
+          to: 'cursor',
+        },
+      },
+      root: one.root,
+      policy: { claimStaleMs: 0 },
+    });
+    expect(busOutcome).toBe('skipped');
+    expect(hits).toBe(1);
   });
 });

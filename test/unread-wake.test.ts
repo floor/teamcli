@@ -1995,6 +1995,146 @@ describe('the cascade re-wake below a channel leg', () => {
     expect(existsSync(reportedPath(helperDir, UNREAD_B))).toBe(true);
     expect(existsSync(reportedPath(leadDir, UNREAD_A))).toBe(false);
   });
+
+  test('every declared channel-class leg walks the webhook at N, while webhook, typed, drop, and mcp-inbox skip straight to typed', async () => {
+    for (const via of ['socket', 'native', 'headless-resume', 'session'] as const) {
+      const seen = hookReceiver();
+      const { made, team } = hookWorld(seen.url);
+      seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+      seedSendLine(made, 'helper', UNREAD_A, { via });
+      const one = pane(MUSE_IDLE);
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+      const live = liveWith('helper', 'helper-pane');
+
+      await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+      expect({ via, hits: seen.hits.length, typed: calls.length }).toEqual({ via, hits: 1, typed: 0 });
+      expect(linesFor(made, UNREAD_A)[1]).toMatchObject({ via: 'webhook', outcome: 'delivered' });
+      made.cleanup();
+      base = '';
+    }
+
+    for (const via of ['webhook', 'typed', 'drop', 'mcp-inbox'] as const) {
+      const seen = hookReceiver();
+      const { made, team } = hookWorld(seen.url);
+      seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+      seedSendLine(made, 'helper', UNREAD_A, { via });
+      const one = pane(MUSE_IDLE);
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+      const live = liveWith('helper', 'helper-pane');
+
+      await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+      expect({ via, hits: seen.hits.length, typed: calls.length }).toEqual({ via, hits: 0, typed: 1 });
+      expect(linesFor(made, UNREAD_A)[1]).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
+      made.cleanup();
+      base = '';
+    }
+  });
+
+  test('a webhook re-wake whose answer was not read keeps its reservation, is never repeated, and reports queued, not woken at 2N', async () => {
+    let hits = 0;
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: async () => {
+        hits += 1;
+        await Bun.sleep(250);
+        return new Response('late', { status: 200 });
+      },
+    });
+    hookStops.push(() => server.stop(true));
+    const url = `http://127.0.0.1:${String(server.port)}/routine`;
+    const { made } = hookWorld(url);
+    const yamlPath = join(made.dir, 'team.yaml');
+    writeFileSync(
+      yamlPath,
+      readFileSync(yamlPath, 'utf8').replace('      body: inbox\n', '      body: inbox\n      timeout_ms: 40\n'),
+    );
+    const team = teamOf(readFileSync(yamlPath, 'utf8'));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 25 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const wakeSaid: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, team, one, wakeSaid, { sources, live }), { unreadAfter: N });
+
+    expect(hits).toBe(1);
+    expect(calls).toEqual([]);
+    expect(wakeSaid).toEqual([
+      'helper: a message from owner was unread and its webhook post\'s answer was not read (no answer within 40 ms); it is not posted again',
+    ]);
+    expect(wakeMark(made, 'helper', UNREAD_A)).toEqual({
+      id: UNREAD_A,
+      at: NOW.toISOString(),
+      state: 'reserved',
+      evidence: 'webhook',
+    });
+    const claim = JSON.parse(readFileSync(join(dropDir, `${UNREAD_A}.posting`), 'utf8')) as { state: string };
+    expect(claim.state).toBe('sent');
+
+    // A second wake pass neither posts again nor falls through to typed.
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(hits).toBe(1);
+    expect(calls).toEqual([]);
+
+    // At 2N, the report names `queued, not woken` and the unanswered webhook wake in both the sender mailbox and lead drop.
+    const reportSaid: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, reportSaid, { sources, live }), { unreadAfter: N });
+    const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(owner.body).toContain(`helper: a message from owner is queued, not woken - unread for 25 min (id ${UNREAD_A})`);
+    expect(owner.body).toContain(`a webhook wake was posted at ${NOW.toISOString()} and its answer was not read`);
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(owner.body);
+  });
+
+  test('progression from <N to N to 2N: silent before N, cascade re-wake at N, and queued, not woken report at 2N', async () => {
+    const seen = hookReceiver(() => new Response('down', { status: 502 }));
+    const { made, team } = hookWorld(seen.url);
+    const windowS = UNREAD_AFTER_WAKEABLE_SECONDS; // 30s
+    const sentAt = new Date(NOW.getTime() - 20_000);
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nprogression', sentAt);
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'native' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    // 1. At 20s (< N = 30s): neither woken nor reported.
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: NOW }), { unreadAfter: windowS });
+    reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: NOW }), { unreadAfter: windowS });
+    expect(seen.hits).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
+
+    // 2. At 35s (>= N = 30s, < 2N = 60s): re-wakes down the cascade (webhook 502 -> typed wake), still not reported.
+    const atN = new Date(sentAt.getTime() + 35_000);
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: atN }), { unreadAfter: windowS });
+    reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: atN }), { unreadAfter: windowS });
+    expect(seen.hits).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
+    expect(linesFor(made, UNREAD_A)[1]).toMatchObject({
+      via: 'typed',
+      outcome: 'delivered (typed wake)',
+      failed: ['webhook: HTTP 502'],
+    });
+
+    // 3. At 65s (>= 2N = 60s): reported once as `queued, not woken` to sender and lead.
+    const at2N = new Date(sentAt.getTime() + 65_000);
+    const said: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: at2N }), { unreadAfter: windowS });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(owner.body).toContain(`helper: a message from owner is queued, not woken - unread for 1 min (id ${UNREAD_A}); its wake line was sent at ${atN.toISOString()}`);
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(owner.body);
+  });
 });
 
 describe('the unread window a seat earns', () => {
