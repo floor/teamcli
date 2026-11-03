@@ -19,10 +19,12 @@ takes the client form whether it is bare or named with `--client`.
 
 ## Who may run it
 
-Only the owner, from a terminal outside herdr, in every form. An agent, seat, delegate or caller
-without a terminal is refused before the team file is read. Existing grant or delegate authority
-cannot authorize this command, and no mode waives the gate; `--dry-run` has the same owner
-requirement.
+Only the owner, from a terminal outside the terminal host, in every form — or, with dev mode on,
+the team's placed orchestrator standing on the pane its state records, under the same admission
+every named owner-only gate uses ([development mode](development-mode.md)). The owner's own path
+is untouched and no other seat is admitted. An agent, seat, delegate or caller without a terminal
+is refused before the team file is read. Existing grant or delegate authority cannot authorize
+this command, and `--dry-run` has the same requirement as a write.
 
 ## What it changes
 
