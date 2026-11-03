@@ -28,13 +28,14 @@ Run the command from the tree with `bun src/cli.ts <command>`. Bun builds and te
 
 ## Making a change
 
-Work on a branch. `main` is the trunk, and every change is a pull request into it.
+Work on a branch. `main` is the trunk. A pull request into it is the external and release path.
 Write the tests with the code, not after it. Commit in conventional commits, one idea per
 commit. Update the docs with the behaviour: a changed flag, refusal or output reaches its page in
 `docs/commands/` too.
 
-Before a push, run `bun run typecheck`, `bun test` and `bun run ci` — typecheck, tests, build, the
-built command, conformance, and the schema, contract, coverage, exit-code and readme checks.
+Before a push on the external and release path, run `bun run typecheck`, `bun test` and `bun run ci`
+— typecheck, tests, build, the built command, conformance, and the schema, contract, coverage,
+exit-code and readme checks. The internal cycle is typecheck plus the touched tests per merge.
 `bun run e2e` drives the real commands against fake seats in a herdr session of its own; it needs
 herdr, and CI does not run it.
 
@@ -58,11 +59,12 @@ carries its units' measured times as `##[unit]<unit> <ms>` lines, printed from t
 report; until a unit has a recorded time the assignment weighs it at the measured average of the
 units that had none when the suite was measured, not at its size alone.
 
-Before a merge, the author quotes their own full `bun run ci` on the exact head in the pull
-request. At least one reviewer who is not the author runs `bun run ci` on macOS on the exact
-head and quotes its exit status and final line in their review. A review without that quote is
-not an approval. A reviewer in a sandbox quotes what failed there and why; the unsandboxed run
-carries the evidence.
+On the external and release path, before a merge, the author quotes their own full `bun run ci` on
+the exact head in the pull request. At least one reviewer who is not the author runs `bun run ci`
+on macOS on the exact head and quotes its exit status and final line in their review. A review
+without that quote is not an approval on that path. A reviewer in a sandbox quotes what failed
+there and why; the unsandboxed run carries the evidence. A pull request, hosted CI and a review
+come before a public release.
 
 ## Releasing (maintainers)
 
