@@ -46,12 +46,14 @@ code's words.
 
 ### 3.1 The rules text
 
-The rules are one text, built in a fixed order. The first four are the tool's own, in these words:
+The rules are one text, built in a fixed order. The tool's own come first, in this order:
 
 1. `End every commit message and every pull request body with your signature, given below.`
 2. `Never stop at a question: tell the orchestrator (<name>) in one line and keep working.`
-3. ``Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.``
-4. `In a protected checkout, never switch the branch, reset or commit.`
+3. Only for a seat whose profile registers the team's MCP inbox: ``If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.``
+4. Only for every other seat — a turn can outlive the wake that started it, and a seat without the inbox tools sees what arrived during it only by reading again: ``At the end of every turn, run `team drops --read --seat <seat>` and act on what it prints.`` `<seat>` is the seat's own name, written in because the command needs it and nothing else in the rules tells the seat its name.
+5. ``Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.``
+6. `In a protected checkout, never switch the branch, reset or commit.`
 
 Then, in this order:
 
