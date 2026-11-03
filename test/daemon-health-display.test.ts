@@ -250,6 +250,42 @@ test('a running daemon says what it hosted, and a failed endpoint is never full 
   expect(daemonReading(failed).roots).toHaveLength(2);
 });
 
+test('a bus serving while its first pass runs says how far the scan got, then when it finished', () => {
+  // A daemon-hosted bus is serving once its listener is bound, while the first pass still scans:
+  // the row carries the pass's progress so "serving" is never read as caught up.
+  const running = health({
+    roots: [root({ firstPass: { running: true, scanned: 12_345, doneAt: null } })],
+  });
+  expect(daemonNotes(running)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass running for /work/acme (12,345 files scanned)`,
+  ]);
+  expect(daemonHealthy(running)).toBe(true);
+  const done = health({
+    roots: [root({ firstPass: { running: false, scanned: 45_871, doneAt: '2026-11-03T19:14:37.449Z' } })],
+  });
+  expect(daemonNotes(done)).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 1); first pass done at 2026-11-03T19:14:37.449Z for /work/acme`,
+  ]);
+  // Every checkout's pass is named by its own root, so a multi-root record is not ambiguous.
+  const both = health({
+    roots: [
+      root({ firstPass: { running: true, scanned: 3, doneAt: null } }),
+      root({
+        root: '/work/beta',
+        team: 'beta',
+        firstPass: { running: false, scanned: 10, doneAt: '2026-11-03T19:20:00.000Z' },
+      }),
+    ],
+  });
+  expect(daemonNotes(both)).toEqual([
+    `${HEALTHY_LINE}; roots 2 (send 2, bus 2); first pass running for /work/acme (3 files scanned); first pass done at 2026-11-03T19:20:00.000Z for /work/beta`,
+  ]);
+  // A starting endpoint is said once: it is not counted again as "not hosted here".
+  expect(daemonNotes(health({ roots: [root({ bus: 'starting' })] }))).toEqual([
+    `${HEALTHY_LINE}; roots 1 (send 1, bus 0); 1 endpoint starting`,
+  ]);
+});
+
 const TEXT = `format: 1
 project: acme
 coordinator: lead

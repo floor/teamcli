@@ -133,6 +133,7 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
   );
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
+  parts.push(...firstPassPhrases(roots));
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
     // Every failed endpoint is named, with its reason. A record written before this build kept
@@ -156,14 +157,36 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
     );
     return parts;
   }
-  const notHosted = roots.reduce(
-    (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
-    0,
-  );
+  // "Not hosted here" is the endpoint another process already serves. A starting endpoint is
+  // already said as starting, and a failed one is named above with its reason; counting either
+  // here would name one endpoint twice.
+  const notHosted = roots.reduce((count, root) => count + (root.send === 'already-running' ? 1 : 0), 0);
   if (notHosted > 0) {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
   return parts;
+}
+
+/**
+ * The first-pass progress each hosted route's bus carries, as phrases. A daemon-hosted bus reads
+ * serving once its listener is bound and answering, while the first pass over the store still
+ * runs; these phrases keep that from being read as caught up. A pass that settled names the
+ * instant it did, so "done" is never printed without a time.
+ */
+export function firstPassPhrases(roots: DaemonRootState[]): string[] {
+  return roots.flatMap((root) => {
+    const pass = root.firstPass;
+    if (pass === undefined) return [];
+    if (pass.running) {
+      return [`first pass running for ${root.root} (${groupedCount(pass.scanned)} files scanned)`];
+    }
+    return [`first pass done at ${pass.doneAt} for ${root.root}`];
+  });
+}
+
+/** Digits grouped in threes: the same text on every machine, whichever locale it runs in. */
+function groupedCount(count: number): string {
+  return String(count).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 /** How long an endpoint has been failing, measured against this reading's own instant. Empty

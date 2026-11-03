@@ -72,6 +72,16 @@ export type DaemonRootPresenceHealth = {
  */
 export type DaemonRootPresence = { state: 'pending'; why: string } | DaemonRootPresenceHealth;
 
+/**
+ * How far the route's bus first reconcile pass has got. A daemon-hosted bus serves as soon as its
+ * listener is bound and answering, while the first pass over the store still runs; this is what
+ * keeps a reader from reading "serving" as "caught up". While the pass runs, `scanned` is live;
+ * once it settles, `scanned` is the pass total and `doneAt` is the instant it settled.
+ */
+export type DaemonRootFirstPass =
+  | { running: true; scanned: number; doneAt: null }
+  | { running: false; scanned: number; doneAt: string };
+
 /** One checkout this process hosts, recorded so a later `team daemon status` can tell a running
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
 export type DaemonRootState = {
@@ -100,6 +110,12 @@ export type DaemonRootState = {
    * answer, whose only proof is `state: 'serving'` with `healthy: true`.
    */
   presence?: DaemonRootPresence;
+  /**
+   * The bus's first pass over the route's store, present once this daemon started a bus that has
+   * one to report. A reader prints it beside `bus: serving` so "bound and answering" is never
+   * read as "caught up". Display data, not a hosting fact: a malformed one is left out.
+   */
+  firstPass?: DaemonRootFirstPass;
 };
 
 export type DaemonState = {
@@ -212,6 +228,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     }
     const watch = watchOf(entry.watch);
     const presence = presenceOf(entry.presence);
+    const firstPass = firstPassOf(entry.firstPass);
     roots.push({
       root: entry.root,
       team: entry.team as string | null,
@@ -222,6 +239,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       ...(entry.busFailedAt === undefined ? {} : { busFailedAt: entry.busFailedAt as string | null }),
       ...(watch === null ? {} : { watch }),
       ...(presence === null ? {} : { presence }),
+      ...(firstPass === null ? {} : { firstPass }),
     });
   }
   return roots;
@@ -267,6 +285,25 @@ function watchOf(raw: unknown): HostedWatchState | null {
 
 function positiveInt(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+/** A bus first-pass record is display data, not a hosting fact: a malformed one is left out
+ *  rather than making the whole daemon record unreadable. A running record carries no settle
+ *  instant, and a settled one must name it — a "done" without a time could not be printed
+ *  honestly, so it is left out too. */
+function firstPassOf(raw: unknown): DaemonRootFirstPass | null {
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (typeof entry.running !== 'boolean') return null;
+  if (!Number.isInteger(entry.scanned) || (entry.scanned as number) < 0) return null;
+  if (entry.running) {
+    // A running pass carries no settle instant; one that names a time is self-contradicting.
+    if (!(entry.doneAt === null || entry.doneAt === undefined)) return null;
+    return { running: true, scanned: entry.scanned as number, doneAt: null };
+  }
+  if (typeof entry.doneAt !== 'string' || entry.doneAt === '') return null;
+  return { running: false, scanned: entry.scanned as number, doneAt: entry.doneAt };
 }
 
 /** A presence lifecycle record is display evidence for an operator, not a hosting fact: a

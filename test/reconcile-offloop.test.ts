@@ -136,6 +136,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Holds the event log's lock for this process, so a pass's append is deferred and retried. */
+function holdEventLock(root: string, home: string): string {
+  const dir = join(dirname(eventLogPath('acme', root, home)), 'locks', 'events');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, LOCK_FILE);
+  writeFileSync(path, `${String(process.pid)}\n`);
+  return path;
+}
+
 const BULK_FILES = 10_000;
 const BULK_TS = '2026-11-01T00:00:00.000Z';
 
@@ -349,14 +358,6 @@ describe('the archive findings are regression probes', () => {
 });
 
 describe('a held event lock neither loses the event nor freezes the loop', () => {
-  function holdEventLock(root: string, home: string): string {
-    const dir = join(dirname(eventLogPath('acme', root, home)), 'locks', 'events');
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, LOCK_FILE);
-    writeFileSync(path, `${String(process.pid)}\n`);
-    return path;
-  }
-
   function seatReady(root: string, ts: string): void {
     updateState(join(root, '.agents'), (state) => {
       (state.sessions.acme ??= emptySession()).seats['worker-1'] = { stage: 'ready', last_active: ts };
@@ -654,6 +655,67 @@ describe('closing the bus cancels the pass it started', () => {
   }, 15_000);
 });
 
+describe('a bus can host its first pass in the background', () => {
+  test('the start resolves before the pass raises; reconcileNow joins it; close drains a pass in flight', async () => {
+    const { root, home } = scratch();
+    const parsed = validateTeamFile(TEAM);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    signedDrop(root, home, 'background-0001');
+    // The held event lock keeps the first pass's append deferred, so the pass is provably still
+    // running — and its record provably not raised — when the background start resolves.
+    const lock = holdEventLock(root, home);
+    const started = await startBus({
+      root,
+      team: parsed.team,
+      home,
+      stderr: () => {},
+      reconcileIntervalMs: 0,
+      initialReconcile: 'background',
+    });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    const handle = started.handle;
+    function appended(): number {
+      const read = readEvents('acme', root, home);
+      if (!read.ok) throw new Error(read.reason);
+      return read.events.length;
+    }
+    try {
+      // Bound and answering, with the first pass still scanning: the start did not wait for it.
+      const running = handle.firstPass();
+      expect(running.running).toBe(true);
+      if (running.running) expect(running.scanned).toBeGreaterThanOrEqual(1);
+      expect(appended()).toBe(0);
+      // The same pass, joined rather than a second scan: releasing the lock lets its deferred
+      // append land, and the handle reports the pass settled with its total and instant.
+      unlinkSync(lock);
+      const raised = await handle.reconcileNow();
+      expect(raised.map((record) => `${record.payload.kind}:${record.payload.record_id}`))
+        .toContain('message.arrived:background-0001');
+      expect(appended()).toBe(1);
+      const done = handle.firstPass();
+      expect(done.running).toBe(false);
+      if (!done.running) {
+        expect(done.doneAt).not.toBeNull();
+        expect(done.scanned).toBeGreaterThanOrEqual(1);
+      }
+      // A pass in flight when close lands is drained, and nothing is appended after close.
+      for (let n = 0; n < 200; n += 1) signedDrop(root, home, `closing-${String(n).padStart(4, '0')}`);
+      const run = handle.reconcileNow();
+      await handle.close();
+      const atClose = appended();
+      await run;
+      expect(appended()).toBe(atClose);
+      // A later scan never rewrites the first pass's own record.
+      expect(handle.firstPass().running).toBe(false);
+    } finally {
+      try {
+        unlinkSync(lock);
+      } catch {}
+      await handle.close();
+    }
+  }, 30_000);
+});
+
 describe('the daemon heartbeat and endpoint supervision', () => {
   test('a pending endpoint start leaves the daemon heartbeating and its root recorded as starting', async () => {
     const { root, home } = scratch();
@@ -690,7 +752,7 @@ describe('the daemon heartbeat and endpoint supervision', () => {
     if (result.kind === 'serving') await result.daemon.close();
   }, 30_000);
 
-  test('a 10,000-file bus pass does not stop the heartbeat or the starting record', async () => {
+  test('a 10,000-file first pass runs behind a serving bus and never stops the heartbeat', async () => {
     const { root, home } = scratch();
     seedBulkStore(root, home);
     const started = startMachineDaemon({
@@ -700,16 +762,22 @@ describe('the daemon heartbeat and endpoint supervision', () => {
       heartbeatMs: 5,
       sendStart: async () => ({ kind: 'already-running', socketPath: join(home, 'absent-send.sock'), pid: null }),
     });
+    // The bus serves once its listener is bound; the first pass scans behind it and the row says
+    // how far it has got, so serving is not read as caught up while the heartbeat keeps beating.
     const first = await waitForValue(() => {
       const read = readDaemonState(home);
       if (read.kind !== 'ok') return null;
       const entry = read.state.roots[0];
-      return entry?.bus === 'starting' ? { heartbeatAt: read.state.heartbeatAt } : null;
+      return entry?.bus === 'serving' && entry.firstPass?.running === true
+        ? { heartbeatAt: read.state.heartbeatAt, scanned: entry.firstPass.scanned }
+        : null;
     }, 5_000);
     await sleep(40);
     const later = readStateOk(home);
     expect(later.heartbeatAt).not.toBe(first.heartbeatAt);
-    expect(later.roots[0]?.bus).toBe('starting');
+    expect(later.roots[0]?.bus).toBe('serving');
+    expect(later.roots[0]?.firstPass?.running).toBe(true);
+    // The start returned while the pass still ran; close aborts and drains it.
     const result = await started;
     expect(result.kind).toBe('serving');
     if (result.kind === 'serving') await result.daemon.close();

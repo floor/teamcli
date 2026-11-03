@@ -34,7 +34,7 @@ import {
   writeFaultRequest,
 } from '../daemon/fault.ts';
 import { daemonHealth } from '../daemon/health.ts';
-import { failureAge } from '../daemon/health_display.ts';
+import { failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
@@ -425,16 +425,19 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
   const at = now.toISOString();
   const sendServing = roots.filter((root) => root.send === 'serving').length;
   const busServing = roots.filter((root) => root.bus === 'serving').length;
-  const notHosted = roots.reduce(
-    (count, root) => count + (root.send === 'serving' ? 0 : 1) + (root.bus === 'serving' ? 0 : 1),
-    0,
-  );
+  // "Not hosted here" is the endpoint another process already serves. A starting endpoint is
+  // already said as starting, and a failed one is named below with its reason; counting either
+  // here would name one endpoint twice.
+  const notHosted = roots.reduce((count, root) => count + (root.send === 'already-running' ? 1 : 0), 0);
   const starting = roots.reduce(
     (count, root) => count + (root.send === 'starting' ? 1 : 0) + (root.bus === 'starting' ? 1 : 0),
     0,
   );
   const parts = [`roots ${String(roots.length)} (send ${String(sendServing)}, bus ${String(busServing)})`];
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
+  // A daemon-hosted bus serves once its listener is bound, while the first pass still runs; the
+  // pass's progress is said here so serving is never read as caught up.
+  parts.push(...firstPassPhrases(roots));
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
     // Every failed endpoint is named, with its reason. A record written before this build kept

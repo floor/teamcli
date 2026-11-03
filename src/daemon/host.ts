@@ -159,8 +159,12 @@ export type StartMachineDaemonInput = {
   sendRestart?: { giveUp?: number; backoffMs?: (failures: number) => number };
   /** Starts one root's bus server when the heartbeat finds it stopped. The default starts the
    *  real server; a test injects its own to hold or observe a revive. It is never the start that
-   *  hosts the bus beside send: that one is `startBus` itself. */
+   *  hosts the bus beside send: that one is `initialBusStart`'s. */
   busStart?: (input: StartBusInput) => Promise<StartBusResult>;
+  /** Starts one root's bus server when the roots loop first hosts it. The default starts the
+   *  real server; a test injects its own to read the start input and the first-pass progress
+   *  without binding a socket. It never covers a revive; that one is `busStart`'s. */
+  initialBusStart?: (input: StartBusInput) => Promise<StartBusResult>;
   /**
    * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
    * quiet foundation lands before any activation, and a daemon started only to host endpoints
@@ -414,6 +418,8 @@ type EndpointWatch = {
   sendStart: (() => Promise<Awaited<ReturnType<typeof startSendDaemon>>>) | null;
   /** The send handle this daemon owns, so a failed endpoint can be closed before a restart. */
   sendHandle: SendDaemonHandle | null;
+  /** The bus handle this daemon owns, so a state write can read the first pass's progress. */
+  busHandle: BusHandle | null;
   /** The restart's own backoff and single-flight flag. */
   sendState: BusWatch;
   /** Whether this root's send start attempt has returned; a probe waits for it. */
@@ -506,6 +512,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const inFlight = new Map<string, InFlight>();
   const roots: MachineRootStatus[] = [];
+  /** Each hosted bus whose first pass is still worth reading on a state write: the row carries
+   *  how far the scan has got, so a bus that serves while its first pass runs says so. */
+  const passRefreshers: (() => void)[] = [];
   const routes: HostedRoute[] = [];
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
@@ -674,6 +683,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const writeState = (afterClose = false): void => {
     if (closed && !afterClose) return;
     for (const one of hostedWatches) one.status.watch = one.watch.state();
+    for (const refresh of passRefreshers) refresh();
     try {
       writeDaemonState(home, {
         format: 1,
@@ -885,6 +895,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       sendMisses: 0,
       sendStart: null,
       sendHandle: null,
+      busHandle: null,
       sendState: freshBusWatch(),
       sendStarted: false,
       busStarted: false,
@@ -1135,7 +1146,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     let bus: Awaited<ReturnType<typeof startBus>>;
     try {
-      bus = await startBus({
+      // The first pass runs in the background: the bus serves as soon as its listener is bound,
+      // so one store's scan never holds the next root back. The root's row carries the pass's
+      // progress until it settles, so serving is not read as caught up.
+      bus = await (input.initialBusStart ?? startBus)({
         root: canonical,
         team: loaded.team,
         stateDir: dirname(loaded.path),
@@ -1143,6 +1157,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         stderr: (text) => logLine(text),
         heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
         now,
+        initialReconcile: 'background',
       });
     } catch (error) {
       watch.busStarted = true;
@@ -1155,9 +1170,20 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     watch.busStarted = true;
     if (bus.kind === 'serving') {
-      busHandles.push(bus.handle);
+      const handle = bus.handle;
+      busHandles.push(handle);
+      watch.busHandle = handle;
       status.bus = 'serving';
       watch.busSocket = busSocket(canonical);
+      // Read on every state write, so the row's first-pass progress follows the scan: the start
+      // returned once the listener was bound, and this is how a reader knows the store is not
+      // caught up yet. A settle instant, once written, is not overwritten by a later pass. The
+      // handle is read through the watch: a revive replaces it, and a failure clears it so an
+      // endpoint that is gone never keeps the last bus's pass on its row.
+      passRefreshers.push(() => {
+        const current = watch.busHandle;
+        if (current !== null) status.firstPass = current.firstPass();
+      });
     } else {
       status.bus = 'failed';
       status.busFailedAt = now().toISOString();
@@ -1689,12 +1715,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     if (revived.kind === 'serving') {
       busHandles.push(revived.handle);
+      // The revived start is the awaited one, so its first pass has settled by now; the row
+      // reads this handle's pass from here on.
+      watch.busHandle = revived.handle;
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
       if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
       logLine(`root ${root}: bus restarted`);
     } else if (revived.kind === 'busy' || revived.kind === 'listening') {
+      // Another process serves the bus here: this daemon owns no handle and has no pass to report.
+      watch.busHandle = null;
+      delete watch.status.firstPass;
       watch.status.bus = 'serving';
       watch.status.busFailedAt = null;
       watch.busSocket = busSocket(loaded.root);
@@ -1831,6 +1863,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 status.why ??= 'the hosted bus endpoint stopped answering';
                 status.bus = 'failed';
                 status.busFailedAt = now().toISOString();
+                // The bus whose pass this row carried is gone: a later revive sets its own handle,
+                // and until then the row must not keep reading a pass nobody is running.
+                watch.busHandle = null;
+                delete status.firstPass;
                 logLine(`root ${status.root}: bus endpoint stopped answering`);
               }
               await reviveHostedBus(watch);
