@@ -381,13 +381,13 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
     // The implied default names the seat's runtime queue first while its `codex-daemon` policy
-    // is on; this fixture records no thread for the seat, so the route stands down and nothing
-    // is typed. The cascade then reaches the mailbox, which stores the record and ends the send.
+    // is on; this fixture records no thread for the seat, so the route stands down. The typed
+    // wake is next, and this host binds no pane writer, so nothing is typed. The cascade then
+    // reaches the mailbox, which stores the record and ends the send.
     expect(lastEntry(w.root, w.home).failed).toEqual([
-      `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+      'typed: the send host binds no pane writer; nothing was typed',
     ]);
-    // No pane messaging: the typed leg is never walked, so the bus inbox (the drop) takes it.
     expect(lastEntry(w.root, w.home).via).toBe('drop');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropped(w.root, 'native'))).toBe(true);
@@ -402,32 +402,32 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
     // The listener is the store's reader, never a wake: the send ends on the drop and records
-    // no inbox leg, delivered or not.
+    // no inbox leg. The typed wake runs, and this host binds no pane writer, so nothing is typed.
     expect(io.out).toContain('native: sent (unconfirmed) (drop, 0 ms)');
     expect(host.typed).toEqual([]);
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(entry.failed).toEqual([
-      `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+      'typed: the send host binds no pane writer; nothing was typed',
     ]);
     expect(inboxDrop(dir)).toMatch(MESSAGE_ID);
   });
 
-  test('no pane messaging: a codex seat whose declared order is [typed] is woken through its runtime queue', async () => {
+  test('a codex seat whose declared order is [typed] still tries its runtime queue, and types nothing without a pane writer', async () => {
     const w = world();
     const host = walker(w, { team: ['typed'] });
     const io = owner(w.root);
 
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
-    // The declared typed word asked for a wake. With typing retired, the seat's own runtime queue
-    // stands where it stood while its codex-daemon policy is on: the walk tries native before the
-    // bus inbox, and nothing is typed.
+    // The declared typed word asked for a wake. The seat's own runtime queue still leads while
+    // its codex-daemon policy is on, and this host binds no pane writer, so nothing is typed
+    // and the bus inbox keeps the message.
     const entry = lastEntry(w.root, w.home);
     expect(entry.failed).toEqual([
-      `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+      'typed: the send host binds no pane writer; nothing was typed',
     ]);
     expect(entry.via).toBe('drop');
     expect(host.typed).toEqual([]);
@@ -1317,7 +1317,7 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line; nothing was written\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);

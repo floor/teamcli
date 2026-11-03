@@ -55,6 +55,14 @@ rules:
 # The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
 # turn; this CLI has no event adapter that reaches it while idle.
 delivery: pull-on-turn
+# The typed wake, granted on the sanitized 1.0.70 welcome frame in
+# test/fixtures/grok/1.0.70/ and the shipped 1.0.52 frames: a send may type one trigger line
+# into a composer two reads showed as the empty idle prompt, presses Enter only while the box
+# still holds exactly that line, and calls itself delivered only when the `working` screen
+# shows. A working turn, a box that holds text, and the answer widget refuse before a key.
+# Nothing else is typed, and a wake that cannot deliver leaves the message in the bus inbox.
+# See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - models

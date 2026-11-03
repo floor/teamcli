@@ -34,6 +34,13 @@ rules:
 # pointer through its own queue between turns (src/send/push-adapters/codex-relay.ts); a seat
 # without that endpoint reads its MCP inbox when it takes a turn.
 delivery: between-turns
+# The typed wake, read on the shipped 0.157.0 frames: a send may type one trigger line into a
+# composer two reads showed as the empty idle prompt (the grey suggestion reads as empty),
+# presses Enter only while the box still holds exactly that line, and calls itself delivered
+# only when the working screen shows. A running turn, a box that holds text, and a permission
+# dialog refuse before a key. Nothing else is typed, and a wake that cannot deliver leaves the
+# message in the bus inbox. See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - login

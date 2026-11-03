@@ -45,7 +45,7 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   expect(doc.dry_run).toBe(false);
   expect(doc.seat).toBe('native');
   expect(doc.status).toBe('sent (unconfirmed)');
-  expect(withoutSendId(doc.action_summary)).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)');
+  expect(withoutSendId(doc.action_summary)).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)');
   expect(doc.project).toBe('acme');
   expect(doc.session).toBe('acme');
   expect(doc.channel).toBe('drop');
@@ -103,6 +103,7 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
       { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       // The declared `typed` word wakes a Codex seat through its runtime queue (codex-daemon on).
       { leg: 'native', state: 'attempted', reason: 'no trusted runtime session is recorded for this seat (no agent record for this seat)' },
+      { leg: 'typed', state: 'attempted', reason: 'the send host binds no pane writer; nothing was typed' },
       { leg: 'drop', state: 'attempted' },
     ],
   });
