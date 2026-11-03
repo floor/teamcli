@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
-import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
+import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
@@ -570,6 +570,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A seat whose last webhook delivery did not arrive, in the same words `team status` prints:
     // the send could not have known, so the outcome is read here.
     ...webhookDeliveryNotes(team.seats, state),
+    // A send's webhook post left in flight with no bus serving the root to finish it: a reading,
+    // never a delivered post.
+    ...unfinishedWebhookNotes({ root, alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid) }),
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
