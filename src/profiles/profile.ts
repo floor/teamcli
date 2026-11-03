@@ -25,6 +25,7 @@ import type { ComposeProfile } from './compose.ts';
 import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
+import { MESSAGE_HINT_MAX } from '../settings/message-display.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
 import { shellWords, type ShellWord } from '../launch/shell-words.ts';
 import { questionAnswers, type QuestionAnswerRecord } from './question-answer.ts';
@@ -184,6 +185,11 @@ export interface Profile {
    *  two reads, and `delivered` only when the profile's own working screen shows — see
    *  src/send/typed-wake.ts. */
   typedWake: TypedWake | null;
+  /** The words a typed wake appends after the message's header, so the woken seat takes its
+   *  fastest read path: a profile whose seats carry an MCP inbox names the inbox tool, and one
+   *  without keeps the shipped sentence. Null, the default, is the shipped
+   *  `Read it with: team drops --read.` (src/settings/message-display.ts). */
+  readHint: string | null;
   /** Whether the watch's unread pass may type the same wake a send types, when a message has
    *  gone unread past its window. On by default exactly where the profile declares
    *  `typed_wake`; a profile may turn it off (`watch_wake: off`), and may not turn it on
@@ -1316,7 +1322,7 @@ const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules',
 // (the delivery CLI a session runs and the public-only declaration the send path proves),
 // `features` (the pinned feature set the launch and the recorded line carry) and the watch
 // retry (`watch_wake`, `watch_wake_tries`).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1439,6 +1445,23 @@ function typedWakeOf(entry: YamlEntry): TypedWake {
     fail(entry.line, `"typed_wake" must be one of: ${TYPED_WAKES.join(', ')}`);
   }
   return value as TypedWake;
+}
+
+/** The value of `read_hint`: the one sentence a typed wake appends after the message's header.
+ *  It is display, never transport: one printable line with no controls, no padding space, and
+ *  short enough that the header still names the sender inside `MESSAGE_LINE_MAX`. The words are
+ *  the profile's own — the shipment's `Read it with: team drops --read.` stands when none is
+ *  declared — so a profile whose seat reads its MCP inbox names the inbox tool there. */
+function readHintOf(entry: YamlEntry): string {
+  const value = text(entry, 'read_hint');
+  if (value !== value.trim()) fail(entry.line, '"read_hint" must not start or end with whitespace');
+  if (/[\u0000-\u001f\u007f-\u009f\p{Zl}\p{Zp}]/u.test(value)) {
+    fail(entry.line, '"read_hint" must be one printable line');
+  }
+  if (value.length > MESSAGE_HINT_MAX) {
+    fail(entry.line, `"read_hint" must be at most ${String(MESSAGE_HINT_MAX)} characters`);
+  }
+  return value;
 }
 
 /** The value of `watch_wake`: `on` or `off`, never a guess. Only a profile that declares a
@@ -1710,6 +1733,14 @@ export function typedWakeKey(text: string): TypedWake | null {
   return entry === undefined ? null : typedWakeOf(entry);
 }
 
+/** The `read_hint` a profile snippet names, by the loader's own rule: for tests. A value that is
+ *  not one printable line inside the bound throws; an absent key reads as null, as an absent
+ *  optional key does. */
+export function readHintKey(text: string): string | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'read_hint');
+  return entry === undefined ? null : readHintOf(entry);
+}
+
 /** The `watch_wake` a profile snippet names, by the loader's own rule: for tests. A word outside
  *  the two throws; an absent key reads as null, as an absent optional key does. The rule that
  *  `on` needs a `typed_wake` is the loader's, read with the whole profile. */
@@ -1797,6 +1828,7 @@ function launchOf(root: YamlNode): Shipped {
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
   const settingsEntry = optional(entries, 'settings');
   const typedWakeEntry = optional(entries, 'typed_wake');
+  const readHintEntry = optional(entries, 'read_hint');
   const watchWakeEntry = optional(entries, 'watch_wake');
   const watchWakeTriesEntry = optional(entries, 'watch_wake_tries');
   const exitEntry = optional(entries, 'exit');
@@ -1869,6 +1901,7 @@ function launchOf(root: YamlNode): Shipped {
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
       settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
       typedWake,
+      readHint: readHintEntry ? readHintOf(readHintEntry) : null,
       watchWake,
       watchWakeTries,
       delivery: deliveryOf(required(entries, 'delivery', root.line)),

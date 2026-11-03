@@ -181,6 +181,11 @@
       "enum": ["screen"],
       "description": "optional: the one wake a send may type into this CLI's pane; screen types one trigger line into an empty idle box seen on two reads and calls the send delivered only when the profile's working screen shows; absent, the typed leg never runs for this CLI"
     },
+    "read_hint": {
+      "type": "string", "minLength": 1, "maxLength": 60,
+      "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*\\S)?$",
+      "description": "optional: the one sentence a typed wake appends after the message's header so the seat takes its fastest read path; absent, the shipped 'Read it with: team drops --read.'"
+    },
     "watch_wake": {
       "enum": ["on", "off"],
       "description": "optional: whether the watch's unread pass may type the same wake a send types when a message has gone unread past its window; on by default exactly where typed_wake is declared, and it cannot be turned on without one"

@@ -1,5 +1,6 @@
-// The `message-display` policy's words: the header a wake line opens with, and the one sentence a
-// typed wake appends so its seat knows where to read the signed record.
+// The `message-display` policy's words: the header a wake line opens with, and the shipped
+// sentence a typed wake appends so its seat knows where to read the signed record. A profile
+// that declares `read_hint` supplies its own sentence in place of the shipped one.
 //
 // The line is display, never transport: the signed record is what a seat reads, and every field
 // here is data. The summary is always the body's first content line, with the attribution header
@@ -16,7 +17,8 @@
 /** The shipped template: sender, address, summary. */
 export const MESSAGE_DISPLAY_DEFAULT = 'Message from {name} ({seat}@{team}): {summary}';
 
-/** The fixed sentence an agent seat's typed wake ends with. The template cannot remove it. */
+/** The sentence an agent seat's typed wake ends with when its profile declares no `read_hint`.
+ *  The template cannot remove it. */
 export const MESSAGE_READ_HINT = 'Read it with: team drops --read.';
 
 /**
@@ -27,13 +29,20 @@ export const MESSAGE_READ_HINT = 'Read it with: team drops --read.';
  */
 export const MESSAGE_LINE_MAX = 80;
 
+/**
+ * The longest a profile's `read_hint` may be. The hint is kept whole and the header gives way,
+ * so a longer hint would leave the typed line no room to name its sender: the shipped sentence
+ * takes 32 of the line's 80 columns.
+ */
+export const MESSAGE_HINT_MAX = MESSAGE_LINE_MAX - 20;
+
 /** The longest one field may be before the whole line is measured. */
 export const MESSAGE_FIELD_MAX = 100;
 
 /** The summary is the body's first content line, cut here after line-safety sanitisation. */
 export const MESSAGE_SUMMARY_MAX = 80;
 
-/** What stands between the rendered header and the fixed hint. */
+/** What stands between the rendered header and the read hint. */
 export const MESSAGE_HINT_SEPARATOR = ' ';
 
 /** The only slots a template may carry; everything else is literal text. */
@@ -195,8 +204,8 @@ export function renderMessageDisplay(template: string, fields: MessageDisplayFie
 }
 
 /**
- * A typed wake line: the rendered header, then the fixed hint for an agent seat. The hint is
- * never cut or replaced; the header gives way to it. Null when no line can carry both.
+ * A typed wake line: the rendered header, then the read hint. The hint is never cut or replaced;
+ * the header gives way to it. Null when no line can carry both.
  */
 export function composeMessageLine(header: string, hint: string | null, max = MESSAGE_LINE_MAX): string | null {
   if (hint === null) {
@@ -210,7 +219,7 @@ export function composeMessageLine(header: string, hint: string | null, max = ME
   return `${head}${suffix}`;
 }
 
-/** The rendered header and, for an agent seat, the fixed hint; null when it cannot fit. */
+/** The rendered header and, for an agent seat, the shipped hint; null when it cannot fit. */
 export function messageLineFor(
   template: string,
   fields: MessageDisplayFields,
