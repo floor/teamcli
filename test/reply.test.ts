@@ -157,6 +157,46 @@ describe('a reply is a record on the thread it answers', () => {
     expect(verifyReceipt(receipt, key.key)).toBe(true);
   });
 
+  test('answering is a read: a signed read receipt naming read_by: reply lands beside the replied one', async () => {
+    sentTo('owner', SENT, { from: 'worker' });
+    expect((await run([SENT, 'the answer'], { kind: 'owner' }, { newId: () => REPLY })).code).toBe(0);
+
+    // ADR `zeus-message-path`, D3: the seat's answer is the read. The `read` receipt and the
+    // `replied` receipt hold their own names, and both verify.
+    const read = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.read.json`), 'utf8')));
+    if (read === null) throw new Error('no read receipt was written');
+    const { writer, ...fields } = read.payload;
+    expect(fields).toEqual({
+      kind: 'receipt',
+      status: 'read',
+      id: SENT,
+      to: 'owner',
+      root,
+      session: 'acme',
+      at: NOW_ISO,
+      read_by: 'reply',
+    });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
+    const key = messageKeyState(home);
+    if (key.kind !== 'key') throw new Error(key.kind);
+    expect(verifyReceipt(read, key.key)).toBe(true);
+    expect(existsSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.replied.json`))).toBe(true);
+  });
+
+  test('a seat answering marks it read with its own signed receipt', async () => {
+    place('helper', 'w2:p1');
+    sentTo('helper', SENT_B, { from: 'worker' });
+    const result = await run([SENT_B, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY_B });
+    expect(result.code).toBe(0);
+    const read = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'helper'), `${SENT_B}.read.json`), 'utf8')));
+    if (read === null) throw new Error('no read receipt was written');
+    expect(read.payload.read_by).toBe('reply');
+    const key = messageKeyState(home);
+    if (key.kind !== 'key') throw new Error(key.kind);
+    expect(verifyReceipt(read, key.key)).toBe(true);
+    expect(existsSync(join(recordDir(root, 'acme', 'helper'), `${SENT_B}.replied.json`))).toBe(true);
+  });
+
   test('the history line names the reply, its thread, the record it answers, and the drop leg', async () => {
     sentTo('owner', SENT, { from: 'worker' });
     const result = await run([SENT, 'the answer'], { kind: 'owner' }, { newId: () => REPLY });

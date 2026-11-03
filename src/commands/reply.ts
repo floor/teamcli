@@ -75,6 +75,7 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import { messageKeyOf, messageKeyState } from '../store/keys.ts';
+import { publishRecordRead } from '../send/read-receipt.ts';
 import { recordDir } from './messages.ts';
 import { admissionOf, sealDropTree, senderIdOf } from './send.ts';
 
@@ -722,7 +723,24 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
           if (wrote === 'exists') return { ok: false, why: `client ${grant.clientId}: a record already holds the id ${replyId}; nothing was written` };
           if (wrote !== 'written') return { ok: false, why: 'the record could not be written; nothing was written' };
           // The answered record moves to `replied`: a seat-side receipt beside the client's
-          // opening record, as every reply's is.
+          // opening record, as every reply's is. The `read` receipt goes first, under its own
+          // name: answering is a read (ADR `zeus-message-path`, D3), and a receipt that cannot be
+          // written is an annotation missing, not a reply lost, so it changes no exit.
+          try {
+            publishRecordRead({
+              dropDir: recordDir(root, session, me),
+              id: answered.id,
+              to: me,
+              root,
+              session,
+              home: host.home,
+              key,
+              at,
+              readBy: 'reply',
+            });
+          } catch {
+            // The reply record below is the message; the missing read receipt is argued nowhere.
+          }
           const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
           writeReceipt(recordDir(root, session, me), receipt, host.home);
           return { ok: true };
@@ -903,8 +921,24 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     // them is called delivered; a write alone is not.
     landed = landsWhereRead(host.home, folder, replyId, toRoot, toSession, targetSeat);
     // The answered record moves to `replied` — a receipt the receiving side writes, beside the
-    // message it answers. The reply record is the message; a receipt that cannot be written is
-    // an annotation missing, not a reply lost, so it changes no exit.
+    // message it answers. The `read` receipt goes first, under its own name: answering is a read
+    // (ADR `zeus-message-path`, D3). The reply record is the message; a receipt that cannot be
+    // written is an annotation missing, not a reply lost, so it changes no exit.
+    try {
+      publishRecordRead({
+        dropDir: recordDir(root, session, me),
+        id: answered.id,
+        to: me,
+        root,
+        session,
+        home: host.home,
+        key,
+        at,
+        readBy: 'reply',
+      });
+    } catch {
+      // The reply record below is the message; the missing read receipt is argued nowhere.
+    }
     const receipt = signReceiptPayload({ kind: 'receipt', status: 'replied', id: answered.id, to: me, root, session, at }, host.home);
     writeReceipt(recordDir(root, session, me), receipt, host.home);
   } finally {

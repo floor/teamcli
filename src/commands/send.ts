@@ -39,6 +39,7 @@ import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverified
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
+import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -1635,6 +1636,30 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now, to.project);
     if (!stagedWalk.ok) return;
+    // ADR `zeus-message-path`, D3: the seat's own answer is a read. A send from this seat to its
+    // recipient settles the newest message that recipient delivered it before this send's own
+    // instant — the seat's signed act, never the original sender's — and only the newest, so one
+    // answer never swallows the older unread work. A sweep that cannot read or write is a missing
+    // annotation, never a failed send.
+    if (caller.kind === 'seat') {
+      try {
+        const answered = markAnsweredBySend({
+          seat: caller.name,
+          sender: to.seat,
+          senderId: to.agentId,
+          root,
+          session: team.session,
+          project: team.project,
+          home: host.home,
+          at: record.at,
+        });
+        if (answered.kind === 'unavailable') {
+          logLine(dir, 'send', who, `${caller.name}: the answered message could not be marked read (${answered.reason})`, host.now());
+        }
+      } catch {
+        // The send's record is staged; the read receipt is an annotation beside it.
+      }
+    }
     const begun = beginFallbackWalk({
       caller,
       team,
