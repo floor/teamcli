@@ -800,6 +800,75 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       await started.daemon.close();
     }
   });
+
+  test('a bus row that failed follows a live socket back to serving, and a send recovery never clears the bus row\'s reason', async () => {
+    const { base, root, home } = scratch();
+    const absent = join(base, 'absent-send.sock');
+    const liveSend = join(base, 'live-send.sock');
+    // Answer the probe's ping as a live send daemon does: a socket that only half-closes leaves
+    // the probe waiting out its timeout, and a later server close waits on that connection.
+    const sendListener = createServer((socket) => {
+      socket.on('data', () => socket.write(`${JSON.stringify({ ok: true, pong: true })}\n`));
+    });
+    await new Promise<void>((done) => sendListener.listen(liveSend, () => done()));
+    let sendStarts = 0;
+    const sendStart = async (): Promise<{ kind: 'already-running'; socketPath: string; pid: number | null }> => {
+      sendStarts += 1;
+      // The start at daemon start names a socket nothing answers, so the send row stops
+      // answering and is restarted; the restart names a socket that does.
+      return sendStarts === 1
+        ? { kind: 'already-running', socketPath: absent, pid: null }
+        : { kind: 'already-running', socketPath: liveSend, pid: process.pid };
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 20,
+      sendStart,
+      // The start loses to the lock a standalone bus holds while its listener already answers.
+      initialBusStart: async (): Promise<StartBusResult> => ({ kind: 'locked' }),
+      busStart: async (): Promise<StartBusResult> => ({ kind: 'locked' }),
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    let busListener: ReturnType<typeof createServer> | null = null;
+    try {
+      // The bus row carries its own reason, and the send row's failure and recovery must not
+      // touch it: only the bus's own answer clears it.
+      const failed = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.bus === 'failed' ? entry : null;
+      }, 5_000);
+      expect(failed.busWhy).toBe('another bus server is starting');
+
+      await waitForValue(async () => (sendStarts >= 2 ? true : null), 5_000);
+      const afterSend = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.send === 'already-running' && entry.sendWhy === null ? entry : null;
+      }, 5_000);
+      expect(afterSend.bus).toBe('failed');
+      expect(afterSend.busWhy).toBe('another bus server is starting');
+
+      // A live socket is a serving bus whatever the row said: another process's start may have
+      // been holding this very lock while it answered. The row follows the socket and its reason
+      // clears with it, with no revive of this daemon's own.
+      busListener = createServer((socket) => socket.end());
+      await new Promise<void>((done) => busListener!.listen(join(root, '.agents', 'bus.sock'), () => done()));
+      const served = await waitForValue(async () => {
+        const entry = (await daemonHealth(home)).roots.find((one) => one.root === root);
+        return entry?.bus === 'serving' && entry.busFailedAt === null ? entry : null;
+      }, 5_000);
+      expect(served.busWhy === undefined || served.busWhy === null).toBe(true);
+    } finally {
+      // The daemon closes first: while it beats, it keeps probing both sockets, and a listener
+      // closed under a probing daemon waits for a connection the probe has not let go.
+      await started.daemon.close();
+      if (busListener !== null) await new Promise<void>((done) => busListener!.close(() => done()));
+      await new Promise<void>((done) => sendListener.close(() => done()));
+    }
+  }, 20_000);
 });
 
 describe('the service adapter writes and registers one user unit, neutrally', () => {
@@ -1504,6 +1573,44 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('roots 1 (send 1, bus 0)');
     expect(io.out).toContain(`1 endpoint failed (bus for ${root}: another bus server holds the project socket)`);
+  });
+
+  test('run names each failed endpoint with its own reason, never the other row\'s', async () => {
+    const { root, home } = scratch();
+    const io = testIo(root, owner);
+    const code = await runDaemon(['run'], io, sourcesOf(home, {
+      start: async () => ({
+        kind: 'serving',
+        daemon: {
+          socketPath: join(home, 'daemon.sock'),
+          roots: [
+            {
+              root,
+              team: 'acme',
+              send: 'failed',
+              bus: 'failed',
+              why: 'the checkout could not be read',
+              sendWhy: 'the send socket could not be bound',
+              busWhy: 'another bus server is starting',
+            },
+          ],
+          routes: [],
+          health: () => snapshot,
+          close: async () => {},
+        },
+      }),
+      stop: (end) => {
+        setTimeout(end, 0);
+        return () => {};
+      },
+    }));
+    expect(code).toBe(0);
+    expect(io.out).toContain(
+      `2 endpoints failed (send for ${root}: the send socket could not be bound, bus for ${root}: another bus server is starting)`,
+    );
+    // The row-level reason is a fallback for records written before the split, never an
+    // endpoint's reading while its own reason is recorded.
+    expect(io.out).not.toContain('the checkout could not be read');
   });
 
   test('run reports an existing daemon and a held lock without starting a second one', async () => {

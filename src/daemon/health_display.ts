@@ -143,12 +143,12 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
     // real one, so only the age is optional.
     if (root.send === 'failed') {
       entries.push(
-        `send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
+        `send for ${root.root}: ${root.sendWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
       );
     }
     if (root.bus === 'failed') {
       entries.push(
-        `bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
+        `bus for ${root.root}: ${root.busWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
       );
     }
     return entries;
@@ -284,14 +284,14 @@ export function daemonDifferences(health: DaemonHealth | null, now: Date): Diffe
   for (const root of health.roots) {
     if (root.send === 'failed') {
       rows.push({
-        what: `machine daemon send endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
+        what: `machine daemon send endpoint for ${root.root}: ${root.sendWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
         repair: 'team daemon install',
         owner: true,
       });
     }
     if (root.bus === 'failed') {
       rows.push({
-        what: `machine daemon bus endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
+        what: `machine daemon bus endpoint for ${root.root}: ${root.busWhy ?? root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
         repair: 'team daemon install',
         owner: true,
       });
