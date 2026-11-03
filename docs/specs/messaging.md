@@ -336,26 +336,44 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### The delivery order
 
-1. The legs are `native` (the sender is a session of the recipient's own kind and sends over its
-   own channel with its own attestation; the tool supplies the address from the registry, checks
-   admission and records the send), `mcp-inbox` (not in this build), and `typed` (the drop file and
-   the wake line). (`src/settings/inherit.ts`, `DELIVERY_LEGS`.)
+1. The catalogue's legs are `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+   `session` (the cross-session socket, a Codex seat's runtime queue or the sender's own handoff,
+   the seat's MCP inbox, the drop file with its wake line, the mailbox, a headless resume, and a
+   CLI's own session-creating call), and `channel`, the receiving server's development-channel
+   push, which is implied and never a declared word. Each belongs to one class: `socket`,
+   `native`, `headless-resume`, `session` and `channel` are the channel class; `typed` is the
+   typed class; `drop` is the mailbox. `mcp-inbox` is a name this build reads and never walks —
+   the MCP inbox is the store's reader, not a wake. The sender-posted `webhook` is the second
+   class, between the channel legs and the typed leg; no order names it, the receiving seat's
+   adapter row decides whether it exists (`src/send/walk-cascade.ts`, `src/settings/inherit.ts`
+   `DELIVERY_LEGS`).
 2. The order is the `delivery-order` policy of the receiving seat's chain — entity, project, team,
-   seat — because the order says how that seat's messages may travel. The fallback is `native`,
-   `mcp-inbox`, `typed`. A level drops or reorders the legs, never adds one.
-3. The legs are tried in order until one confirms; a leg that does not exist for this sender or
+   seat — because the order says how that seat's messages may travel, and it names the legs the
+   seat accepts. The walk that uses it is the owner's cascade (ADR `zeus-message-path`, D1):
+   channel-class legs first — the seat's serving `channel` ahead of them, then the ones the chain
+   names, in its own order — then the webhook, then typed (where the seat's profile declares a
+   typed wake), then the mailbox. The fallback order is `typed`,
+   `drop`. A level drops legs, reorders the ones it keeps, and may add `socket`, `native`,
+   `headless-resume` or `session`; a word naming any other leg the order in force does not have is
+   set aside and the order in force stands, and an `mcp-inbox` word is kept and reported
+   unavailable.
+3. The cascade is tried until one leg confirms; a leg that does not exist for this sender or
    receiver is skipped and recorded `unavailable`; a send falls through to the next leg only on a
-   definite failure before the send went through (no session, refused, a timeout before the send),
-   never on a missing acknowledgement after a send that went through — or the seat gets the message
-   twice. Every attempt is recorded with the leg and the failure (the history's `failed` field).
+   definite failure before the send went through (no session, refused, a timeout before the send,
+   a post the adapter did not take), never on a missing acknowledgement after a send that went
+   through — or the seat gets the message twice. Every attempt is recorded with the leg and the
+   failure (the history's `failed` field), and a typed line that passed a webhook names it there
+   as `webhook: <reason>`.
 4. The tool never attests a permission mode on a seat's behalf: a CLI process cannot truthfully say
    which mode it runs in, and attesting anyway would be a false statement to another tool's gate.
 
 ### What `delivered` means
 
 `delivered` means the message reached the seat by a path that reports its own receipt: the
-socket frame was written, or a `--confirm` run found the handoff's nonce in the recipient's
-transcript. The typed leg claims it only through the seat's own receipt: the line it types is
+socket frame was written, a `--confirm` run found the handoff's nonce in the recipient's
+transcript, or the seat's webhook adapter answered 2xx to the signed record the send posted —
+the console ending reads `delivered (webhook, <n> ms)` and the history records `delivered` with
+`via: webhook`, a claim that the adapter took the arrival and never that the seat read it. The typed leg claims it only through the seat's own receipt: the line it types is
 `Run team drops --read --seat <seat> --session <session> and do that.`, whose first act is the
 signed read receipt, and a receipt that verifies inside the delivery's window is
 `delivered (read)`. Without one, a trigger line that left the seat's input box after that one
@@ -366,7 +384,8 @@ reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a m
 inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
 never a read. The console line for a send that ends without a delivery carries the receiving
 seat's delivery class in plain words after the leg's own parenthetical — `woken through its event
-adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next turn, and nothing
+adapter`, `woken through its runtime queue`, `queued; its webhook fires when the bus takes it`,
+`queued; <seat> reads it at its next turn, and nothing
 here gives it one (pull-only)`, `queued; nothing wakes <seat> while it is idle; a person or a
 restart must give it a turn` (or, for a profile that declares the typed wake, `… while it is idle
 except a send-time typed wake and the watch's typed retry once a message passes its unread
