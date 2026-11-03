@@ -28,6 +28,12 @@
 - `working.txt`: `Write a 300-word explanation of how a for loop works in any programming
   language.` sent, with the spinner and `Working` under the prompt box and
   `→ Add a follow-up   ctrl+c to stop` on the prompt row. It reads as `working`.
+- `idle-after-edit.txt`: the bordered composer frame after a turn that edited a file, with
+  `· 1 file edited` on the status row — the pane's singular count for a single changed file.
+  Transcribed from a captured pane and sanitized: the transcript above the frame is synthetic
+  and the workspace line is written as `<workspace>`; every frame row keeps the capture's own
+  width (border rows 150 columns, the status row 149). It reads as `idle`, and it pins the
+  singular and plural edited-file counts on every family (test/launch/cursor.test.ts).
 
 ## Not produced
 
