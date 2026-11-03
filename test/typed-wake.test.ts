@@ -8,7 +8,14 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
-import { DEFAULT_WATCH_WAKE_TRIES, profileFor, typedWakeKey, watchWakeKey, watchWakeTriesKey } from '../src/profiles/index.ts';
+import {
+  DEFAULT_WATCH_WAKE_TRIES,
+  profileFor,
+  readHintKey,
+  typedWakeKey,
+  watchWakeKey,
+  watchWakeTriesKey,
+} from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
@@ -362,6 +369,34 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('codex')?.watchWakeTries).toBe(3);
   });
 
+  test('the read hint is declared where a seat has an inbox tool to name', () => {
+    // The two profiles whose seats carry an MCP inbox send their woken turn to the one direct
+    // call that lists the waiting messages: the typed line never carries the id `inbox_read`
+    // takes, so the read is always reached through `inbox_check`.
+    for (const cli of ['antigravity', 'cursor']) {
+      expect(profileFor(cli)?.readHint, cli).toBe('Read it with: call inbox_check now.');
+    }
+    // Muse types too, but reads with the drops command: the shipped sentence stands, as it does
+    // for a profile that declares no hint at all.
+    for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'gemini', 'jules']) {
+      expect(profileFor(cli)?.readHint, cli).toBeNull();
+    }
+  });
+
+  test('the read hint is read and checked by the loader’s own rules', () => {
+    // The sentence holds `: `, so the file's own YAML rule makes it a quoted scalar.
+    expect(readHintKey("read_hint: 'Read it with: call inbox_check now.'")).toBe('Read it with: call inbox_check now.');
+    // The longest accepted sentence is the shipped ceiling: the header has to keep room to name
+    // its sender inside the 80-column line.
+    expect(readHintKey(`read_hint: ${'x'.repeat(60)}`)).toBe('x'.repeat(60));
+    expect(readHintKey('cli: muse')).toBeNull();
+    // The last two carry a real newline inside a quoted scalar; a block scalar never reaches the
+    // check, because the file's own YAML reader refuses block scalars outright.
+    for (const bad of ['""', '5', `"${'x'.repeat(61)}"`, '" leading"', '"trailing "', '"two\\nlines"', '"trailing\\n"']) {
+      expect(() => readHintKey(`read_hint: ${bad}`), bad).toThrow(/read_hint/);
+    }
+  });
+
   test('the watch keys are read by the loader’s own rules', () => {
     expect(watchWakeKey('watch_wake: on')).toBe(true);
     expect(watchWakeKey('watch_wake: off')).toBe(false);
@@ -401,9 +436,9 @@ describe('team send: the typed wake', () => {
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: delivered (typed wake)\n');
     // One line, one Enter, and the line is the trigger that reads the drop, never the body.
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.typed[0]).toContain('team drops --read');
-    expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
+    // Muse has no MCP inbox, so its profile declares no `read_hint` and the shipped sentence
+    // stands: the drop read is this seat's fastest path.
+    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');
