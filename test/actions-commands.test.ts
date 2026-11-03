@@ -339,3 +339,130 @@ test('a field or --input with no explicit GET is POST', () => {
   expect(refusedByGuard('gh api repos/acme/demo --input body.json')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/acme/demo -X GET -f name=x')).toBeNull();
 });
+
+test('independent adversarial matrix: five gh api verb spellings, last-wins transitions, implied POST forms, comment delete/dismiss, and allowed neighbours', () => {
+  // 1. All five explicit verb spellings (-X V, -X=V, -XV, --method V, --method=V) in mixed case:
+  //    DELETE -> github-comment-delete ('refused in team seats: post a superseding comment instead')
+  //    POST / PUT / PATCH -> github-actions
+  //    GET -> null (allowed)
+  const deleteSpellings = [
+    'gh api -X delete repos/acme/demo/issues/comments/101',
+    'gh api -X=DeLeTe repos/acme/demo/pulls/comments/202',
+    'gh api -XdElEtE repos/acme/demo/commit_comments/303',
+    'gh api --method dElEtE repos/acme/demo/issues/comments/404',
+    'gh api --method=DELETE repos/acme/demo/releases/assets/505',
+    'gh -R acme/demo --hostname github.example.com api -X=delete repos/acme/demo/issues/comments/101',
+    '"gh" api -X=DELETE repos/acme/demo/issues/comments/101',
+    "'gh' api -Xdelete repos/acme/demo/issues/comments/101",
+    '\\gh api --method=delete repos/acme/demo/issues/comments/101',
+    'command gh api -X=DELETE repos/acme/demo/issues/comments/101',
+    'env GH_HOST=github.com gh api -X=DELETE repos/acme/demo/issues/comments/101',
+    '/opt/homebrew/bin/gh api -X=DELETE repos/acme/demo/issues/comments/101',
+    'echo 101 | xargs gh api -X=DELETE repos/acme/demo/issues/comments/101',
+    'find . -maxdepth 0 -exec gh api -X=DELETE repos/acme/demo/issues/comments/101 \\;',
+    'env -S "gh api -X=DELETE repos/acme/demo/issues/comments/101"',
+    'echo ok && gh api -X=DELETE repos/acme/demo/issues/comments/101',
+  ];
+  for (const cmd of deleteSpellings) {
+    expectSupersede(cmd);
+  }
+
+  for (const verb of ['PoSt', 'pUt', 'PaTcH']) {
+    for (const flag of [`-X ${verb}`, `-X=${verb}`, `-X${verb}`, `--method ${verb}`, `--method=${verb}`]) {
+      const cmd = `gh api ${flag} repos/acme/demo/issues/comments/101`;
+      expect(refusedByGuard(cmd)?.rule, cmd).toBe('github-actions');
+    }
+  }
+
+  for (const flag of ['-X gEt', '-X=GeT', '-XgEt', '--method GeT', '--method=gEt']) {
+    const cmd = `gh api ${flag} repos/acme/demo/issues/comments/101`;
+    expect(refusedByGuard(cmd), cmd).toBeNull();
+  }
+
+  // 2. Last explicit verb wins across all five spellings and across fields/--input:
+  //    ending in DELETE -> github-comment-delete
+  expectSupersede('gh api -X GET --method=POST -XPUT --method PATCH -X=dElEtE repos/acme/demo');
+  expectSupersede('gh api --method=GET -Xpost -X=DELETE -f body=note repos/acme/demo/issues/comments/1');
+  expectSupersede('gh api -f body=note --input payload.json --method delete repos/acme/demo/issues/comments/1');
+
+  //    ending in POST / PUT / PATCH after DELETE or GET -> github-actions
+  expect(refusedByGuard('gh api -X=DELETE --method=pOsT repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api --method DELETE -XpUt repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api -XDELETE -X=pAtCh repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api -X=GET --method=PUT -f q=1 repos/acme/demo')?.rule).toBe('github-actions');
+
+  //    ending in GET after DELETE or write verbs (even with -f/-F/--field/--raw-field/--input) -> allowed
+  expect(refusedByGuard('gh api -X=DELETE -X gEt repos/acme/demo')).toBeNull();
+  expect(refusedByGuard('gh api --method DELETE -X=GeT repos/acme/demo')).toBeNull();
+  expect(refusedByGuard('gh api -XDELETE -Xget repos/acme/demo')).toBeNull();
+  expect(refusedByGuard('gh api -X=POST --method get -f per_page=10 -F page=1 repos/acme/demo')).toBeNull();
+  expect(refusedByGuard('gh api -X=DELETE --method=GET --field state=open --raw-field sort=created --input body.json repos/acme/demo')).toBeNull();
+
+  // 3. Implied POST from every field / --input spelling when no explicit verb is present:
+  const impliedPostCmds = [
+    'gh api repos/acme/demo/issues/1/comments -f body=hi',
+    'gh api repos/acme/demo/issues/1/comments -fbody=hi',
+    'gh api repos/acme/demo/issues/1/comments -f=body=hi',
+    'gh api repos/acme/demo/issues/1/comments -F body=hi',
+    'gh api repos/acme/demo/issues/1/comments -Fbody=hi',
+    'gh api repos/acme/demo/issues/1/comments -F=body=hi',
+    'gh api repos/acme/demo/issues/1/comments --field body=hi',
+    'gh api repos/acme/demo/issues/1/comments --field=body=hi',
+    'gh api repos/acme/demo/issues/1/comments --raw-field body=hi',
+    'gh api repos/acme/demo/issues/1/comments --raw-field=body=hi',
+    'gh api repos/acme/demo/issues/1/comments --input comment.json',
+    'gh api repos/acme/demo/issues/1/comments --input=comment.json',
+  ];
+  for (const cmd of impliedPostCmds) {
+    expect(refusedByGuard(cmd)?.rule, cmd).toBe('github-actions');
+  }
+
+  //    And explicit GET in all 5 spellings overrides the implied POST from fields/--input:
+  for (const getFlag of ['-X get', '-X=get', '-Xget', '--method get', '--method=get']) {
+    const cmd = `gh api ${getFlag} repos/acme/demo/issues/1/comments -f per_page=5 -F page=1 --field sort=created --raw-field direction=desc --input params.json`;
+    expect(refusedByGuard(cmd), cmd).toBeNull();
+  }
+
+  // 4. Comment delete and review dismiss variations (all refused with github-comment-delete & supersede guidance):
+  const commentDeleteAndDismiss = [
+    'gh pr comment --delete-last',
+    'gh pr comment 17 --delete-last',
+    'gh pr comment 17 --delete-last=true',
+    'gh pr comment 17 --delete-last=1',
+    'gh -R acme/demo pr comment 17 --delete-last',
+    'gh --repo=acme/demo pr comment 17 --delete-last=true',
+    'gh issue comment --delete-last',
+    'gh issue comment 23 --delete-last',
+    'gh issue comment 23 --delete-last=true',
+    'gh -R acme/demo issue comment 23 --delete-last',
+    'gh pr review --dismiss',
+    'gh pr review 31 --dismiss',
+    'gh pr review 31 --dismiss=true -b "obsolete"',
+    'gh --repo acme/demo pr review 31 --dismiss',
+    'command gh pr review 31 --dismiss',
+    'env gh issue comment 23 --delete-last',
+  ];
+  for (const cmd of commentDeleteAndDismiss) {
+    expectSupersede(cmd);
+  }
+
+  // 5. Allowed neighbours (adding/editing comments, non-dismiss reviews, GraphQL reads, and quoted arguments):
+  const allowedNeighbours = [
+    'gh pr comment 17 --body "superseding comment with updated findings"',
+    'gh pr comment 17 --edit-last --body "amended findings"',
+    'gh issue comment 23 --body "superseding issue note"',
+    'gh issue comment 23 --edit-last --body "amended issue note"',
+    'gh pr review 31 --comment --body "review note"',
+    'gh pr review 31 --approve --body "looks good"',
+    'gh pr review 31 --request-changes --body "please add test"',
+    'gh api repos/acme/demo/issues/comments/101',
+    'gh api repos/acme/demo/pulls/17/comments',
+    'gh api graphql -f query="query { viewer { login } }"',
+    'team send worker "do not run gh pr comment --delete-last or gh api -X=DELETE repos/acme/demo"',
+    'echo "gh pr review --dismiss && gh api -X=DELETE repos/acme/demo"',
+  ];
+  for (const cmd of allowedNeighbours) {
+    expect(refusedByGuard(cmd), cmd).toBeNull();
+  }
+});
+
