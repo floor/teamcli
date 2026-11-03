@@ -1340,6 +1340,186 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
+  test("the entity's main orchestrator lifts a stopped seat's sign-off, and puts it back when the launch fails", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+
+    // 1. Failed launch restores `stopped: true` on `parked-seat`.
+    const failedHarness = makeHarness(fixture, { createFails: true });
+    const failIo = testIo(fixture.root);
+    failIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['parked-seat'], failIo, failedHarness.sources)).not.toBe(0);
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(true);
+    expect(failIo.err).toContain('its sign-off was put back in the team file');
+
+    // 2. Successful launch clears `stopped: true` and brings `parked-seat` to ready.
+    const { sources, did } = makeHarness(fixture);
+    const okIo = testIo(fixture.root);
+    okIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['parked-seat'], okIo, sources), okIo.err).toBe(0);
+    expect(okIo.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).toBe('ready');
+  });
+
+  test("the entity's main orchestrator is still refused --abandon on the orchestrator, operator, or a working seat", async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      const held = (state.sessions.acme ??= emptySession());
+      held.seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      held.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+      held.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+
+    for (const leadTarget of ['orchestrator', 'ops']) {
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart([leadTarget, '--abandon'], io, sources), leadTarget).toBe(1);
+      expect(io.err, leadTarget).toBe('team restart: a seat caller does not abandon the orchestrator\'s or the operator\'s seat; this call is orchestrator\n');
+      expect(did.closed, leadTarget).toEqual([]);
+      expect(did.created, leadTarget).toBe(0);
+    }
+
+    // `--abandon` on a `working` worker seat is also refused to the main orchestrator.
+    const workingHarness = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
+    const workingIo = testIo(fixture.root);
+    workingIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['worker', '--abandon'], workingIo, workingHarness.sources)).toBe(1);
+    expect(workingIo.err).toContain('worker is working');
+    expect(workingHarness.did.closed).toEqual([]);
+    expect(workingHarness.did.created).toBe(0);
+  });
+
+  test('a same-named caller from a foreign session or wrong pane is refused, and the name self-guard still holds when mainOrchestrator is null', async () => {
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      const held = (state.sessions.acme ??= emptySession());
+      held.seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      held.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+
+    // 1. Wrong pane in head session (`pane-spoof` when state records `pane-main`): refused.
+    const wrongPaneHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const wrongPaneIo = testIo(fixture.root);
+    wrongPaneIo.callerSources = sharedFleetSources({ headPane: 'pane-spoof', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator'], wrongPaneIo, wrongPaneHarness.sources)).toBe(1);
+    expect(wrongPaneHarness.did.created).toBe(0);
+
+    // 2. Same-named caller placed in a foreign session (`stranger`): refused.
+    const foreignHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const foreignIo = testIo(fixture.root, { kind: 'seat', name: 'orchestrator', pane: 'pane-main', session: 'stranger' });
+    expect(await runRestart(['orchestrator'], foreignIo, foreignHarness.sources)).toBe(1);
+    expect(foreignHarness.did.created).toBe(0);
+
+    // 3. With `mainOrchestrator === null` (caller stands on `pane-spoof`) and dev mode folding the
+    //    caller gate, the `byName` self-guard still refuses `orchestrator` restarting `orchestrator`.
+    const devSelfHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const devSelfIo = testIo(fixture.root, { kind: 'seat', name: 'orchestrator', pane: 'pane-spoof', session: 'acme' });
+    devSelfIo.env = { TEAMCLI_DEV_MODE: '1' };
+    expect(await runRestart(['orchestrator'], devSelfIo, devSelfHarness.sources)).toBe(1);
+    expect(devSelfIo.err).toContain('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+    expect(devSelfHarness.did.created).toBe(0);
+  });
+
+  test('an unreadable teams registry, a target with no entity, and a head team without a valid single orchestrator all fail closed', async () => {
+    // 1. Target team has no `entity:` in its file (`team.entity === null`).
+    const noEntityFixture = makeFixture(
+      TEAM_YAML.replace('coordinator: lead', 'coordinator: orchestrator').replace('    name: lead\n', '    name: orchestrator\n'),
+    );
+    updateState(noEntityFixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const noEntityHead = makeHeadTeam(noEntityFixture.base, 'floor', 'floor');
+    recordMainOrchestrator(noEntityHead.dir, noEntityHead.session, 'pane-main');
+    upsertTeam(noEntityFixture.home, teamIdOf(noEntityFixture.root), { project: 'acme', entity: null, session: 'acme', root: noEntityFixture.root, at: NOW.toISOString() });
+    upsertTeam(noEntityFixture.home, teamIdOf(noEntityHead.root), { project: 'floor', entity: 'floor', session: noEntityHead.session, root: noEntityHead.root, at: NOW.toISOString() });
+    const noEntityHarness = makeHarness(noEntityFixture, { workerName: 'orchestrator' });
+    const noEntityIo = testIo(noEntityFixture.root);
+    noEntityIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: noEntityHead.root, targetRoot: noEntityFixture.root });
+    expect(await runRestart(['orchestrator'], noEntityIo, noEntityHarness.sources)).toBe(1);
+    expect(noEntityHarness.did.created).toBe(0);
+
+    // 2. Head team led by `leads: true` on one seat without top-level `coordinator:` resolves
+    //    `loaded.team.orchestrator` to that seat (`src/file/sections/lead.ts:22-48`); whereas a
+    //    head file with `leads: true` on two seats or on another seat (or no lead key at all) is
+    //    refused (`!loaded.ok` or `placed.name !== loaded.team.orchestrator`).
+    const fixture = makeFixture(crossTeamTargetYaml('floor'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+    recordMainOrchestrator(head.dir, head.session, 'pane-main');
+    upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+    setRoster(fixture.home, teamIdOf(head.root), [
+      { agent: 'agt_000000000000', seat: 'orchestrator', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator', leads: true },
+    ]);
+    const headFile = join(head.dir, 'team.yaml');
+    const validHeadText = readFileSync(headFile, 'utf8');
+
+    // 2a. Head `team.yaml` with neither `coordinator:` nor `leads: true` fails closed (`!loaded.ok`).
+    writeFileSync(headFile, validHeadText.replace('coordinator: orchestrator\n', ''));
+    const noOrchestratorHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const noOrchestratorIo = testIo(fixture.root);
+    noOrchestratorIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator'], noOrchestratorIo, noOrchestratorHarness.sources)).toBe(1);
+    expect(noOrchestratorHarness.did.created).toBe(0);
+
+    // 2b. Head `team.yaml` omitting `coordinator:` and putting `leads: true` on `ops` instead of
+    //     `orchestrator` refuses `orchestrator` (`placed.name !== loaded.team.orchestrator`).
+    writeFileSync(
+      headFile,
+      validHeadText
+        .replace('coordinator: orchestrator\n', '')
+        .replace('    name: ops\n', '    name: ops\n    leads: true\n'),
+    );
+    const otherLeadHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const otherLeadIo = testIo(fixture.root);
+    otherLeadIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator'], otherLeadIo, otherLeadHarness.sources)).toBe(1);
+    expect(otherLeadHarness.did.created).toBe(0);
+
+    // 2c. Head `team.yaml` omitting `coordinator:` and putting `leads: true` on the single
+    //     `orchestrator` seat resolves `loaded.team.orchestrator === 'orchestrator'` and is admitted.
+    writeFileSync(
+      headFile,
+      validHeadText
+        .replace('coordinator: orchestrator\n', '')
+        .replace('    name: orchestrator\n', '    name: orchestrator\n    leads: true\n'),
+    );
+    const singleLeadsHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const singleLeadsIo = testIo(fixture.root);
+    singleLeadsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator'], singleLeadsIo, singleLeadsHarness.sources), singleLeadsIo.err).toBe(0);
+    expect(singleLeadsHarness.did.created).toBe(1);
+
+    // 3. Restore valid head `team.yaml`, then corrupt `~/.config/team/teams.yaml`: unreadable registry fails closed.
+    writeFileSync(headFile, validHeadText);
+    writeFileSync(join(fixture.home, '.config', 'team', 'teams.yaml'), 'teams:\n  broken: [\n');
+    const unreadableHarness = makeHarness(fixture, { workerName: 'orchestrator' });
+    const unreadableIo = testIo(fixture.root);
+    unreadableIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    expect(await runRestart(['orchestrator'], unreadableIo, unreadableHarness.sources)).toBe(1);
+    expect(unreadableHarness.did.created).toBe(0);
+  });
+
   // Dev mode folds the caller gate into a warning; it does not lift the sign-off. The refusal
   // still stands, and names the command that does work.
   test('a worker is still refused the stopped seat with dev mode on, naming `team restart`', async () => {
