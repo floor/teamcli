@@ -134,4 +134,28 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
       expect(history.entries[0]?.failed).toBeUndefined();
     }
   });
+
+  test('a long summary and multi-line body on Cursor truncates the header to fit <= 80 chars, keeps call inbox_check now whole, and never types the body', async () => {
+    const made = cursorWorld();
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
+    const host = fake(made, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+    });
+    const longBody = `SUMMARY-${'C'.repeat(120)}\nSECOND-LINE-BODY-SECRET\nTHIRD-LINE-BODY-SECRET`;
+    const io = owner(made.root);
+    expect(await runSend(['cursor', longBody], io, host)).toBe(0);
+    expect(pane.typed).toHaveLength(1);
+    const typedLine = pane.typed[0] as string;
+    expect(typedLine.length).toBe(80);
+    expect(typedLine.endsWith(' Read it with: call inbox_check now.')).toBe(true);
+    expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
+    expect(typedLine).not.toContain('\n');
+    expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
+    expect(typedLine).not.toContain('THIRD-LINE-BODY-SECRET');
+    const drops = join(made.dir, 'send-drops', 'acme', 'cursor');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
+  });
 });
