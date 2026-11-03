@@ -500,6 +500,15 @@ function ghWriteMethod(args: readonly string[]): boolean {
   return method !== null && GH_WRITE_METHODS.has(method);
 }
 
+/** `-fquery=…` and `-Fquery=…`: the short flag glued to its value. Null for `-f`, `-f=`, and other words. */
+function gluedFieldBody(arg: string): string | null {
+  if ((arg.startsWith('-f') && arg !== '-f' && !arg.startsWith('-f='))
+    || (arg.startsWith('-F') && arg !== '-F' && !arg.startsWith('-F='))) {
+    return arg.slice(2);
+  }
+  return null;
+}
+
 /** A parameter gh turns into a POST when the line names no GET. `--input` counts with the fields. */
 function ghHasRequestParameters(args: readonly string[]): boolean {
   for (const arg of args) {
@@ -508,6 +517,7 @@ function ghHasRequestParameters(args: readonly string[]): boolean {
       arg.startsWith('--field=') || arg.startsWith('--raw-field=') || arg.startsWith('--input=')
       || arg.startsWith('-f=') || arg.startsWith('-F=')
     ) return true;
+    if (gluedFieldBody(arg) !== null) return true;
   }
   return false;
 }
@@ -549,6 +559,10 @@ function graphqlQueries(args: readonly string[]): string[] | null {
       if (body === 'query' || (body !== undefined && body.startsWith('query='))) {
         if (!take(body === 'query' ? args[at + 2] : body)) return null;
       }
+    }
+    const glued = gluedFieldBody(arg);
+    if (glued !== null && (glued === 'query' || glued.startsWith('query='))) {
+      if (!take(glued)) return null;
     }
     if (arg === '--input') {
       const text = readQueryFile(args[at + 1] ?? '');
