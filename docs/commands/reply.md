@@ -79,18 +79,21 @@ the new thread, and `in-reply-to` names the last record of the closed one. Closi
 closed thread is refused, naming what ended it, and nothing is written.
 
 The answered record moves to `replied`: the reply writes a signed receipt (`<id>.replied.json`)
-beside the message it answers, in the answering seat's own folder. The reply is delivered the way
-the drop leg delivers — the record is left in the target's folder, nothing is typed and no frame
-is sent — and the outcome line says `delivered (drop)` only after the written record passes the
-checks the recipient's own readers make: its name is the id, its `to`, `root` and `session` bind
-it to that seat and that tree, and its signature verifies. A write that cannot be confirmed says
-the folder it wrote to and that the recipient's reader was not confirmed. The receiving seat's own
-watch rings the message-display wake line: the rendered header and the fixed
-`Read it with: team drops --read.` hint. A
+beside the message it answers, in the answering seat's own folder. The record is then carried
+through the receiving seat's own cascade, exactly as a send of it would be: its channel-class legs
+(the development channel's push, the frame on a Claude session's cross-session socket), the seat's
+sender-posted webhook, the profile-gated typed wake, and the bus inbox under all three. The
+outcome line names the leg that took it, in the same words a send prints — `delivered (socket)`,
+`sent (channel) (… ms)`, `delivered (webhook, … ms)`, `delivered (typed wake)` — and
+`delivered (drop)` when the mailbox takes it, which the run confirms only after the written record
+passes the checks the recipient's own readers make: its name is the id, its `to`, `root` and
+`session` bind it to that seat and that tree, and its signature verifies. A record whose delivery
+cannot be confirmed says the folder it wrote to and that the recipient's reader was not confirmed.
+The receiving seat's own watch rings the message-display wake line: the rendered header and the
+fixed `Read it with: team drops --read.` hint. A
 [team send --wait](send.md) waiting on that thread wakes on the reply record and returns
-`answered`. A reply's text is
-kept in the record, and the project's message history keeps one line for it, with `thread`,
-`in-reply-to` and `via: drop`.
+`answered`. A reply's text is kept in the record, and the project's message history keeps one line
+for it, with `thread`, `in-reply-to` and the leg's `via`.
 
 ## Synopsis
 
@@ -128,7 +131,7 @@ A reply that is refused writes nothing: no record, no receipt, no close, no hist
 
 ## Who may run it
 
-The owner, or a seat of the team, from a terminal outside herdr or its own pane. A run with no
+The owner, or a seat of the team, from a terminal outside the terminal host or its own pane. A run with no
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
 the record sits in its own folder — and the reply reaches the seat the record's `from` names, in
 the team the record's registry id places it: a sender whose own file no longer declares the seat
@@ -152,7 +155,7 @@ then the outcome line. A refused run prints its line on stderr and has none.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| replied | `<seat>: delivered (drop)` on stdout — the seat the reply went to, once its reader's folder holds the verified record | 0 |
+| replied | `<seat>: delivered (socket)`, `<seat>: sent (channel) (… ms)`, `<seat>: delivered (webhook, … ms)`, `<seat>: delivered (typed wake)`, or `<seat>: delivered (drop)` on stdout — the seat the reply went to and the leg that took it; the drop is claimed once its reader's folder holds the verified record | 0 |
 | replied, reader unconfirmed | `<seat>: wrote to <folder>, and could not confirm the recipient's reader will read it` on stdout | 0 |
 | replied to a client | `client:<client id>: replied` on stdout | 0 |
 | closed | `<thread>: closed` on stdout | 0 |

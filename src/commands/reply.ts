@@ -26,12 +26,14 @@
 // recipient's folder. A message of an earlier build — `.agents/messages/<seat>/<id>.json` —
 // carries no thread and is read, never answered.
 //
-// A reply is delivered the way the drop leg delivers: the record is left in the target's folder,
-// nothing is typed and no frame is sent, and the receiving seat's own watch rings its own read
-// (`Team: run team drops --read --seat <seat> --session <session>`). A human's pane takes exactly
-// that, so no separate human rule is needed here. The report says `delivered (drop)` only after
-// the written record passes the checks that seat's own readers make (`landsWhereRead`); a write
-// that cannot be confirmed says where it wrote and that the reader was not confirmed.
+// The record is written into the target's folder exactly as it always was, and then carried
+// through the receiving seat's own cascade, as a send of it would be (`walkReplyDelivery`): its
+// channel-class legs, its sender-posted webhook, the profile-gated typed wake, and the bus inbox
+// under all three. The report names the leg that took the answer; `delivered (drop)` is claimed
+// only after the written record passes the checks that seat's own readers make
+// (`landsWhereRead`), and a write that cannot be confirmed says where it wrote and that the
+// reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
+// read an answer marks — are decided before the walk and are untouched by it.
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -80,7 +82,7 @@ import {
 import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { recordDir } from './messages.ts';
-import { admissionOf, sealDropTree, senderIdOf } from './send.ts';
+import { admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
 
 export const USAGE = `Usage: team reply <id> [<text>] [--close] [--json]
        team reply <id> --close
@@ -99,9 +101,13 @@ export type ReplyHost = {
   now: () => Date;
   /** The id a reply record is written under; the real host mints a UUID, a test pins one. */
   newId?: () => string;
+  /** The delivery host the answer's own walk reads its settings, panes and routes through. The
+   *  real host binds the send's; a test hands the walk a fake, and an absent one leaves the
+   *  answer the record alone, exactly as a reply was before the walk existed. */
+  send?: SendHost;
 };
 
-export const realHost: ReplyHost = { home: homedir(), now: () => new Date() };
+export const realHost: ReplyHost = { home: homedir(), now: () => new Date(), send: realSendHost };
 
 const reply: Command = (argv, io) => runReply(argv, io, realHost);
 export default reply;
@@ -994,15 +1000,61 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   } finally {
     lock.release();
   }
-  // What this run can stand behind: the record is where the recipient's reader reads, or the
-  // write succeeded somewhere and the reader was not confirmed.
-  const summary = landed
-    ? `${targetSeat}: delivered (drop)`
-    : `${targetSeat}: wrote to ${recordDir(toRoot, toSession, targetSeat)}, and could not confirm the recipient's reader will read it`;
-  logLine(dir, 'reply', who, summary, host.now());
   // The history line belongs to the team the record was written into: the answer's own team, which
   // is the owner endpoint's team when the owner asked.
   const toProject = endpoint !== null ? endpoint.team.project : seatSender !== null ? seatSender.team.project : team.project;
+  // The delivery half: the record written above is walked through the receiving side's own
+  // cascade, exactly as a send of it would be — its channel-class legs, its sender-posted
+  // webhook, the profile-gated typed wake, and the bus inbox under all three. The walk never
+  // writes a second record (every leg's write finds this answer's copy at its id), and nothing
+  // above is touched by it: who may reply, the thread and the read the answer marks stand as
+  // they were. A host that binds no send host leaves the answer the record as it always was.
+  const targetAgentReach = endpoint !== null
+    ? endpoint.agent.reach
+    : seatSender !== null
+      ? seatSender.agent.reach
+      : answered.from_id !== null
+        ? getAgent(host.home, answered.from_id)?.reach ?? null
+        : null;
+  const localTargetRow = (namingFile ?? team).seats.find((seat) => seat.name === targetSeat);
+  const walk = host.send === undefined
+    ? null
+    : await walkReplyDelivery({
+        io,
+        host: host.send,
+        dir: toDir,
+        root: toRoot,
+        project: toProject,
+        session: toSession,
+        seat: targetSeat,
+        cli: localTargetRow?.cli ?? 'claude-code',
+        payload,
+        naming,
+        file: namingFile,
+        sender: {
+          teamId: fileTeamId,
+          project: team.project,
+          label: placed.kind === 'seat' ? labelNameOf(team, placed.name) : null,
+        },
+        address: targetAgentReach?.address ?? null,
+        who,
+      });
+  // What this run can stand behind: the leg that took the answer, or the record where the
+  // recipient's reader reads, or the write that succeeded without a confirmed reader.
+  const summary = walk?.summary ?? (landed
+    ? `${targetSeat}: delivered (drop)`
+    : `${targetSeat}: wrote to ${recordDir(toRoot, toSession, targetSeat)}, and could not confirm the recipient's reader will read it`);
+  logLine(dir, 'reply', who, summary, host.now());
+  const walkedVia = walk?.summary == null ? 'drop' : walk.via;
+  const walkedOutcome = walkedVia === 'socket'
+    ? 'delivered'
+    : walkedVia === 'channel'
+      ? 'sent (channel)'
+      : walkedVia === 'webhook'
+        ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
+        : walkedVia === 'typed'
+          ? 'delivered (typed wake)'
+          : landed ? 'delivered' : 'sent (unconfirmed)';
   appendHistory(toProject, toRoot, host.home, {
     ts: at,
     from: me,
@@ -1014,9 +1066,10 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     id: replyId,
     thread,
     in_reply_to: answered.id,
-    outcome: landed ? 'delivered' : 'sent (unconfirmed)',
+    outcome: walkedOutcome,
     ms: host.now().getTime() - startedAt,
-    via: 'drop',
+    via: walkedVia,
+    ...(walk !== null && walk.failures.length > 0 ? { failed: [...walk.failures] } : {}),
   });
 
   return written(io, json, {
