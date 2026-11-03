@@ -41,9 +41,9 @@ import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
 import {
-  checkedDropRecord,
-  checkedMailboxReceipt,
-  checkedMailboxRecord,
+  checkedDropRelative,
+  checkedMailboxReceiptRelative,
+  checkedMailboxRelative,
   dropFolderIsReal,
   mailboxFolderIsReal,
   RECORD_NAME,
@@ -547,7 +547,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           // record is left for a pass that has one.
           let entry = cachedEntry(state, seatDir, file, fresh.stamp);
           if (entry === null || entry.kind !== 'drop') {
-            const checked = checkedDropRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+            const checked = checkedDropRelative(root, session, seat, file, { session, seat, record_id: id }, scope, keyState.key);
             stats.filesRead += 1;
             if (checked.ok) {
               entry = { kind: 'drop', verified: true, event: checked.event };
@@ -578,8 +578,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let refusal: string | null = null;
         if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
           for (const name of [pending.id, `${pending.id}.json`]) {
-            const checked = checkedDropRecord(
-              join(seatDir, name),
+            const checked = checkedDropRelative(
+              root,
+              session,
+              seat,
+              name,
               { session, seat, record_id: pending.id },
               scope,
               keyState.key,
@@ -683,7 +686,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           // checked read keeps the envelope, signature and addressing rule those records answer
           // to, and refuses a linked file or a folder another checkout owns.
           let next: MessageEntry = { kind: 'message', keyPrint, verified: false, at: nowIso, ownerDigest: false };
-          const checked = checkedMailboxRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          const checked = checkedMailboxRelative(root, seat, file, { session, seat, record_id: id }, scope, keyState.key);
           stats.verifies += 1;
           if (checked.ok) {
             const from = checked.from;
@@ -732,7 +735,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let entry = cachedEntry(state, seatDir, file, fresh.stamp);
         if (entry === null || entry.kind !== 'signed-receipt' || entry.keyPrint !== keyPrint) {
           let next: SignedReceiptEntry = { kind: 'signed-receipt', keyPrint, verified: false, id, at: nowIso };
-          const checked = checkedMailboxReceipt(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          const checked = checkedMailboxReceiptRelative(root, seat, file, { session, seat, record_id: id }, scope, keyState.key);
           stats.verifies += 1;
           if (checked.ok) {
             next = { kind: 'signed-receipt', keyPrint, verified: true, id, at: checked.at ?? nowIso };
@@ -814,10 +817,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       } else if (!dropFolderIsReal(root, session, entry.to)) {
         refusal = 'the history line names no drop folder of this checkout';
       } else {
-        const seatDir = join(root, '.agents', 'send-drops', session, entry.to);
         for (const name of [entry.id, `${entry.id}.json`]) {
-          const checked = checkedDropRecord(
-            join(seatDir, name),
+          const checked = checkedDropRelative(
+            root,
+            session,
+            entry.to,
+            name,
             { session, seat: entry.to, record_id: entry.id },
             scope,
             keyState.key,
