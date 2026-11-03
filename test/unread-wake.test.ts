@@ -38,6 +38,7 @@ import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
 import { reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
+import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
@@ -93,13 +94,19 @@ seats:
  *  must show on the pass's own look before the wake is reached. */
 const MUSE_IDLE = readFileSync(new URL('./fixtures/muse/1.4.11/idle.txt', import.meta.url), 'utf8');
 
-/** The same team with the helper seat on a CLI whose profile declares the typed wake (Muse or
- *  Cursor): the watch's retry is on for it by default. `extra` adds seat-file keys after the
- *  launch line, as a team file writes them. */
-function typedTeamText(root: string, lobby: string, cli: 'muse' | 'cursor', extra = ''): string {
+/** The interrupted Codex frame: the banner, the empty placeholder, and the warning on the
+ *  status row. A native leg that was taken still leaves this box idle. */
+const CODEX_INTERRUPTED = readFileSync(new URL('./fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
+
+/** The same team with the helper seat on a CLI whose profile declares the typed wake (Muse,
+ *  Cursor, or Codex): the watch's retry is on for it by default. `extra` adds seat-file keys
+ *  after the launch line, as a team file writes them. */
+function typedTeamText(root: string, lobby: string, cli: 'muse' | 'cursor' | 'codex', extra = ''): string {
   const seat = cli === 'muse'
     ? { vendor: 'meta', model: 'Muse Wonder Full', launch: 'muse' }
-    : { vendor: 'cursor', model: 'Cursor', launch: 'cursor-agent' };
+    : cli === 'cursor'
+      ? { vendor: 'cursor', model: 'Cursor', launch: 'cursor-agent' }
+      : { vendor: 'test', model: 'Test', launch: 'codex' };
   return teamText(root, lobby).replace(
     `  - role: implementer
     name: helper
@@ -2134,6 +2141,24 @@ describe('the cascade re-wake below a channel leg', () => {
     const owner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(owner.body).toContain(`helper: a message from owner is queued, not woken - unread for 1 min (id ${UNREAD_A}); its wake line was sent at ${atN.toISOString()}`);
     expect(leadReportBody(made.dir, UNREAD_A)).toContain(owner.body);
+  });
+
+  test('a taken native leg on the interrupted idle screen is typed', async () => {
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'codex'));
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'native' });
+    expect(readScreen('codex', CODEX_INTERRUPTED).kind).toBe('idle');
+    const one = pane(CODEX_INTERRUPTED);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cli).toBe('codex');
+    expect(linesFor(made, UNREAD_A)[1]).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
   });
 });
 

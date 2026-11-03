@@ -322,6 +322,11 @@ screen:
     placeholders:
       - equals: ''
       - equals: Ask Codex to do anything
+    # An interrupted turn returns to this same placeholder. The banner
+    # `■ Conversation interrupted - use /feedback if something went wrong`
+    # sits above a blank row, and the warning stays on the status row
+    # (0.161.0/interrupted-idle.txt). That banner is transcript above the
+    # frame, so the box is still the empty prompt.
     # unsent.txt and exit-typed.txt show one empty row under the text, between it and the
     # status line: the drop the pane draws of its own, inside the box's frame. The box read
     # strips up to one trailing empty row as that frame; a row beyond it is one the typed

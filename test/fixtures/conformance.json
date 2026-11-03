@@ -701,6 +701,13 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/interrupted-idle.txt",
+      "cli": "codex",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/near-context-used-follower.txt",
       "cli": "codex",
       "classify": "unknown",

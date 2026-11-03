@@ -18,7 +18,7 @@ import { upsertProject } from '../../src/registry/projects.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { runningModel } from '../../src/status/statusline.ts';
 import { bumpGeneration, keyOf, signDomain } from '../../src/store/keys.ts';
-import { classify, classifyComposer, readScreen } from '../../src/watch/screen.ts';
+import { classify, classifyComposer, readBox, readScreen } from '../../src/watch/screen.ts';
 import type { YamlValue } from '../../src/yaml.ts';
 import { SAMPLE_RULES, wordWrap } from '../helpers.ts';
 
@@ -218,6 +218,19 @@ describe('Codex launch and captured screens', () => {
     // nothing from them.
     expect(readScreen('codex', latest('idle-hint')).kind).toBe('idle');
     expect(readScreen('codex', latest('unsent')).kind).toBe('unsent');
+  });
+
+  test('the interrupted frame is the empty prompt under the banner', () => {
+    const captured = readFileSync(new URL('../fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
+    const rows = captured.trimEnd().split('\n');
+    expect(rows[0]).toBe('■ Conversation interrupted - use /feedback if something went wrong');
+    expect(rows.at(-3)).toBe('› Ask Codex to do anything');
+    const status = rows.at(-1) ?? '';
+    expect(status.startsWith('  GPT-6.1-Sol high · Context 64% left · weekly 5% left')).toBe(true);
+    expect(status.endsWith('⚠ 3 warnings · f2 to view')).toBe(true);
+    expect(readScreen('codex', captured).kind).toBe('idle');
+    expect(classifyComposer('codex', captured.split('\n')).kind).toBe('idle');
+    expect(readBox('codex', captured)).toBeNull();
   });
   test('a dialog above the status row and its chrome row is still the dialog', () => {
     // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two
