@@ -60,6 +60,21 @@ export type Row = {
  *  it out, so an omission reads the default store and never an empty one. */
 export type ReachRoute = { dir: string; root: string; home: string };
 
+/** What a caller's daemon reading proves about this session's watch record, so the note never
+ *  presents a process the record names as the current watch once that process is gone. Absent
+ *  when the caller read no daemon: the note is then the record's own words. */
+export type WatchDaemonReading = {
+  /** The live daemon's process, or null when no daemon is running (or the reading cannot tell). */
+  pid: number | null;
+  /** Whether that daemon records hosting this session's root — a row for it in its own record. */
+  hostsRoot: boolean;
+  /** Whether any checkout's bus first reconcile pass is still running, so a root the daemon has
+   *  not recorded yet is still on its way through the serial start. */
+  firstPassRunning: boolean;
+  /** Whether the process the watch record names still exists. */
+  recordedPidAlive: boolean;
+};
+
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
 export const APPROVAL_REPAIR = 'the live file is what the commands read';
@@ -292,6 +307,8 @@ export function socketLegOf(input: {
 // verified standing, the defaults under none — so the verdict reads one object. `trust` is
 // whether the owner's live grant turns trust answering on for this team: the caller passes
 // `dialogsTrustInForce`, so the repair line offers `team answer` only while the setting is on.
+// `daemon` is the caller's daemon reading, when it made one: the watch note uses it so a record
+// left behind by a daemon that has since stopped is never printed as the current watch.
 export function compare(
   team: TeamFile,
   session: string,
@@ -304,6 +321,7 @@ export function compare(
   signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string }>,
   continuityIds?: ReadonlyMap<string, string | null>,
   route?: ReachRoute,
+  daemon?: WatchDaemonReading,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -695,17 +713,9 @@ export function compare(
 
   // The watch the state records, as one line: where it runs, whose process it is once a pass has
   // recorded one, and how old its last heartbeat is. The difference below says when that is too
-  // old; this note is what stands either way.
-  if (state.watch) {
-    const beat = Date.parse(state.watch.heartbeat);
-    const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
-    const age = seconds === null
-      ? 'never recorded'
-      : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
-    const where = state.watch.pane ? `pane ${state.watch.pane}` : 'pane not recorded';
-    const whose = state.watch.pid !== undefined ? `pid ${state.watch.pid}` : 'pid not recorded yet';
-    notes.push(`watch: ${where}, ${whose}, last heartbeat ${age}`);
-  }
+  // old; this note is what stands either way. A record left by a daemon that has since stopped
+  // is not the watch now, and the note says so rather than printing the dead process as it.
+  if (state.watch) notes.push(...watchNotes(state.watch, daemon, now));
 
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
@@ -766,6 +776,44 @@ export function compare(
   }
 
   return { rows, differences, notes };
+}
+
+/**
+ * The watch note, or the facts that replace it. The record's own words stand while they are
+ * true. A record a daemon host wrote (it carries the epoch fence) is not the current watch once
+ * its process is gone, or while the live daemon does not host this root: the reading says what
+ * the machine is doing now — the live daemon has this checkout in its own
+ * record, or has not reached it yet — and names a dead process for what it is. Nothing here
+ * rewrites a pane watch record, whose process is not a daemon's.
+ */
+function watchNotes(
+  watch: NonNullable<SessionState['watch']>,
+  daemon: WatchDaemonReading | undefined,
+  now: Date,
+): string[] {
+  const beat = Date.parse(watch.heartbeat);
+  const seconds = Number.isFinite(beat) ? Math.max(0, Math.round((now.getTime() - beat) / 1000)) : null;
+  const age = seconds === null
+    ? 'never recorded'
+    : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)} min ago`;
+  const where = watch.pane ? `pane ${watch.pane}` : 'pane not recorded';
+  const whose = watch.pid !== undefined ? `pid ${watch.pid}` : 'pid not recorded yet';
+  const record = `watch: ${where}, ${whose}, last heartbeat ${age}`;
+  if (daemon === undefined || watch.pid === undefined || watch.epoch === undefined) return [record];
+  // A live daemon that has not reached this root yet is a record that is not the current watch
+  // either, even while the process it names still exists (a daemon restarted onto other roots).
+  const notHosted = daemon.pid !== null && !daemon.hostsRoot;
+  if (daemon.recordedPidAlive && !notHosted) return [record];
+  const lines: string[] = [];
+  if (notHosted) {
+    // The first pass over the roots before this one is what holds it back, said only while one
+    // is really running.
+    lines.push(
+      `root not yet hosted by daemon ${String(daemon.pid)}${daemon.firstPassRunning ? ' (first pass running)' : ''}`,
+    );
+  }
+  if (!daemon.recordedPidAlive) lines.push(`watch record names a stopped daemon (pid ${String(watch.pid)})`);
+  return lines;
 }
 
 // A pane that no longer holds the process team launched: no CLI at all, or a foreground CLI that
