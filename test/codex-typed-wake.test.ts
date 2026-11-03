@@ -11,15 +11,23 @@ import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
-import { readBox, readScreen } from '../src/watch/screen.ts';
+import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { recordBody } from './helpers.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'codex', '0.157.0');
+const FIXTURES_161 = join(import.meta.dir, 'fixtures', 'codex', '0.161.0');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working.txt'), 'utf8');
+const WORKING_161 = readFileSync(join(FIXTURES_161, 'working.txt'), 'utf8');
 const UNSENT = readFileSync(join(FIXTURES, 'unsent.txt'), 'utf8');
 const PERMISSION = readFileSync(join(FIXTURES, 'permission.txt'), 'utf8');
+const PERMISSION_161 = readFileSync(join(FIXTURES_161, 'permission.txt'), 'utf8');
+const TRUST = readFileSync(join(FIXTURES, 'trust.txt'), 'utf8');
+const TRUST_161 = readFileSync(join(FIXTURES_161, 'trust.txt'), 'utf8');
+const PLAN_APPROVAL = readFileSync(join(FIXTURES_161, 'plan-approval.txt'), 'utf8');
+const QUESTION_161 = readFileSync(join(FIXTURES_161, 'question.txt'), 'utf8');
+const VENDOR_NOTICE = readFileSync(join(FIXTURES, 'startup.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
@@ -124,6 +132,116 @@ describe('the Codex typed wake: the profile’s own screens gate the keys', () =
     expect(out).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(0);
+  });
+
+  test('a box with only spaces or altered internal spacing after typing gets no Enter', async () => {
+    const spacesOnly = wakeFake((read) => (read < 2 ? IDLE : holding('    ')));
+    const outSpaces = await deliverTypedWake(spacesOnly.host, 'pane-1', LINE, 'codex', FAST);
+    expect(readScreen('codex', holding('    ')).kind).toBe('idle');
+    expect(boxHoldsText('codex', LINE, holding('    '))).toBe(false);
+    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
+    expect(spacesOnly.typed).toEqual([LINE]);
+    expect(spacesOnly.enters).toBe(0);
+
+    const doubledSpace = LINE.replace(' ', '  ');
+    const internalSpaces = wakeFake((read) => (read < 2 ? IDLE : holding(doubledSpace)));
+    const outInternal = await deliverTypedWake(internalSpaces.host, 'pane-1', LINE, 'codex', FAST);
+    expect(readScreen('codex', holding(doubledSpace)).kind).toBe('unsent');
+    expect(boxHoldsText('codex', LINE, holding(doubledSpace))).toBe(false);
+    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    expect(internalSpaces.typed).toEqual([LINE]);
+    expect(internalSpaces.enters).toBe(0);
+  });
+
+  test('partial text or a modified suggestion in the box refuses before any key and gets no Enter if drawn after typing', async () => {
+    const prefix = LINE.slice(0, 12);
+    const suffix = LINE.slice(5);
+    const partialSuggestion = 'Ask Codex to do';
+    const extendedSuggestion = 'Ask Codex to do anything now';
+    for (const draft of [holding(prefix), holding(suffix), holding(partialSuggestion), holding(extendedSuggestion)]) {
+      expect(readScreen('codex', draft).kind).toBe('unsent');
+      expect(boxHoldsText('codex', LINE, draft)).toBe(false);
+
+      const firstRead = wakeFake(() => draft);
+      const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(firstRead.typed).toEqual([]);
+      expect(firstRead.enters).toBe(0);
+
+      const secondRead = wakeFake((read) => (read === 0 ? IDLE : draft));
+      const outSecond = await deliverTypedWake(secondRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outSecond).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the second read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(secondRead.typed).toEqual([]);
+      expect(secondRead.enters).toBe(0);
+
+      const afterType = wakeFake((read) => (read < 2 ? IDLE : draft));
+      const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+      expect(afterType.typed).toEqual([LINE]);
+      expect(afterType.enters).toBe(0);
+    }
+  });
+
+  test('captured dialog and working frames refuse before any key and before Enter', async () => {
+    const dialogs: ReadonlyArray<readonly [kind: Screen['kind'], frame: string]> = [
+      ['permission', PERMISSION],
+      ['permission', PERMISSION_161],
+      ['trust', TRUST],
+      ['trust', TRUST_161],
+      ['plan approval', PLAN_APPROVAL],
+      ['question', QUESTION_161],
+      ['vendor notice', VENDOR_NOTICE],
+    ];
+    for (const [kind, frame] of dialogs) {
+      expect(readScreen('codex', frame).kind).toBe(kind);
+      expect(boxHoldsText('codex', LINE, frame)).toBe(false);
+
+      const firstRead = wakeFake(() => frame);
+      const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: `the first read showed ${kind}, not an empty idle prompt; nothing was typed` });
+      expect(firstRead.typed).toEqual([]);
+      expect(firstRead.enters).toBe(0);
+
+      const secondRead = wakeFake((read) => (read === 0 ? IDLE : frame));
+      const outSecond = await deliverTypedWake(secondRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outSecond).toEqual({ delivered: false, typed: false, tries: 0, reason: `the second read showed ${kind}, not an empty idle prompt; nothing was typed` });
+      expect(secondRead.typed).toEqual([]);
+      expect(secondRead.enters).toBe(0);
+
+      const afterType = wakeFake((read) => (read < 2 ? IDLE : frame));
+      const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: `the screen read ${kind} after the line was typed; no Enter was pressed` });
+      expect(afterType.typed).toEqual([LINE]);
+      expect(afterType.enters).toBe(0);
+    }
+
+    for (const workingFrame of [WORKING, WORKING_161]) {
+      expect(readScreen('codex', workingFrame).kind).toBe('working');
+      expect(boxHoldsText('codex', LINE, workingFrame)).toBe(false);
+
+      const firstRead = wakeFake(() => workingFrame);
+      const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+      expect(firstRead.typed).toEqual([]);
+      expect(firstRead.enters).toBe(0);
+
+      const secondRead = wakeFake((read) => (read === 0 ? IDLE : workingFrame));
+      const outSecond = await deliverTypedWake(secondRead.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outSecond).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the second read showed working, not an empty idle prompt; nothing was typed' });
+      expect(secondRead.typed).toEqual([]);
+      expect(secondRead.enters).toBe(0);
+
+      const afterType = wakeFake((read) => (read < 2 ? IDLE : workingFrame));
+      const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'codex', FAST);
+      expect(outAfter).toEqual({
+        delivered: false,
+        typed: true,
+        tries: 0,
+        reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed',
+      });
+      expect(afterType.typed).toEqual([LINE]);
+      expect(afterType.enters).toBe(0);
+    }
   });
 });
 
