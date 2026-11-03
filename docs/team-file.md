@@ -613,8 +613,9 @@ much a send keeps — the safe side is the default:
   never `delivered`, and a write that settles leaves the record and the wake in exactly the
   `first` shape.
 - `none` keeps no copy at all. The walk is narrowed to the legs that carry the body themselves —
-  `socket`, `native`, `headless-resume` and `session` — and every other leg the order names is
-  set aside with its reason; an order left with no body-carrying leg refuses the send before
+  `socket` and `session` — and every other leg the order names is set aside with its reason (a
+  runtime queue or a headless resume only hands the seat a pointer to the stored copy, which
+  nothing writes under `none`); an order left with no body-carrying leg refuses the send before
   anything is written. A socket frame under `none` carries the signed record's exact bytes in its
   `record` field: they are signed, never stored, and a receiver verifies them with the same key
   check it applies to the folder copy. What the copy would have carried is given up: the retry,

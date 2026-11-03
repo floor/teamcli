@@ -1555,12 +1555,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
   // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
   // store's reader, and the record is already stored there for it to read.
-  // `messaging.store: none` keeps no copy, so only a leg that carries the body's own signed
-  // record reaches the seat: the socket frame (which carries the signed bytes in the frame), a
-  // native runtime queue, a headless resume, or the CLI's own session call. Every leg that
-  // would leave a record or a trigger behind — the channel push, the webhook, the typed wake,
-  // the drop file — is set aside with its reason, before anything is written.
-  const BODY_CARRYING_LEGS: readonly WalkLeg[] = ['socket', 'native', 'session', 'headless-resume'];
+  // `messaging.store: none` keeps no copy, so only a leg that carries the body by itself
+  // reaches the seat: the socket frame (which carries the signed bytes in the frame) and the
+  // CLI's own session call (which carries the whole body as its one argument). Every other leg
+  // reads or wakes a stored copy, or leaves a trigger behind — the runtime queue and the
+  // headless resume hand the seat a pointer to the copy (`inbox_read` on an id), the channel
+  // push and the webhook wake it to read one, and the typed wake and the drop file leave a
+  // trigger — so each is set aside with its reason, before anything is written.
+  const BODY_CARRYING_LEGS: readonly WalkLeg[] = ['socket', 'session'];
   const walk: readonly WalkLeg[] = store === 'none'
     ? declaredWalk.filter((leg) => BODY_CARRYING_LEGS.includes(leg))
     : [...declaredWalk];
@@ -1725,11 +1727,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (reason !== undefined) entry.reason = reason;
   };
   // With `messaging.store: none`, every leg the order names that would leave a stored record or
-  // a trigger behind is set aside here, with the reason the report and the history line carry.
+  // a trigger behind is set aside here, with the reason the history line carries. A pointer leg
+  // needs the copy to exist — the runtime queue and the headless resume hand the seat an id to
+  // read — so under `none` it would point at a file nothing wrote; a wake leg wakes the seat to
+  // read the copy; a trigger leg leaves one behind. None of them can carry the body itself.
   if (store === 'none') {
-    const why = 'the store is none, and this leg leaves a stored copy or a trigger behind; only a leg that carries the body itself is walked';
     for (const leg of declaredWalk) {
       if (BODY_CARRYING_LEGS.includes(leg)) continue;
+      const why = noneSetAsideReason(leg);
       failures.push(`${leg}: ${why}`);
       markLeg(leg, 'skipped', why);
     }
@@ -2936,6 +2941,19 @@ function liveRoutesAfter(walk: readonly WalkLeg[], at: number, cli?: string): bo
   return walk
     .slice(at + 1)
     .some((leg) => leg !== 'headless-resume' || (cli !== undefined && isHeadlessResumeCli(cli)));
+}
+
+/** Why a leg is set aside when `messaging.store: none` keeps no copy: a pointer leg hands the
+ *  seat an id to read from the store, a wake leg wakes it to read the copy, and a trigger leg
+ *  leaves a trigger behind — under `none` there is nothing for any of them to read. */
+function noneSetAsideReason(leg: WalkLeg): string {
+  if (leg === 'native' || leg === 'headless-resume') {
+    return 'the store is none, and this leg hands the seat a pointer to the stored copy; only a leg that carries the body itself is walked';
+  }
+  if (leg === 'channel' || leg === 'webhook') {
+    return 'the store is none, and this leg wakes the seat to read the stored copy; only a leg that carries the body itself is walked';
+  }
+  return 'the store is none, and this leg leaves a stored copy or a trigger behind; only a leg that carries the body itself is walked';
 }
 
 /** The dry run's webhook clause: the reason a configured adapter cannot post right now. Empty

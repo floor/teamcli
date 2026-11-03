@@ -1,7 +1,9 @@
-// The `messaging.store` word a send walks, on the socket leg: `first` writes the signed copy
-// before the frame leaves and keeps it; `parallel` starts that write beside the dial and ends
-// the send only when both settled; `none` stores nothing at all and the frame carries the signed
-// record's bytes, which a receiver verifies with the same key check it applies to a folder copy.
+// The `messaging.store` word a send walks: `first` writes the signed copy before the frame
+// leaves and keeps it; `parallel` starts that write beside the dial and ends the send only when
+// both settled; `none` stores nothing at all and the frame carries the signed record's bytes,
+// which a receiver verifies with the same key check it applies to a folder copy. A `none` walk
+// keeps only the legs that carry the body themselves — the socket frame and the session call —
+// and sets a leg that would read or wake a stored copy aside, pointer lines included.
 // No live pane and no real socket: the host's deliver is a fake, and the socket file only has to
 // stand where the socket lookup looks.
 import { afterEach, expect, test } from 'bun:test';
@@ -13,7 +15,9 @@ import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { carriedRecordOf, readRecord } from '../src/send/record.ts';
-import { NOW, dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
+import { updateState } from '../src/state.ts';
+import { testIo } from './helpers.ts';
+import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
 
 let cleanup: () => void = () => {};
@@ -265,4 +269,78 @@ test('a signed entity record decides the store, and a team record may tighten it
   expect(read.ok).toBe(true);
   if (!read.ok || read.record === null) return;
   expect(read.record.payload.body.endsWith('a second note')).toBe(true);
+});
+
+/** What a `none` walk says about a leg that would read or wake a stored copy. */
+const POINTER_SET_ASIDE = 'the store is none, and this leg hands the seat a pointer to the stored copy; only a leg that carries the body itself is walked';
+
+test('none sets a pointer leg aside with its reason and lets the socket carry the send', async () => {
+  const made = world(['native', 'headless-resume', 'socket', 'drop']);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made);
+  const frames: string[] = [];
+  const host = fake(made, {
+    store: 'none',
+    deliver: async (_socket: string, frame: string) => {
+      frames.push(frame);
+      return { ok: true };
+    },
+  });
+  const io = owner(made.root);
+
+  const code = await runSend(['lead', 'a note'], io, host);
+
+  expect(code).toBe(0);
+  expect(withoutSendId(io.out)).toContain('lead: delivered (socket)');
+  expect(frames).toHaveLength(1);
+  // A runtime queue and a headless resume hand the seat an id to read: with no copy stored, they
+  // would point at a file nothing wrote, so they are set aside before the walk and the history
+  // line names why. The socket carries the signed bytes, so it is the leg that walks.
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  const failed = history.entries.at(-1)?.failed ?? [];
+  expect(failed).toContain(`native: ${POINTER_SET_ASIDE}`);
+  expect(failed).toContain(`headless-resume: ${POINTER_SET_ASIDE}`);
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+test('a none walk that names only a pointer leg refuses: no copy exists for it to point at', async () => {
+  const made = world(['native', 'drop']);
+  cleanup = made.cleanup;
+  const host = fake(made, { store: 'none' });
+  const io = owner(made.root);
+
+  const code = await runSend(['native', 'a note'], io, host);
+
+  expect(code).toBe(1);
+  expect(io.err).toContain('messaging.store is none and no route the order names carries the body itself');
+  expect(existsSync(dropDir(made.dir, 'native'))).toBe(false);
+});
+
+test('none never runs the Claude handoff: its record and pending file write nothing', async () => {
+  const made = world(['native', 'drop']);
+  cleanup = made.cleanup;
+  // A Claude Code sender and a resolvable recipient: without the store rule this is exactly the
+  // walk that writes the handoff's own record and pending file, store or no store.
+  updateState(made.dir, (state) => {
+    state.sessions.acme = {
+      seats: { helper: { stage: 'ready', pane: 'fixture-pane-1' } },
+      worktrees: {},
+    };
+  });
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  const host = fake(made, {
+    store: 'none',
+    native: scripted(['idle', 'working']),
+    newId: () => 'aaaaaaaa-0000-4000-8000-000000000801',
+  });
+  const io = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'fixture-pane-1', session: 'acme' });
+
+  const code = await runSend(['lead', 'hello'], io, host);
+
+  expect(code).toBe(1);
+  expect(io.err).toContain('messaging.store is none and no route the order names carries the body itself');
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
 });
