@@ -65,7 +65,8 @@ function world(screen: Screen = { kind: 'idle' }, status = 'idle'): {
   const closed: string[] = [];
   let sent = false;
   // What the pane shows: the empty idle box before any typing, the box with the typed text
-  // after one, as the CLI renders it.
+  // after one, as the CLI renders it — and the empty box again once the Enter has been
+  // delivered, for a delivered Enter sends the text out of the box.
   let box: string | undefined = claudeBox('');
   const agents: HerdrAgent[] = [];
   const running: boolean[] = [];
@@ -73,7 +74,7 @@ function world(screen: Screen = { kind: 'idle' }, status = 'idle'): {
   const launch: DownLaunch = {
     typeText: (_session, _pane, text) => { typed.push(text); box = claudeBox(text); return true; },
     sendKey: (_session, _pane, key) => { keys.push(key); box = claudeBox(''); return true; },
-    pressEnter: () => { sent = true; return true; },
+    pressEnter: () => { sent = true; box = claudeBox(''); return true; },
     agentPanes: () => agents.map((agent) => agent.pane),
     closeWorkspace: (_session, workspace) => { closed.push(workspace); return true; },
     stopSession: () => false,

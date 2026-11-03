@@ -5279,7 +5279,8 @@ describe('team down, live', () => {
     let current = status;
     let onSleep = () => {};
     // What the pane shows: the empty idle box before any typing, the box with the typed
-    // text after one, as the CLI renders it.
+    // text after one, as the CLI renders it — and the empty box again once the Enter has
+    // been delivered, for a delivered Enter sends the text out of the box.
     let box: string | undefined = claudeBox('');
     let clearFails = false;
     const launch: DownLaunch = {
@@ -5296,6 +5297,7 @@ describe('team down, live', () => {
       pressEnter() {
         entered.push('enter');
         gone = true;
+        box = claudeBox('');
         return true;
       },
       agentPanes: () => (gone ? [] : ['w3:p1']),
@@ -6090,9 +6092,11 @@ describe('team down, live', () => {
   });
 
   test('a seat that does not leave is left as it is', async () => {
+    // The pane host keeps reporting the seat's pane however the stop went, so the departure
+    // never confirms. The harness's own Enter stands: the text went out of the box, and what
+    // never happens is the leaving.
     const run = harness({ kind: 'idle' });
     run.launch.agentPanes = () => ['w3:p1'];
-    run.launch.pressEnter = () => true;
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(FILE, io, run.sourcesOf());
     expect(code).toBe(1);
@@ -6106,7 +6110,6 @@ describe('team down, live', () => {
   test('abandon closes a seat that does not leave', async () => {
     const run = harness({ kind: 'idle' });
     run.launch.agentPanes = () => ['w3:p1'];
-    run.launch.pressEnter = () => true;
     const io = testIo(root, { kind: 'owner' });
     const code = await runDown(['--abandon', ...FILE], io, run.sourcesOf());
     expect(code).toBe(0);

@@ -298,12 +298,13 @@ export type ExitIo = {
  * that reads back as exactly the typed text, the same comparison delivery makes. When the
  * read-back does not confirm the text, nothing is sent on a screen that is not the CLI's own
  * composer; a box that holds exactly the typed text is cleared with the profile's one key, and
- * a profile without one leaves the text for the owner, saying so. Where the profile declares
- * the completion row, a box whose first row is this run's text is cleared even when a row under
- * it is not the one the profile names — a row Muse moved between versions — so a failed exit
- * leaves the box as it was found; the typed-newline frame gets one backspace first, because the
- * clearing key alone does nothing on it (measured on Muse Code 1.4.14). The caller check that
- * precedes every key precedes each of these too.
+ * a profile without one leaves the text for the owner, saying so. A box whose first row is this
+ * run's text is cleared on every profile — an Enter the pane refused, or one that went out and
+ * never ran, leaves exactly that — and, where the profile declares the completion row, even
+ * when a row under it is not the one the profile names — a row Muse moved between versions —
+ * so a failed exit leaves the box as it was found; the typed-newline frame gets one backspace
+ * first, because the clearing key alone does nothing on it (measured on Muse Code 1.4.14). The
+ * caller check that precedes every key precedes each of these too.
  */
 export async function typeExit(io: ExitIo, cli: string, text: string): Promise<ExitTyping> {
   const names = profileFor(cli)?.processNames ?? [];
@@ -423,12 +424,13 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
       }
     }
     if (!io.pressEnter()) {
-      // The Enter never went out. Where the profile declares the completion row, the text this
-      // run typed is still the box's and is cleared; every other profile keeps its refusal.
-      if (completion) {
-        const cleared = await clearTyped();
-        if (cleared !== null) return cleared;
-      }
+      // The Enter never went out. The text this run typed is still the box's — the gates above
+      // held it exact — so it is cleared with the profile's one key on every profile that has
+      // one, not only those that declare a completion row: a refused Enter is this run's own
+      // refusal, and the box is left as it was found. A profile without a key, or a gate that
+      // no longer holds (clearTyped reads them again), keeps the refusal below.
+      const cleared = await clearTyped();
+      if (cleared !== null) return cleared;
       return { left: 'its exit was not confirmed; the exit text was typed and not sent; left running' };
     }
     const confirm = profileFor(cli)?.exitConfirm ?? null;
@@ -477,12 +479,16 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     if (kindOf() === 'exit question') {
       return { left: 'its exit was not confirmed; the exit question stayed open; left running' };
     }
-    // The exit text did not run: where the profile declares the completion row, the text is this
-    // run's own — with the completion frame it drew, or a row under it the profile does not name —
-    // and it is cleared with the profile's one key, so the box is left as it was found. Muse's
-    // ctrl+u was measured to clear `/exit` and its completion row to the idle box, with the CLI
-    // still running; a key that leaves anything else is reported, not retried.
-    if (completion && kindOf() === 'unsent' && typedInBox()) {
+    // The exit text did not run: it is still the box's first row, so it is this run's own on
+    // every profile — with the completion frame it drew, or a row under it the profile does not
+    // name — and it is cleared with the profile's one key, so the box is left as it was found.
+    // An Enter the pane swallowed leaves exactly this frame, and a stop that times out waiting
+    // for the departure would otherwise strand its own typed text in a still-running seat. A
+    // box whose first row is anything else proved nothing about where the text went, and the
+    // departure wait below stays the answer. Muse's ctrl+u was measured to clear `/exit` and its
+    // completion row to the idle box, with the CLI still running; a key that leaves anything
+    // else is reported, not retried.
+    if (kindOf() === 'unsent' && typedInBox()) {
       const cleared = await clearTyped();
       if (cleared !== null) return cleared;
     }

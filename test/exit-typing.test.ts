@@ -51,21 +51,43 @@ function paneOf(
   binary: string,
   before: string,
   after: string,
-  opts: { foreground?: (drawn: boolean) => string[]; status?: (drawn: boolean) => string } = {},
+  opts: {
+    foreground?: (drawn: boolean) => string[];
+    status?: (drawn: boolean) => string;
+    /** Answers the Enter itself, instead of sending it (a scene about a refused Enter). */
+    enter?: () => boolean;
+    /** The frame the box takes once the profile's clearing key goes out: a pane whose composer
+     *  empties, as every profile with an exit_clear key was measured to do. */
+    cleared?: string;
+    /** The frame the box takes once a delivered Enter has sent the text out of it: the pane
+     *  past the Enter, a shape the static before/after pair could not draw. */
+    afterEnter?: string;
+  } = {},
 ): { io: ExitIo; sent: Sent[]; types: string[] } {
   const text = exitText(cli);
+  const clearKey = profileFor(cli)?.exitClear ?? '';
   let typed = false;
   let drawn = false;
+  let wiped = false;
+  let entered = false;
   let clock = 1_000_000;
   const sent: Sent[] = [];
   const types: string[] = [];
-  const screen = () => (typed && drawn ? after : before);
+  const screen = () => {
+    if (wiped && opts.cleared !== undefined) return opts.cleared;
+    if (entered && opts.afterEnter !== undefined) return opts.afterEnter;
+    return typed && drawn ? after : before;
+  };
   const send = (key: string): boolean => {
     sent.push({
       key,
       kind: readScreen(cli, screen(), { cwd: io.foregroundCwd?.() ?? undefined, home: io.home }).kind,
       holds: boxHoldsText(cli, text, screen(), { cwd: io.foregroundCwd?.() ?? undefined, home: io.home }),
     });
+    // The flip comes after the record, as in leftoverPane: the record keeps the reading the
+    // key was decided on, not the frame the key itself draws.
+    if (key === clearKey && opts.cleared !== undefined) wiped = true;
+    if (key === 'enter' && opts.afterEnter !== undefined) entered = true;
     return true;
   };
   const io: ExitIo = {
@@ -75,7 +97,7 @@ function paneOf(
       return true;
     },
     sendKey: send,
-    pressEnter: () => send('enter'),
+    pressEnter: () => (opts.enter === undefined ? send('enter') : opts.enter()),
     screen,
     status: () => opts.status?.(drawn) ?? 'idle',
     foreground: () => opts.foreground?.(drawn) ?? [binary],
@@ -90,7 +112,8 @@ function paneOf(
 
 /** One pane whose box already holds exactly the exit text when the run starts — the leftover of
  *  an earlier attempt: `leftover` until the profile's clearing key has gone out and the pane has
- *  drawn the cleared box, then `idle` until the text is typed and drawn, then `leftover` again.
+ *  drawn the cleared box, then `idle` until the text is typed and drawn, then `leftover` again —
+ *  until `opts.afterEnter` names the frame a delivered Enter leaves, the box past its text.
  *  `opts.foreground` can move the seat while the sequence runs — per call and per draw — and
  *  `types` records every typing, as in `paneOf`. */
 function leftoverPane(
@@ -98,18 +121,20 @@ function leftoverPane(
   binary: string,
   leftover: string,
   idle: string,
-  opts: { foreground?: (drawn: boolean, calls: number) => string[] } = {},
+  opts: { foreground?: (drawn: boolean, calls: number) => string[]; afterEnter?: string } = {},
 ): { io: ExitIo; sent: Sent[]; types: string[] } {
   const text = exitText(cli);
   const key = profileFor(cli)?.exitClear ?? '';
   let cleared = false;
   let typed = false;
   let drawn = false;
+  let entered = false;
   let calls = 0;
   let clock = 1_000_000;
   const sent: Sent[] = [];
   const types: string[] = [];
   const screen = () => {
+    if (entered && opts.afterEnter !== undefined) return opts.afterEnter;
     if (!cleared || !drawn) return leftover;
     return typed ? leftover : idle;
   };
@@ -120,6 +145,7 @@ function leftoverPane(
       holds: boxHoldsText(cli, text, screen(), { cwd: io.foregroundCwd?.() ?? undefined, home: io.home }),
     });
     if (keySent === key) cleared = true;
+    if (keySent === 'enter' && opts.afterEnter !== undefined) entered = true;
     return true;
   };
   const io: ExitIo = {
@@ -155,7 +181,10 @@ describe('the captured pairs', () => {
 
   for (const { cli, binary, idle, unsent } of CAPTURED) {
     test(`${cli}: the Enter goes out at the second reading and nowhere else`, async () => {
-      const pane = paneOf(cli, binary, fixture(idle), fixture(unsent));
+      // A delivered Enter sends the text out of the box; the pane past it is modeled by the
+      // idle capture — the box empty again while the CLI departs — a shape the static
+      // before/after pair could not draw.
+      const pane = paneOf(cli, binary, fixture(idle), fixture(unsent), { afterEnter: fixture(idle) });
       expect(await typeExit(pane.io, cli, exitText(cli))).toBe(true);
       expect(pane.sent).toEqual([{ key: 'enter', kind: 'unsent', holds: true }]);
     });
@@ -163,11 +192,40 @@ describe('the captured pairs', () => {
 
   for (const { idle, unsent } of BACKGROUND) {
     test(`claude-code with background work: ${unsent} still gets the Enter at its own reading`, async () => {
-      const pane = paneOf('claude-code', 'claude', fixture(idle), fixture(unsent));
+      const pane = paneOf('claude-code', 'claude', fixture(idle), fixture(unsent), { afterEnter: fixture(idle) });
       expect(await typeExit(pane.io, 'claude-code', exitText('claude-code'))).toBe(true);
       expect(pane.sent).toEqual([{ key: 'enter', kind: 'unsent', holds: true }]);
     });
   }
+});
+
+describe('a refused or swallowed Enter clears its own typed text', () => {
+  test('codex: an Enter the pane host refused is cleared, not left typed', async () => {
+    // The host's Enter never went out, so the box still holds exactly what this run typed —
+    // and the run does not leave its own text in a seat it was asked to stop.
+    const pane = paneOf('codex', 'codex', fixture('codex-idle-ansi.txt'), fixture('codex-unsent-ansi.txt'), {
+      enter: () => false,
+      cleared: fixture('codex-idle-ansi.txt'),
+    });
+    expect(await typeExit(pane.io, 'codex', exitText('codex'))).toBe('cleared');
+    expect(pane.types).toEqual(['/exit']);
+    expect(pane.sent).toEqual([{ key: 'ctrl+u', kind: 'unsent', holds: true }]);
+  });
+
+  test('codex: an Enter that went out and never ran is cleared at the draw-wait deadline', async () => {
+    // The Enter was delivered but the pane stays on the unsent frame — the host swallowed the
+    // key. The deadline passes with the text still the box's first row, this run's own typing,
+    // and it is cleared rather than stranded in a still-running seat.
+    const pane = paneOf('codex', 'codex', fixture('codex-idle-ansi.txt'), fixture('codex-unsent-ansi.txt'), {
+      cleared: fixture('codex-idle-ansi.txt'),
+    });
+    expect(await typeExit(pane.io, 'codex', exitText('codex'))).toBe('cleared');
+    expect(pane.types).toEqual(['/exit']);
+    expect(pane.sent).toEqual([
+      { key: 'enter', kind: 'unsent', holds: true },
+      { key: 'ctrl+u', kind: 'unsent', holds: true },
+    ]);
+  });
 });
 
 describe('never a key on anything but the exact read-back', () => {
@@ -685,7 +743,10 @@ screen:
 
 describe('a box that already holds exactly the exit text', () => {
   test('is cleared with the profile key and then typed fresh', async () => {
-    const pane = leftoverPane('claude-code', 'claude', fixture('claude-code-unsent-ansi.txt'), fixture('claude-code-idle-ansi.txt'));
+    const pane = leftoverPane('claude-code', 'claude', fixture('claude-code-unsent-ansi.txt'), fixture('claude-code-idle-ansi.txt'), {
+      // The fresh Enter sends the fresh text out of the box, back to the idle frame.
+      afterEnter: fixture('claude-code-idle-ansi.txt'),
+    });
     expect(profileFor('claude-code')?.exitClear).toBe('ctrl+c');
     expect(await typeExit(pane.io, 'claude-code', exitText('claude-code'))).toBe(true);
     expect(pane.sent).toEqual([
@@ -803,8 +864,9 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
     // And screen showing wrapped ~/start/dir when foregroundCwd is liveDir reads unknown
     expect(readScreen('cursor', wrappedIdleStart, { cwd: liveDir, home }).kind).toBe('unknown');
 
-    // typeExit with matching liveDir proceeds cleanly
-    const pane = paneOf('cursor', 'cursor-agent', wrappedIdleLive, wrappedUnsentLive);
+    // typeExit with matching liveDir proceeds cleanly; the Enter sends the text out of the
+    // box, and the wrapped idle frame — the one this cwd reads — models the pane past it.
+    const pane = paneOf('cursor', 'cursor-agent', wrappedIdleLive, wrappedUnsentLive, { afterEnter: wrappedIdleLive });
     pane.io.foregroundCwd = () => liveDir;
     pane.io.home = home;
     expect(await typeExit(pane.io, 'cursor', '/exit')).toBe(true);
@@ -966,14 +1028,19 @@ describe('per-key fresh witness contract in typeExit', () => {
     expect(pane.sent).toEqual([]);
   });
 
-  test('pressEnter failure in sendExit returns typed and not sent', async () => {
-    const pane = paneOf('claude-code', 'claude', idle, unsent);
-    pane.io.pressEnter = () => false;
-    expect(await typeExit(pane.io, 'claude-code', '/exit')).toEqual({
-      left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+  test('pressEnter failure in sendExit clears the text it typed', async () => {
+    // The host refused the Enter itself, so the box still holds exactly what this run typed —
+    // every gate still reads — and the run clears its own text instead of leaving it. The
+    // plain "typed and not sent" refusal is the one a changed pane keeps, as the two scenes
+    // above hold: a box that no longer reads back, or a seat no longer at rest, proves
+    // nothing about whose the text is, and nothing more is sent into it.
+    const pane = paneOf('claude-code', 'claude', idle, unsent, {
+      enter: () => false,
+      cleared: idle,
     });
+    expect(await typeExit(pane.io, 'claude-code', '/exit')).toBe('cleared');
     expect(pane.types).toEqual(['/exit']);
-    expect(pane.sent).toEqual([]);
+    expect(pane.sent).toEqual([{ key: 'ctrl+c', kind: 'unsent', holds: true }]);
   });
 });
 

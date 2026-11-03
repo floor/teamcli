@@ -166,17 +166,20 @@ function boxed(text: string, base = fixture('idle')): string {
 describe('Grok exit typing', () => {
   /** A pane whose screen follows its two captures: the idle box until `/exit` has been typed
    *  and the pane has drawn it — herdr's send returns before the pane renders, so the drawing
-   *  is the sleep — and the exit-typed capture from then on. Every key is recorded with the
-   *  reading it went out on. */
+   *  is the sleep — and the exit-typed capture from then on. A delivered Enter sends the text
+   *  out of the box, and the pane past it is the idle capture again — a shape the two-frame
+   *  fake could not draw. Every key is recorded with the reading it went out on. */
   function exitPane() {
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (typed && drawn ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : typed && drawn ? fixture('exit-typed') : fixture('idle'));
     const send = (key: string) => {
       sent.push({ key, holds: boxHoldsText('grok', '/exit', screen()) });
+      if (key === 'enter') entered = true;
       return true;
     };
     const io: ExitIo = {
@@ -202,14 +205,16 @@ describe('Grok exit typing', () => {
   test('a box left holding /exit from an earlier stop is cleared with ctrl+u first, then typed and entered', async () => {
     // The pane starts on the exit-typed capture. The profile's clearing key empties it; the
     // cleared pane is taken to draw the idle box again (the ctrl+u probe's clearing is quoted
-    // in the fixtures README), and the text is typed fresh and entered.
+    // in the fixtures README), the text is typed fresh, and the fresh Enter sends it out of
+    // the box — the pane past it draws the idle box again.
     let cleared = false;
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (!cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : !cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
     const io: ExitIo = {
       typeText: (line) => { types.push(line); typed = true; return true; },
       sendKey: (key) => {
@@ -219,6 +224,7 @@ describe('Grok exit typing', () => {
       },
       pressEnter: () => {
         sent.push({ key: 'enter', holds: boxHoldsText('grok', '/exit', screen()) });
+        entered = true;
         return true;
       },
       screen,

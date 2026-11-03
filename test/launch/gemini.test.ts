@@ -115,15 +115,20 @@ describe('Gemini CLI launch and captured screens', () => {
 });
 
 describe('Gemini CLI exit typing', () => {
+  /** A pane whose screen follows its two captures: the idle box until `/exit` has been typed
+   *  and drawn, the exit-typed capture from then on — and the idle box again once a delivered
+   *  Enter has sent the text out of it, the shape the two-frame fake could not draw. */
   function exitPane() {
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (typed && drawn ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : typed && drawn ? fixture('exit-typed') : fixture('idle'));
     const send = (key: string) => {
       sent.push({ key, holds: boxHoldsText('gemini', '/exit', screen()) });
+      if (key === 'enter') entered = true;
       return true;
     };
     const io: ExitIo = {
@@ -154,13 +159,16 @@ describe('Gemini CLI exit typing', () => {
   });
 
   test('a box left holding /exit from an earlier stop is cleared with ctrl+c first, then typed and entered', async () => {
+    // The fresh Enter sends the fresh text out of the box — the pane past it draws the idle
+    // box again.
     let cleared = false;
     let typed = false;
     let drawn = false;
+    let entered = false;
     let clock = 1_000_000;
     const sent: { key: string; holds: boolean }[] = [];
     const types: string[] = [];
-    const screen = () => (!cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
+    const screen = () => (entered ? fixture('idle') : !cleared || !drawn ? fixture('exit-typed') : typed ? fixture('exit-typed') : fixture('idle'));
     const io: ExitIo = {
       typeText: (line) => {
         types.push(line);
@@ -174,6 +182,7 @@ describe('Gemini CLI exit typing', () => {
       },
       pressEnter: () => {
         sent.push({ key: 'enter', holds: boxHoldsText('gemini', '/exit', screen()) });
+        entered = true;
         return true;
       },
       screen,
