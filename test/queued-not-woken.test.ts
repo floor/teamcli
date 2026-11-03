@@ -2,9 +2,11 @@
 // wakes while it is idle says so in the send's own words — never `sent (unconfirmed)`, which
 // reads like success — and the same three words ride the history line, the `--json` status and
 // the lead's status note. The word is reserved to the drop leg: a seat a channel, socket or
-// webhook wakes keeps `sent (unconfirmed)` even when the drop is what carried the message, and
-// the mcp-inbox leg keeps it too. Every scene runs the real walk over a synthetic team whose
-// seats cover each delivery class; no live session is touched.
+// webhook wakes keeps `sent (unconfirmed)` even when the drop is what carried the message. A
+// live inbox listener is no leg in this build's walk — the seat's own reader serves it at its
+// next turn — so a seat with nothing else ends at the drop like any wakeless one. Every scene
+// runs the real walk over a synthetic team whose seats cover each delivery class; no live
+// session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,7 +25,8 @@ const PUSH_LAUNCH = 'claude --dangerously-load-development-channels server:team-
 
 /** One checkout with a team whose seats are the delivery classes this outcome turns on: a
  *  pull-only Claude seat, a person's seat (class none), a seat whose launch installs the event
- *  adapter (push) and one more Claude seat for the mcp-inbox leg. No `delivery_order` is
+ *  adapter (push) and one more Claude seat that registers a live inbox listener — no leg under
+ *  this build's walk. No `delivery_order` is
  *  declared, so every seat walks the default chain and the drop leg is where a wakeless send
  *  lands. */
 function world(): { base: string; root: string; dir: string; sockets: string; home: string; dropOf: (seat: string) => string } {
@@ -90,8 +93,8 @@ seats:
 }
 
 /** The host the walk runs on: no live pane to type into (the no-pane-messaging guard skips the
- *  typed leg for exactly this reason), no socket dialed, and an inbox grace of zero so the
- *  mcp-inbox scene needs no clock. */
+ *  typed leg for exactly this reason), no socket dialed, and an inbox grace of zero so no
+ *  listener scene needs a clock. */
 function host(made: ReturnType<typeof world>): SendHost {
   return {
     agents: () => [],
@@ -164,19 +167,19 @@ describe('the queued, not woken outcome', () => {
     expect(entries()).toEqual([{ outcome: 'sent (unconfirmed)', via: 'drop' }]);
   });
 
-  test('the mcp-inbox leg keeps sent (unconfirmed), on its own via', async () => {
+  test('a live inbox listener is no leg: the send ends at the drop and says the not-woken word', async () => {
     made = world();
-    // A live listener this process owns: the mcp-inbox leg takes the send, and with no receipt
-    // inside its zero grace it ends unconfirmed — the seat is served at its next turn, which is
-    // not nothing.
+    // A listener this process owns sits by the drop, and this build's walk never consults it:
+    // the seat's own reader serves the message at its next turn, and the sender's ending stays
+    // honest about nothing on this side waking the seat.
     expect(writeListener(made.dropOf('inbox-seat'), {
       v: 1, seat: 'inbox-seat', session: 'acme', root: made.root, cli: 'claude-code',
       pid: process.pid, ts: NOW.toISOString(),
     })).toBe(true);
     const io = testIo(made.root, { kind: 'owner' });
     expect(await runSend(['inbox-seat', 'hello'], io, host(made))).toBe(0);
-    expect(io.out).toContain('inbox-seat: sent (unconfirmed) (mcp-inbox, 0 ms)');
-    expect(entries()).toEqual([{ outcome: 'sent (unconfirmed)', via: 'mcp-inbox' }]);
+    expect(io.out).toContain('inbox-seat: queued, not woken (drop, 0 ms)');
+    expect(entries()).toEqual([{ outcome: 'queued, not woken', via: 'drop' }]);
   });
 
   test('the three words never ride a leg other than drop', async () => {
@@ -192,8 +195,9 @@ describe('the queued, not woken outcome', () => {
       expect(await runSend([seat, 'hello'], io, host(made))).toBe(0);
     }
     const queued = entries().filter((entry) => entry.outcome === 'queued, not woken');
-    // Both wakeless classes said it, and every line that says it was left by the drop leg.
-    expect(queued.length).toBe(2);
+    // Every wakeless ending said it — pull, person, and the listener that is no leg — and every
+    // line that says it was left by the drop leg.
+    expect(queued.length).toBe(3);
     expect(queued.every((entry) => entry.via === 'drop')).toBe(true);
   });
 });
