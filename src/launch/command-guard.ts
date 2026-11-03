@@ -39,7 +39,8 @@ export type GuardRule =
   | 'git-clean'
   | 'git-branch-force-delete'
   | 'npm-publish'
-  | 'github-actions';
+  | 'github-actions'
+  | 'github-comment-delete';
 
 /** What a denied command is and what the model is told instead. */
 export type GuardMatch = { rule: GuardRule; guidance: string };
@@ -61,6 +62,7 @@ const GUIDANCE: Record<GuardRule, string> = {
   'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
   'npm-publish': 'refused in team seats: the release moves only on the owner\'s word',
   'github-actions': 'refused in team seats: the actions-commands policy does not allow that Actions command',
+  'github-comment-delete': 'refused in team seats: post a superseding comment instead',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -504,6 +506,24 @@ function ghWriteMethod(args: readonly string[]): boolean {
   return method !== null && GH_WRITE_METHODS.has(method);
 }
 
+/** A flag as its own word or glued to a value (`--delete-last`, `--delete-last=true`). */
+function ghFlag(args: readonly string[], name: string): boolean {
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+/** Deleting or dismissing a GitHub comment. An HTTP DELETE is refused on every path, not only
+ *  Actions: the comment, the review and the record stay, and the seat posts a later comment.
+ *  Adding and editing stay allowed. */
+function githubCommentDelete(args: readonly string[]): boolean {
+  const call = ghCall(args);
+  if (call === null) return false;
+  if (call.group === 'api') return ghExplicitMethod(args) === 'DELETE';
+  if ((call.group === 'pr' || call.group === 'issue') && call.sub === 'comment' && ghFlag(args, '--delete-last')) {
+    return true;
+  }
+  return call.group === 'pr' && call.sub === 'review' && ghFlag(args, '--dismiss');
+}
+
 /** `-fquery=…` and `-Fquery=…`: the short flag glued to its value. Null for `-f`, `-f=`, and other words. */
 function gluedFieldBody(arg: string): string | null {
   if ((arg.startsWith('-f') && arg !== '-f' && !arg.startsWith('-f='))
@@ -712,6 +732,9 @@ function matchSegment(words: readonly string[], actions: readonly ActionsCommand
   if (word === 'npm' && npmPublishes(args)) {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
+  if (word === 'gh' && githubCommentDelete(args)) {
+    return { rule: 'github-comment-delete', guidance: GUIDANCE['github-comment-delete'] };
+  }
   if (word === 'gh' && !actionsAllowed(args, actions)) {
     return { rule: 'github-actions', guidance: GUIDANCE['github-actions'] };
   }
@@ -754,8 +777,10 @@ export function lineRunsGh(line: string): boolean {
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
  * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
  * `git push --force` (and `-f`),
- * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, and an
- * Actions write outside the `actions-commands` policy.
+ * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, an
+ * Actions write outside the `actions-commands` policy, and deleting or dismissing a GitHub
+ * comment (`gh api` DELETE on any path, `gh pr comment --delete-last`,
+ * `gh issue comment --delete-last`, `gh pr review --dismiss`).
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
  * only ever sits in the arguments of the command that carries it.

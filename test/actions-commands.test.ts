@@ -48,7 +48,7 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh api -X POST repos/floor/teamcli/deployments')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api --method=PATCH repos/acme/demo')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api -XPUT repos/acme/demo')?.rule).toBe('github-actions');
-  expect(refusedByGuard('gh api --method DELETE repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api --method DELETE repos/acme/demo')?.rule).toBe('github-comment-delete');
   expect(refusedByGuard('gh api repos/acme/demo/deployments')).toBeNull();
   expect(refusedByGuard('gh api repos/floor/teamcli/releases -f tag_name=v0.6.1')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/floor/teamcli/releases --field tag_name=v0.6.1')?.rule).toBe('github-actions');
@@ -183,9 +183,6 @@ test('independent adversarial checks: all Actions reads pass (even under empty p
     'gh api --method=PUT repos/acme/demo/actions/workflows/ci.yml/enable',
     'gh api -XPUT repos/acme/demo/actions/workflows/ci.yml/disable',
     'gh api --method=PATCH repos/acme/demo/actions/variables/CI_MODE',
-    'gh api -X DELETE repos/acme/demo/actions/runs/12345',
-    'gh api -Xdelete repos/acme/demo/actions/runs/12345/logs',
-    'gh api --method DELETE repos/acme/demo/actions/caches/1',
     'gh api -X GET -X POST repos/acme/demo/actions/runs/12345/cancel',
     // api implicit POSTs (parameters or --input without explicit GET)
     'gh api repos/acme/demo/actions/runs -f branch=main',
@@ -231,4 +228,74 @@ test('independent adversarial checks: all Actions reads pass (even under empty p
   expect(lineRunsGh('"gh" run cancel 12345')).toBe(true);
   expect(lineRunsGh("'gh' workflow disable ci.yml")).toBe(true);
   expect(lineRunsGh('\\gh run delete 12345')).toBe(true);
+});
+
+const SUPERSEDE = 'refused in team seats: post a superseding comment instead';
+
+function expectSupersede(line: string): void {
+  const match = refusedByGuard(line);
+  expect(match?.rule, line).toBe('github-comment-delete');
+  expect(match?.guidance, line).toBe(SUPERSEDE);
+}
+
+test('gh api -X DELETE is refused on any path', () => {
+  expectSupersede('gh api -X DELETE repos/acme/demo');
+  expectSupersede('gh api -X DELETE repos/acme/demo/issues/comments/1');
+  expectSupersede('gh api -X delete repos/acme/demo/actions/runs/12345');
+  expect(refusedByGuard('gh api -X DELETE -X POST repos/acme/demo')?.rule).toBe('github-actions');
+});
+
+test('gh api --method DELETE is refused on any path', () => {
+  expectSupersede('gh api --method DELETE repos/acme/demo');
+  expectSupersede('gh api --method=DELETE repos/acme/demo/pulls/comments/2');
+  expectSupersede('gh api --method DELETE repos/acme/demo/actions/caches/1');
+});
+
+test('gh api -XDELETE is refused on any path', () => {
+  expectSupersede('gh api -XDELETE repos/acme/demo');
+  expectSupersede('gh api -Xdelete repos/acme/demo/actions/runs/12345/logs');
+});
+
+test('a quoted gh refuses deleting a comment', () => {
+  expectSupersede('"gh" api -X DELETE repos/acme/demo');
+  expectSupersede("'gh' pr comment --delete-last");
+});
+
+test('a backslash-escaped gh refuses deleting a comment', () => {
+  expectSupersede('\\gh api --method DELETE repos/acme/demo');
+  expectSupersede('\\gh issue comment --delete-last');
+});
+
+test('a prefixed gh refuses deleting a comment', () => {
+  expectSupersede('command gh api -XDELETE repos/acme/demo');
+  expectSupersede('env gh pr comment 9 --delete-last');
+  expectSupersede('/usr/local/bin/gh pr review --dismiss');
+});
+
+test('gh pr comment --delete-last is refused', () => {
+  expectSupersede('gh pr comment --delete-last');
+  expectSupersede('gh pr comment 42 --delete-last');
+  expectSupersede('gh -R acme/demo pr comment --delete-last=true --body replaced');
+});
+
+test('gh issue comment --delete-last is refused', () => {
+  expectSupersede('gh issue comment --delete-last');
+  expectSupersede('gh issue comment 12 --delete-last');
+});
+
+test('gh pr review --dismiss is refused', () => {
+  expectSupersede('gh pr review --dismiss');
+  expectSupersede('gh pr review 7 --dismiss');
+});
+
+test('gh pr comment --body is allowed', () => {
+  expect(refusedByGuard("gh pr comment --body 'the note stays'")).toBeNull();
+  expect(refusedByGuard("gh issue comment 12 --body 'the note stays'")).toBeNull();
+  expect(refusedByGuard("gh pr comment --body 'do not --delete-last'")).toBeNull();
+});
+
+test('gh pr comment --edit-last is allowed', () => {
+  expect(refusedByGuard("gh pr comment --edit-last --body 'replaced'")).toBeNull();
+  expect(refusedByGuard('gh issue comment --edit-last')).toBeNull();
+  expect(refusedByGuard('gh pr review --approve')).toBeNull();
 });
