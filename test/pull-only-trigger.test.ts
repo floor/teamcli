@@ -304,4 +304,42 @@ describe('the pull-only walk types one trigger after the store', () => {
     // The inbox stored the record once and the declared drop leg behind it wrote nothing.
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
   });
+
+  test('every leg behind the store is skipped: a resume route before the trigger never runs', async () => {
+    const one = world(['mcp-inbox', 'headless-resume', 'typed', 'drop'], [CURSOR]);
+    made.push(one);
+    liveInbox(one);
+    const pane = wakeFake(wakeScript());
+    const host = fake(one, {
+      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+      inboxGraceMs: 0,
+      headlessResumeSpawn: () => {
+        throw new Error('a resume leg must not run once the record is stored');
+      },
+    });
+    const io = owner(one.root);
+    expect(await runSend(['cursor', 'hello', '--json'], io, host)).toBe(0);
+    const doc = JSON.parse(io.out) as {
+      status: string;
+      delivery: { leg: string; state: string; reason?: string }[];
+    };
+    expect(doc.status).toBe('sent (unconfirmed)');
+    const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
+    expect(legs.get('mcp-inbox')).toMatchObject({ state: 'attempted' });
+    expect(legs.get('headless-resume')).toEqual({
+      leg: 'headless-resume',
+      state: 'skipped',
+      reason: 'the record is already stored by the leg ahead of it',
+    });
+    expect(legs.get('typed')).toMatchObject({ state: 'attempted' });
+    expect(legs.get('drop')).toMatchObject({ state: 'not-reached' });
+    // One stored record, one trigger line: no second delivery on the resume route behind it.
+    expect(pane.typed).toEqual([STORED_WAKE_LINE]);
+    expect(pane.enters).toBe(1);
+    expect(recordsIn(inboxOf(one))).toHaveLength(1);
+    const history = readHistory('acme', one.root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'mcp-inbox' });
+  });
 });

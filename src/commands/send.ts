@@ -20,7 +20,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { readState, type SeatState } from '../state.ts';
@@ -1627,18 +1627,26 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const lowerDelivery = (): void => {
     report.deliveryWords = wordsNow(wakeOutcome);
   };
-  // A seat whose effective class cannot be woken while it is idle — pull-on-turn or none — reads
-  // at its next turn, and a storing leg alone gives it none. For such a seat the walk does not end
-  // on the stored copy: the typed leg behind it types one trigger-only line
-  // (src/send/typed-wake.ts), and the ending reports the store and the wake together. The leg
-  // that stored the record is named here; null means none has, so the typed leg is a delivery
-  // rather than a trigger for one. A seat a push or between-turns route can wake is left exactly
-  // as its order resolves: the storing leg is its ending, and nothing is typed after it.
+  // A pull-on-turn seat reads at its next turn, and a storing leg alone gives it none. For such a
+  // seat the walk does not end on the stored copy: the typed leg behind it types one trigger-only
+  // line (src/send/typed-wake.ts), and the ending reports the store and the wake together. The
+  // leg that stored the record is named here; null means none has, so the typed leg is a
+  // delivery rather than a trigger for one. Only `pull-on-turn` is a target: a seat no route can
+  // wake (`none`) has a walking typed leg of its own when its order names one, but a storing leg
+  // is that walk's ending, exactly as it is for a push or between-turns seat.
   let storedQueued: 'mcp-inbox' | 'drop' | null = null;
   const pullOnlyTarget = (): boolean =>
-    !human && typedWake !== null && !wakeableWhileIdle(classWithout(to, host.home, walkLost, declared).cls);
+    !human && typedWake !== null && classWithout(to, host.home, walkLost, declared).cls === 'pull-on-turn';
   const typedAhead = (from: number): boolean => walk.slice(from + 1).includes('typed');
   for (const [at, leg] of walk.entries()) {
+    // A storing leg ahead of this one already put the record in the seat's inbox: the stored copy
+    // is the send, and every leg behind it except the typed trigger would deliver a second time.
+    // The walk goes straight to the typed leg; the store only happens when one stands behind it.
+    if (storedQueued !== null && leg !== 'typed') {
+      markLeg(leg, 'skipped', 'the record is already stored by the leg ahead of it');
+      note(walkAttempt(leg, 'unreachable', true, host.now(), startedAt, { reason: 'the record is already stored by the leg ahead of it' }));
+      continue;
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The record is written to
       // the seat's inbox first, so the push and every later reader carry the same signed copy;
@@ -2133,13 +2141,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // receiver watches its own drop folder, and for a pane that must never be typed into: a
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
-      // A storing leg ahead of this one already put the record in the seat's inbox: this leg adds
-      // no second copy and no second pending marker, and the walk goes on to the typed wake.
-      if (storedQueued !== null) {
-        markLeg('drop', 'skipped', 'the record is already stored by the leg ahead of it');
-        note(walkAttempt('drop', 'unreachable', true, host.now(), startedAt, { reason: 'the record is already stored by the leg ahead of it' }));
-        continue;
-      }
       markLeg('drop', 'attempted');
       // The bus inbox is not a wake. The runtime queue this seat may record is no way to reach
       // it either: nothing handed that queue a pointer, so the words a queue-only class would
