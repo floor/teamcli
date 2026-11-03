@@ -248,6 +248,28 @@ describe('the push', () => {
     }
   });
 
+  test('the notification carries the content and meta only: no key object rides in a frame shown to an agent', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nhello there');
+      await until(() => notice(feed.replies).length >= 1);
+      // The raw line the client receives: the key that verified the record signs the read
+      // receipt, and what the client shows to an agent is the content and its meta alone.
+      const raw = feed.replies.find((one) => (JSON.parse(one) as Record<string, any>).method === 'notifications/claude/channel')!;
+      expect(raw).not.toContain('"key"');
+      const params = (JSON.parse(raw) as Record<string, any>).params;
+      expect(Object.keys(params)).toEqual(['content', 'meta']);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
   test('ack writes the signed read receipt with read_by channel for a message no push carried', async () => {
     const at = place();
     try {

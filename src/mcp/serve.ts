@@ -419,7 +419,10 @@ function watchChannel(
     // seat that lost its place during the marker write receives no notification.
     const beforeWrite = serving.alive?.();
     if (beforeWrite !== undefined && beforeWrite !== null) return;
-    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+    // What the client shows is the content and its meta; the key that verified the record signs
+    // the read receipt below and never rides in the notification.
+    const { key: signingKey, ...notification } = push;
+    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: notification }));
     // The push is the show: the notification is with the client now, so the seat signs its read
     // receipt here, with the key that verified the record — never the sender. A receipt that
     // cannot be written leaves the record unread and the watch's ordinary confirmation window
@@ -433,7 +436,7 @@ function watchChannel(
       root: serving.root,
       session: serving.session,
       home: serving.home,
-      key: push.key,
+      key: signingKey,
       at: new Date().toISOString(),
       readBy: CHANNEL_PUSH_READ_BY,
       ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
