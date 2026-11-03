@@ -397,6 +397,37 @@ describe('the typed wake is a profile word', () => {
     }
   });
 
+  test('adversarial loader refusals: over-long, multi-line, control-character, whitespace-padded, and non-scalar read_hint values', () => {
+    expect(readHintKey(`read_hint: "${'a'.repeat(59)}"`)).toBe('a'.repeat(59));
+    expect(readHintKey(`read_hint: "${'a'.repeat(60)}"`)).toBe('a'.repeat(60));
+    // Over-long hints (61, 80, 200 chars) are refused with the 60-character ceiling named.
+    for (const len of [61, 80, 200]) {
+      expect(() => readHintKey(`read_hint: "${'a'.repeat(len)}"`)).toThrow(/"read_hint" must be at most 60 characters/);
+    }
+    // Multi-line hints (LF, CR, CRLF, Unicode line/paragraph separators) and control characters are refused.
+    for (const bad of [
+      '"line one\\nline two"',
+      '"line one\\rline two"',
+      '"line one\\r\\nline two"',
+      '"line one\\u2028line two"',
+      '"line one\\u2029line two"',
+      '"bell\\u0007here"',
+      '"esc\\u001b[31mhere"',
+      '"del\\u007fhere"',
+      '"c1\\u0085here"',
+    ]) {
+      expect(() => readHintKey(`read_hint: ${bad}`), bad).toThrow(/"read_hint" must be one printable line/);
+    }
+    // Leading or trailing whitespace (spaces, tabs) is refused.
+    for (const padded of ['" Read it."', '"Read it. "', '"\\tRead it."', '"Read it.\\t"', '"   "']) {
+      expect(() => readHintKey(`read_hint: ${padded}`), padded).toThrow(/read_hint/);
+    }
+    // Non-string YAML shapes (booleans, numbers, lists, mappings) are refused.
+    for (const nonString of ['true', 'false', '42', '\n  - a', '\n  k: v']) {
+      expect(() => readHintKey(`read_hint: ${nonString}`), nonString).toThrow(/read_hint/);
+    }
+  });
+
   test('the watch keys are read by the loader’s own rules', () => {
     expect(watchWakeKey('watch_wake: on')).toBe(true);
     expect(watchWakeKey('watch_wake: off')).toBe(false);
@@ -500,5 +531,29 @@ describe('team send: the typed wake', () => {
         "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
       ]);
     }
+  });
+
+  test('a long summary and multi-line body on Muse truncates the header to fit <= 80 chars, keeps the drops hint whole, and never types the body', async () => {
+    const made = museWorld();
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
+    const host = fake(made, {
+      agents: () => [{ name: 'muse', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+    });
+    const longBody = `SUMMARY-${'M'.repeat(120)}\nSECOND-LINE-BODY-SECRET\nTHIRD-LINE-BODY-SECRET`;
+    const io = owner(made.root);
+    expect(await runSend(['muse', longBody], io, host)).toBe(0);
+    expect(pane.typed).toHaveLength(1);
+    const typedLine = pane.typed[0] as string;
+    expect(typedLine.length).toBe(80);
+    expect(typedLine.endsWith(' Read it with: team drops --read.')).toBe(true);
+    expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
+    expect(typedLine).not.toContain('\n');
+    expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
+    expect(typedLine).not.toContain('THIRD-LINE-BODY-SECRET');
+    const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
   });
 });

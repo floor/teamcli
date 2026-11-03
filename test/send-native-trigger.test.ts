@@ -126,3 +126,38 @@ test('a named read wake keeps the fixed hint whole inside the measured limit', (
   // The nameless form is never the fallback: a wake for a message always names its sender.
   expect(readTriggerLine('lead', 'acme')).not.toBeNull();
 });
+
+test('adversarial long summary and multi-line body: cursor, antigravity, and muse keep their exact hint inside 80 chars and never include the body', () => {
+  const longSummary = `FIRST-SUMMARY-${'A'.repeat(120)}`;
+  const secretBody = `${longSummary}\nSECOND-LINE-SECRET-PAYLOAD\nTHIRD-LINE-NEVER-TYPED`;
+  const sender = {
+    name: 'helper · tester 3',
+    seat: 'tester-3',
+    team: 'teamcli',
+    subject: `SUBJECT-${'S'.repeat(90)}`,
+    body: secretBody,
+  };
+
+  for (const cli of ['cursor', 'antigravity']) {
+    const line = readTriggerLine('dev', 'teamcli', sender, cli);
+    expect(line).not.toBeNull();
+    expect((line as string).length).toBe(MESSAGE_LINE_MAX);
+    expect((line as string).endsWith(' Read it with: call inbox_check now.')).toBe(true);
+    expect(line as string).not.toContain('\n');
+    expect(line as string).not.toContain('SECOND-LINE-SECRET-PAYLOAD');
+    expect(line as string).not.toContain('THIRD-LINE-NEVER-TYPED');
+    expect(line as string).not.toContain('team drops --read');
+  }
+
+  for (const cli of ['muse', 'claude-code', 'codex', undefined]) {
+    const line = readTriggerLine('dev', 'teamcli', sender, cli);
+    expect(line).not.toBeNull();
+    expect((line as string).length).toBe(MESSAGE_LINE_MAX);
+    expect((line as string).endsWith(' Read it with: team drops --read.')).toBe(true);
+    expect(line as string).not.toContain('\n');
+    expect(line as string).not.toContain('SECOND-LINE-SECRET-PAYLOAD');
+    expect(line as string).not.toContain('THIRD-LINE-NEVER-TYPED');
+    expect(line as string).not.toContain('inbox_check');
+  }
+});
+
