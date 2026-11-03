@@ -477,18 +477,49 @@ const GH_TAKES_VALUE = new Set([
 
 const GH_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** A write verb on `gh api`, from `-X`, `-XPOST`, `--method` and `--method=`. A missing verb is a read. */
-function ghWriteMethod(args: readonly string[]): boolean {
+/** The explicit verb, or null when the line names none. `-X` and `--method` take the next word. */
+function ghExplicitMethod(args: readonly string[]): string | null {
   for (let at = 0; at < args.length; at += 1) {
     const arg = args[at]!;
     if (arg === '-X' || arg === '--method') {
-      if (GH_WRITE_METHODS.has((args[at + 1] ?? '').toUpperCase())) return true;
-      continue;
+      const verb = args[at + 1];
+      return verb === undefined || verb === '' ? null : verb.toUpperCase();
     }
-    if (arg.startsWith('--method=') && GH_WRITE_METHODS.has(arg.slice('--method='.length).toUpperCase())) return true;
-    if (/^-X[A-Za-z]+$/.test(arg) && GH_WRITE_METHODS.has(arg.slice(2).toUpperCase())) return true;
+    if (arg.startsWith('--method=')) {
+      const verb = arg.slice('--method='.length);
+      return verb === '' ? null : verb.toUpperCase();
+    }
+    if (/^-X[A-Za-z]+$/.test(arg)) return arg.slice(2).toUpperCase();
+  }
+  return null;
+}
+
+/** A write verb on `gh api`, from `-X`, `-XPOST`, `--method` and `--method=`. */
+function ghWriteMethod(args: readonly string[]): boolean {
+  const method = ghExplicitMethod(args);
+  return method !== null && GH_WRITE_METHODS.has(method);
+}
+
+/** A parameter gh turns into a POST when the line names no GET. `--input` counts with the fields. */
+function ghHasRequestParameters(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '-f' || arg === '--field' || arg === '-F' || arg === '--raw-field' || arg === '--input') return true;
+    if (
+      arg.startsWith('--field=') || arg.startsWith('--raw-field=') || arg.startsWith('--input=')
+      || arg.startsWith('-f=') || arg.startsWith('-F=')
+    ) return true;
   }
   return false;
+}
+
+/** `graphql` as its own word, or a path whose last segment is `graphql`. */
+function ghGraphql(call: { sub: string | null; positionals: readonly string[] }): boolean {
+  const words = call.sub === null ? call.positionals : [call.sub, ...call.positionals];
+  return words.some((word) => {
+    if (word === 'graphql') return true;
+    const path = word.split('?')[0] ?? word;
+    return path.endsWith('/graphql');
+  });
 }
 
 const GH_FIELD_FLAGS = ['-f', '--field', '-F', '--raw-field'];
@@ -580,11 +611,14 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
   if (call.group === 'api') {
     if (ghWriteMethod(args)) return false;
     if (args.some((arg) => arg.includes('/actions') || arg.includes('/dispatches'))) return false;
-    if (call.sub === 'graphql') {
+    if (ghGraphql(call)) {
       const queries = graphqlQueries(args);
       if (queries === null || queries.length === 0) return false;
       if (queries.some((query) => /mutation/i.test(query))) return false;
+      return true;
     }
+    // gh's own default: GET, and POST once a parameter or --input is present, unless the verb is GET.
+    if (ghExplicitMethod(args) !== 'GET' && ghHasRequestParameters(args)) return false;
     return true;
   }
   if (call.group === 'run' && call.sub === 'rerun') {
