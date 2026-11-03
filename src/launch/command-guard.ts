@@ -622,13 +622,18 @@ function ghCall(args: readonly string[]): { group: string; sub: string | null; p
   return { group, sub: positionals[1] ?? null, positionals: positionals.slice(2), ref: ref === '' ? null : ref };
 }
 
-/** True when this `gh` line is one of the three Actions commands the policy still holds. */
+const GH_READ_RUN = new Set(['list', 'view', 'watch']);
+const GH_READ_WORKFLOW = new Set(['list', 'view']);
+
+/** True when this `gh` line is an Actions read, or one of the three writes the policy still holds.
+ *  A read is `run list|view|watch`, `workflow list|view`, `pr checks`, or `gh api` with GET,
+ *  including a path under `/actions`. `/dispatches` is a write on every verb. */
 function actionsAllowed(args: readonly string[], actions: readonly ActionsCommand[]): boolean {
   const call = ghCall(args);
   if (call === null) return true;
   if (call.group === 'api') {
     if (ghWriteMethod(args)) return false;
-    if (args.some((arg) => arg.includes('/actions') || arg.includes('/dispatches'))) return false;
+    if (args.some((arg) => arg.includes('/dispatches'))) return false;
     if (ghGraphql(call)) {
       const queries = graphqlQueries(args);
       if (queries === null || queries.length === 0) return false;
@@ -639,6 +644,9 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
     if (ghExplicitMethod(args) !== 'GET' && ghHasRequestParameters(args)) return false;
     return true;
   }
+  if (call.group === 'run' && call.sub !== null && GH_READ_RUN.has(call.sub)) return true;
+  if (call.group === 'pr' && call.sub === 'checks') return true;
+  if (call.group === 'workflow' && call.sub !== null && GH_READ_WORKFLOW.has(call.sub)) return true;
   if (call.group === 'run' && call.sub === 'rerun') {
     return actions.includes('rerun-failed')
       && args.includes('--failed')
@@ -747,7 +755,7 @@ export function lineRunsGh(line: string): boolean {
  * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
  * `git push --force` (and `-f`),
  * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, and an
- * Actions command outside the `actions-commands` policy.
+ * Actions write outside the `actions-commands` policy.
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
  * only ever sits in the arguments of the command that carries it.
