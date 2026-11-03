@@ -6,12 +6,12 @@
 // rule: a machine folder this uid cannot claim in starts nothing.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { machineConfigDir, restoreInheritPath } from '../src/daemon/paths.ts';
-import { claimOneUseToken } from '../src/daemon/one-use-token.ts';
+import { claimOneUseToken, pidAlive } from '../src/daemon/one-use-token.ts';
 import { readChoresInherit, writeChoresInherit } from '../src/daemon/chores/token.ts';
 import { acceptRestoreDoor, restoreDoorText, restoreRequestProblem, writeRestoreDoor } from '../src/daemon/restore/token.ts';
 import type { ChoresChildConfig } from '../src/daemon/chores/protocol.ts';
@@ -322,3 +322,58 @@ describe('independent adversarial checks: one-use token, malformed nonces, unrea
   });
 });
 
+describe('the claimed copies a process left when it died between claim and unlink', () => {
+  /** A pid the machine no longer has: a child started and waited for leaves one behind. */
+  function deadPid(): number {
+    const left = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+    expect(left.pid).toBeDefined();
+    const pid = left.pid as number;
+    expect(pidAlive(pid)).toBe(false);
+    return pid;
+  }
+
+  test('a token write removes them and leaves live, malformed, linked and neighbouring files alone', () => {
+    const { base, root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const dead = deadPid();
+    const stale = join(dir, `restore.inherit.${'a'.repeat(32)}.json.claim.${dead}`);
+    writeFileSync(stale, '{"stale":true}\n');
+    const live = join(dir, `restore.inherit.${'b'.repeat(32)}.json.claim.${process.pid}`);
+    writeFileSync(live, '{"live":true}\n');
+    const notAPid = join(dir, `restore.inherit.${'c'.repeat(32)}.json.claim.not-a-pid`);
+    writeFileSync(notAPid, 'x\n');
+    const unrelated = join(dir, 'daemon.state.json');
+    writeFileSync(unrelated, '{}\n');
+    const target = join(base, 'outside-target.txt');
+    writeFileSync(target, 'target\n');
+    const link = join(dir, `restore.inherit.${'d'.repeat(32)}.json.claim.${dead}`);
+    symlinkSync(target, link);
+    const neighbour = join(home, `restore.inherit.${'e'.repeat(32)}.json.claim.${dead}`);
+    writeFileSync(neighbour, 'neighbour\n');
+
+    writeRestoreDoor({ version: 1, home, root });
+
+    // The dead process's claimed copy is the only thing the write removed.
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+    expect(existsSync(notAPid)).toBe(true);
+    expect(existsSync(unrelated)).toBe(true);
+    // A link is never followed, and the file outside the machine folder is untouched.
+    expect(existsSync(target)).toBe(true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(neighbour)).toBe(true);
+    // The write's own token is there.
+    expect(readdirSync(dir).some((name) => /^restore\.inherit\.[0-9a-f]{32}\.json$/.test(name))).toBe(true);
+  });
+
+  test('the chores token write sweeps the same way', () => {
+    const { root, home } = scratch();
+    const dir = machineConfigDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stale = join(dir, `chores.inherit.${'a'.repeat(32)}.json.claim.${deadPid()}`);
+    writeFileSync(stale, '{}\n');
+    writeChoresInherit(configOf(home, root));
+    expect(existsSync(stale)).toBe(false);
+  });
+});

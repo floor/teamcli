@@ -18,7 +18,7 @@
 //    own token file and descriptor 3 is refused and spends nothing.
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { claimOneUseToken } from '../one-use-token.ts';
+import { claimOneUseToken, sweepSpentClaims } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 import { systemServiceManager, type ServiceManager } from '../service.ts';
 
@@ -99,6 +99,7 @@ export function writeRestoreDoor(input: RestoreDoorMint): { nonce: string; secre
   };
   const dir = machineConfigDir(input.home);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  sweepSpentClaims(dir);
   const path = restoreInheritPath(input.home, nonce);
   writeFileSync(path, `${JSON.stringify(claims)}\n`, { flag: 'wx', mode: 0o600 });
   chmodSync(path, 0o600);
