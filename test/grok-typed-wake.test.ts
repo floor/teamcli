@@ -32,14 +32,24 @@ const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
 
 /** The captured idle frame with `text` drawn in its empty input row: the `❯` row between the
  *  box's two rules. The right-edge border stays, and the padding shrinks by the text. */
-function holding(text: string): string {
-  return IDLE.replace(/^( {2}│ ❯)(.*)$/m, (_match, prompt: string, rest: string) => {
+function drawn(frame: string, text: string): string {
+  return frame.replace(/^( {2}│ ❯)(.*)$/m, (_match, prompt: string, rest: string) => {
     const trimmed = rest.trimEnd();
     const edge = trimmed.endsWith('│') ? '│' : '';
     const room = trimmed.length - edge.length;
     const gap = Math.max(1, room - text.length);
     return `${prompt} ${text}${' '.repeat(gap)}${edge}`;
   });
+}
+
+function holding(text: string): string {
+  return drawn(IDLE, text);
+}
+
+/** The captured working frame with `text` still in the composer. The spinner row keeps the
+ *  screen working; the composer read is unsent while the line sits there. */
+function workingHolding(text: string): string {
+  return drawn(WORKING, text);
 }
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it.
@@ -94,6 +104,37 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
     expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a working screen that still holds the line is not delivered until the box empties', async () => {
+    const held = workingHolding(LINE);
+    expect(readScreen('grok', held).kind).toBe('working');
+    expect(boxHoldsText('grok', LINE, held)).toBe(true);
+    let post = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters === 0) return holding(LINE);
+      post += 1;
+      return post < 3 ? held : WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', { ...FAST, verifyMs: 3 });
+    expect(post).toBe(3);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a working screen that keeps the line through the bound is not delivered', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? workingHolding(LINE) : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });

@@ -42,6 +42,12 @@ function holding(text: string): string {
   return IDLE.replace('❯\n', `❯ ${text}\n`);
 }
 
+/** The captured working frame with `text` still in the composer. The spinner row keeps the
+ *  screen working; the composer read is unsent while the line sits there. */
+function workingHolding(text: string): string {
+  return WORKING.replace('❯\n', `❯ ${text}\n`);
+}
+
 const LINE = 'Read /t/mail/abc and do that.';
 
 /** A pane scripted by how many reads and Enters it has seen, and by the lines typed into it. The
@@ -84,6 +90,37 @@ describe('the typed wake: one line into an empty idle box', () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a working screen that still holds the line is not delivered until the box empties', async () => {
+    const held = workingHolding(LINE);
+    expect(readScreen('muse', held).kind).toBe('working');
+    expect(boxHoldsText('muse', LINE, held)).toBe(true);
+    let post = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters === 0) return holding(LINE);
+      post += 1;
+      return post < 3 ? held : WORKING;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { ...FAST, verifyMs: 3 });
+    expect(post).toBe(3);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a working screen that keeps the line through the bound is not delivered', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? workingHolding(LINE) : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({
+      delivered: false,
+      typed: true,
+      tries: 1,
+      reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
+    });
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
