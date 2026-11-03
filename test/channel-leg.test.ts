@@ -491,8 +491,8 @@ describe('the channel redelivery', () => {
 
   test('the socket takes the redelivery first: one frame, no receipt, the marker cleared, the record unread', async () => {
     const made = channelWorld();
-    // The owner's frame ends with the entity's owner-reply target, so the receiving team names
-    // an entity whose shipped default answers (`floor`).
+    // The frame's reader line names the record's own id, so no entity is needed for it; the
+    // receiving team still names one so its registry identity resolves like a real team's.
     declareEntity(made, 'floor');
     declareSeat(made, 'lead', 'accept');
     const dir = seedChannel(made, SOCKET_ID, BODY);
@@ -525,7 +525,7 @@ describe('the channel redelivery', () => {
     expect(frames).toHaveLength(1);
     const content = (JSON.parse(frames[0] as string) as { message: { content: string } }).message.content;
     expect(content).toContain(BODY);
-    expect(content.split('\n').at(-1)).toBe('Reply with: team send orchestrator@floor "…"');
+    expect(content.split('\n').at(-1)).toBe(`Answer with team reply ${SOCKET_ID} "…" (this marks it read), or team ack ${SOCKET_ID} if no answer is needed.`);
     // Only the seat writes a read receipt: the taken frame leaves the record unread for the
     // seat's own read, and the watch's unread pass re-wakes it like any other message.
     expect(existsSync(receiptPath(dir, SOCKET_ID))).toBe(false);

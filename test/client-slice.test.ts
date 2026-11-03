@@ -1093,7 +1093,7 @@ describe('the client send walk', () => {
     expect(frame.type).toBe('user');
     expect(frame.msg_id).toBe('drop-1');
     expect(frame.message.content).toBe(
-      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nReply with: team send orchestrator@floor "…"',
+      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
     );
     // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
     // leaves the record unread and the watch re-wakes it like any other message.

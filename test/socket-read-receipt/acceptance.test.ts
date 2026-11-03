@@ -7,10 +7,12 @@
 // own read then writes the receipt and settles it. A frame the box held proves nothing either:
 // no receipt, and the watch's one retry still comes after the normal window.
 //
-// The accepted frame opens with `Message from <name> (<seat>@<team>)`, the sender's nickname
-// (its seat name when none stands) resolved from the signed record. It is display only: the
-// signed record keeps its own `from … — admitted by: …` line, and the typed-wake line is
-// unchanged.
+// The accepted frame ends with the reader line ADR D3 pins: it names the message id twice —
+// `team reply <id>` answers and marks it read, `team ack <id>` marks it read with no answer —
+// so a seat that saw the frame can settle the record it carries. The frame opens with
+// `Message from <name> (<seat>@<team>)`, the sender's nickname (its seat name when none stands)
+// resolved from the signed record. It is display only: the signed record keeps its own
+// `from … — admitted by: …` line, and the typed-wake line is unchanged.
 // No live session, socket or owner home: the host's deliver is a fake, and the pane is a string.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
@@ -67,6 +69,11 @@ test('an accepted socket frame writes no receipt and leaves the record unread', 
   expect(code).toBe(0);
   expect(host.frames.length).toBe(1);
   const record = recordOf(drops);
+  // The frame's own last line names the record's id, once: the reader line ADR D3 pins.
+  const content = frameOf(host.frames).content;
+  const reader = `Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`;
+  expect(content.split('\n').at(-1)).toBe(reader);
+  expect(content.split('\n').filter((line) => line === reader)).toHaveLength(1);
   // The frame was taken: that is the delivery, and it writes no receipt. Only the seat writes a
   // read receipt, so the record derives `sent` and stays in the reader's unread list.
   expect(readReceipt(drops, record.id)).toBeNull();
@@ -189,6 +196,8 @@ test('an accepted socket frame names a seat sender by nickname and seat address'
   expect(record.raw).not.toContain('Message from Bea');
   // The unchanged body follows the header under one blank line.
   expect(frame.content).toContain(`Message from Bea (helper@acme)\n\n${record.body}`);
+  // And the frame closes with the reader line naming the record's own id.
+  expect(frame.content.split('\n').at(-1)).toBe(`Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`);
 });
 
 test('an accepted socket frame falls back to the seat name when no nickname stands', async () => {
@@ -205,6 +214,7 @@ test('an accepted socket frame falls back to the seat name when no nickname stan
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n').at(-1)).toBe(`Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`);
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from helper');
 });

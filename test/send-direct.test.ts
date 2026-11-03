@@ -34,7 +34,8 @@ function accepting(made: World): void {
 
 /** The team file with an entity, and the entity's own lobby in its trust list: a team that names
  *  an entity starts in `<home>/.config/team/lobbies/<slug>`, and that is the lobby the file must
- *  trust. The entity also gives an owner sender the reply address its socket frame carries. */
+ *  trust. The socket frame's reader line names the record's own id, so it takes no address from
+ *  the entity. */
 function declareEntity(made: World, entity = 'floor'): void {
   const path = join(made.dir, 'team.yaml');
   const lobby = resolveLobby(made.home, { entity });
