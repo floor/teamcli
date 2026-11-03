@@ -1183,3 +1183,206 @@ describe('muse: the exit text carries the composer’s own completion row', () =
     expect(pane.keys.map((one) => one.key)).toEqual(['ctrl+u', 'enter']);
   });
 });
+
+describe('independent adversarial checks: refused or swallowed Enter clears only our own /exit', () => {
+  const claudeIdle = fixture('claude-code-idle-ansi.txt');
+  const claudeUnsent = fixture('claude-code-unsent-ansi.txt');
+  const claudeOther = fixture('claude-code-other-text-ansi.txt');
+
+  for (const { cli, binary, idle, unsent } of CAPTURED) {
+    test(`${cli}: both refused Enter and swallowed Enter clear /exit with the profile exit_clear key`, async () => {
+      const clearKey = profileFor(cli)?.exitClear ?? '';
+      expect(clearKey.length).toBeGreaterThan(0);
+
+      // 1. Refused Enter (`pressEnter` returns false): clears `/exit` with `exit_clear` and returns 'cleared'.
+      const refused = paneOf(cli, binary, fixture(idle), fixture(unsent), {
+        enter: () => false,
+        cleared: fixture(idle),
+      });
+      expect(await typeExit(refused.io, cli, exitText(cli))).toBe('cleared');
+      expect(refused.types).toEqual([exitText(cli)]);
+      expect(refused.sent).toEqual([{ key: clearKey, kind: 'unsent', holds: true }]);
+
+      // 2. Swallowed Enter (`pressEnter` returns true, box stays unsent holding `/exit` through DRAW_WAIT_MS):
+      //    clears `/exit` with `exit_clear` and returns 'cleared'.
+      const swallowed = paneOf(cli, binary, fixture(idle), fixture(unsent), {
+        cleared: fixture(idle),
+      });
+      expect(await typeExit(swallowed.io, cli, exitText(cli))).toBe('cleared');
+      expect(swallowed.types).toEqual([exitText(cli)]);
+      expect(swallowed.sent).toEqual([
+        { key: 'enter', kind: 'unsent', holds: true },
+        { key: clearKey, kind: 'unsent', holds: true },
+      ]);
+    });
+  }
+
+  test('a person typing into the box between our /exit and clearTyped is never erased (refused or swallowed Enter)', async () => {
+    // 1. Refused Enter: right as `pressEnter` returns false, a person replaces `/exit` with their own draft.
+    let personTypedOnRefused = false;
+    const refused = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      enter: () => {
+        personTypedOnRefused = true;
+        return false;
+      },
+      cleared: claudeIdle,
+    });
+    const origRefusedScreen = refused.io.screen;
+    refused.io.screen = () => (personTypedOnRefused ? claudeOther : origRefusedScreen());
+
+    expect(await typeExit(refused.io, 'claude-code', '/exit')).toEqual({
+      left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+    });
+    expect(refused.sent).toEqual([]);
+
+    // 2. Swallowed Enter: Enter goes out, and while waiting (or right before clearTyped re-reads),
+    //    a person replaces `/exit` with their own text. `clearTyped` must NOT send `ctrl+c`.
+    let postEnterReads = 0;
+    let enterSent = false;
+    const swallowed = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      cleared: claudeIdle,
+    });
+    const origSwallowedEnter = swallowed.io.pressEnter;
+    swallowed.io.pressEnter = () => {
+      const ok = origSwallowedEnter();
+      enterSent = true;
+      return ok;
+    };
+    const origSwallowedScreen = swallowed.io.screen;
+    swallowed.io.screen = () => {
+      if (enterSent) {
+        postEnterReads += 1;
+        // Keep `/exit` during the loop check so `clearTyped()` is entered, then flip on the re-read inside `clearTyped()`.
+        if (postEnterReads >= 6) return claudeOther;
+      }
+      return origSwallowedScreen();
+    };
+
+    expect(await typeExit(swallowed.io, 'claude-code', '/exit')).toBe(true);
+    expect(swallowed.sent.map((s) => s.key)).toEqual(['enter']);
+
+    // 3. Status turns `working` or foreground process exits right when `pressEnter` is refused: no clear key is sent.
+    let refusedWorking = false;
+    const turnStarted = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      enter: () => {
+        refusedWorking = true;
+        return false;
+      },
+      status: () => (refusedWorking ? 'working' : 'idle'),
+      cleared: claudeIdle,
+    });
+    expect(await typeExit(turnStarted.io, 'claude-code', '/exit')).toEqual({
+      left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+    });
+    expect(turnStarted.sent).toEqual([]);
+
+    let refusedGone = false;
+    const processGone = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      enter: () => {
+        refusedGone = true;
+        return false;
+      },
+      foreground: () => (refusedGone ? ['zsh'] : ['claude']),
+      cleared: claudeIdle,
+    });
+    expect(await typeExit(processGone.io, 'claude-code', '/exit')).toBe('no-agent');
+    expect(processGone.sent).toEqual([]);
+  });
+
+  test('a box holding /exit plus more text (same-row suffix or extra continuation row) is never cleared', async () => {
+    const claudeSuffix = claudeUnsent.replace('/exit\x1b[0m', '/exit now\x1b[0m');
+    const claudeExtraRow = claudeUnsent.replace('/exit\x1b[0m', '/exit\x1b[0m\n  keep my draft');
+    expect(boxHoldsText('claude-code', '/exit', claudeSuffix)).toBe(false);
+    expect(boxHoldsOther('claude-code', '/exit', claudeSuffix)).toBe('/exit now');
+
+    // 1a. Same-row suffix (`/exit now`) appended between refused Enter and `clearTyped()`:
+    //     `typedInBox()` (`box.first === '/exit'`) is false, so `ctrl+c` is never sent.
+    let suffixAfterRefused = false;
+    const sameRowRefused = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      enter: () => {
+        suffixAfterRefused = true;
+        return false;
+      },
+      cleared: claudeIdle,
+    });
+    const origSameRowScreen = sameRowRefused.io.screen;
+    sameRowRefused.io.screen = () => (suffixAfterRefused ? claudeSuffix : origSameRowScreen());
+
+    expect(await typeExit(sameRowRefused.io, 'claude-code', '/exit')).toEqual({
+      left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+    });
+    expect(sameRowRefused.sent).toEqual([]);
+
+    // 1b. Extra continuation row (`❯ /exit\n  keep my draft`) on a non-completion profile:
+    //     `typedInBox()` (`box.first === '/exit'`) is STILL true, and `kindOf() === 'unsent'` is true,
+    //     so only `!completion && !holds()` in `clearTyped()` prevents erasing the person's second row!
+    expect(readScreen('claude-code', claudeExtraRow).kind).toBe('unsent');
+    expect(boxHoldsText('claude-code', '/exit', claudeExtraRow)).toBe(false);
+    expect(boxHoldsOther('claude-code', '/exit', claudeExtraRow)).toBe('keep my draft');
+
+    let extraRowAfterRefused = false;
+    const extraRowRefused = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      enter: () => {
+        extraRowAfterRefused = true;
+        return false;
+      },
+      cleared: claudeIdle,
+    });
+    const origExtraRowScreen = extraRowRefused.io.screen;
+    extraRowRefused.io.screen = () => (extraRowAfterRefused ? claudeExtraRow : origExtraRowScreen());
+
+    expect(await typeExit(extraRowRefused.io, 'claude-code', '/exit')).toEqual({
+      left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+    });
+    expect(extraRowRefused.sent).toEqual([]);
+
+    // 1c. Same extra continuation row appearing after a swallowed Enter: `typedInBox()` is true at the
+    //     loop's `if (kindOf() === 'unsent' && typedInBox())` guard, and `clearTyped()` refuses to clear
+    //     because `!completion && !holds()` is true.
+    let swallowedEntered = false;
+    const extraRowSwallowed = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+      cleared: claudeIdle,
+    });
+    const origExtraSwallowedEnter = extraRowSwallowed.io.pressEnter;
+    extraRowSwallowed.io.pressEnter = () => {
+      const ok = origExtraSwallowedEnter();
+      swallowedEntered = true;
+      return ok;
+    };
+    const origExtraSwallowedScreen = extraRowSwallowed.io.screen;
+    extraRowSwallowed.io.screen = () => (swallowedEntered ? claudeExtraRow : origExtraSwallowedScreen());
+
+    expect(await typeExit(extraRowSwallowed.io, 'claude-code', '/exit')).toBe(true);
+    expect(extraRowSwallowed.sent.map((s) => s.key)).toEqual(['enter']);
+  });
+
+  test('a profile without exit_clear stays "typed and not sent" on a refused Enter and sends no clear key on a swallowed Enter', async () => {
+    const profile = profileFor('claude-code');
+    if (!profile) throw new Error('missing claude-code profile');
+    const prevClear = profile.exitClear;
+    profile.exitClear = null;
+    try {
+      // 1. Refused Enter with `exitClear === null` returns the "typed and not sent" refusal and sends no keys.
+      const refused = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+        enter: () => false,
+        cleared: claudeIdle,
+      });
+      expect(await typeExit(refused.io, 'claude-code', '/exit')).toEqual({
+        left: 'its exit was not confirmed; the exit text was typed and not sent; left running',
+      });
+      expect(refused.types).toEqual(['/exit']);
+      expect(refused.sent).toEqual([]);
+
+      // 2. Swallowed Enter with `exitClear === null` sends only `enter` and never a clear key.
+      const swallowed = paneOf('claude-code', 'claude', claudeIdle, claudeUnsent, {
+        cleared: claudeIdle,
+      });
+      expect(await typeExit(swallowed.io, 'claude-code', '/exit')).toBe(true);
+      expect(swallowed.types).toEqual(['/exit']);
+      expect(swallowed.sent.map((s) => s.key)).toEqual(['enter']);
+    } finally {
+      profile.exitClear = prevClear;
+    }
+  });
+});
+

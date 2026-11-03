@@ -3230,3 +3230,94 @@ describe('independent checks: restart --fresh', () => {
     });
   });
 });
+
+describe('independent checks: restart clears unsent /exit on refused or swallowed Enter', () => {
+  test('refused or swallowed Enter during restart clears our /exit with exit_clear and leaves the seat running', async () => {
+    for (const mode of ['refused', 'swallowed'] as const) {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.worker = {
+          stage: 'ready',
+          pane: 'pane-old',
+          workspace: 'ws-old',
+          id: 'seat_0123456789ab',
+        };
+      });
+      const { sources, did } = makeHarness(fixture);
+      const keysSent: string[] = [];
+      let enterCalls = 0;
+      let screenBox = claudeBox('');
+      sources.screenText = () => screenBox;
+      sources.launch!.typeText = (_session, _pane, text) => {
+        did.typed.push(text);
+        screenBox = claudeBox(text);
+        return true;
+      };
+      sources.launch!.pressEnter = () => {
+        enterCalls += 1;
+        // Refused Enter returns false; swallowed Enter returns true without emptying the box or exiting to zsh.
+        return mode === 'swallowed';
+      };
+      sources.launch!.sendKey = (_session, _pane, key) => {
+        keysSent.push(key);
+        if (key === 'ctrl+c') screenBox = claudeBox('');
+        return true;
+      };
+
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker'], io, sources), mode).toBe(1);
+      expect(did.typed, mode).toEqual(['/exit']);
+      expect(enterCalls, mode).toBe(1);
+      expect(keysSent, mode).toEqual(['ctrl+c']);
+      expect(did.closed, mode).toEqual([]);
+      expect(did.created, mode).toBe(0);
+      expect(io.out, mode).toContain(
+        'worker: its exit was not confirmed; the text was cleared; left running (team restart worker --abandon closes it)\n',
+      );
+      expect(io.err, mode).toBe('team restart: worker could not be stopped; left as it is\n');
+    }
+  });
+
+  test('person typing into the box or adding a continuation row after /exit during restart is never cleared', async () => {
+    for (const boxAfterEnter of [claudeBox('my own draft'), claudeBox('/exit now'), claudeBox('/exit\n  second row')]) {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.worker = {
+          stage: 'ready',
+          pane: 'pane-old',
+          workspace: 'ws-old',
+          id: 'seat_0123456789ab',
+        };
+      });
+      const { sources, did } = makeHarness(fixture);
+      const keysSent: string[] = [];
+      let screenBox = claudeBox('');
+      sources.screenText = () => screenBox;
+      sources.launch!.typeText = (_session, _pane, text) => {
+        did.typed.push(text);
+        screenBox = claudeBox(text);
+        return true;
+      };
+      sources.launch!.pressEnter = () => {
+        screenBox = boxAfterEnter;
+        return false;
+      };
+      sources.launch!.sendKey = (_session, _pane, key) => {
+        keysSent.push(key);
+        return true;
+      };
+
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker'], io, sources)).toBe(1);
+      expect(did.typed).toEqual(['/exit']);
+      expect(keysSent).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(io.out).toContain(
+        'worker: its exit was not confirmed; the exit text was typed and not sent; left running (team restart worker --abandon closes it)\n',
+      );
+      expect(io.err).toBe('team restart: worker could not be stopped; left as it is\n');
+    }
+  });
+});
+
