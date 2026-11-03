@@ -96,6 +96,7 @@ export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];
 /** Canonical names of the closed enforced policy vocabulary in 0.5.0. */
 export const ENFORCED_POLICY_NAMES = [
   'dev-mode',
+  'lead-gates',
   'seats-cross-teams',
   'state-trace-window-seconds',
   'state-blind-after-seconds',
@@ -157,6 +158,7 @@ export type CataloguePolicyName = EnforcedPolicyName | AdvisedPolicyName;
 /** Snake-case aliases accepted at load and normalized to their canonical kebab-case policy name. */
 export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> = {
   dev_mode: 'dev-mode',
+  lead_gates: 'lead-gates',
   seats_cross_teams: 'seats-cross-teams',
   state_trace_window_seconds: 'state-trace-window-seconds',
   trace_window_seconds: 'state-trace-window-seconds',
@@ -293,6 +295,14 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   if (raw === 'on' || raw === true) return 'on';
   if (raw === 'off' || raw === false) return 'off';
   return null;
+}
+
+/** `lead-gates`: which placed roles dev mode admits to the owner-only gates (ruling D5, A3). */
+export type LeadGatesValue = 'lead' | 'lead+operator';
+
+/** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
+function parseLeadGates(raw: unknown): LeadGatesValue | null {
+  return raw === 'lead' || raw === 'lead+operator' ? raw : null;
 }
 
 /** `owner-signers`: a list of signer names, or on the command line one comma-separated word (`phone,mac`). */
@@ -678,6 +688,18 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
       if (!lowerExpiry) return false;
       return Date.parse(lowerExpiry) <= Date.parse(higherExpiry);
     },
+  },
+  'lead-gates': {
+    name: 'lead-gates',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'lead',
+    gateLifting: true,
+    parseValue: parseLeadGates,
+    // `lead` is within anything: it admits no operator, so no stricter reading can loosen it.
+    // `lead+operator` is only within `lead+operator`: a nearer level cannot widen the gates past
+    // a farther level that kept them the lead's.
+    isWithin: (lower: LeadGatesValue, higher: LeadGatesValue) => lower === 'lead' || lower === higher,
   },
   'seats-cross-teams': {
     name: 'seats-cross-teams',
