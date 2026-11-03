@@ -948,10 +948,34 @@ Usage:
 | --- | --- | --- | --- |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--inherited` | yes | no | yes |
 | `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `chores`
+
+Hidden: yes
+
+Usage: none
+
+#### Who may run it
+
+`owner-only` — the hidden child start is the daemon's own act: the daemon starts its chores children through their own program entry, and this verb is the same start with the whole command table loaded, so it runs only from the daemon's one-use token — never from a seat or a pane, and the owner's terminal is the one interactive caller the row admits while the token still decides inside
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
