@@ -133,6 +133,7 @@ export const ENFORCED_POLICY_NAMES = [
   'approval-rule-ttl',
   'client-bundles',
   'client-grant-max-duration',
+  'actions-commands',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -261,6 +262,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   approval_rule_ttl: 'approval-rule-ttl',
   client_bundles: 'client-bundles',
   client_grant_max_duration: 'client-grant-max-duration',
+  actions_commands: 'actions-commands',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -321,6 +323,27 @@ export type LeadGatesValue = 'lead' | 'lead+operator';
 /** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
 function parseLeadGates(raw: unknown): LeadGatesValue | null {
   return raw === 'lead' || raw === 'lead+operator' ? raw : null;
+}
+
+/** The Actions commands a caller may leave in the guard's allowlist. The release default is all
+ *  three: Floor's values, with no seat named. A lower level may only drop commands. */
+export const ACTIONS_COMMANDS = ['rerun-failed', 'deploy', 'ci-pr-head'] as const;
+
+export type ActionsCommand = (typeof ACTIONS_COMMANDS)[number];
+
+export const ACTIONS_COMMANDS_DEFAULT: readonly ActionsCommand[] = ACTIONS_COMMANDS;
+
+function parseActionsCommands(raw: unknown): ActionsCommand[] | null {
+  const items = typeof raw === 'string'
+    ? raw.split(',').map((item) => item.trim()).filter((item) => item !== '')
+    : raw;
+  if (!Array.isArray(items)) return null;
+  const out: ActionsCommand[] = [];
+  for (const name of ACTIONS_COMMANDS) {
+    if (items.includes(name)) out.push(name);
+  }
+  if (out.length !== items.length || new Set(items).size !== items.length) return null;
+  return out;
 }
 
 /** `owner-signers`: a list of signer names, or on the command line one comma-separated word (`phone,mac`). */
@@ -1252,6 +1275,19 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     },
     inherit: (higher: string, lower: string) => inheritDurationPolicy(higher, lower),
     isWithin: (lower: string, higher: string) => durationPolicyWithin(lower, higher),
+  },
+  // Which Actions commands the guard allows. The default is Floor's three; a caller sets a
+  // subset. A name outside the three is not a value, so the list cannot grow a fourth command,
+  // and no seat is named.
+  'actions-commands': {
+    name: 'actions-commands',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: ACTIONS_COMMANDS_DEFAULT,
+    gateLifting: false,
+    parseValue: parseActionsCommands,
+    isWithin: (lower: readonly ActionsCommand[], higher: readonly ActionsCommand[]) =>
+      lower.every((command) => higher.includes(command)),
   },
   'grant-emission': {
     name: 'grant-emission',

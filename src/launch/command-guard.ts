@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellQuote } from '../profiles/profile.ts';
 import { stableHookPath } from '../daemon/runtime-entry.ts';
+import { ACTIONS_COMMANDS_DEFAULT, type ActionsCommand } from '../policy/types.ts';
 
 /** The command classes the guard denies. One rule name and one line of guidance each. */
 export type GuardRule =
@@ -37,7 +38,8 @@ export type GuardRule =
   | 'git-reset-hard'
   | 'git-clean'
   | 'git-branch-force-delete'
-  | 'npm-publish';
+  | 'npm-publish'
+  | 'github-actions';
 
 /** What a denied command is and what the model is told instead. */
 export type GuardMatch = { rule: GuardRule; guidance: string };
@@ -58,6 +60,7 @@ const GUIDANCE: Record<GuardRule, string> = {
   'git-clean': 'refused in team seats: delete only the paths you created, never the untracked tree',
   'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
   'npm-publish': 'refused in team seats: the release moves only on the owner\'s word',
+  'github-actions': 'refused in team seats: the actions-commands policy does not allow that Actions command',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -467,7 +470,67 @@ function launchctlReadOnly(args: readonly string[]): boolean {
   return false;
 }
 
-function matchSegment(words: readonly string[]): GuardMatch | null {
+const GH_TAKES_VALUE = new Set([
+  '-R', '--repo', '--hostname', '-H', '--ref', '-f', '--field', '-F', '--raw-field', '--json', '--jq', '--job',
+]);
+
+/** `gh` once its global flags are set aside: the command group, the subcommand, the remaining
+ *  positionals, and whether `--ref` names a non-empty head. */
+function ghCall(args: readonly string[]): { group: string; sub: string | null; positionals: string[]; ref: string | null } | null {
+  const positionals: string[] = [];
+  let ref: string | null = null;
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '--') {
+      positionals.push(...args.slice(at + 1));
+      break;
+    }
+    if (arg === '--ref') {
+      ref = args[at + 1] ?? '';
+      at += 1;
+      continue;
+    }
+    if (arg.startsWith('--ref=')) {
+      ref = arg.slice('--ref='.length);
+      continue;
+    }
+    if (GH_TAKES_VALUE.has(arg)) {
+      at += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    positionals.push(arg);
+  }
+  const group = positionals[0];
+  if (group === undefined) return null;
+  return { group, sub: positionals[1] ?? null, positionals: positionals.slice(2), ref: ref === '' ? null : ref };
+}
+
+/** True when this `gh` line is one of the three Actions commands the policy still holds. */
+function actionsAllowed(args: readonly string[], actions: readonly ActionsCommand[]): boolean {
+  const call = ghCall(args);
+  if (call === null) return true;
+  if (call.group === 'api') {
+    return !args.some((arg) => arg.includes('/actions'));
+  }
+  if (call.group === 'run' && call.sub === 'rerun') {
+    return actions.includes('rerun-failed')
+      && args.includes('--failed')
+      && call.positionals.every((word) => /^[0-9]+$/.test(word));
+  }
+  if (call.group === 'workflow' && call.sub === 'run') {
+    const workflow = call.positionals[0];
+    const rest = call.positionals.slice(1);
+    if (workflow === undefined || rest.length > 0) return false;
+    if ((workflow === 'deploy.yml' || workflow === 'deploy') && actions.includes('deploy')) return true;
+    if ((workflow === 'ci.yml' || workflow === 'ci') && actions.includes('ci-pr-head') && call.ref !== null) return true;
+    return false;
+  }
+  if (call.group === 'run' || call.group === 'workflow') return false;
+  return true;
+}
+
+function matchSegment(words: readonly string[], actions: readonly ActionsCommand[]): GuardMatch | null {
   const command = commandOf(words);
   if (command.length === 0) return null;
   const word = base(command[0]!);
@@ -515,22 +578,25 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'npm' && npmPublishes(args)) {
     return { rule: 'npm-publish', guidance: GUIDANCE['npm-publish'] };
   }
+  if (word === 'gh' && !actionsAllowed(args, actions)) {
+    return { rule: 'github-actions', guidance: GUIDANCE['github-actions'] };
+  }
   if (word === 'xargs') {
     // `find … | xargs chmod +x`: the command xargs runs is the first word that is not its option.
     const at = args.findIndex((arg) => !arg.startsWith('-'));
-    if (at !== -1) return matchSegment(args.slice(at));
+    if (at !== -1) return matchSegment(args.slice(at), actions);
   }
   if (word === 'find') {
     // Every `-exec`, `-execdir`, `-ok` and `-okdir` runs the words that follow it, up to the
     // action's `;` or `+`.
-    const actions = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+    const findActions = new Set(['-exec', '-execdir', '-ok', '-okdir']);
     let scan = 0;
     while (scan < args.length) {
-      const action = args.findIndex((arg, index) => index >= scan && actions.has(arg));
+      const action = args.findIndex((arg, index) => index >= scan && findActions.has(arg));
       if (action === -1) break;
       const command = args.slice(action + 1);
       const end = command.findIndex((arg) => arg === ';' || arg === '+');
-      const match = matchSegment(end === -1 ? command : command.slice(0, end));
+      const match = matchSegment(end === -1 ? command : command.slice(0, end), actions);
       if (match !== null) return match;
       scan = end === -1 ? args.length : action + end + 2;
     }
@@ -544,16 +610,20 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
  * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
  * `git push --force` (and `-f`),
- * `git reset --hard`, a destructive `git clean`, `git branch -D` and `npm publish`.
+ * `git reset --hard`, a destructive `git clean`, `git branch -D`, `npm publish`, and an
+ * Actions command outside the `actions-commands` policy.
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
  * only ever sits in the arguments of the command that carries it.
  */
-export function refusedByGuard(line: string): GuardMatch | null {
+export function refusedByGuard(
+  line: string,
+  actions: readonly ActionsCommand[] = ACTIONS_COMMANDS_DEFAULT,
+): GuardMatch | null {
   const parsed = segments(withoutHeredocBodies(line));
   for (let at = 0; at < parsed.length; at++) {
     const segment = parsed[at]!;
-    const match = matchSegment(segment.words);
+    const match = matchSegment(segment.words, actions);
     if (match !== null) return match;
     if (segment.piped && at > 0) {
       const left = commandOf(parsed[at - 1]!.words);
