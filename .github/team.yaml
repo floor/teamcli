@@ -190,8 +190,10 @@ seats:
     display: DeepSeek V4.1 Flash
     launch: claude-deepseek
 
+  # The registry's `reviewer` is the GLM seat declared below; this Codex reviewer keeps its
+  # identity and signs under its own name, which a seat name must have.
   - role: reviewer
-    name: reviewer
+    name: reviewer-terra
     cli: codex
     vendor: openai
     model: GPT Terra
@@ -411,3 +413,42 @@ seats:
     version: "6.1"
     display: GPT Sol 6.1
     launch: codex
+
+  # 2026-11-03: seats declared today, each signing with its registry display and role.
+  - role: builder
+    name: builder-5
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  # The registry's reviewer, under the name the registry gives it; the Codex reviewer above
+  # was moved to its own name so this one can be exact.
+  - role: reviewer
+    name: reviewer
+    cli: claude-code
+    vendor: zai
+    model: GLM
+    version: "5.3"
+    display: GLM 5.3
+    launch: claude-glm
+
+  - role: builder
+    name: builder-7
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: tester
+    name: tester-3
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
