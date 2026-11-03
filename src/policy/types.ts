@@ -148,6 +148,10 @@ export const ADVISED_POLICY_NAMES = [
   'landing-mode',
   'vault-root',
   'entity-orchestrator',
+  'entity.main-orchestrator.relays-owner',
+  'leads.pane-actions',
+  'leads.self-service',
+  'owner.reserved-scope',
 ] as const;
 
 export type AdvisedPolicyName = (typeof ADVISED_POLICY_NAMES)[number];
@@ -199,6 +203,20 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   vault_root: 'vault-root',
   entity_orchestrator: 'entity-orchestrator',
   'chain.topology.entity.orchestrator': 'entity-orchestrator',
+  // The lead rules the owner decided on 2026-11-03 (OD-20261103-03), in the spellings a team
+  // writes them and the kebab-case canonical names of this catalogue.
+  entity_main_orchestrator_relays_owner: 'entity.main-orchestrator.relays-owner',
+  'entity.main_orchestrator.relays_owner': 'entity.main-orchestrator.relays-owner',
+  'entity.main-orchestrator.relays_owner': 'entity.main-orchestrator.relays-owner',
+  'entity.main_orchestrator.relays-owner': 'entity.main-orchestrator.relays-owner',
+  leads_pane_actions: 'leads.pane-actions',
+  'leads.pane_actions': 'leads.pane-actions',
+  leads_self_service: 'leads.self-service',
+  'leads.self_service': 'leads.self-service',
+  'lead-self-service': 'leads.self-service',
+  owner_reserved_scope: 'owner.reserved-scope',
+  'owner.reserved_scope': 'owner.reserved-scope',
+  'owner-reserved-scope': 'owner.reserved-scope',
   event_thread_ttl_seconds: 'event-thread-ttl-seconds',
   thread_ttl_seconds: 'event-thread-ttl-seconds',
   'thread-ttl': 'event-thread-ttl-seconds',
@@ -504,6 +522,20 @@ function shortenOnlyProblem(name: string, raw: unknown, ceiling: number): string
   return null;
 }
 
+/** `owner.reserved-scope`: a list of what the owner reserves, or one `;`/`,`-separated word. */
+function parseScopeItems(raw: unknown): readonly string[] | null {
+  const items = typeof raw === 'string' ? raw.split(/[;,]/).map((part) => part.trim()) : raw;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim().replace(/\s+/g, ' ');
+    if (text === '' || /[\x00-\x1f\x7f]/.test(text)) return null;
+    if (!out.includes(text)) out.push(text);
+  }
+  return out;
+}
+
 function rawDeliveryItems(raw: unknown): unknown[] | null {
   if (typeof raw === 'string') {
     return raw
@@ -662,6 +694,20 @@ const BACKLOG_LIMIT_RANGE: BacklogRange = { min: 1, max: 10_000, release: DAEMON
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
  * sourced directly from `src/settings/inherit.ts`.
  */
+/**
+ * The owner's reserved scope, in four words (OD-20261103-03(4)): public releases, spending,
+ * credentials, and the owner's machine. The machine's gloss names what it covers, so a rule
+ * that prints the list never leaves "the machine" to be read as "any act on it": it is the
+ * system's own settings and accounts, logins, keychain and hardware, never a checkout, a seat
+ * or the team's config.
+ */
+export const OWNER_RESERVED_SCOPE_DEFAULT = [
+  'public releases',
+  'spending',
+  'credentials',
+  "the owner's machine",
+] as const;
+
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
     name: 'dev-mode',
@@ -1324,6 +1370,57 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: (raw: unknown) => (raw === 'auto' || raw === 'dedicated' || raw === 'off' ? raw : null),
     valueProblem: (raw: unknown) => `entity-orchestrator is auto, dedicated or off, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // Whether the entity's main orchestrator relays the owner's word: a relayed decision quotes
+  // the owner and cites its owner-decisions entry, and seats act on it without asking again.
+  // On by default where the entity sets a main orchestrator; `off` turns the rule line off.
+  'entity.main-orchestrator.relays-owner': {
+    name: 'entity.main-orchestrator.relays-owner',
+    kind: 'advised',
+    levels: ['entity'],
+    defaultValue: 'on',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // Whether leads may type or choose in a seat's pane when `team send` cannot reach it or a
+  // dialog blocks it; they read the pane before and after, and never the owner's own pane.
+  'leads.pane-actions': {
+    name: 'leads.pane-actions',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // Whether a lead in dev mode may bring back a stopped seat and build when no watcher runs.
+  'leads.self-service': {
+    name: 'leads.self-service',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseOnOff,
+    isWithin: () => true,
+  },
+  // What the owner keeps, in four words, printed in every seat's generated rules below the
+  // line that says what belongs to the teams (OD-20261103-03(4)). A list, `;`- or
+  // `,`-separated on the command line; set it to change the words, never to make the rule
+  // disappear.
+  'owner.reserved-scope': {
+    name: 'owner.reserved-scope',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: OWNER_RESERVED_SCOPE_DEFAULT,
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseScopeItems,
+    valueProblem: (raw: unknown) => `owner.reserved-scope is a list of reserved scopes, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
 };

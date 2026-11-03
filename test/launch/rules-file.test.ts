@@ -572,9 +572,9 @@ describe('one seat\'s delivery', () => {
 });
 
 describe("the inbox sentence follows the seat's CLI", () => {
-  // The rules v0.5.0 wrote for this seat, byte for byte (that tag's rulesOf, on this fixture):
-  // a seat whose CLI registers no inbox must keep getting exactly this text.
-  const V050_WITHOUT_INBOX = [
+  // The full rules text for this seat, byte for byte: a seat whose CLI registers no inbox must
+  // keep getting exactly this text, with no inbox sentence and the owner's reserved scope last.
+  const NO_INBOX_RULES = [
     'Rules for this session, from the team file:',
     '- End every commit message and every pull request body with your signature, given below.',
     '- Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
@@ -586,14 +586,15 @@ describe("the inbox sentence follows the seat's CLI", () => {
     '- Your signature in a pull request body, as its last line: **Agent:** GPT-6 Sol · implementer',
     '- Protected checkouts, relative to the project root: .',
     '- Work on the code in the worktree your brief names, never in the checkout you started in. Branches are named {kind}/{task}.',
+    "- The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams.",
     'These are standing rules, not a task: reply ready and wait for your brief.',
   ].join('\n');
 
-  test("a CLI with no inbox route keeps 0.5.0's text, byte for byte", () => {
+  test('a CLI with no inbox route gets the rules without the inbox sentence, byte for byte', () => {
     const { team, seat } = codexSeat();
     // muse has no measured `mcp_inbox` route, and its rules are a first message like the fixture
     // seat's: the one profile difference rulesOf reads is the inbox flag.
-    expect(rulesOf(team, { ...seat, cli: 'muse' }, '/nowhere')).toBe(V050_WITHOUT_INBOX);
+    expect(rulesOf(team, { ...seat, cli: 'muse' }, '/nowhere')).toBe(NO_INBOX_RULES);
   });
 
   test.each(['codex', 'antigravity'])("a %s seat's rules carry the inbox sentence, once, after the never-stop line", (cli) => {
