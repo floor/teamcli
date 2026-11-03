@@ -209,7 +209,7 @@ describe('the message walk', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       const last = history.entries.at(-1);
-      expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'drop', outcome: 'queued, not woken' });
+      expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'drop', outcome: 'sent (unconfirmed)' });
     }
   });
 
