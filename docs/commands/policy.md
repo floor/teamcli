@@ -29,7 +29,8 @@ gate-lifting policies); an expired value counts as unset at its level.
 `rerun-failed`, `deploy` and `ci-pr-head`: `gh run rerun --failed`, `gh workflow run deploy.yml`,
 and `gh workflow run ci.yml` with a ref. A lower level may only drop a command. Every other Actions
 command is refused. So is an `api` path under `/actions` or `/dispatches`, an `api` call
-whose method is POST, PUT, PATCH or DELETE (`-X` and `--method`), and an `api` call that adds
+whose method is POST, PUT, PATCH or DELETE (`-X` and `--method`; the last verb named is the one
+that counts), and an `api` call that adds
 `-f`, `--field`, `-F`, `--raw-field` or `--input` without an explicit GET. A graphql read stays
 allowed, including a path that ends in `/graphql`. A graphql query that contains `mutation` is refused.
 

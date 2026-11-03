@@ -53,6 +53,7 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh api repos/floor/teamcli/releases --field tag_name=v0.6.1')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/floor/teamcli/releases -f tag_name=v0.6.1 --method GET')).toBeNull();
   expect(refusedByGuard('gh api repos/floor/teamcli/releases -X GET -f tag_name=v0.6.1')).toBeNull();
+  expect(refusedByGuard('gh api repos/floor/teamcli/releases --method GET -X POST -f tag_name=v0.6.1')?.rule).toBe('github-actions');
   expect(refusedByGuard("gh api graphql -f query='query { viewer { login } }' -fquery='mutation { hidden }'")?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/acme/demo --input body.json')?.rule).toBe('github-actions');
   expect(refusedByGuard("gh api https://api.github.com/graphql -f query='mutation { anythingElse }'")?.rule).toBe('github-actions');

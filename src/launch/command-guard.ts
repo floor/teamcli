@@ -477,21 +477,25 @@ const GH_TAKES_VALUE = new Set([
 
 const GH_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** The explicit verb, or null when the line names none. `-X` and `--method` take the next word. */
+/** The last explicit verb, or null when the line names none. `-X` and `--method` take the next word.
+ *  A later verb replaces an earlier one, the way the flag parser keeps the last. */
 function ghExplicitMethod(args: readonly string[]): string | null {
+  let method: string | null = null;
   for (let at = 0; at < args.length; at += 1) {
     const arg = args[at]!;
     if (arg === '-X' || arg === '--method') {
       const verb = args[at + 1];
-      return verb === undefined || verb === '' ? null : verb.toUpperCase();
+      if (verb !== undefined && verb !== '') method = verb.toUpperCase();
+      continue;
     }
     if (arg.startsWith('--method=')) {
       const verb = arg.slice('--method='.length);
-      return verb === '' ? null : verb.toUpperCase();
+      if (verb !== '') method = verb.toUpperCase();
+      continue;
     }
-    if (/^-X[A-Za-z]+$/.test(arg)) return arg.slice(2).toUpperCase();
+    if (/^-X[A-Za-z]+$/.test(arg)) method = arg.slice(2).toUpperCase();
   }
-  return null;
+  return method;
 }
 
 /** A write verb on `gh api`, from `-X`, `-XPOST`, `--method` and `--method=`. */
