@@ -63,6 +63,16 @@ mcp_inbox:
 # The class the launch installs: the inbox above is read when the model takes a turn, so an idle
 # seat is pull-only (the class grok, cursor and gemini also declare).
 delivery: pull-on-turn
+# The typed wake, granted 2026-11-02 on the 1.4.12 frames in test/fixtures/antigravity/1.4.12/:
+# a send may type one trigger line into a composer two reads showed as the empty idle prompt,
+# presses Enter only while the box still holds exactly that line, and calls itself delivered only
+# when the `working` screen (the braille spinner row, `⣾  Reading file...` or `Generating...`)
+# appears. The screens are captured whole, including the `Conversation compacted` transcript
+# under the same box. The box-holding frames are refusals: a draft the owner left, and the
+# `/exit` completion frame, whose box holds `/exit` while the completion row sits below the
+# closing rule. Nothing else is typed, and a wake that cannot deliver leaves the message in the
+# bus inbox. See src/send/typed-wake.ts.
+typed_wake: screen
 login:
   check:
     - models
