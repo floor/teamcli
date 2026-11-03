@@ -184,9 +184,9 @@ describe('a reply is a record on the thread it answers', () => {
   });
 
   test('a seat answering marks it read with its own signed receipt', async () => {
-    place('helper', 'w2:p1');
+    place('helper', 'pane-helper');
     sentTo('helper', SENT_B, { from: 'worker' });
-    const result = await run([SENT_B, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY_B });
+    const result = await run([SENT_B, 'answered'], { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' }, { newId: () => REPLY_B });
     expect(result.code).toBe(0);
     const read = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'helper'), `${SENT_B}.read.json`), 'utf8')));
     if (read === null) throw new Error('no read receipt was written');
