@@ -193,21 +193,23 @@ import { mkdirSync } from 'node:fs';
  * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent
  * link is traversed. Only one writer can win the `mkdir` for a level; `EEXIST` is then success
  * only when what stands there is a real folder of this user's, judged by the same no-link rule
- * every level gets, and anything else is a refusal rather than a folder to write into.
+ * every level gets, and anything else is a refusal rather than a folder to write into. `what` is
+ * the folder's name in the refusal's words — the state folder here, and the pending folder at
+ * the one other site that adopts a race's winner (`src/send/pending.ts`).
  */
-function createDir0700(path: string): string | null {
+export function createDir0700(path: string, what = 'the state folder'): string | null {
   try {
     mkdirSync(path, { mode: 0o700 });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return 'the state folder could not be created';
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return `${what} could not be created`;
     const problem = ladderProblem(path);
     if (problem !== null) return problem;
-    if (heldAt(path).kind !== 'folder') return 'the state folder could not be created';
+    if (heldAt(path).kind !== 'folder') return `${what} could not be created`;
   }
   try {
     chmodSync(path, 0o700);
   } catch {
-    return 'the state folder permissions could not be set to 0700';
+    return `${what} permissions could not be set to 0700`;
   }
   return null;
 }

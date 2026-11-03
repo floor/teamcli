@@ -3,11 +3,12 @@
 // the winner's folder as ready, not fail with "the state folder could not be created". The
 // spawn-per-writer with one shared start instant follows test/bus-log-concurrent-seq.test.ts.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
 import { ensureStoreLadder, historyPath } from '../src/send/history.ts';
+import { pendingDir } from '../src/send/pending.ts';
 
 const dirs: string[] = [];
 
@@ -119,5 +120,56 @@ test("writers creating the same folders below one store all accept each other's 
     ok: Array.from({ length: writers }, () => true),
     reasons: [],
     modes: ['700', '700', '700'],
+  });
+}, 30000);
+
+test("pending handoffs beginning in a brand-new home all accept each other's mkdir", async () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-pending-race-')));
+  dirs.push(base);
+  const root = join(base, 'repo');
+  mkdirSync(root, { recursive: true });
+  // The home exists; the store ladder below it and then the pending folder are each a first
+  // write for every one of these processes.
+  const home = join(base, 'home');
+  mkdirSync(home, { recursive: true });
+
+  const writers = 8;
+  const ids = Array.from({ length: writers }, (_, i) => `pending-race-${String(i)}`);
+  const startAt = Date.now() + 500;
+  const helper = join(import.meta.dir, 'pending-race-run.ts');
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      const proc = Bun.spawn(['bun', helper, 'acme', root, home, id, String(startAt)], { stdout: 'pipe', stderr: 'pipe' });
+      const out = await new Response(proc.stdout).text();
+      const err = await new Response(proc.stderr).text();
+      await proc.exited;
+      const line = out.trim().split('\n').filter(Boolean).pop() ?? '';
+      try {
+        return { exitCode: proc.exitCode, ...(JSON.parse(line) as { ok?: boolean; reason?: string }) };
+      } catch {
+        return {
+          exitCode: proc.exitCode,
+          ok: false,
+          reason: `unparseable output: ${line.slice(0, 80)} ${err.slice(0, 80)}`,
+        };
+      }
+    }),
+  );
+
+  const dir = pendingDir('acme', root, home);
+  // The loser of the pending folder's mkdir must adopt the winner's folder and write its own
+  // record; a red run names what it answered instead.
+  expect({
+    exitCodes: results.map((result) => result.exitCode),
+    ok: results.map((result) => result.ok),
+    reasons: results.filter((result) => result.ok !== true).map((result) => result.reason ?? null),
+    files: readdirSync(dir).filter((name) => name.endsWith('.json')).sort(),
+    mode: (statSync(dir).mode & 0o777).toString(8),
+  }).toEqual({
+    exitCodes: ids.map(() => 0),
+    ok: ids.map(() => true),
+    reasons: [],
+    files: ids.map((id) => `${id}.json`).sort(),
+    mode: '700',
   });
 }, 30000);
