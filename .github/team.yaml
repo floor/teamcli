@@ -190,8 +190,10 @@ seats:
     display: DeepSeek V4.1 Flash
     launch: claude-deepseek
 
+  # The registry's `reviewer` is the GLM seat declared below; this Codex reviewer keeps its
+  # identity and signs under its own name, which a seat name must have.
   - role: reviewer
-    name: reviewer
+    name: reviewer-terra
     cli: codex
     vendor: openai
     model: GPT Terra
@@ -422,10 +424,10 @@ seats:
     display: GLM 5.3
     launch: claude-glm
 
-  # The registry names this seat `reviewer`, but a seat name is unique in its team and the file
-  # already carries a reviewer of that name, so the GLM reviewer signs under its own name.
+  # The registry's reviewer, under the name the registry gives it; the Codex reviewer above
+  # was moved to its own name so this one can be exact.
   - role: reviewer
-    name: reviewer-glm
+    name: reviewer
     cli: claude-code
     vendor: zai
     model: GLM
