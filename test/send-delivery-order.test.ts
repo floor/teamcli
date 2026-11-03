@@ -533,7 +533,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
 
     // The old inbox leg waited out `inboxGraceMs` and ended `delivered (read)` on this receipt.
     // Under D1 the send ends when the mailbox stores the record, and no receipt is its ending.
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(host.typed).toEqual([]);
     const id = inboxDrop(dir);
     expect(lastEntry(w.root, w.home)).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop' });

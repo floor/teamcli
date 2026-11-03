@@ -789,7 +789,7 @@ exit 1
     // The words follow the leg that took the message, and the walk stops there: a send the
     // runtime queue took never reaches its webhook leg, so no post is made and no
     // queued-for-bus sentence appears. The adapter's closed loopback port is never dialled.
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(out).not.toContain('queued; its webhook fires');
     expect(out).not.toContain('webhook not delivered');
     expect(calls).toEqual([
@@ -1271,7 +1271,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     expect(code).toBe(0);
     // `mcp-inbox` is a name this build reads and never walks (ADR D1): the channel-class leg the
     // order also names is what the cascade reaches, and the queue takes the send.
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
@@ -1306,7 +1306,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     // the store's reader, the declared drop is the one route the cascade reaches, and the drop
     // is what the sender's line names.
     expect(err).toBe(queuedLine(SEAT, NO_PANE_MESSAGING));
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('drop');
