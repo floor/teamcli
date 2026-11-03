@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -1268,7 +1268,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const code = await runSend(['lead', 'ping over socket', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
     expect(withoutSendId(io.err)).toBe(
-      `${queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT)}team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n`,
+      `${queuedLine('lead', NO_PANE_MESSAGING)}team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n`,
     );
 
     // An older CLI that still asks the daemon for a waited send gets the refusal from the

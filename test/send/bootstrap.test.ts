@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
+import { NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine } from '../../src/send/no-pane-messaging.ts';
 // The bootstrap scenes: a sender herdr has placed as a seat the live file declares, before any
 // agent record exists for it. The own-team rules judge it as that seat, the drop file's header
 // says so in as many words, and a refusal for the same caller names the command that would write
@@ -45,7 +45,7 @@ describe("team send: the file's seat, before its record", () => {
     const code = await runSend(['lead', 'a note'], io, fake(one, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
+    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
     // The delivery path stays another suite's subject: the plain word is the outcome here.
     // What this file judges is the header the receiver reads.
     expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(

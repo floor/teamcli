@@ -14,6 +14,7 @@ import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messag
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { recordBody } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 
 const IDLE = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.70', 'idle.txt'), 'utf8');
@@ -264,7 +265,7 @@ describe('team send: the Grok typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\ngrok: delivered (typed wake)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: delivered (typed wake)\n');
     expect(pane.typed).toHaveLength(1);
     expect(pane.typed[0]).toContain('team drops --read');
     expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
@@ -278,7 +279,7 @@ describe('team send: the Grok typed wake', () => {
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'delivered (typed wake)', via: 'typed' });
-      expect(history.entries[0]?.failed).toEqual(['mcp-inbox: no live inbox listener']);
+      expect(history.entries[0]?.failed).toBeUndefined();
     }
   });
 
@@ -291,7 +292,7 @@ describe('team send: the Grok typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\ngrok: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed question, not an empty idle prompt; nothing was typed); grok reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed question, not an empty idle prompt; nothing was typed); grok reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io.err).toBe(queuedLine('grok', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
@@ -301,7 +302,6 @@ describe('team send: the Grok typed wake', () => {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'sent (unconfirmed)', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'mcp-inbox: no live inbox listener',
         'typed: the first read showed question, not an empty idle prompt; nothing was typed',
       ]);
     }

@@ -1307,7 +1307,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     // the store's reader, the declared drop is the one route the cascade reaches, and the drop
     // is what the sender's line names.
     expect(err).toBe(queuedLine(SEAT, NO_PANE_MESSAGING));
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('drop');
