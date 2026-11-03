@@ -35,7 +35,7 @@ import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
-import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
@@ -5417,9 +5417,13 @@ export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender
  * record and this receiver (`sendGrantFor`); a grant for another pair is not a grant here, so
  * nothing looser than the pair reaches `admitSend`.
  *
- * `reply` is handed in by `team reply` alone, and only after it verified the record it answers
- * and found the thread open: the context then carries `open-thread`, and the reply rule — the
- * last one `admitSend` asks — can admit a pair no rule above admits.
+ * `reply` is handed in by `team reply` alone, and only after it verified the records it stands
+ * on. `open-thread` says the answered record verified and the thread is open; the reply rule —
+ * the last one `admitSend` asks — can then admit a pair no rule above admits.
+ * `main-orchestrator-thread` is the narrower answer to the entity's main orchestrator: the
+ * answered record verified, its sender is the entity's main orchestrator, and the thread's
+ * opening record is that same sender's and this seat's. `admitSend` asks the chain place and the
+ * reach's setting again, and that marker never falls through to the generic rule.
  */
 export function admissionOf(
   caller: Caller,
@@ -5430,7 +5434,7 @@ export function admissionOf(
   fileTeamId: string,
   now: () => Date,
   at: SeatStanding,
-  reply?: 'open-thread',
+  reply?: ReplyContext,
   watch?: { principal: WatchSendPrincipal; root: string },
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };

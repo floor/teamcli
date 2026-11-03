@@ -5,7 +5,10 @@
 // and `in_reply_to` (the record it answers). It goes to the sender of the record it answers,
 // never to a third seat, and admission judges the pair exactly as a send's, with the reply rule
 // (draft 3 §7, `reply-on-open-thread`) asked last: a reply is admitted while its thread is open,
-// even between seats no other rule pairs.
+// even between seats no other rule pairs. A seat's answer to the entity's main orchestrator is
+// the one reply the reach itself admits (OD-20261103-02): bound to the record the orchestrator
+// sent to this seat and to the thread that orchestrator opened, gated by the reach's own setting,
+// and never a new thread of the seat's own.
 //
 // The folder is the one that seat's own reader scans. A seat name is shared by teams, so the name
 // alone cannot place the reply: the registry id on the answered record does, and a sender of
@@ -50,7 +53,7 @@ import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
 import { findAgent, getAgent } from '../registry/agents.ts';
 import { findTeam, teamIdOf } from '../registry/teams.ts';
 import { sayThreshold } from '../settings/inherit.ts';
-import { senderHeader } from '../send/admit.ts';
+import { MAIN_ORCHESTRATOR_REPLY_RULE, senderHeader } from '../send/admit.ts';
 import { namingFor } from '../send/names.ts';
 import { appendHistory } from '../send/history.ts';
 import { resolveTarget, type Target } from '../send/resolve.ts';
@@ -830,13 +833,60 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     }
   }
 
-  // The pair is judged as a send's, with `open-thread` in the context: the thread the reply is
-  // written onto is open by construction — the answered thread while it is open, and otherwise
-  // the new one this reply opens and cites (§3.5). The seat rules admit the ordinary pairs
-  // first — two seats of one team, and two seats of one entity's teams — so the reply rule
-  // admits what no other rule pairs: two seats of different entities. A send never carries the
-  // context.
-  const admission = admissionOf(placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
+  // ---- the answer to the entity's main orchestrator -------------------------------------------
+  //
+  // The reach (OD-20261103-02) has a reply direction, and only one: a seat answers the entity's
+  // main orchestrator on the thread that orchestrator opened, and nowhere else. The binding is
+  // read from the verified records. The answered record's sender resolved to a seat of another
+  // team whose live file names that seat its orchestrator, and that team's project is the
+  // caller's own entity — the head team, the same place admission's `onMainCoordinator` reads.
+  // The thread is that record's own: the thread's opening record must verify, be this seat's and
+  // carry the same sender. A closed thread is refused too: a reply there would be a new thread
+  // this seat opened, which is exactly what a seat may not do.
+  const entity = team.entity;
+  const senderIsMainOrchestrator =
+    senderFile !== null && seatSender !== null && entity !== null
+    && senderFile.project === entity
+    && (senderFile.entity ?? seatSender.team.entity ?? null) === entity
+    && senderFile.orchestrator === answered.from;
+
+  // The ordinary rules first, exactly a send's and with no reply marker: a pair another rule
+  // admits — two leads, an own-team pair, a grant — keeps its rule and its name, and only a
+  // main-orchestrator answer no rule admits is handed the bound marker. Every other reply keeps
+  // the generic open-thread rule, and the thread it is written onto is open by construction —
+  // the answered thread while it is open, and otherwise the new one this reply opens and cites
+  // (§3.5). A send never carries the context.
+  let admission = admissionOf(
+    placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
+    senderIsMainOrchestrator ? undefined : 'open-thread',
+  );
+  if (!admission.ok && senderIsMainOrchestrator) {
+    if (!state.open) {
+      return refused(
+        io,
+        json,
+        `${closedWords(answered.thread, state.reason ?? 'close', thresholds.thresholds)}; a seat answers the entity's main orchestrator only on the open thread that orchestrator opened, and never opens one; nothing was written`,
+      );
+    }
+    const opening = answered.thread === answered.id
+      ? answered
+      : (() => {
+          const lookup = findRecord(recordHits(root, session, answered.thread), root, session, answered.thread, me, key);
+          return lookup.kind === 'found' ? lookup.found.record.payload : null;
+        })();
+    if (opening === null || opening.from !== answered.from || opening.from_id !== answered.from_id) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
+      return refused(
+        io,
+        json,
+        `${answered.from}: the thread ${answered.thread} was not opened by the entity's main orchestrator; ${MAIN_ORCHESTRATOR_REPLY_RULE} is the reach's only reply, and a seat never opens a thread to the main orchestrator; nothing was written`,
+      );
+    }
+    admission = admissionOf(
+      placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
+      'main-orchestrator-thread',
+    );
+  }
   if (!admission.ok) {
     raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
     return refused(io, json, `refused: ${admission.why}`);
