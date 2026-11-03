@@ -372,9 +372,9 @@ describe('S4 independent coverage: signed lead-drop aggregation and drain retry'
     const lines = readLead.record.payload.body.split('\n');
     expect(lines[0]).toBe('3 messages have been unread past the report window:');
     expect(lines).toHaveLength(4);
-    expect(lines[1]).toContain(`worker-a: a message from sender-one has been unread for 3 min (id ${id1}); no wake line was typed`);
-    expect(lines[2]).toContain(`worker-a: a message from sender-two has been unread for 3 min (id ${id2}); its wake line was sent at 2026-10-21T18:58:00.000Z`);
-    expect(lines[3]).toContain(`worker-b: a message from sender-one has been unread for 3 min (id ${id3}); no wake line was typed`);
+    expect(lines[1]).toContain(`worker-a: a message from sender-one is queued, not woken - unread for 3 min (id ${id1}); no wake line was typed`);
+    expect(lines[2]).toContain(`worker-a: a message from sender-two is queued, not woken - unread for 3 min (id ${id2}); its wake line was sent at 2026-10-21T18:58:00.000Z`);
+    expect(lines[3]).toContain(`worker-b: a message from sender-one is queued, not woken - unread for 3 min (id ${id3}); no wake line was typed`);
 
     // Lead's inbox (`listUnread`) serves the single aggregated drop.
     const leadUnread = listUnread(
@@ -570,9 +570,9 @@ describe('S4 independent coverage: signed lead-drop aggregation and drain retry'
 
     const body = readLead.record.payload.body;
     expect(body).toContain('2 messages have been unread past the report window:');
-    expect(body).toContain(`worker-a: a message from owner has been unread for 3 min (id ${idOwner})`);
+    expect(body).toContain(`worker-a: a message from owner is queued, not woken - unread for 3 min (id ${idOwner})`);
     expect(body).toContain(
-      `worker-b: a message from sender-one has been unread for 3 min (id ${idUnresolved}); no wake line was typed; the drop is at ${join(h.dir, 'send-drops', h.session, 'worker-b', idUnresolved)}; the sender's own mailbox could not be resolved (agent agt_deadbeef0000 is not a live record in this home's registry), so this report goes to the team's lead only`,
+      `worker-b: a message from sender-one is queued, not woken - unread for 3 min (id ${idUnresolved}); no wake line was typed; the drop is at ${join(h.dir, 'send-drops', h.session, 'worker-b', idUnresolved)}; the sender's own mailbox could not be resolved (agent agt_deadbeef0000 is not a live record in this home's registry), so this report goes to the team's lead only`,
     );
 
     // Owner mailbox receives its per-message record; sender-one does NOT receive a record for the unresolved agent id.

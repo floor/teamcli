@@ -935,7 +935,7 @@ describe('reportUnreadDrops', () => {
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(toOwner.to).toBe('owner');
     expect(toOwner.from).toBe('runtime');
-    expect(toOwner.body).toContain('lead: a message from owner has been unread for 21 min');
+    expect(toOwner.body).toContain('lead: a message from owner is queued, not woken - unread for 21 min');
     expect(toOwner.body).toContain('no wake line was typed');
     expect(toOwner.body).toContain(join(dropDir, UNREAD_A));
     const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
@@ -1288,7 +1288,7 @@ describe('reportUnreadDrops', () => {
     expect(verifyRecord(report.record, key)).toBe(true);
     expect(report.record.payload.from).toBe('runtime');
     expect(report.record.payload.to).toBe('lead');
-    expect(report.record.payload.body).toContain('a message from client:atlas has been unread for 21 min');
+    expect(report.record.payload.body).toContain('a message from client:atlas is queued, not woken - unread for 21 min');
     expect(report.record.payload.body).not.toContain('could not be resolved');
     expect(report.record.payload.body).not.toContain('mailbox');
     expect(said).toEqual(['lead: a message from client:atlas was still unread after 21 min; reported to lead']);
@@ -1373,8 +1373,8 @@ describe('the lead report aggregates a pass', () => {
     const body = read.record.payload.body;
     expect(read.record.payload.from).toBe('runtime');
     expect(body.startsWith('2 messages have been unread past the report window:\n')).toBe(true);
-    expect(body).toContain(`lead: a message from owner has been unread for 21 min (id ${UNREAD_A})`);
-    expect(body).toContain(`helper: a message from owner has been unread for 25 min (id ${UNREAD_B})`);
+    expect(body).toContain(`lead: a message from owner is queued, not woken - unread for 21 min (id ${UNREAD_A})`);
+    expect(body).toContain(`helper: a message from owner is queued, not woken - unread for 25 min (id ${UNREAD_B})`);
     // The sender records stay per message: each carries its own sentence, and the aggregate
     // repeats that sentence rather than replacing it.
     const senderA = join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`);

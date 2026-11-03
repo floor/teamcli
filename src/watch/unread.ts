@@ -771,9 +771,12 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
           ? `a wake was attempted at ${woke.at} and its outcome is unconfirmed`
           : `its wake line was sent at ${woke.at}`;
       const where = `the drop is at ${join(dropDir, message.id)}`;
+      // The record's state word matches the send-side one written when a walk stored a message
+      // without waking the seat: `queued, not woken`. A sender reading either line finds the
+      // same words, and the wake words behind them say what this daemon's re-wake did.
       const text = unresolved === null
-        ? `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}`
-        : `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}; the sender's own mailbox could not be resolved (${unresolved}), so this report goes to the team's lead only`;
+        ? `${seat.name}: a message from ${payload.from} is queued, not woken - unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}`
+        : `${seat.name}: a message from ${payload.from} is queued, not woken - unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}; the sender's own mailbox could not be resolved (${unresolved}), so this report goes to the team's lead only`;
       due.push({
         seat: seat.name,
         dropDir,
