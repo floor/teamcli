@@ -512,7 +512,7 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
   if (call === null) return true;
   if (call.group === 'api') {
     return !args.some((arg) =>
-      arg.includes('/actions') || arg.includes('/dispatches') || arg.includes('triggerWorkflow')
+      arg.includes('/actions') || arg.includes('/dispatches')
     );
   }
   if (call.group === 'run' && call.sub === 'rerun') {

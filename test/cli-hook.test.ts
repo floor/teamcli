@@ -30,6 +30,7 @@ import {
   namesRuntimeCopy, plannedCliHooks, readCliHook, refreshCliHooks, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
 import { recordInstalledProgram, stableHookPath } from '../src/daemon/runtime-entry.ts';
+import { commandGuardScriptPath } from '../src/launch/command-guard.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
 import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -1109,5 +1110,31 @@ describe('a running seat\'s hook file, refreshed without a restart', () => {
     expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY}/dist/cli.js`)).toBe(true);
     expect(namesRuntimeCopy('/opt/homebrew/lib/node_modules/team/dist/cli.js')).toBe(false);
     expect(namesRuntimeCopy(`/var/lib/team/daemon-runtime/${COPY.slice(1)}/dist/cli.js`)).toBe(false);
+  });
+});
+
+describe('the command guard hook reads the parsed gh word', () => {
+  test('a quoted gh uses the seat allowlist, and an unreadable policy denies the default deploy', () => {
+    const script = commandGuardScriptPath();
+    if (script === null) throw new Error('the command guard script has no stable path');
+    const root = join(base, 'project');
+    const home = join(base, 'home');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(root, '.agents', 'team.yaml'), ':\n');
+    const args = ['--project', 'crew', '--root', root, '--home', home, '--session', 'teamcli', '--seat', 'worker'];
+    const run = (command: string) => execFileSync(process.execPath, [script, ...args], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+      encoding: 'utf8',
+    });
+    const denied = JSON.parse(run('"gh" workflow run deploy.yml')) as {
+      hookSpecificOutput: { permissionDecision: string };
+    };
+    expect(denied.hookSpecificOutput.permissionDecision).toBe('deny');
+    const backslash = JSON.parse(run('\\gh workflow run deploy.yml')) as {
+      hookSpecificOutput: { permissionDecision: string };
+    };
+    expect(backslash.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(run('gh pr view 1')).toBe('');
   });
 });

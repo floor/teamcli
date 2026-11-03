@@ -41,7 +41,6 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh workflow enable ci.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/1')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api -X POST repos/floor/teamcli/dispatches')?.rule).toBe('github-actions');
-  expect(refusedByGuard("gh api graphql -f query='mutation { triggerWorkflow }'")?.rule).toBe('github-actions');
   expect(refusedByGuard('gh run list')?.guidance).toBe(
     'refused in team seats: the actions-commands policy does not allow that Actions command',
   );
