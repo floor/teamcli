@@ -129,7 +129,7 @@ the trace below can name it:
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
+gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -139,11 +139,11 @@ and cost, and the last step's quiet time from the step above it:
 ```console
 $ team trace 66666666-6666-4666-8666-666666666666 ; echo "exit $?"
 team beacon, session "beacon"
-  TIME          STEP            VIA        OUTCOME      MS  DELTA  NOTE
-  09:00:00.000  message.staged  -          -            -   -      -
-  09:00:00.000  leg.tried       native     unreachable  0   0 ms   no trusted runtime session is recorded for this seat (no agent record for this seat)
-  09:00:00.000  leg.tried       mcp-inbox  unreachable  0   0 ms   no live inbox listener
-  09:00:00.000  leg.tried       drop       held         0   0 ms   the record is stored; no seat was woken
+  TIME          STEP            VIA     OUTCOME      MS  DELTA  NOTE
+  09:00:00.000  message.staged  -       -            -   -      -
+  09:00:00.000  leg.tried       native  unreachable  0   0 ms   no trusted runtime session is recorded for this seat (no agent record for this seat)
+  09:00:00.000  leg.tried       typed   unreachable  0   0 ms   the send host binds no pane writer; nothing was typed
+  09:00:00.000  leg.tried       drop    held         0   0 ms   the record is stored; no seat was woken
 4 steps
 exit 0
 ```
@@ -212,14 +212,14 @@ $ team trace 66666666-6666-4666-8666-666666666666 --json ; echo "exit $?"
       "seq": 3,
       "ts": "2026-10-04T09:00:00.000Z",
       "kind": "leg.tried",
-      "record_id": "66666666-6666-4666-8666-666666666666:leg.tried:mcp-inbox",
+      "record_id": "66666666-6666-4666-8666-666666666666:leg.tried:typed",
       "from": "owner",
       "to": "gpt-reviewer",
       "thread": "66666666-6666-4666-8666-666666666666",
-      "via": "mcp-inbox",
+      "via": "typed",
       "outcome": "unreachable",
       "ms": 0,
-      "reason": "no live inbox listener",
+      "reason": "the send host binds no pane writer; nothing was typed",
       "delta_ms": 0
     },
     {
