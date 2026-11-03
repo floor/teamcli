@@ -1,6 +1,9 @@
 // The Actions allowlist is a policy, not a seat. The release default is Floor's three commands.
 // A caller may set a subset. The guard allows exactly those and refuses every other Actions command.
 import { expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { lineRunsGh, refusedByGuard } from '../src/launch/command-guard.ts';
 import { ACTIONS_COMMANDS_DEFAULT, getPolicySpec, type ActionsCommand } from '../src/policy/types.ts';
 
@@ -41,6 +44,14 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh workflow enable ci.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/1')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api -X POST repos/floor/teamcli/dispatches')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api -X POST repos/floor/teamcli/deployments')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api --method=PATCH repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api -XPUT repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api --method DELETE repos/acme/demo')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/acme/demo/deployments')).toBeNull();
+  expect(refusedByGuard("gh api graphql -f query='mutation { anythingElse }'")?.rule).toBe('github-actions');
+  expect(refusedByGuard("gh api graphql -f query='MUTATION { anythingElse }'")?.rule).toBe('github-actions');
+  expect(refusedByGuard("gh api graphql -f query='query { viewer { login } }'")).toBeNull();
   expect(refusedByGuard('gh run list')?.guidance).toBe(
     'refused in team seats: the actions-commands policy does not allow that Actions command',
   );
@@ -59,4 +70,22 @@ test('a caller that drops a command removes only that command', () => {
   expect(refusedByGuard('gh run rerun --failed', none)?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow run deploy.yml', none)?.rule).toBe('github-actions');
   expect(refusedByGuard('gh pr view 1', none)).toBeNull();
+});
+
+test('a graphql query in a file is read, and a mutation there is refused', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'actions-graphql-'));
+  try {
+    const query = join(dir, 'query.graphql');
+    const mutation = join(dir, 'mutation.graphql');
+    const body = join(dir, 'body.json');
+    writeFileSync(query, 'query { viewer { login } }\n');
+    writeFileSync(mutation, 'mutation { anythingElse }\n');
+    writeFileSync(body, '{"query":"mutation { anythingElse }"}\n');
+    expect(refusedByGuard(`gh api graphql -f query=@${query}`)).toBeNull();
+    expect(refusedByGuard(`gh api graphql -f query=@${mutation}`)?.rule).toBe('github-actions');
+    expect(refusedByGuard(`gh api graphql --input ${body}`)?.rule).toBe('github-actions');
+    expect(refusedByGuard(`gh api graphql -f query=@${join(dir, 'missing.graphql')}`)?.rule).toBe('github-actions');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -28,7 +28,9 @@ gate-lifting policies); an expired value counts as unset at its level.
 `actions-commands` is which Actions commands the command guard allows. The default is
 `rerun-failed`, `deploy` and `ci-pr-head`: `gh run rerun --failed`, `gh workflow run deploy.yml`,
 and `gh workflow run ci.yml` with a ref. A lower level may only drop a command. Every other Actions
-command is refused, including an `api` path under `/actions` or `/dispatches`.
+command is refused. So is an `api` path under `/actions` or `/dispatches`, an `api` call
+whose method is POST, PUT, PATCH or DELETE (`-X` and `--method`), and a graphql query that
+contains `mutation`. A graphql read stays allowed.
 
 `client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no
 end date) for every kind of grant, or per kind, `send=30d;up=90d;bundle=none`. Unset it is

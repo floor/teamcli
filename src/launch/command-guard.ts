@@ -15,7 +15,7 @@
 //
 // The hook names the command class, never the command: a command line may hold a secret, and a
 // refusal is raised as `security.refused` with the class as its rule and the seat as its object.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { shellQuote } from '../profiles/profile.ts';
@@ -472,7 +472,74 @@ function launchctlReadOnly(args: readonly string[]): boolean {
 
 const GH_TAKES_VALUE = new Set([
   '-R', '--repo', '--hostname', '-H', '--ref', '-f', '--field', '-F', '--raw-field', '--json', '--jq', '--job',
+  '-X', '--method', '--input',
 ]);
+
+const GH_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** A write verb on `gh api`, from `-X`, `-XPOST`, `--method` and `--method=`. A missing verb is a read. */
+function ghWriteMethod(args: readonly string[]): boolean {
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    if (arg === '-X' || arg === '--method') {
+      if (GH_WRITE_METHODS.has((args[at + 1] ?? '').toUpperCase())) return true;
+      continue;
+    }
+    if (arg.startsWith('--method=') && GH_WRITE_METHODS.has(arg.slice('--method='.length).toUpperCase())) return true;
+    if (/^-X[A-Za-z]+$/.test(arg) && GH_WRITE_METHODS.has(arg.slice(2).toUpperCase())) return true;
+  }
+  return false;
+}
+
+const GH_FIELD_FLAGS = ['-f', '--field', '-F', '--raw-field'];
+
+/** The query texts a graphql call carries, files included. Null when one of them cannot be read. */
+function graphqlQueries(args: readonly string[]): string[] | null {
+  const texts: string[] = [];
+  const take = (body: string | undefined): boolean => {
+    if (body === undefined) return true;
+    const value = body.startsWith('query=') ? body.slice('query='.length) : body;
+    const text = value.startsWith('@') ? readQueryFile(value.slice(1)) : value;
+    if (text === null) return false;
+    texts.push(text);
+    return true;
+  };
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at]!;
+    for (const flag of GH_FIELD_FLAGS) {
+      if (!arg.startsWith(`${flag}=`)) continue;
+      const body = arg.slice(flag.length + 1);
+      if (body === 'query' || body.startsWith('query=')) {
+        if (!take(body === 'query' ? args[at + 1] : body)) return null;
+      }
+    }
+    if (GH_FIELD_FLAGS.includes(arg)) {
+      const body = args[at + 1];
+      if (body === 'query' || (body !== undefined && body.startsWith('query='))) {
+        if (!take(body === 'query' ? args[at + 2] : body)) return null;
+      }
+    }
+    if (arg === '--input') {
+      const text = readQueryFile(args[at + 1] ?? '');
+      if (text === null) return null;
+      texts.push(text);
+    } else if (arg.startsWith('--input=')) {
+      const text = readQueryFile(arg.slice('--input='.length));
+      if (text === null) return null;
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function readQueryFile(path: string): string | null {
+  if (path === '') return null;
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 /** `gh` once its global flags are set aside: the command group, the subcommand, the remaining
  *  positionals, and whether `--ref` names a non-empty head. */
@@ -511,9 +578,14 @@ function actionsAllowed(args: readonly string[], actions: readonly ActionsComman
   const call = ghCall(args);
   if (call === null) return true;
   if (call.group === 'api') {
-    return !args.some((arg) =>
-      arg.includes('/actions') || arg.includes('/dispatches')
-    );
+    if (ghWriteMethod(args)) return false;
+    if (args.some((arg) => arg.includes('/actions') || arg.includes('/dispatches'))) return false;
+    if (call.sub === 'graphql') {
+      const queries = graphqlQueries(args);
+      if (queries === null || queries.length === 0) return false;
+      if (queries.some((query) => /mutation/i.test(query))) return false;
+    }
+    return true;
   }
   if (call.group === 'run' && call.sub === 'rerun') {
     return actions.includes('rerun-failed')
