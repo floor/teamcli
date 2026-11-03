@@ -483,8 +483,9 @@ explicit opt-out — and an omitted key leaves the choice to the launch. A send 
 seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
 TeamCLI launched is authorized by that launch alone (its generated settings file carries the
 attestation), while a session launched some other way is dialed only when the record says
-`accept`. A frame the receiver's box holds at its dialog is recorded once as
-`held (socket)`, and the walk falls through to the next route with the same message id; the
+`accept`. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
+box then holds at its dialog is recorded once as `held` by the daemon's presence pass, which
+looks at the receiving pane after a socket delivery — the sender never waits on the box. The
 socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
 settings file being rewritten. The key is part of the seat's digest, and a record that writes none
 keeps every digest it had; a word other than the three is refused under the seat.
@@ -630,17 +631,19 @@ same arrival after the send returns. Whichever poster comes first leaves the `<i
 beside the record on a 2xx, and both skip a record that carries it or a claim another poster
 holds, so one arrival is posted once and the routine is never asked twice. Only a 2xx is a
 delivery: the send's line says `delivered (webhook, <n> ms)`. The send's own post is one
-attempt: a non-2xx answer or a refused connection fails it after that attempt and releases its
-claim, so the walk moves on and the line says `webhook not delivered: <reason>` beside the
-class's words. The bus's pass is the one that retries: a request that could not be sent at all —
-a refused connection, a name that does not resolve — three attempts in all, with a pause before
-each retry, while a non-2xx answer fails it after one attempt and releases the claim. A redirect
-is not followed. A timeout after the body went out is reported as sent with its answer unknown —
-`sent (unconfirmed) (webhook, <n> ms); webhook delivery unknown: <reason>` — and its claim stays,
-so no later pass posts the record again. A line that keeps the `queued; its webhook fires when
-the bus takes it` words is one whose post took nothing — a failed post says so beside them, and
-the released record is the bus's and the seat's pull's to take; a post the adapter took, or one
-whose answer was not read, replaces them with the post's own clause.
+attempt, its wait for the routine's answer capped by the sender's own one-second deadline, so a
+person's command never waits out the row's `timeout_ms`: a non-2xx answer or a refused connection
+fails it after that attempt and releases its claim, so the walk moves on and the line says
+`webhook not delivered: <reason>` beside the class's words. The bus's pass is the one that
+retries: a request that could not be sent at all — a refused connection, a name that does not
+resolve — three attempts in all, with a pause before each retry, while a non-2xx answer fails it
+after one attempt and releases the claim. A redirect is not followed. A timeout after the body
+went out is reported as sent with its answer unknown — `sent (unconfirmed) (webhook, <n> ms);
+webhook delivery unknown: <reason>` — and its claim stays, so no later pass posts the record
+again. A line that keeps the `queued; its webhook fires when the bus takes it` words is one whose
+post took nothing — a failed post says so beside them, and the released record is the bus's and
+the seat's pull's to take; a post the adapter took, or one whose answer was not read, replaces
+them with the post's own clause.
 
 The drop file stays in place in every case, so the seat's own pull still reads the message. The
 last outcome is recorded on the seat's state row — `delivered`, `failed` with its attempts and

@@ -79,7 +79,7 @@ The status words:
 | `delivered` | the transport took it (the inbox fetched it, the drop watcher receipted it, the socket frame was taken, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) — a delivery, never a read: only the seat's own signed receipt makes it `read` |
 | `read` | the seat's own tool showed the body |
 | `replied` | a record on the thread answers it |
-| `held` | the record waits: a dialog, unsent text in the box, or an unreachable seat; the side and reason named |
+| `held` | the record waits: a dialog (a socket frame the daemon's presence pass saw at the receiver's box, or one the sender saw), unsent text in the box, or an unreachable seat; the side and reason named |
 
 `held` is one word on two records: an attempt's outcome, and the message's status while no later
 attempt has. `not-submitted`, `timeout`, `unreachable` and `refused` stay outcomes of an attempt,

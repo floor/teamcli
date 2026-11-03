@@ -3,11 +3,12 @@
 // hook receipt). The sender's own write used to mark every taken frame read, including a frame
 // an agent never saw; now the record stays unread for the seat's own read, and the watch's
 // unread pass re-wakes it like any other message — the report at twice the window is what speaks
-// when no seat receipt comes. A frame the box holds is not a delivery either: it writes no
-// receipt and the record stays unread, so the watch's retry after its window remains the attempt.
-// The frame also opens with the sender's display line (the nickname the roster holds, else the
-// seat name) without touching the record's own attribution line or the typed wake's template.
-// Fake hosts and temporary homes: no pane is typed into and no socket is dialed.
+// when no seat receipt comes. A taken frame ends the sender's work at once: it reads no pane, so
+// a box showing a held-message dialog changes nothing here — the record stays unread, and the
+// daemon's held step is what marks a dialog. The watch's retry after its window remains the
+// attempt. The frame also opens with the sender's display line (the nickname the roster holds,
+// else the seat name) without touching the record's own attribution line or the typed wake's
+// template. Fake hosts and temporary homes: no pane is typed into and no socket is dialed.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -201,7 +202,7 @@ test('the watch re-wakes a socket-delivered record like any other, and reports i
   expect(existsSync(reportedPath(drops, id))).toBe(true);
 });
 
-test('a held socket frame writes no receipt, and the record waits for the watch retry', async () => {
+test('a socket-taken frame under a held dialog writes no receipt, and the record waits for the watch retry', async () => {
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made);
@@ -209,7 +210,11 @@ test('a held socket frame writes no receipt, and the record waits for the watch 
   const rule = '─'.repeat(30);
   const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
   const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
-  pane.paneText = () => heldDialog;
+  let reads = 0;
+  pane.paneText = () => {
+    reads += 1;
+    return heldDialog;
+  };
   const dials: string[] = [];
   const host = fake(made, {
     native: pane,
@@ -221,9 +226,12 @@ test('a held socket frame writes no receipt, and the record waits for the watch 
 
   expect(await runSend(['lead', 'held note'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(1);
+  // The frame was taken, and the sender did not look at the box to ask what came of it: the one
+  // look is the quota preflight every send makes, never a held-dialog probe.
+  expect(reads).toBe(1);
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
-  // No receipt, no other status file: the frame was held, not delivered.
+  // No receipt, no other status file: only the seat's own read writes one.
   expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
   // The record is still the watch's to retry.
   const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };

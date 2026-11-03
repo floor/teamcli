@@ -400,8 +400,12 @@ read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached
-a session but sits in a dialog the sender cannot see — is `held`, with the side named, never
-`delivered`. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
+a session but sits in a dialog the sender cannot see — is not the sender's to report: the socket
+frame ends `delivered (socket)` at the frame, and the daemon's presence pass looks at the
+receiving pane after that delivery and, when the frame is at its dialog, writes one `held` line
+for the id — its fields are the signed record's — and marks the socket held, so the history
+carries both facts, taken at the frame and held at the box, and a sender that never saw the box
+never claims one for the other. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
 further window for a cleared box to show the seat took the line. The whole verify window is
 bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three waits and the further
 window all fall inside it. The tag's measurements — about six seconds from send to a working

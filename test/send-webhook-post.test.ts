@@ -537,11 +537,59 @@ describe('the claim decides who posts', () => {
       now: () => new Date(),
       fetch: timedOut as unknown as typeof fetch,
     });
-    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 5000 ms' });
+    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 1000 ms' });
     // The claim stays, naming the state that forbids a second post.
     const held = JSON.parse(readFileSync(join(dir, `${ID}.posting`), 'utf8')) as { state: string };
     expect(held.state).toBe('sent');
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
+  });
+
+  test("a routine that never answers is cut off at the sender's own second, not the routine's five", async () => {
+    // The deadline is measured on the wall clock: the request is built with a 1 s abort signal
+    // even though the routine's own row allows five, so a person's send never waits out the bus's
+    // budget. The fake transport answers only when the signal aborts, the way a real fetch does.
+    const hook = hookFiles('http://127.0.0.1:1/routine');
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-webhook-deadline-')));
+    extras.push(base);
+    const root = join(base, 'acme');
+    const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+    mkdirSync(dir, { recursive: true });
+    const message: SignedRecord = signRecord(messagePayload(root, ID), base);
+    let aborted = false;
+    const hangs = ((_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      return new Promise<Response>((_resolve, reject) => {
+        const stop = (): void => {
+          aborted = true;
+          const error = new Error('the answer never came');
+          error.name = 'TimeoutError';
+          reject(error);
+        };
+        const signal = init?.signal;
+        if (signal === null || signal === undefined) return;
+        if (signal.aborted) stop();
+        else signal.addEventListener('abort', stop, { once: true });
+      });
+    }) as unknown as typeof fetch;
+    const started = performance.now();
+    const outcome = await postArrivalWebhook({
+      seat: 'iris',
+      webhook: { urlFile: hook.urlFile, secretFile: hook.secretFile, body: 'inbox', timeoutMs: 5000 },
+      root,
+      session: 'acme',
+      id: ID,
+      from: 'lead',
+      message,
+      dropDir: dir,
+      home: base,
+      now: () => new Date(),
+      fetch: hangs,
+    });
+    const elapsed = performance.now() - started;
+    expect(outcome).toEqual({ kind: 'unknown', reason: 'no answer within 1000 ms' });
+    expect(aborted).toBe(true);
+    // The sender's bound, not the row's five seconds; the upper bound only tolerates a slow timer.
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(3000);
   });
 
   test('a 2xx whose posted mark cannot be written still blocks a second post', async () => {

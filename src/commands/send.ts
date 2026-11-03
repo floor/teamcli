@@ -57,8 +57,8 @@ import {
   isHeadlessResumeCli,
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
-import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
+import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
+import { readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
 import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
@@ -70,7 +70,7 @@ import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
 import {
-  declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket, recordHeldSocket,
+  declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
   type CrossSessionInbound, type InboundDeclaration,
 } from '../send/inbound.ts';
@@ -104,7 +104,7 @@ CLI builds its own work item from its screens — a profile with a compose modul
 still gets the drop file, but the body is typed through those screens and never
 becomes a trigger line; delivered there means the CLI printed the line that creates
 the item. On the typed leg the run is sent (unconfirmed): the line left the seat's
-input box after that trigger line and Enter, and herdr reported the seat working — or
+input box after that trigger line and Enter, and the pane host reported the seat working — or
 done or blocked, changed from the status read before Enter — or the transcript shows
 the drop being read; no signed receipt has come back, so the message is never called
 read. The pane must not be a dialog this command already classifies (question,
@@ -179,29 +179,23 @@ deliver names its reason, and one the run never reached says it did not run. A d
 needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
-  delivered    the socket path (exit 0): the frame was taken, or herdr reported the
-               seat working; \`delivered (read)\` when a transport leg's receipt came
-               back inside its grace — the seat read the message, which is not a claim
-               that it acted on it. A trigger typed into a composer is never delivered:
-               it is \`sent (unconfirmed)\`
+  delivered    the socket path (exit 0): the frame was taken, printed \`delivered (socket)\`
+               with no look at the box; \`delivered (read)\` when a transport leg's receipt
+               came back inside its grace — the seat read the message, which is not a
+               claim that it acted on it. A trigger typed into a composer is never
+               delivered: it is \`sent (unconfirmed)\`
   sent         a leg's success with no signed read receipt (exit 0). The drop leg left
                the 0600 record in the seat's drop folder and typed nothing; the typed
                leg wrote the same record and the trigger left the composer, and its
                line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
-  held         the message is safe — on disk, or in the frame a Claude Code seat's
-               held-message dialog keeps, printed held (socket) — and the pane was
-               left untouched because the seat remained busy, locked, or in a dialog,
-               or its unsent text has no way out of the box this version measured:
-               the reason names the copy's path when one was kept. A box holding
-               unsent text does not hold the delivery: the text is copied beside the
-               drop, the box is cleared with the profile's measured keys, the trigger
-               is typed and pressed Enter, and the text is pasted back exactly, its
-               row unchanged, before the run's verdict (exit 1 only where the box
-               could not be cleared or the text put back); a box drawn over more than
-               one row is held untouched, since a soft wrap cannot be told from a
-               newline
+  held         the message is safe — the signed record is on disk — and nothing was typed
+               or dialed further: the reason names what held it, and the copy's path when
+               one was kept. A socket frame that lands at the receiving box's held-message
+               dialog is not this run's to see: the send reports \`delivered (socket)\` at
+               the frame, and the daemon's presence pass records the hold afterwards, once
+               for that id, and keeps the socket out until the declaration is re-confirmed
   not-submitted the line was typed and the seat never took it (exit 1): Enter was
                pressed up to three times, and only to a box still holding exactly the
                trigger; the message names what the box holds, faint suggestions not
@@ -1871,24 +1865,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'socket', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
         return delivered(io, to.seat, report, 'socket');
-      }
-      if (attempt.kind === 'held') {
-        // The mark is written once, under the receiving team's state folder: the next send reads
-        // it and keeps the socket out until the declaration this hold sat under is re-confirmed.
-        // The history line and the line below already carry the outcome; the mark is the retry guard.
-        markLeg('socket', 'attempted', attempt.reason);
-        recordHeldSocket(heldSocketPath(to.dir, to.session, to.seat), inbound, host.now());
-        const remaining = liveRoutesAfter(walk, at, to.cli);
-        note(walkAttempt('socket', 'held', remaining, host.now(), startedAt, { reason: attempt.reason }));
-        // A held frame is not a delivery, and a live route behind it may still take the send:
-        // the frame stays in the receiver's folder as its durable copy and the walk moves on.
-        if (remaining) {
-          failures.push(`socket: ${attempt.reason}`);
-          socketNote = `typed, socket ${attempt.reason}`;
-          logLine(dir, 'send', who, `${to.seat}: the socket held the frame (${attempt.reason}); falling back to the next route`, host.now());
-          continue;
-        }
-        return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       }
       failures.push(`socket: ${attempt.reason}`);
       // The walk proved the receiving session has no dialable socket now — none for its pane, a
@@ -4518,15 +4494,6 @@ async function deliverClientRecord(
       markLeg('socket', 'attempted');
       const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, root, CLIENT_FRAME_HEADER, false, reply);
       if (attempt.kind === 'delivered') return;
-      if (attempt.kind === 'held') {
-        // The mark is written once: the next send keeps the socket out until the declaration
-        // this hold sat under is re-confirmed.
-        recordHeldSocket(heldSocketPath(dir, session, seatName), inbound, host.now());
-        failures.push(`socket: ${attempt.reason}`);
-        markLeg('socket', 'attempted', attempt.reason);
-        logLine(dir, 'send', from, `${seatName}: the socket held the client frame (${attempt.reason}); the remaining legs continue`, host.now());
-        continue;
-      }
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
       // the reported class, so the summary never claims a wake that did not happen. A surviving
@@ -4796,22 +4763,13 @@ function socketDirs(host: SendHost): string {
  *  started before its declaration — the walk's own evidence, which the reported class follows. */
 type SocketAttempt =
   | { kind: 'delivered' }
-  | { kind: 'held'; reason: string }
   | { kind: 'fallback'; reason: string; socketUnusable?: true };
-
-/** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
- *  further is typed. */
-const HELD_FRAME_REASON =
-  'the session holds the socket frame at its held-message dialog ("Held message from another session"): the box is blocked while it is up, and nothing further is typed';
 
 /** What the walk records for the native leg when the sender cannot make the leg itself: the
  *  frame is the sending session's own cross-session SendMessage, which this process cannot make,
  *  so the leg cannot take this send, and the walk skips and records it. A sender whose own file
  *  declares Claude Code gets the handoff instead. */
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
-
-/** How long a socket write's pane is read for the held-message dialog, in all. */
-const HELD_READ_MS = 1000;
 
 /**
  * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
@@ -4851,20 +4809,6 @@ function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, sender
   return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
 }
 
-/** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
- *  right after the write lands, and a write the session holds is not a delivery. A host with no
- *  pane reader keeps the write's own answer — there is nothing to look at. */
-async function heldAtDialog(session: string, pane: string, host: SendHost): Promise<boolean> {
-  const reader = host.native.paneText;
-  if (reader === undefined) return false;
-  if (showsHeldFrameDialog(reader(session, pane))) return true;
-  for (let waited = 0; waited < HELD_READ_MS; waited += POLL_MS) {
-    await host.native.wait(POLL_MS);
-    if (showsHeldFrameDialog(reader(session, pane))) return true;
-  }
-  return false;
-}
-
 /**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
  * The address is resolved first — the registry's recorded one while it is still live, else the pane's
@@ -4874,6 +4818,13 @@ async function heldAtDialog(session: string, pane: string, host: SendHost): Prom
  * or refusing, a frame past the measured limit. A recorded address whose write refuses gets one
  * live re-resolution first: a pid the registry has not caught up with must not cost the fast
  * path, while the record itself remains the registry's to refresh.
+ *
+ * A taken frame ends the sender's work at once — the frame was taken, so the send reports
+ * `delivered (socket)` and returns. The pane is never read here: whether the receiving session
+ * held the frame at its held-message dialog is the daemon's held step to see on its own 250 ms
+ * beat (`src/daemon/presence/held.ts`), which raises `held` and marks the socket until the
+ * seat's declaration is re-confirmed. A person's command must not wait a second on another
+ * seat's screen.
  */
 async function deliverSocketFrame(
   dir: string,
@@ -4973,16 +4924,15 @@ async function deliverSocketFrame(
   }
   if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
   logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
-  if (await heldAtDialog(to.session, found.pane, host)) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
-    return { kind: 'held', reason: HELD_FRAME_REASON };
-  }
   // The frame was taken: that is the delivery, and only the seat writes a read receipt. The
   // sender no longer marks its own frame read — a frame a wrapper launch took but the agent never
   // saw must stay unread — so the record waits for the seat's own `inbox_read`,
   // `team drops --read` or hook receipt, and the watch's unread pass re-wakes it like any other
-  // message. A held frame returned above writes no receipt either: it was not a delivery, and the
-  // watch's retry stays the attempt.
+  // message. The sender does not wait here to see whether the receiving session held the frame
+  // at its held-message dialog either: a taken frame is reported `delivered (socket)` at once,
+  // and the daemon's held step reads the pane on its own beat and raises `held` if it finds the
+  // dialog. Waiting on another seat's screen is what made this path slow, and the dialog's own
+  // arrival is never part of what this process can prove.
   if (!wait) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
   }
@@ -5065,7 +5015,6 @@ export async function redeliverChannelOnSocket(input: {
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
-  if (attempt.kind === 'held') return { ok: false, reason: `the socket held the frame (${attempt.reason})` };
   return { ok: false, reason: attempt.reason };
 }
 

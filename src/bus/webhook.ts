@@ -57,6 +57,14 @@ export const WEBHOOK_POLICY: WebhookPolicy = {
   claimStaleMs: 30_000,
 };
 
+/** The longest a send's own arrival post waits on the routine. The bus delivery has the adapter's
+ *  budget (three attempts, five seconds each); a person's `team send` never sits on a webhook for
+ *  it: the post is a wake beside the record, and the record is already staged for the bus and the
+ *  seat's pull. A row's own shorter bound still applies; this one only caps a longer one. A post
+ *  that times out leaves its claim in `sent`, the state that forbids a second post, and the bus
+ *  reports the record instead. */
+export const SENDER_POST_DEADLINE_MS = 1000;
+
 /** What one delivery ended as: the routine took it (`delivered`, only after a 2xx), the request
  *  could not be sent and its attempts ran out (`failed`), the body may have reached the routine
  *  and no answer was read (`sent-unknown`), the seat's files could not be read so nothing was
@@ -814,8 +822,9 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
-    // The row's own answer bound, when it names one, as the bus delivery reads it.
-    const timeoutMs = input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs;
+    // The row's own answer bound, when it names one, as the bus delivery reads it — capped by the
+    // sender's own deadline: a send is a person's command and never waits out the bus's budget.
+    const timeoutMs = Math.min(input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs, SENDER_POST_DEADLINE_MS);
     try {
       const response = await (input.fetch ?? fetch)(request.url, {
         ...prepared,

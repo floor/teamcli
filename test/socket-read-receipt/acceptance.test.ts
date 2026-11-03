@@ -122,19 +122,24 @@ test('a socket delivery no seat reads is woken at the window and reported at twi
   expect(existsSync(reportedPath(drops, record.id))).toBe(true);
 });
 
-test('a held socket frame writes no receipt, and the one watch retry still comes after the window', async () => {
+test('a socket-taken frame under a held dialog writes no receipt, and the one watch retry still comes after the window', async () => {
   const one = world(['socket']);
   made = one;
   declareEntity(one);
   acceptSocket(one);
-  const host = hostOf(one, book(HELD_SCREEN));
+  const pane = book(HELD_SCREEN);
+  const host = hostOf(one, pane);
   const drops = dropsOf(one);
 
   const code = await runSend(['lead', 'the held note'], ownerIo(one.root), host);
 
-  // The socket held the frame; the bus inbox keeps it (exit 0), and nothing is a read.
+  // The screen shows a held-message dialog, but a taken frame ends the sender's work before any
+  // look: the send reports `delivered (socket)`, nothing is typed, and nothing is a read. The
+  // dialog — if the seat is in one — is the daemon's held step to see and mark.
   expect(code).toBe(0);
   expect(host.frames.length).toBe(1);
+  // One look, and it is the quota preflight every send makes; no held-dialog probe runs here.
+  expect(pane.reads).toBe(1);
   const record = recordOf(drops);
   expect(readReceipt(drops, record.id)).toBeNull();
   expect(unreadAt(one).map((message) => message.id)).toEqual([record.id]);
