@@ -111,14 +111,20 @@ one existing line and gains none here. A team file that opts out (`inbound` hold
 person's pane, a seat its launch already wakes through the push channel, and a seat whose
 delivery class is between-turns are no finding. The line is
 `<seat>: sends go to its drop folder, not its socket: <why>`, one per seat, and it is a
-difference like an unread drop: exit 1. Three reasons are the team's to fix, each with the act
+difference like an unread drop: exit 1. Four reasons are the team's to fix, each with the act
 that fixes it: the launch's own settings declare accept while the team file's word is what is
-missing, repaired by `team config set seats.<seat>.inbound accept`; a frame the seat's box held,
-repaired by `team restart <seat>`, which re-confirms the declaration; and a socket older than
-the settings that declare it accepts, repaired by the same restart, which writes one that does
-not predate them. A socket that is nowhere is the ordinary state of its delivery class, whatever
-the gate would say — absence wins — and is not a broken promise: it is a note naming the class
-and what happens to its sends next, and it does not change the exit.
+missing, repaired by `team config set seats.<seat>.inbound accept`; a team file that accepts
+while the launch's effective settings do not, repaired by `team restart <seat>` when this
+build's generated file is what declares nothing, by declaring `crossSessionInbound: accept` in
+the settings the launch names (or dropping the launch's own `--settings` so the generated
+settings carry the team's word) and then restarting, and by `team restart <seat>` for a wrapper
+launch that carries no settings at all — this reason is read before the address, because a
+session whose settings never declared accept is why no socket serves it; a frame the seat's box
+held, repaired by `team restart <seat>`, which re-confirms the declaration; and a socket older
+than the settings that declare it accepts, repaired by the same restart, which writes one that
+does not predate them. Otherwise a socket that is nowhere is the ordinary state of its delivery
+class, whatever the gate would say — absence wins — and is not a broken promise: it is a note
+naming the class and what happens to its sends next, and it does not change the exit.
 
 The seat's last webhook delivery is one more note of that kind: when its recorded outcome is not
 delivered, one line says how the delivery ended — `<seat>: its last webhook delivery did not

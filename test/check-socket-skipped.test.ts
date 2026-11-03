@@ -4,7 +4,10 @@
 // reading is the send's own gate and address choice, and the walk is the send's own order: a
 // declared order that names neither the socket nor the `typed` wake word chose its routes and is
 // no finding. The reasons a team-file word or a restart fixes are differences (exit 1, one line
-// per seat, the repair named). A socket that is nowhere is a note naming its delivery class in
+// per seat, the repair named). A team file that accepts while the launch's effective settings do
+// not is named before the address is read — the mismatch is why no socket serves the seat — and
+// the repair follows the source: this build's generated file, a wrapper's own settings, or no
+// settings at all. Otherwise a socket that is nowhere is a note naming its delivery class in
 // every shape — absence wins over any gate — and a pane that no longer holds the seat is not
 // read at all: the comparison's own line already says the CLI ended.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -115,16 +118,27 @@ function world(seats: readonly SeatSpec[], order?: readonly string[]): World {
 /** The launch line in the shape a wrapper reports: this build did not generate the settings file
  *  on the line, so its accept alone attests nothing and the team file's word is what admits it.
  *  The settings file is backdated, so a socket written after it stands as the newer file. */
-function wrapperLine(w: World, name: string): string {
+function wrapperLine(w: World, name: string, policy: string | null = 'accept'): string {
   const wrapper = join(w.dir, 'wrapper');
   mkdirSync(wrapper, { recursive: true });
   const script = join(wrapper, 'launch.sh');
   writeFileSync(script, '#!/bin/sh\nexec fake-claude --model test "$@"\n', { mode: 0o700 });
   const settings = join(wrapper, `${name}.json`);
-  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+  writeFileSync(settings, JSON.stringify(policy === null ? { hooks: {} } : { crossSessionInbound: policy }));
   const past = new Date(NOW.getTime() - 90_000);
   utimesSync(settings, past, past);
   return `FIXTURE_LAUNCH_FLAG=1 zsh ${script} --resume fixture-conversation --settings ${settings}`;
+}
+
+/** The line of a wrapper launch with no settings of its own: no `--settings` on the line and
+ *  none in the script, and no generated file this build wrote. The line a seat carries when the
+ *  install never landed one, or when another build launched it before the hook existed. */
+function bareWrapperLine(w: World, name: string): string {
+  const wrapper = join(w.dir, 'wrapper');
+  mkdirSync(wrapper, { recursive: true });
+  const script = join(wrapper, `bare-${name}.sh`);
+  writeFileSync(script, '#!/bin/sh\nexec fake-claude --model test "$@"\n', { mode: 0o700 });
+  return `FIXTURE_LAUNCH_FLAG=1 zsh ${script}`;
 }
 
 /** The fixture team file with one seat's launch line replaced in place: the line is one YAML
@@ -353,6 +367,72 @@ describe('team check names a live seat whose socket a send would skip', () => {
     );
     expect(out).toContain('  repair: team restart mismatch');
     expect(code).toBe(1);
+  });
+
+  test('the mismatch with no socket: the word the team accepted is named, not the absence it causes', () => {
+    const w = world([{ name: 'staleno', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'staleno', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    // The same stale generated file with no socket anywhere: a session whose settings declare no
+    // accept holds every frame, so no socket serves it and the absence is the consequence, not
+    // the class's ordinary state. The mismatch is named for every seat, socket or none.
+    declareNothing(w, 'staleno');
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(
+      `difference: staleno: ${NOT_SOCKET}: its launch-effective generated settings do not declare crossSessionInbound accept, though its team file declares inbound accept`,
+    );
+    expect(out).toContain('  repair: team restart staleno');
+    expect(code).toBe(1);
+  });
+
+  test('a wrapper launch with no settings at all is named for a team that accepts, socket or none', () => {
+    const w = world([{ name: 'bare', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const line = bareWrapperLine(w, 'bare');
+    setLaunch(w, 'bare', line);
+    const seat = { name: 'bare', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    ready(w, [seat]);
+    // No generated file on the line and no `--settings` of the launch's own: the CLI started
+    // with the word unset. A relaunch installs the generated settings that carry the team's word.
+    for (const socket of [false, true]) {
+      const { code, out } = check(w, liveOn([seat]));
+      expect(out).toContain(
+        `difference: bare: ${NOT_SOCKET}: its launch carries no setting that declares crossSessionInbound accept, though its team file declares inbound accept`,
+      );
+      expect(out).toContain('  repair: team restart bare');
+      expect(code).toBe(1);
+      if (socket) writeSocket(w, seat);
+    }
+  });
+
+  test('a wrapper’s own settings that declare nothing: the source is named, and a restart alone does not repair it', () => {
+    const w = world([{ name: 'ownnone', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const line = wrapperLine(w, 'ownnone', null);
+    setLaunch(w, 'ownnone', line);
+    const seat = { name: 'ownnone', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    ready(w, [seat]);
+    // The launch names its own `--settings`, so this build generates none: a restart keeps the
+    // same wrapper word, and the repair must name the file the CLI actually reads.
+    const settings = join(w.dir, 'wrapper', 'ownnone.json');
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(
+      `difference: ownnone: ${NOT_SOCKET}: its launch-effective settings (${settings}) do not declare crossSessionInbound accept, though its team file declares inbound accept`,
+    );
+    expect(out).toContain(
+      `  repair: declare crossSessionInbound accept in ${settings}, or drop the launch's own --settings so this build's generated settings carry the team's word, then team restart ownnone`,
+    );
+    expect(code).toBe(1);
+  });
+
+  test('a wrapper’s own settings that accept: absence stays a note, whatever the team file says', () => {
+    const w = world([{ name: 'ownaccept', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const line = wrapperLine(w, 'ownaccept');
+    setLaunch(w, 'ownaccept', line);
+    const seat = { name: 'ownaccept', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(`note: ownaccept: ${NO_SOCKET}`);
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(code).toBe(0);
   });
 
   test('a socket older than the settings that declare it: the restart is the repair', () => {

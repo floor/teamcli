@@ -166,20 +166,27 @@ One more delivery family is named, with the send's own reading (`socketSkippedDe
 `src/check/team.ts`): a live Claude seat whose profile promises a push delivery but whose socket
 leg a send would skip. The gate is the send's — `socketIneligibleReason` and `socketAddressOf`
 behind `socketLegOf`, the reading `team status` prints — and only a pane that still holds the
-seat is read. Three reasons are the team's to fix, each a difference with its repair, exit 1:
+seat is read. Four reasons are the team's to fix, each a difference with its repair, exit 1:
 
 - `<seat>: sends go to its drop folder, not its socket: <gate>`, repaired by
   `team config set seats.<seat>.inbound accept` when the launch's own settings declare accept
   but the team file never did;
+- `<seat>: sends go to its drop folder, not its socket: its launch-effective generated settings
+  do not declare crossSessionInbound accept, though its team file declares inbound accept`,
+  repaired by `team restart <seat>`; the same finding names the launch's own settings file (or
+  the launch line's own `--settings`) with that file as the repair's first act, and a wrapper
+  launch that carries no settings at all is repaired by `team restart <seat>`. This reason is
+  read before the address, for every seat: a session whose settings never declared accept is
+  why no socket serves it;
 - the same line, repaired by `team restart <seat>`, when the seat's box held a frame its
   declaration has not re-confirmed since;
 - `<seat>: sends go to its drop folder, not its socket: the socket predates the settings that
   declare it accepts`, repaired by `team restart <seat>`.
 
-A socket that is nowhere is its class's ordinary state, not a broken promise: the seat earns a
-note instead — `<seat>: no cross-session socket is live, so sends go to its drop folder; its
-delivery class is <class> — <the class's own words>`, read from `deliveryWords` so it matches
-every send's console line — and the exit does not change. A seat that opts out in the team file, a human's pane, a seat its
+Otherwise a socket that is nowhere is its class's ordinary state, not a broken promise: the
+seat earns a note instead — `<seat>: no cross-session socket is live, so sends go to its drop
+folder; its delivery class is <class> — <the class's own words>`, read from `deliveryWords` so
+it matches every send's console line — and the exit does not change. A seat that opts out in the team file, a human's pane, a seat its
 launch already wakes through the push channel, and a between-turns seat keep no promise the
 socket would keep, so none is named.
 
