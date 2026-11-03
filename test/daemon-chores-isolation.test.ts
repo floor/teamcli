@@ -15,9 +15,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { readEvents } from '../src/bus/log.ts';
+import { runDaemon } from '../src/commands/daemon.ts';
 import { messageFile } from '../src/commands/messages.ts';
 import { serveChoresChild, type ChoresSlices } from '../src/daemon/chores/child.ts';
 import { createFallbackPass } from '../src/daemon/chores/fallback.ts';
+import { createPresencePass } from '../src/daemon/chores/presence.ts';
 import { FALLBACK_STORE_PASS_MS } from '../src/daemon/fallback-sweep.ts';
 import { choresPolicyFor, tightestPolicy, type ChoresPolicy } from '../src/daemon/chores/policy.ts';
 import {
@@ -40,7 +42,7 @@ import {
   type ChoresRouteInput,
 } from '../src/daemon/chores/supervisor.ts';
 import type { ChoresWatchInput } from '../src/daemon/chores/watch.ts';
-import { daemonHealth } from '../src/daemon/health.ts';
+import { daemonHealth, probeDaemonHealth } from '../src/daemon/health.ts';
 import type { PresenceSourceStatus } from '../src/daemon/presence/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { machineConfigDir, daemonLogPath, daemonSocketPath } from '../src/daemon/paths.ts';
@@ -60,6 +62,7 @@ import {
   type FallbackMarker,
   type TransportFact,
 } from '../src/send/fallback-events.ts';
+import { testIo } from './helpers.ts';
 
 const TEAM_YAML = `format: 1
 entity: floor
@@ -627,6 +630,66 @@ describe('the chores fleet', () => {
     expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 12_500 + 3000).toISOString() });
   });
 
+  test('a child that beats twice resets the doubling wait to its first step', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2, backoffCapMs: 3000 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4250 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    /** A child that was ready and beat twice: the row's proof that its loop moved on its own. */
+    const proofOfRun = (fake: Fake, pid: number, at: number): void => {
+      fake.emit({ type: 'ready', pid, at: new Date(at).toISOString() });
+      for (const offset of [0, 1]) {
+        fake.emit({
+          type: 'heartbeat',
+          at: new Date(at + offset).toISOString(),
+          rssBytes: rss,
+          busy: null,
+          markerCache: null,
+        });
+      }
+    };
+
+    tickAt(0);
+    proofOfRun(made2[0]!, 4250, NOW);
+    tickAt(1000);
+    tickAt(2000);
+    tickAt(3000);
+    expect(made2[0]!.kills).toHaveLength(1);
+    made2[0]!.leave(null, 'SIGTERM');
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 1, nextStartAt: new Date(NOW + 4000).toISOString() });
+
+    // The replacement proves its run before it fails: its two heartbeats start the exponent over,
+    // so the next failure waits the first step again instead of the doubled one.
+    tickAt(4000);
+    expect(made2).toHaveLength(2);
+    proofOfRun(made2[1]!, 4251, NOW + 4000);
+    tickAt(5000);
+    tickAt(6000);
+    tickAt(7000);
+    expect(made2[1]!.kills).toHaveLength(1);
+    made2[1]!.leave(null, 'SIGTERM');
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 8000).toISOString() });
+  });
+
   test('inline starts no child at all, at any beat', () => {
     const made = world();
     let spawned = 0;
@@ -917,6 +980,66 @@ describe('the fleet presence nudge', () => {
       kind: 'unavailable',
       why: 'the child left before it answered the presence pass',
     });
+  });
+
+  test('an answer that misses its own deadline settles unanswered, and a late answer is dropped', async () => {
+    const made = world();
+    const fake = fakeChild(4562);
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      log: () => {},
+      presenceDeadlineMs: 25,
+      factory: () => fake.child,
+    });
+    fleet.tick(new Date(NOW));
+    fake.emit({ type: 'ready', pid: 4562, at: AT });
+    const answer = fleet.presence({ root: made.root, at: new Date(NOW), readings });
+    expect(answer).not.toBeNull();
+    const first = fake.sends.find((message) => message.type === 'presence');
+    if (first?.type !== 'presence') throw new Error('the child was never nudged');
+    // The child never answers: the pass settles by its own deadline and says so.
+    await expect(answer!).resolves.toEqual({
+      kind: 'unavailable',
+      why: 'the child did not answer the presence pass within 25 ms',
+    });
+    // A late answer to that nudge is not a pass: the entry it named is gone, so nothing is
+    // recorded for it.
+    fake.emit({
+      type: 'presence-result',
+      id: first.id,
+      root: made.root,
+      at: first.at,
+      proofs: [{ seat: 'crew-lead', id: '2026-11-02T03:00:00.000Z-aaaaaaaa', binding: 'prs_0123456789ab' }],
+      notes: [],
+      ms: 40,
+    });
+    expect(fleet.stateFor(made.root)?.presence).toBeNull();
+    expect(fleet.stateFor(made.root)?.lastChore).toBeNull();
+    // The same child answers the next nudge in time, and that one is the pass.
+    const again = fleet.presence({ root: made.root, at: new Date(NOW + 30), readings });
+    if (again === null) throw new Error('the ready child was not nudged again');
+    const nudges = fake.sends.filter((message) => message.type === 'presence');
+    const second = nudges[nudges.length - 1];
+    if (second?.type !== 'presence') throw new Error('the child was never nudged again');
+    fake.emit({
+      type: 'presence-result',
+      id: second.id,
+      root: made.root,
+      at: second.at,
+      proofs: [],
+      notes: ['answered after the first deadline'],
+      ms: 5,
+    });
+    await expect(again).resolves.toEqual({
+      kind: 'answered',
+      proofs: [],
+      notes: ['answered after the first deadline'],
+    });
+    expect(fleet.stateFor(made.root)?.presence).toMatchObject({ proved: 0, missed: 0 });
   });
 
   test('a stop settles an unanswered nudge and an inline root is never asked', async () => {
@@ -1378,6 +1501,82 @@ describe('the chores child loop', () => {
     expect(await served).toBe(0);
   }, 10_000);
 
+  test('the real presence pass stops at its own slice boundaries and keeps proofs it already has', async () => {
+    const made = world();
+    const route = {
+      root: made.root,
+      team: 'acme',
+      session: 'acme-dev',
+      stateDir: join(made.root, '.agents'),
+      teamFile: teamFile(),
+    };
+    const pass = createPresencePass({
+      version: 1,
+      home: made.home,
+      beatMs: 100,
+      sliceMs: 250,
+      since: AT,
+      routes: [route],
+    });
+    const readings = [{ seat: 'crew-lead', failed: 'the runtime source has staged no event yet' }];
+    // A stop before the first boundary: the activity step still runs, then the pass ends at
+    // the boundary instead of building or publishing anything.
+    const stopped = await pass.run(route, {
+      at: new Date(NOW),
+      readings,
+      slices: {
+        sliceMs: 250,
+        stopping: () => true,
+        yield: async () => {
+          throw new Error('a stopped pass never yields');
+        },
+      },
+    });
+    expect(stopped.proofs).toEqual([]);
+    expect(stopped.notes[stopped.notes.length - 1]).toBe('the presence pass stopped at a slice boundary');
+
+    // A stop at the first yield, after the proofs are built: the publish step is never reached,
+    // and the proofs the pass already has are not thrown away.
+    let stopping = false;
+    let yields = 0;
+    const halfway = await pass.run(route, {
+      at: new Date(NOW),
+      readings,
+      slices: {
+        sliceMs: 250,
+        stopping: () => stopping,
+        yield: async () => {
+          yields += 1;
+          stopping = true;
+          return true;
+        },
+      },
+    });
+    expect(yields).toBe(1);
+    expect(halfway.proofs).toEqual([{ seat: 'crew-lead', miss: 'the runtime source has staged no event yet' }]);
+    expect(halfway.notes[halfway.notes.length - 1]).toBe(
+      'the presence pass stopped at a slice boundary before the publish step',
+    );
+
+    // An open pass crosses both boundaries and publishes; the same reading is the same miss.
+    yields = 0;
+    const open = await pass.run(route, {
+      at: new Date(NOW),
+      readings,
+      slices: {
+        sliceMs: 250,
+        stopping: () => false,
+        yield: async () => {
+          yields += 1;
+          return true;
+        },
+      },
+    });
+    expect(yields).toBe(2);
+    expect(open.proofs).toEqual([{ seat: 'crew-lead', miss: 'the runtime source has staged no event yet' }]);
+    expect(open.notes.some((note) => note.startsWith('the presence pass stopped'))).toBe(false);
+  });
+
   test('the frames carry the chore, its own duration and the cache its process filled', async () => {
     const made = world();
     const lines: ChoresChildMessage[] = [];
@@ -1637,6 +1836,108 @@ describe('under the machine daemon', () => {
       expect(closed).toBe(true);
     }
   }, 30_000);
+
+  test('a plain run hosts its per-root child with no test seam at all', async () => {
+    const made = world();
+    // A cold real child outlives the release miss allowance on a busy machine; this scene is
+    // about the command starting one, never about how fast the machine is.
+    word(made.home, made.root, 'daemon.chores-missed-beats', 20);
+    const io = testIo(made.root, { kind: 'owner' });
+    // The holder, not a bare `let`: the stop seam is assigned from inside the command's own
+    // callback, which a narrowed outer variable cannot see.
+    const control: { stop: (() => void) | null } = { stop: null };
+    let disarmed = false;
+    const running = runDaemon(['run', '--root', made.root], io, {
+      home: made.home,
+      version: '0.5.12-chores-test',
+      gitHead: null,
+      heartbeatMs: 100,
+      stop: (end) => {
+        control.stop = end;
+        return () => {
+          disarmed = true;
+        };
+      },
+    });
+    try {
+      await waitUntil(() => (rowFor(made.home, made.root)?.pid ?? null) !== null, 20_000);
+      const row = rowFor(made.home, made.root);
+      if (row === undefined) throw new Error('the run wrote no chores row');
+      // The command passed chores hosting: the default per-root mode built a fleet.
+      expect(row.mode).toBe('per-root');
+      const childPid = row.pid;
+      if (childPid === null) throw new Error('the row named no child');
+      // A process of its own, not this one.
+      expect(childPid).not.toBe(process.pid);
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+      // The same child reaches 'ok': a replacement would carry another pid.
+      await waitUntil(() => {
+        const now = rowFor(made.home, made.root);
+        return now?.pid === childPid && now.state === 'ok';
+      }, 20_000);
+    } finally {
+      control.stop?.();
+    }
+    expect(await running).toBe(0);
+    expect(disarmed).toBe(true);
+    expect(io.out).toContain('team daemon: running');
+    expect(io.out).toContain('team daemon: stopped');
+    // The clean close removes the record, and the child it named with it.
+    expect(rowFor(made.home, made.root)).toBeUndefined();
+  }, 90_000);
+
+  test('the health probe answers in under 100 ms while a child sweeps a large fallback store', async () => {
+    const made = world();
+    // The smallest slice the catalogue allows, and a miss allowance a loaded machine cannot
+    // trip: the sweep runs long enough to cover the probes, and the child yields inside it.
+    word(made.home, made.root, 'daemon.chores-slice-ms', 100);
+    word(made.home, made.root, 'daemon.chores-missed-beats', 20);
+    // A store the sweep cannot finish inside the probe window: this lane measured about a
+    // second to walk 12,000 delivered markers, so a 100 ms slice crosses it many times.
+    for (let index = 0; index < 12_000; index += 1) {
+      deliveredMarker(made.root, `m-${String(index).padStart(5, '0')}-health`, NOW);
+    }
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 100,
+      choresHosting: true,
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitUntil(() => rowFor(made.home, made.root)?.busy === 'chores', 30_000);
+      const elapsed: number[] = [];
+      for (let probe = 0; probe < 3; probe += 1) {
+        const before = Date.now();
+        const answer = await probeDaemonHealth(started.daemon.socketPath, { timeoutMs: 500 });
+        elapsed.push(Date.now() - before);
+        expect(answer.kind).toBe('answered');
+      }
+      // The daemon answered while its child was still inside the sweep: the last heartbeat, sent
+      // during the probes, named the chore as running.
+      expect(rowFor(made.home, made.root)?.busy).toBe('chores');
+      expect(Math.max(...elapsed)).toBeLessThan(100);
+      expect(rowFor(made.home, made.root)).toMatchObject({ state: 'ok', missed: 0 });
+      // The sweep is the fallback pass, and it completes even while the probes are answered.
+      await waitUntil(() => rowFor(made.home, made.root)?.lastChore?.name === 'fallback', 30_000);
+    } finally {
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 20_000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+      // The store this scene wrote is large; removing it here keeps the file hook's own
+      // cleanup inside its bound, and the hook's own remove of this path is a no-op.
+      rmSync(made.base, { recursive: true, force: true });
+    }
+  }, 180_000);
 
   test('a hosted root\'s presence steps run in its child, and the child\'s answer is the one applied', async () => {
     const made = world();

@@ -14,7 +14,7 @@ import {
   FALLBACK_STORE_PASS_LIMIT,
   FALLBACK_STORE_PASS_MS,
   storeBacklogLimits,
-  sweepFallbackEscalations,
+  sweepFallbackEscalationsSliced,
   type SweepRoot,
   type SweepRootResult,
 } from '../fallback-sweep.ts';
@@ -67,7 +67,11 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
     if (previous === undefined || housekeeping) lastStorePass.set(route.root, startedAt);
     const given: SweepRoot | string =
       route.teamFile === undefined ? route.root : { root: route.root, team: route.teamFile };
-    const swept = sweepFallbackEscalations({
+    // The pass runs under the child's own slice budget: the sweep's work items are taken a slice
+    // at a time and the child's yield is awaited at each boundary, so a store walk answers the
+    // heartbeat and a presence nudge instead of holding the loop until it finishes. A stop ends
+    // the walk at its next boundary; the next child's pass starts from the durable markers.
+    const swept = await sweepFallbackEscalationsSliced({
       home: config.home,
       roots: [given],
       now: () => at,
@@ -83,6 +87,7 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
             },
           }
         : {}),
+      slices,
     });
     const entry = swept.roots[0];
     return entry === undefined ? [] : passNotes(entry);

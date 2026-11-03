@@ -242,7 +242,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       let proofs: ChoresPresenceProof[];
       let notes: string[];
       try {
-        const outcome = await presence.run(route, { at, readings: message.readings });
+        const outcome = await presence.run(route, { at, readings: message.readings, slices });
         proofs = outcome.proofs;
         notes = outcome.notes;
       } catch (error) {

@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
 import { messageFile } from '../src/commands/messages.ts';
-import { sweepFallbackEscalations } from '../src/daemon/fallback-sweep.ts';
+import { sweepFallbackEscalations, sweepFallbackEscalationsSliced } from '../src/daemon/fallback-sweep.ts';
 import { probeDaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { daemonLogPath } from '../src/daemon/paths.ts';
@@ -458,5 +458,101 @@ describe('the daemon fallback sweep', () => {
       await holder.exit.catch(() => 0);
       await started.daemon.close();
     }
+  });
+
+  test('the sliced pass reads its budget and answers what the one-shot pass answers', async () => {
+    const world = makeWorld();
+    // Settled episodes: the two passes write nothing, so their reports are compared directly.
+    for (const id of ['m-101', 'm-102', 'm-103', 'm-104']) {
+      const noted = noteTransport(world.ctx, fact(world, { messageId: id, outcome: 'delivered', route: 'native' }));
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+    const input = {
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+    };
+    const oneShot = sweepFallbackEscalations(input);
+    expect(oneShot.roots[0]!.report!.scanned).toBe(4);
+
+    // The injected clock moves 1000 ms per reading, so the budget passes once per work item and
+    // the child's yield lands at the boundary the budget names — the test chooses the instant,
+    // never the machine's load.
+    const clock = { at: 0 };
+    const sliceClock = (): number => {
+      const value = clock.at;
+      clock.at += 1000;
+      return value;
+    };
+    let yields = 0;
+    const sliced = await sweepFallbackEscalationsSliced({
+      ...input,
+      sliceClock,
+      slices: {
+        sliceMs: 10,
+        stopping: () => false,
+        yield: async () => {
+          yields += 1;
+          return true;
+        },
+      },
+    });
+    expect(yields).toBeGreaterThan(0);
+    expect(sliced).toEqual(oneShot);
+
+    // The same clock with a budget wider than the whole store: no boundary is reached, and the
+    // walk is the one-shot pass again. This is the reading that the budget word is what gates it.
+    clock.at = 0;
+    let wideYields = 0;
+    const wide = await sweepFallbackEscalationsSliced({
+      ...input,
+      sliceClock,
+      slices: {
+        sliceMs: 1_000_000_000,
+        stopping: () => false,
+        yield: async () => {
+          wideYields += 1;
+          return true;
+        },
+      },
+    });
+    expect(wideYields).toBe(0);
+    expect(wide).toEqual(oneShot);
+  });
+
+  test('a stop at a boundary closes the walk with no report for the root', async () => {
+    const world = makeWorld();
+    for (const id of ['m-201', 'm-202', 'm-203', 'm-204']) {
+      const noted = noteTransport(world.ctx, fact(world, { messageId: id, outcome: 'delivered', route: 'native' }));
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+    const clock = { at: 0 };
+    const sliceClock = (): number => {
+      const value = clock.at;
+      clock.at += 1000;
+      return value;
+    };
+    let yields = 0;
+    let stopping = false;
+    const sliced = await sweepFallbackEscalationsSliced({
+      home: world.home,
+      roots: [{ root: world.root, team: world.team }],
+      now: () => new Date(AT),
+      sliceClock,
+      slices: {
+        sliceMs: 10,
+        stopping: () => stopping,
+        yield: async () => {
+          yields += 1;
+          stopping = true;
+          return false;
+        },
+      },
+    });
+    // The first boundary is the stop: the walk leaves there, and the root is reported not at all,
+    // because a stopping child writes no frame and the next child resumes from the markers.
+    expect(yields).toBe(1);
+    expect(sliced.roots).toEqual([]);
+    expect(sliced.at).toBe(AT);
   });
 });

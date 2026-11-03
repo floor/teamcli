@@ -1069,6 +1069,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // shared authority verifier and the direct sender, and no presence pipeline is implied: a
       // run may host either, both or neither.
       ...(parsed.watch ? { watchHosting: true } : {}),
+      // The heavy per-root chores run in supervised children, one child per root by default.
+      // This asks only whether children may be used at all: the route's own `daemon.chores`
+      // word decides between `per-root`, `shared` and `inline`, so `inline` remains the rollback
+      // a team can choose without changing the command. A run that left this unset swept every
+      // hosted root on its own event loop and built no fleet, while the policy page already
+      // promised the per-root default.
+      choresHosting: true,
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);

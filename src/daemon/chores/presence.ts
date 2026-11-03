@@ -21,6 +21,7 @@ import type {
   ChoresPresenceProof,
   ChoresPresenceReading,
 } from './protocol.ts';
+import type { ChoresSlices } from './child.ts';
 
 export type ChoresPresenceOutcome = {
   proofs: ChoresPresenceProof[];
@@ -29,7 +30,10 @@ export type ChoresPresenceOutcome = {
 };
 
 export type ChoresPresencePass = {
-  run(route: ChoresChildRoute, input: { at: Date; readings: ChoresPresenceReading[] }): Promise<ChoresPresenceOutcome>;
+  run(
+    route: ChoresChildRoute,
+    input: { at: Date; readings: ChoresPresenceReading[]; slices: ChoresSlices },
+  ): Promise<ChoresPresenceOutcome>;
 };
 
 type RootWork = {
@@ -88,6 +92,13 @@ export function createPresencePass(config: ChoresChildConfig): ChoresPresencePas
       } catch (error) {
         notes.push(`the activity step failed: ${messageOf(error)}`);
       }
+      // The pass runs under the child's slice budget like the fallback sweep: the steps are
+      // separated by the child's own yield, and a stop ends the pass before the next step begins.
+      // Presence work is a chore too; it must not hold the heartbeat past a slice boundary.
+      if (input.slices.stopping()) {
+        return { proofs: [], notes: [...notes, 'the presence pass stopped at a slice boundary'] };
+      }
+      await input.slices.yield();
 
       const proofs: ChoresPresenceProof[] = input.readings.map((reading) => {
         // A reading the daemon could not take is its own reason; the inline pass reported it
@@ -107,6 +118,10 @@ export function createPresencePass(config: ChoresChildConfig): ChoresPresencePas
         return { seat: reading.seat, miss: verdict.why };
       });
 
+      if (input.slices.stopping()) {
+        return { proofs, notes: [...notes, 'the presence pass stopped at a slice boundary before the publish step'] };
+      }
+      await input.slices.yield();
       try {
         const published = await built.publisher(input.at);
         if (published.failed !== null) notes.push(`the publish step failed: ${published.failed}`);

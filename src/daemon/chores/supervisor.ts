@@ -57,6 +57,10 @@ export type ChoresFleetInput = {
   factory?: (input: SpawnChoresInput) => ChoresChild;
   /** How long a terminated child gets before it is forced. */
   killGraceMs?: number;
+  /** How long a presence answer waits for the child before the daemon gives it up and holds the
+   *  route's seats for that pass. A child that stopped answering must not hold the pass forever;
+   *  the child's late answer is dropped as one for a nudge no longer pending. */
+  presenceDeadlineMs?: number;
   /** One route's hosted watch reached a seat seam and a daemon beat is due. The daemon's own
    *  beat machinery decides which other routes that beat renews; this hook only carries the
    *  fact across the pipe. */
@@ -100,6 +104,10 @@ export type ChoresPresenceAnswer =
 
 const DEFAULT_KILL_GRACE_MS = 2_000;
 
+/** How long the daemon waits for a child's presence answer when the caller names no deadline:
+ *  two default heartbeats, the same bound after which the child would be replaced. */
+const DEFAULT_PRESENCE_DEADLINE_MS = 10_000;
+
 type Group = {
   mode: 'per-root' | 'shared';
   routes: ChoresRouteInput[];
@@ -114,7 +122,14 @@ type Group = {
   startedOnce: boolean;
   /** The child was signalled because it stopped answering; its exit is the restart's trigger. */
   killing: boolean;
+  /** How many children this group has replaced: the record's own count, never reset. */
   restarts: number;
+  /** The exponent the next wait reads: the number of starts that failed since the last child
+   *  proved a run. A child that has beaten twice since it started resets it, so a long healthy
+   *  life is never charged to the next restart. */
+  backoff: number;
+  /** Heartbeats this child has sent since it started; the second one proves a run. */
+  beats: number;
   nextStartAtMs: number;
   /** How the last child left, for the record and the log. */
   lastExit: { code: number | null; signal: NodeJS.Signals | null } | null;
@@ -177,6 +192,8 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     startedOnce: false,
     killing: false,
     restarts: 0,
+    backoff: 0,
+    beats: 0,
     nextStartAtMs: 0,
     lastExit: null,
     lastPass: new Map(),
@@ -281,7 +298,8 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
     // A factory that throws is this start's failure: the restart path decides the next one.
     group.startedOnce = true;
     group.restarts += 1;
-    const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.restarts - 1));
+    group.backoff += 1;
+    const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
     group.nextStartAtMs = at.getTime() + wait;
     group.why = `the child could not be started: ${error instanceof Error ? error.message : String(error)}`;
     input.log(`chores ${rootList(group)}: ${group.why}; starting again in ${String(wait)} ms`);
@@ -294,6 +312,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.busy = null;
   group.ready = false;
   group.killing = false;
+  group.beats = 0;
   group.lastExit = null;
   group.startedOnce = true;
   group.why = null;
@@ -329,6 +348,11 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       group.rssBytes = message.rssBytes;
       group.busy = message.busy;
       group.markerCache = message.markerCache;
+      group.beats += 1;
+      // Two heartbeats span a full beat interval: this child's loop moved on its own after it
+      // started, so the next failure waits the first step again. A child that dies before its
+      // second beat is a start that did not take, and keeps the doubling wait.
+      if (group.ready && group.beats >= 2) group.backoff = 0;
       return;
     case 'pass':
       for (const pass of message.passes) {
@@ -413,7 +437,8 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   );
   if (group.stopping) return;
   group.restarts += 1;
-  const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.restarts - 1));
+  group.backoff += 1;
+  const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
   group.nextStartAtMs = input.now().getTime() + wait;
   const reason = exitReason(group.lastExit?.code ?? null, group.lastExit?.signal ?? null);
   group.why = `the child ${reason}`;
@@ -520,9 +545,16 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         if (child === null || !group.ready || group.killing || group.stopping) return null;
         const id = `${String(input.now().getTime())}-${String(group.restarts)}-${String(presenceSeq)}`;
         presenceSeq += 1;
+        let timer: ReturnType<typeof setTimeout> | null = null;
         let settle!: (answer: ChoresPresenceAnswer) => void;
         const answer = new Promise<ChoresPresenceAnswer>((resolve) => {
-          settle = resolve;
+          settle = (value: ChoresPresenceAnswer) => {
+            if (timer !== null) {
+              clearTimeout(timer);
+              timer = null;
+            }
+            resolve(value);
+          };
         });
         group.pendingPresence.set(id, settle);
         const sent = child.send({
@@ -536,6 +568,19 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
           group.pendingPresence.delete(id);
           return null;
         }
+        // The pass has its own deadline. A child that stopped answering cannot hold this route's
+        // presence forever: the daemon gives the nudge up, holds the seats for the pass, and a
+        // later nudge is a fresh question. A late answer finds no pending nudge and is dropped.
+        const deadlineMs = input.presenceDeadlineMs ?? DEFAULT_PRESENCE_DEADLINE_MS;
+        timer = setTimeout(() => {
+          if (group.pendingPresence.get(id) !== settle) return;
+          group.pendingPresence.delete(id);
+          settle({
+            kind: 'unavailable',
+            why: `the child did not answer the presence pass within ${String(deadlineMs)} ms`,
+          });
+        }, deadlineMs);
+        timer.unref();
         return answer;
       }
       return null;
