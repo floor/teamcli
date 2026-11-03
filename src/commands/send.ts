@@ -5749,7 +5749,7 @@ function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
  *  ending is never `delivered (read)`. The ending names its own leg, so it carries its own exit
  *  id: `send.delivered` is the channel's site above, this one is the adapter's. Exit 0, always. */
 function deliveredWebhook(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = `${seat}: delivered (webhook, ${String(ms)} ms)`;
+  const summary = withId(`${seat}: delivered (webhook, ${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: 'delivered', summary, channel: 'webhook' });
   } else {
