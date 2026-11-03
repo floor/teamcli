@@ -135,6 +135,12 @@ describe('landing-mode: batching or direct landing, review kept', () => {
     const withLine = rulesOf(loaded.team, seat, w.root, resolveWorkSettings(chainOf(w, loaded.team), {}, { now: NOW }));
     expect(withLine).toContain('- Landing: once a change is reviewed');
     expect(withLine.split('\n').at(-1)).toBe(plain.split('\n').at(-1));
+    // The settings lines append after the tool's own, whatever the tool's own hold: this codex
+    // seat's own read sentence is the inbox one — both ends of a turn in one line — so no drops
+    // line joins it, and the landing line lands after it.
+    expect(withLine).toContain('- If your tools include `inbox_check`, call it at the start and the end of every turn');
+    expect(withLine).not.toContain('drops --read');
+    expect(withLine.indexOf('- Landing:')).toBeGreaterThan(withLine.indexOf('- If your tools include `inbox_check`'));
   });
 });
 

@@ -2447,6 +2447,11 @@ describe('the upgrade from 0.2.1', () => {
     const file = rulesFilePath('acme', root, home, 'scribe');
     expect(file).not.toBeNull();
     if (file !== null) expect(existsSync(file)).toBe(true);
+    // What the fresh launch wrote, read off the disk: a Codex seat registers the MCP inbox, so
+    // its one read sentence names both ends of a turn and no drops command is added for it.
+    const written = file !== null ? readFileSync(file, 'utf8') : '';
+    expect(written).toContain('call it at the start and the end of every turn');
+    expect(written).not.toContain('drops --read');
     const after = await runDoctorCmd([], live);
     expect(after.out).not.toContain('scribe: its rules file is missing');
     expect(readState(dir).sessions['acme']?.seats.scribe).toMatchObject({ stage: 'ready', rules: 'message' });
@@ -2917,10 +2922,12 @@ describe('rules text', () => {
     const sharedFiltered = sharedRules.filter((r) => !r.startsWith('Change to '));
     expect(worktreeFiltered).toEqual(sharedFiltered);
 
-    // Full exact output assertion for shared seat
+    // Full exact output assertion for shared seat. This input names no seat, so the
+    // end-of-turn drops read carries the name's placeholder.
     expect(sharedRules).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (lead) in one line and keep working.',
+      'At the end of every turn, run `team drops --read --seat <seat>` and act on what it prints.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
       'In a protected checkout, never switch the branch, reset or commit.',
       'Never break CI.',

@@ -50,6 +50,10 @@ export interface RulesInput {
    *  `mcp_inbox` route). Only such a seat has the `inbox_check` tool the sentence names, so only
    *  such a seat is asked to call it. Absent reads as false. */
   inbox?: boolean;
+  /** The seat's own name. The end-of-turn line's command needs it — `team drops --read --seat
+   *  <name>` — and nothing else in a seat's rules tells the seat its name. Absent reads as none,
+   *  and the line writes `<seat>` in the name's place. */
+  seatName?: string;
   /** The seat's signature lines, already rendered. */
   signature: { commit: string; pullRequest: string; commitPosition: 'last-line' | 'trailer' | 'anywhere' };
   workspace: {
@@ -80,10 +84,18 @@ export function seatRules(input: RulesInput): string[] {
     `Never stop at a question: tell the orchestrator (${input.orchestrator}) in one line and keep working.`,
     // The inbox is client-pull: a seat sees a message only when it asks. The sentence follows the
     // CLI: only a profile with a measured `mcp_inbox` route gives the seat the tools it names, so
-    // every other seat's rules stay exactly as earlier builds wrote them.
+    // only such a seat is asked to call them.
     ...(input.inbox === true
       ? ['If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.']
       : []),
+    // A turn can outlive the wake that started it: a drop that lands mid-turn waits for the next
+    // turn unless the seat looks again. The inbox seat's line above already names both ends of a
+    // turn; every other seat's own read is the drops read that serves a turn, so that is the one
+    // to run again at the end — naming the seat's own name, because the command needs it and
+    // nothing else in the rules tells the seat its name.
+    ...(input.inbox === true
+      ? []
+      : [`At the end of every turn, run \`team drops --read --seat ${input.seatName ?? '<seat>'}\` and act on what it prints.`]),
     TRUST_RULE[input.origin ?? 'file'],
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
@@ -154,6 +166,7 @@ export function rulesOf(
       // The route the launch registers is the profile's measured one (`src/mcp/register.ts`);
       // a CLI whose profile carries none gets no inbox, and no line about one.
       inbox: profile?.mcpInbox != null,
+      seatName: seat.name,
       signature: {
         commit: renderSignature(commits.template, seat),
         pullRequest: renderSignature(pullRequests.template, seat),

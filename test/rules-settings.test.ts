@@ -162,6 +162,10 @@ describe('the generated rules carry the lead rules of OD-20261103-03', () => {
     const delivery = rulesDeliveryOf({ kind: 'none' }, w.team, lead, w.root, w.home);
     if ('refusal' in delivery) throw new Error(delivery.refusal);
     for (const line of [RELAY, PANE, SELF, SCOPE]) expect(delivery.text).toContain(`- ${line}`);
+    // The read sentence rides along whatever the settings add, and this codex seat's own is the
+    // inbox one — both ends of a turn in one line — so no drops line joins it here.
+    expect(delivery.text).toContain('- If your tools include `inbox_check`, call it at the start and the end of every turn');
+    expect(delivery.text).not.toContain('drops --read');
     const written = writeRulesFile(
       { kind: 'none' },
       'lead',
