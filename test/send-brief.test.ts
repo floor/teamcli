@@ -395,7 +395,7 @@ describe('a message-transport full brief sent end to end', () => {
     // the store afterwards.
     const code = await runSend([SEAT, '--brief', path], on, { ...fake(w), agents: () => [] });
     expect(code, on.err).toBe(0);
-    expect(withoutSendId(on.out)).toBe(`team acme, session "briefs"\n${SEAT}: queued, not woken (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(on.out)).toBe(`team acme, session "briefs"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     const rec = record(w);
     expect(rec.body).toBe(`${HEADER}\n\n${text}`);
 

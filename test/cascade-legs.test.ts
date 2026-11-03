@@ -25,6 +25,7 @@ import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailab
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { fake, filed, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
@@ -212,7 +213,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     });
     const io = owner(one.root);
     expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
@@ -280,7 +281,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     });
     const io = owner(one.root);
     expect(await runSend(['person', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe(
+    expect(withoutSendId(io.out)).toBe(
       'team acme, session "acme"\n'
       + 'person: queued, not woken (drop, 0 ms); queued; person has no way to be woken while idle\n',
     );

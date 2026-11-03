@@ -548,7 +548,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
-    expect(io.out).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(host.typed).toEqual([]);
