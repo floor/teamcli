@@ -458,8 +458,8 @@ nothing typed and awaits a reply record on the thread. The key is part of the se
 it had.
 
 `watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
-retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse, Cursor
-and Antigravity today) and the key is omitted; `on` on a profile with no typed wake is refused,
+retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse, Cursor,
+Antigravity and Grok today) and the key is omitted; `on` on a profile with no typed wake is refused,
 because there is no wake to retry, and a word other than the two is refused under the seat. `off`
 keeps the drop-file wake for that seat — the send-time typed wake is unaffected. The key is part
 of the seat's digest, and a record that writes none keeps every digest it had.
