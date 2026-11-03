@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import { LockBusyError, withLock } from '../../state.ts';
 import { canonicalJson, definitionId, occurrenceId } from '../canonical.ts';
+import { redispatchCheck, type LeadWord } from '../redispatch.ts';
 import { parseWorkflow } from '../schema.ts';
 import type { ArtifactRef, DefinitionId, EvidenceRecord, OccurrenceId, RunId, Workflow } from '../types.ts';
 import {
@@ -250,6 +251,19 @@ export type DecisionInput = {
   at: string;
 };
 
+/** One ask to redispatch a step. `authority` is the step's own confirmation, not the caller. */
+export type RedispatchRequest = {
+  stage: string;
+  at: string;
+  authority: boolean;
+  lead?: LeadWord;
+};
+
+export type RedispatchResult =
+  | { action: 'redispatch'; decisions: LiveDecisionRecord[] }
+  | { action: 'step-failed'; why: string; decisions: LiveDecisionRecord[] }
+  | { action: 'refused'; why: string; decisions: LiveDecisionRecord[] };
+
 export type OutcomeInput = { outcome: 'done' | 'failed'; why?: string; by?: string; at: string };
 
 /** The transaction surface; every method runs inside one store-wide serialized section. */
@@ -275,6 +289,7 @@ export type StoreTx = {
   recordAttempt(runId: RunId, input: AttemptInput): { appended: boolean; attempt: number };
   seeMessage(runId: RunId, input: MessageInput): { duplicate: boolean; record?: LiveMessageRecord };
   appendDecision(runId: RunId, input: DecisionInput): LiveDecisionRecord;
+  requestRedispatch(runId: RunId, input: RedispatchRequest): RedispatchResult;
   recordOutcome(runId: RunId, input: OutcomeInput): LiveOutcomeRecord;
   markDamaged(runId: RunId, why: string): void;
   repairJournal(runId: RunId): RepairResult;
@@ -1188,6 +1203,61 @@ class Transaction implements StoreTx {
     return record;
   }
 
+  /**
+   * The redispatch-max check, recorded. Under the max, one `redispatch` decision. Past it, a
+   * `refusal` and the run stays failed, unless the lead's word is recorded as `lead-override`
+   * and then the redispatch. An authority step records the refusal and never the redispatch.
+   * The same `at` on the same stage returns the decisions already written.
+   */
+  requestRedispatch(runId: RunId, input: RedispatchRequest): RedispatchResult {
+    const run = this.runForAppend(runId);
+    const stageDecisions = run.live.decisions.filter((decision) => decision.stage === input.stage);
+    const sameAt = stageDecisions.filter((decision) => decision.at === input.at);
+    if (sameAt.length > 0) return redispatchAlreadyRecorded(sameAt);
+
+    const taken = stageDecisions.filter((decision) => decision.decision === 'redispatch').length;
+    const lead = input.lead;
+    const spent = lead !== undefined && stageDecisions.some((decision) =>
+      decision.decision === 'lead-override' && decision.detail?.at === lead.at
+    );
+    const verdict = redispatchCheck({
+      taken,
+      authority: input.authority,
+      ...(lead !== undefined && !spent ? { lead } : {}),
+    });
+    if (verdict.action === 'redispatch' && verdict.audit !== null) {
+      const audit = this.appendDecision(runId, {
+        decision: 'lead-override',
+        stage: input.stage,
+        at: input.at,
+        why: verdict.audit.reason,
+        detail: { by: verdict.audit.by, at: verdict.audit.at, reason: verdict.audit.reason },
+      });
+      const step = this.appendDecision(runId, {
+        decision: 'redispatch',
+        stage: input.stage,
+        at: input.at,
+        why: 'lead',
+      });
+      return { action: 'redispatch', decisions: [audit, step] };
+    }
+    if (verdict.action === 'redispatch') {
+      const step = this.appendDecision(runId, {
+        decision: 'redispatch',
+        stage: input.stage,
+        at: input.at,
+      });
+      return { action: 'redispatch', decisions: [step] };
+    }
+    const refusal = this.appendDecision(runId, {
+      decision: 'refusal',
+      stage: input.stage,
+      at: input.at,
+      why: verdict.why,
+    });
+    return { action: verdict.action, why: verdict.why, decisions: [refusal] };
+  }
+
   recordOutcome(runId: RunId, input: OutcomeInput): LiveOutcomeRecord {
     const run = this.runForAppend(runId);
     if (run.live.status !== 'live') {
@@ -1437,6 +1507,18 @@ function generationOf(item: ItemRecord, runId: RunId): Generation {
   const match = /-(\d+)$/.exec(runId);
   const parsed = match === null ? Number.NaN : Number.parseInt(match[1]!, 10);
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : item.lastGeneration;
+}
+
+function redispatchAlreadyRecorded(decisions: readonly LiveDecisionRecord[]): RedispatchResult {
+  const step = decisions.find((decision) => decision.decision === 'redispatch');
+  if (step !== undefined) {
+    const audit = decisions.find((decision) => decision.decision === 'lead-override');
+    return { action: 'redispatch', decisions: audit !== undefined ? [audit, step] : [step] };
+  }
+  const refusal = decisions.find((decision) => decision.decision === 'refusal');
+  const why = refusal?.why ?? 'past redispatch-max (2)';
+  if (why.startsWith('past redispatch-max')) return { action: 'step-failed', why, decisions: [...decisions] };
+  return { action: 'refused', why, decisions: [...decisions] };
 }
 
 function definitionFault(definition: Workflow): string | undefined {
