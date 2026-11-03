@@ -1402,8 +1402,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // unread at twice that window is reported to its sender and the team's lead. The
           // window is the file's declared word when it moved the section, else the seat class's
           // own default: 30 s for a seat a message can wake while idle, 60 s for a typed one.
-          // The report is a mailbox record, so a watch without nudges keeps that word; the wake
-          // is typing, and `--no-nudge` leaves it out.
+          // The report is a mailbox record, so a watch without nudges keeps that word.
+          //
+          // The wake runs under a hosted loop too. Its raw writers are closed there, but the one
+          // seam a hosted source set keeps is the gated typed wake (`hostedWatchSources`), and
+          // the cascade's webhook leg needs no pane at all: leaving the wake out of a hosted
+          // pass made every daemon-hosted root drop the N re-wake while the 2N report still
+          // spoke, so a seat was told nothing and then reported. `--no-nudge` is the caller's
+          // word, and only that leaves the wake out.
           const declaredUnread = declaredUnreadAfter(inForce, watchPace);
           const unreadWindows = new Map<string, number>();
           const unreadWindowOf = (seat: Seat): number => {
@@ -1423,7 +1429,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           };
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf, rung, ...(quiet || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
