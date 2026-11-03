@@ -116,3 +116,119 @@ test('a graphql query in a file is read, and a mutation there is refused', () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('independent adversarial checks: all Actions reads pass (even under empty policy) and all write variants are refused', () => {
+  // 1. Every listed read is allowed both under default policy and when `actions-commands` is empty (`none`).
+  const allowedReads = [
+    'gh run list',
+    'gh run list --commit abc123 --branch main --limit 20',
+    'gh -R acme/demo run list',
+    'gh run view 12345',
+    'gh run view 12345 --log --job 67890',
+    'gh run watch 12345',
+    'gh run watch 12345 --exit-status -i 5',
+    'gh workflow list',
+    'gh workflow list --all -L 10',
+    'gh workflow view deploy.yml',
+    'gh workflow view ci.yml --yaml',
+    'gh pr checks',
+    'gh pr checks 42 --watch',
+    'gh api actions/runs',
+    'gh api actions/runs/12345',
+    'gh api repos/acme/demo/actions/runs',
+    'gh api repos/acme/demo/actions/runs/12345/jobs',
+    'gh api repos/acme/demo/actions/workflows/ci.yml/runs',
+    'gh api -X GET repos/acme/demo/actions/runs -f branch=main -F per_page=10',
+    'gh api --method=GET repos/acme/demo/actions/runs --field status=completed',
+    'gh api -Xget repos/acme/demo/actions/runs -fbranch=main',
+    "gh api graphql -f query='query { repository(owner: \"acme\", name: \"demo\") { name } }'",
+    '"gh" run view 12345',
+    "'gh' workflow list",
+    '\\gh api repos/acme/demo/actions/runs/12345',
+  ];
+  for (const cmd of allowedReads) {
+    expect(refusedByGuard(cmd), `default: ${cmd}`).toBeNull();
+    expect(refusedByGuard(cmd, none), `none: ${cmd}`).toBeNull();
+  }
+
+  // 2. Every write variant is refused (run cancel/delete/download, workflow enable/disable/run,
+  //    rerun without --failed, api explicit/implicit writes, /dispatches on any verb, graphql
+  //    mutations, and quoted/backslash/prefixed gh invocations).
+  const refusedWrites = [
+    // run writes & non-read subcommands
+    'gh run cancel 12345',
+    'gh -R acme/demo run cancel 12345',
+    'gh run delete 12345',
+    'gh run download 12345',
+    'gh run',
+    // rerun without --failed or with non-numeric positional
+    'gh run rerun',
+    'gh run rerun 12345',
+    'gh run rerun 12345 --debug',
+    'gh run rerun --failed 12345 extra-word',
+    // workflow writes & non-read subcommands
+    'gh workflow enable ci.yml',
+    'gh workflow disable ci.yml',
+    'gh workflow disable deploy.yml',
+    'gh workflow run release.yml',
+    'gh workflow run ci.yml',
+    'gh workflow run ci.yml --ref=',
+    'gh workflow run deploy.yml extra-arg',
+    'gh workflow',
+    // api explicit write methods on /actions (and lowercase / glued / --method= forms)
+    'gh api -X POST repos/acme/demo/actions/runs/12345/cancel',
+    'gh api -XPOST repos/acme/demo/actions/runs/12345/rerun',
+    'gh api -X post repos/acme/demo/actions/runs/12345/rerun-failed-jobs',
+    'gh api --method POST repos/acme/demo/actions/workflows/ci.yml/dispatches',
+    'gh api --method=PUT repos/acme/demo/actions/workflows/ci.yml/enable',
+    'gh api -XPUT repos/acme/demo/actions/workflows/ci.yml/disable',
+    'gh api --method=PATCH repos/acme/demo/actions/variables/CI_MODE',
+    'gh api -X DELETE repos/acme/demo/actions/runs/12345',
+    'gh api -Xdelete repos/acme/demo/actions/runs/12345/logs',
+    'gh api --method DELETE repos/acme/demo/actions/caches/1',
+    'gh api -X GET -X POST repos/acme/demo/actions/runs/12345/cancel',
+    // api implicit POSTs (parameters or --input without explicit GET)
+    'gh api repos/acme/demo/actions/runs -f branch=main',
+    'gh api repos/acme/demo/actions/runs --field branch=main',
+    'gh api repos/acme/demo/actions/runs --field=branch=main',
+    'gh api repos/acme/demo/actions/runs -f=branch=main',
+    'gh api repos/acme/demo/actions/runs -fbranch=main',
+    'gh api repos/acme/demo/actions/runs -F per_page=10',
+    'gh api repos/acme/demo/actions/runs --raw-field per_page=10',
+    'gh api repos/acme/demo/actions/runs --raw-field=per_page=10',
+    'gh api repos/acme/demo/actions/runs -F=per_page=10',
+    'gh api repos/acme/demo/actions/runs -Fper_page=10',
+    'gh api repos/acme/demo/actions/runs --input payload.json',
+    'gh api repos/acme/demo/actions/runs --input=payload.json',
+    // /dispatches refused on every verb, even explicit GET
+    'gh api repos/acme/demo/dispatches',
+    'gh api -X GET repos/acme/demo/dispatches',
+    'gh api --method=GET repos/acme/demo/actions/workflows/ci.yml/dispatches',
+    'gh api actions/workflows/deploy.yml/dispatches',
+    // graphql mutations & missing queries
+    'gh api graphql',
+    "gh api graphql -f query='mutation { cancelWorkflowRun(input: {id: \"1\"}) { clientMutationId } }'",
+    "gh api /graphql -F query='MUTATION { deleteWorkflowRun(input: {id: \"1\"}) { clientMutationId } }'",
+    "gh api https://api.github.com/graphql --field=query='mutation { rerunWorkflow }'",
+    "gh api graphql -fquery='mutation { rerunWorkflow }'",
+    // quoted, backslash-escaped, path-qualified, and wrapper-prefixed gh invocations
+    '"gh" run cancel 12345',
+    "'gh' run delete 12345",
+    '\\gh workflow disable ci.yml',
+    '\\gh workflow enable ci.yml',
+    '"gh" run rerun 12345',
+    '\\gh api repos/acme/demo/actions/runs -f name=x',
+    '"gh" api -X GET repos/acme/demo/actions/workflows/ci.yml/dispatches',
+    "\\gh api graphql -f query='mutation { x }'",
+    '/usr/local/bin/gh run cancel 12345',
+    'env gh workflow disable ci.yml',
+    'command gh run delete 12345',
+    'echo 12345 | xargs gh run cancel',
+  ];
+  for (const cmd of refusedWrites) {
+    expect(refusedByGuard(cmd)?.rule, cmd).toBe('github-actions');
+  }
+  expect(lineRunsGh('"gh" run cancel 12345')).toBe(true);
+  expect(lineRunsGh("'gh' workflow disable ci.yml")).toBe(true);
+  expect(lineRunsGh('\\gh run delete 12345')).toBe(true);
+});
