@@ -9,6 +9,8 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import {
   anotherPaneRefusal,
+  callerOf,
+  callerVerdict,
   describeCaller,
   detachedRefusal,
   fileOwnerRefusal,
@@ -89,7 +91,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -296,12 +298,16 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const ceilings = ceilingsOf(team);
 
   const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  // The entity's main orchestrator stands as this team's lead (OD-02): proven by its own head
+  // team's record, live file and recorded pane, never by its seat name. A run that proves it
+  // passes the gate the way a lead of this team would, and the guard below decides the rest.
+  const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
   // `1`, dev mode says this gate once, as a warning, and the restart continues — exactly as
   // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
   // records, the approvals and trust. The warning is logged where this call runs; a dry run
   // says it beside the dry answer and decides nothing.
-  const mayRun = clientRun !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
+  const mayRun = clientRun !== null || mainOrchestrator !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
         : null;
@@ -329,10 +335,19 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
   }
 
+  // A seat cannot restart the pane it stands on. The pane arm is physical and stands for every
+  // caller. The name arm is identity, not spelling: two teams may name an orchestrator the
+  // same, so a run that proved it is the entity's main orchestrator elsewhere is judged by its
+  // pane alone, never by the name it shares with this team's seat.
   const recordedSession = readState(dir).sessions[session] ?? emptySession();
   const recordedSeat = recordedSession.seats[name];
-  if (caller.kind === 'seat' && (caller.name === name || (recordedSeat?.pane !== undefined && caller.pane === recordedSeat.pane))) {
-    return selfRefused(out, json, caller.name);
+  const standingOn = (who: Caller | null): string | null =>
+    who !== null && who.kind === 'seat' && recordedSeat?.pane !== undefined && who.pane === recordedSeat.pane ? who.name : null;
+  const onRecordedPane = standingOn(caller) ?? standingOn(mainOrchestrator);
+  const byName = caller.kind === 'seat' && mainOrchestrator === null && caller.name === name ? caller.name : null;
+  const selfName = onRecordedPane ?? byName;
+  if (selfName !== null) {
+    return selfRefused(out, json, selfName);
   }
 
   const declared = team.seats.find((seat) => seat.name === name);
@@ -345,12 +360,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (abandon && caller.kind !== 'owner' && (name === team.orchestrator || name === team.operator)) {
     return leadRefused(out, json, describeCaller(caller));
   }
-  // A stopped seat is its own team's sign-off to lift: the owner, or a seat this team's map
-  // admits as `leads` on its recorded pane, restarts it, and the run clears the mark in the same
-  // write that records the launch. The caller gate above is not that proof on its own — dev mode
-  // folds its refusal into a warning, and a client run reads past it — so the verdict itself must
-  // be `ok`, not merely unfolded.
-  if (declared.stopped && mayChange.kind !== 'ok') {
+  // A stopped seat is its own team's sign-off to lift: the owner, a seat this team's map admits
+  // as `leads` on its recorded pane, or the entity's main orchestrator standing as its lead,
+  // restarts it, and the run clears the mark in the same write that records the launch. The
+  // caller gate above is not that proof on its own — dev mode folds its refusal into a warning,
+  // and a client run reads past it — so the verdict itself must be `ok`, not merely unfolded.
+  if (declared.stopped && mayChange.kind !== 'ok' && mainOrchestrator === null) {
     return signedOffRefused(out, json, name);
   }
 
@@ -2031,6 +2046,50 @@ function callerRefused(
   else out.stdout(dryAnswer);
   // exit: restart.caller
   return 1;
+}
+
+/**
+ * The entity's main orchestrator, when this run is it: the lead seat of the team whose project
+ * is the entity itself — the head team send admission reads in `onMainCoordinator` — placed in
+ * that team's own session on the pane its state records. The reach is the same one OD-02 names
+ * for sends, limited to the entity: the target's registry record must name that entity, and the
+ * proof comes from the caller's own team's record, live file and state. A name alone is never
+ * this proof, and the target team is never the head team this reach comes from: its own
+ * orchestrator is judged by this team's map, exactly as before.
+ */
+function entityMainOrchestrator(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: { home: string; root: string; entity: string | null },
+): Caller | null {
+  if (options.entity === null) return null;
+  let records: ReturnType<typeof readTeams>;
+  try {
+    records = readTeams(options.home);
+  } catch {
+    // A registry that cannot be read admits nobody, never the registry's absence.
+    return null;
+  }
+  const targetId = teamIdOf(options.root);
+  const target = records[targetId];
+  if (target === undefined || target.entity === null || target.entity !== options.entity) return null;
+  for (const [id, record] of Object.entries(records)) {
+    if (id === targetId) continue;
+    if (record.entity !== options.entity || record.project !== options.entity) continue;
+    const placed = callerOf(io, record.session);
+    if (placed.kind !== 'seat' || placed.session !== record.session) continue;
+    let loaded: ReturnType<typeof readTeamConfig>;
+    try {
+      loaded = readTeamConfig(record.root, { home: options.home });
+    } catch {
+      continue;
+    }
+    if (!loaded.ok) continue;
+    if (loaded.team.entity !== options.entity || placed.name !== loaded.team.orchestrator) continue;
+    const at = standingOf(dirname(loaded.path), record.session, placed);
+    if (callerVerdict(placed, placed.name, at).kind !== 'ok') continue;
+    return placed;
+  }
+  return null;
 }
 
 function selfRefused(out: Io, json: boolean, callerName: string): number {
