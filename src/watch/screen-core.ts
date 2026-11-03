@@ -1495,22 +1495,35 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 }
 
 // A placeholder, not text. When the composer says its suggestions render dim and the input
-// line carries any styling at all, the styling decides alone: all faint past the prompt is a
-// greyed suggestion, anything else is text — the list is not asked, so no suggestion's
-// styling can lend its words to typed characters after it. A line without styling (a plain
-// read, an old herdr) leaves the list to decide, as does a composer without the style.
+// line carries any styling at all, a row that is not all faint past the prompt is text. An
+// all-faint row is the suggestion, unless the composer names `slash-hint`: then the faint row
+// must also be a listed placeholder or a `/command …` hint, so a faint row of other words is
+// text. A line without styling (a plain read, an old herdr) leaves the list to decide, as does
+// a composer without the style. The slash shape is not asked on that plain read: a draft that
+// starts with `/` stays text.
 function placeholder(
   typed: string,
   composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle'] },
   plainLine: string,
   styledLine: string | undefined,
 ): boolean {
+  const listed = composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : 'prefix' in entry ? typed.startsWith(entry.prefix) : false));
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
-    return allDimAfter(styledLine, skip);
+    if (!allDimAfter(styledLine, skip)) return false;
+    // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
+    // that hint shape. Every other dim composer still takes any faint row as the suggestion.
+    if (!composer.placeholders.some((entry) => 'shape' in entry && entry.shape === 'slash-hint')) return true;
+    return listed || slashHint(typed);
   }
-  return composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : typed.startsWith(entry.prefix)));
+  return listed;
+}
+
+/** A rotating `/command …` hint: a slash, a command word, and text after it. A bare `/command`
+ *  is a draft, and so is any row this does not describe. */
+function slashHint(typed: string): boolean {
+  return /^\/[A-Za-z][A-Za-z0-9-]*\s+\S/.test(typed);
 }
 
 // Rows under the input row that hold only a greyed suggestion: a suggestion longer than the box is

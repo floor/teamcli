@@ -639,12 +639,14 @@
         "type": "object",
         "additionalProperties": false,
         "oneOf": [
-          { "required": ["equals"], "not": { "required": ["prefix"] } },
-          { "required": ["prefix"], "not": { "required": ["equals"] } }
+          { "required": ["equals"], "not": { "anyOf": [{ "required": ["prefix"] }, { "required": ["shape"] }] } },
+          { "required": ["prefix"], "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["shape"] }] } },
+          { "required": ["shape"], "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["prefix"] }] } }
         ],
         "properties": {
           "equals": { "type": "string" },
-          "prefix": { "type": "string", "minLength": 1 }
+          "prefix": { "type": "string", "minLength": 1 },
+          "shape": { "const": "slash-hint" }
         }
       }
     },

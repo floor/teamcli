@@ -595,10 +595,12 @@ function placeholdersOf(node: YamlNode): Placeholder[] {
   if (node.kind !== 'seq') fail(node.line, '"placeholders" must be a list');
   return node.items.map((item) => {
     const entries = mapping(item, 'a placeholder');
-    only(entries, ['equals', 'prefix']);
+    only(entries, ['equals', 'prefix', 'shape']);
     const equals = optional(entries, 'equals');
     const prefix = optional(entries, 'prefix');
-    if (equals && prefix) fail(item.line, 'a placeholder is "equals" or "prefix", not both');
+    const shape = optional(entries, 'shape');
+    const named = [equals, prefix, shape].filter((entry) => entry !== undefined);
+    if (named.length !== 1) fail(item.line, 'a placeholder is "equals", "prefix", or "shape", and only one');
     if (equals) {
       const text = stringOf(equals.value);
       if (text === null) fail(equals.line, '"equals" must be a string');
@@ -609,7 +611,9 @@ function placeholdersOf(node: YamlNode): Placeholder[] {
       if (!text) fail(prefix.line, '"prefix" must be a non-empty string');
       return { prefix: text };
     }
-    fail(item.line, 'a placeholder needs "equals" or "prefix"');
+    const word = stringOf(shape!.value);
+    if (word !== 'slash-hint') fail(shape!.line, '"shape" must be slash-hint');
+    return { shape: 'slash-hint' };
   });
 }
 

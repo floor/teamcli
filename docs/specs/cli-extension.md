@@ -123,8 +123,9 @@ Four modes, each a variant of `Composer` (`src/watch/screen-data.ts`):
   do not name `unknown` (`statusThenOne`, `src/watch/screen-core.ts`).
 - **two-rules-footer-below** — the composer between two rule lines, its footer below the second.
 
-Placeholders are `{ equals }` or `{ prefix }`; the greyed suggestions are told by their styling
-when the CLI renders them dim (`placeholder_style: dim`), else by the list. Every composer
+Placeholders are `{ equals }`, `{ prefix }`, or `{ shape: slash-hint }`. The greyed suggestions
+are told by their styling when the CLI renders them dim (`placeholder_style: dim`), else by the
+list. `slash-hint` is the extra dim row `/<command> …`; a plain draft is still the list's. Every composer
 carries `frameRows` — the empty rows a capture shows the pane drawing under the text, inside the
 frame. A wrap is `{ continuation: 'text-column', kind: 'word' | 'hard' }`: the continuation
 starts at the text column, and the break folds the space at a word boundary or falls mid-word.
