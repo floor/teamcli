@@ -30,10 +30,10 @@ import type { Screen } from '../src/watch/screen.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-03T12:00:00Z');
-const LEAD = { kind: 'seat' as const, name: 'lead', pane: 'w1:p1', session: 'acme' };
-const OPS = { kind: 'seat' as const, name: 'ops', pane: 'w3:p1', session: 'acme' };
-const OPS_ELSEWHERE = { kind: 'seat' as const, name: 'ops', pane: 'w2:p1', session: 'acme' };
-const HELPER = { kind: 'seat' as const, name: 'helper', pane: 'w2:p1', session: 'acme' };
+const LEAD = { kind: 'seat' as const, name: 'lead', pane: 'pane1', session: 'acme' };
+const OPS = { kind: 'seat' as const, name: 'ops', pane: 'pane3', session: 'acme' };
+const OPS_ELSEWHERE = { kind: 'seat' as const, name: 'ops', pane: 'pane2', session: 'acme' };
+const HELPER = { kind: 'seat' as const, name: 'helper', pane: 'pane2', session: 'acme' };
 const OWNER_GRANT = 'only the owner runs this, from a terminal outside herdr';
 
 let made: string[] = [];
@@ -87,9 +87,9 @@ ${seat('ops')}${seat('helper')}`);
     sessions: {
       acme: {
         seats: {
-          lead: { stage: 'ready', pane: 'w1:p1' },
-          ops: { stage: 'ready', pane: 'w3:p1' },
-          helper: { stage: 'ready', pane: 'w2:p1' },
+          lead: { stage: 'ready', pane: 'pane1' },
+          ops: { stage: 'ready', pane: 'pane3' },
+          helper: { stage: 'ready', pane: 'pane2' },
         },
         worktrees: {},
       },
@@ -263,7 +263,7 @@ describe('the five gates', () => {
     );
     const typed: string[] = [];
     const keys: string[] = [];
-    const agents: HerdrAgent[] = [{ name: 'helper', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null }];
+    const agents: HerdrAgent[] = [{ name: 'helper', agent: 'claude', pane: 'pane2', workspace: 'w2', status: 'idle', cwd: null }];
     let box = claudeBox('');
     const sources: RemoveSources = {
       home,
