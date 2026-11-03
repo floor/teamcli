@@ -28,10 +28,11 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcesses, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, type PaneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
+import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
+import { runRestoreSweepInChild } from './restore/spawn.ts';
 import { pidAlive } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
@@ -252,11 +253,11 @@ export type StartMachineDaemonInput = {
   nextHandler?: NextDispatchHandler;
   /**
    * The verified pane's process identity for a `next` request's delivery class: the proof that
-   * a recorded socket is the pane's own. The default asks the terminal host; a test injects its
-   * own so a synthetic listener scene makes no terminal-host call. A reader that cannot answer
-   * returns null, the conservative rule.
+   * a recorded socket is the pane's own. The default asks the terminal host, awaited so the
+   * read never holds the beat; a test injects its own so a synthetic listener scene makes no
+   * terminal-host call. A reader that cannot answer returns null, the conservative rule.
    */
-  paneProcesses?: (pane: string, session: string) => PaneProcesses | null;
+  paneProcesses?: (pane: string, session: string) => PaneProcesses | null | Promise<PaneProcesses | null>;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
@@ -574,6 +575,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** The one-flight daemon-start restore sweep. `closeOnce` drains it beside the presence
    *  passes; the sweep reads the daemon's closing flag to stop between seat steps. */
   let restoreSweepRun: Promise<void> | null = null;
+  /** Ends a restore child whose pass is still running when the daemon closes: the child's own
+   *  flag stops the pass between seat steps, and the spawner bounds the step it is inside. */
+  const restoreAbort = new AbortController();
   // The hosted send server may take a delivery while this start is still wiring the presence
   // answers. Until the verdict helper below exists the per-seat answer is false, which holds
   // typing instead of reading a helper that is not initialised yet.
@@ -820,6 +824,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       return nextRefusal('next: the verified principal does not match the seat and pane the request claimed; nothing was done');
     }
     try {
+      // The verified pane's process identity, read the way this host reads a pane for a watch
+      // authority: the handler's class then knows whether the recorded socket is the pane's
+      // own. A pane the terminal host cannot answer for reads null, the conservative rule.
+      // The read is awaited, never taken on the loop: the daemon's timer keeps beating while
+      // a terminal host is slow to answer.
+      const readProcesses = input.paneProcesses
+        ?? ((pane: string, session: string) => paneProcessesAsync(pane, session, { timeoutMs: 10_000 }));
+      const processes = await readProcesses(verdict.pane, route.session);
       const answer = await handler({
         route,
         team: loaded.team,
@@ -830,10 +842,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         // The registry home this daemon was started with: the one the route's team was read in,
         // and the one the handler reads the seat's agent record from.
         home,
-        // The verified pane's process identity, read the way this host reads a pane for a watch
-        // authority: the handler's class then knows whether the recorded socket is the pane's
-        // own. A pane the terminal host cannot answer for reads null, the conservative rule.
-        processes: (input.paneProcesses ?? paneProcesses)(verdict.pane, route.session),
+        processes,
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {
@@ -1450,9 +1459,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           teamFile: entry.handle,
           log,
           // Proving a recorded pane watch is the process in its own pane needs this route's
-          // session; a pane the terminal host cannot read stays `unproven` and is never asked
-          // to hand over.
-          processInfo: (pane) => paneProcesses(pane, route.session),
+          // session; the read is awaited so a slow terminal host holds the watch acquisition,
+          // never the daemon's beat. A pane the terminal host cannot read stays `unproven` and
+          // is never asked to hand over.
+          processInfo: (pane) => paneProcessesAsync(pane, route.session, { timeoutMs: 10_000 }),
           ...(presence === undefined
             ? {}
             : {
@@ -2255,6 +2265,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (!admissionClosed) {
       admissionClosed = true;
       closed = true;
+      // A restore child still running is ended with the daemon: its pass stops between seat
+      // steps, and the spawner forces the one terminal-host read it may be inside.
+      restoreAbort.abort();
       clearInterval(timer);
       if (presenceTimer !== null) clearInterval(presenceTimer);
       // Admission first, and every stop is started before the first await: a watch pass that is
@@ -2420,14 +2433,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // The daemon-start restore sweep: after the sockets, canonical routes, state
   // record and shutdown machinery are wired, one guarded pass per accepted route repairs the
   // seats its recorded session lost. It is never awaited here, so readiness does not wait on a
-  // launch; `closeOnce` drains the tracked run, and the run's own `isClosing` stops it between
-  // seat steps. Only canonical routes are swept: raw input roots can repeat, name a folder with
-  // no accepted route, or differ in spelling from the route's own root.
+  // launch; `closeOnce` drains the tracked run, and the closing signal ends the child's pass
+  // between seat steps. Each pass runs in a child of its own (`./restore/spawn.ts`), so the
+  // pass's synchronous terminal-host reads hold that process alone and the daemon's heartbeat
+  // keeps its cadence while a route restores. Only canonical routes are swept: raw input roots
+  // can repeat, name a folder with no accepted route, or differ in spelling from the route's own
+  // root.
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
       : (root: string, teamFile: string | undefined) =>
-          runRestoreSweepForRoute({ home, root, ...(teamFile === undefined ? {} : { teamFile }), now, isClosing: () => closed });
+          runRestoreSweepInChild({
+            home,
+            root,
+            ...(teamFile === undefined ? {} : { teamFile }),
+            signal: restoreAbort.signal,
+          });
     restoreSweepRun = (async (): Promise<void> => {
       for (const route of routes) {
         if (closed) return;

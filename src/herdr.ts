@@ -222,6 +222,12 @@ export async function paneProcessInfoAsync(pane: string, session: string | undef
   }
 }
 
+/** The pane's process identity, awaited: the same parser `paneProcesses` applies to the same
+ *  call. Null when herdr can't tell. */
+export async function paneProcessesAsync(pane: string, session: string | undefined, options: HerdrReadOptions = {}): Promise<PaneProcesses | null> {
+  return paneProcessesOf(await paneProcessInfoAsync(pane, session, options));
+}
+
 export type HerdrWorkspace = { id: string; label: string };
 
 function workspacesOf(result: unknown): HerdrWorkspace[] {

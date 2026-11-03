@@ -5864,6 +5864,13 @@
     {
       "code": 2,
       "command": "team",
+      "id": "team.restore-entry-refused",
+      "meaning": "the machine daemon's restore child was started without a readable one-use token, so it restored nothing",
+      "trigger": "the daemon starts its restore child entry"
+    },
+    {
+      "code": 2,
+      "command": "team",
       "id": "team.unknown",
       "meaning": "the command is unknown",
       "trigger": "team nosuch"

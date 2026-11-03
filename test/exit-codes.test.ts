@@ -5315,6 +5315,29 @@ scene('team.chores-entry-refused', async (place) => {
   }
   return show(ran, 'the token name is not one this daemon writes');
 });
+// The restore child entry is its own program too: without a readable one-use token it runs no
+// route and says why from a process of its own.
+scene('team.restore-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/restore/entry.ts', import.meta.url));
+  let ran: Ran;
+  try {
+    execFileSync(process.execPath, [entry, '--inherited', 'not-a-token'], {
+      cwd: place.root,
+      env: { ...process.env, HOME: place.home },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    ran = { code: 0, out: '', err: '' };
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: unknown };
+    ran = {
+      code: failed.status ?? -1,
+      out: '',
+      err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+    };
+  }
+  return show(ran, 'the token name is not one this daemon writes');
+});
 scene('daemon.fault-usage', async (place) =>
   show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));
 scene('daemon.fault-root', async (place) =>

@@ -843,6 +843,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.chores-entry-refused` | `team` | 2 | the machine daemon's chores child was started without a readable one-use token, so it served nothing | `the daemon starts its chores child entry` |
 | `team.general-usage` | `team` | 2 | --general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes) | `team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
+| `team.restore-entry-refused` | `team` | 2 | the machine daemon's restore child was started without a readable one-use token, so it restored nothing | `the daemon starts its restore child entry` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
 | `tempo.unchanged` | `tempo` | 0 | the tempo was already that word | `team tempo urgent` |

@@ -44,3 +44,9 @@ export function daemonLockPath(home: string = homedir()): string {
 export function choresInheritPath(home: string, nonce: string): string {
   return join(machineConfigDir(home), `chores.inherit.${nonce}.json`);
 }
+
+/** One restore child's one-use token: the one route its pass may act on. Written 0600 under the
+ *  machine folder and unlinked by the child as it starts, so one token starts one pass. */
+export function restoreInheritPath(home: string, nonce: string): string {
+  return join(machineConfigDir(home), `restore.inherit.${nonce}.json`);
+}
