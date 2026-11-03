@@ -12,15 +12,21 @@ import { boxHoldsText } from '../src/launch/deliver.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
-import { readBox, readScreen } from '../src/watch/screen.ts';
+import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
+const FIXTURES_142 = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.2');
+const FIXTURES_1216 = join(import.meta.dir, 'fixtures', 'antigravity', '1.2.16');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
 const IDLE_COMPACTED = readFileSync(join(FIXTURES, 'idle-compacted.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working-synthetic.txt'), 'utf8');
 const EXIT_UNSENT = readFileSync(join(FIXTURES, 'exit-completion-unsent.txt'), 'utf8');
+const PERMISSION_DIALOG = readFileSync(join(FIXTURES_142, 'permission.txt'), 'utf8');
+const QUESTION_DIALOG = readFileSync(join(FIXTURES_142, 'question.txt'), 'utf8');
+const TRUST_DIALOG = readFileSync(join(FIXTURES_142, 'trust.txt'), 'utf8');
+const CONFIRMATION_DIALOG = readFileSync(join(FIXTURES_1216, 'question-unsent-54.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
@@ -132,6 +138,81 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(0);
   });
+
+  test('a box with only spaces or altered internal spacing after typing gets no Enter', async () => {
+    const spacesOnly = wakeFake((read) => (read < 2 ? IDLE : holding('    ')));
+    const outSpaces = await deliverTypedWake(spacesOnly.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(boxHoldsText('antigravity', LINE, holding('    '))).toBe(false);
+    expect(outSpaces).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the screen read idle after the line was typed; no Enter was pressed' });
+    expect(spacesOnly.typed).toEqual([LINE]);
+    expect(spacesOnly.enters).toBe(0);
+
+    const doubledSpace = LINE.replace(' ', '  ');
+    const internalSpaces = wakeFake((read) => (read < 2 ? IDLE : holding(doubledSpace)));
+    const outInternal = await deliverTypedWake(internalSpaces.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(readScreen('antigravity', holding(doubledSpace)).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', LINE, holding(doubledSpace))).toBe(false);
+    expect(outInternal).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    expect(internalSpaces.typed).toEqual([LINE]);
+    expect(internalSpaces.enters).toBe(0);
+  });
+
+  test('a box with partial text refuses before any key and gets no Enter if drawn after typing', async () => {
+    const prefix = LINE.slice(0, 12);
+    const suffix = LINE.slice(5);
+    expect(readScreen('antigravity', holding(prefix)).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', LINE, holding(prefix))).toBe(false);
+    expect(boxHoldsText('antigravity', LINE, holding(suffix))).toBe(false);
+
+    const beforeKey = wakeFake(() => holding(prefix));
+    const outBefore = await deliverTypedWake(beforeKey.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outBefore).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(beforeKey.typed).toEqual([]);
+    expect(beforeKey.enters).toBe(0);
+
+    const afterPrefix = wakeFake((read) => (read < 2 ? IDLE : holding(prefix)));
+    const outPrefix = await deliverTypedWake(afterPrefix.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outPrefix).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    expect(afterPrefix.typed).toEqual([LINE]);
+    expect(afterPrefix.enters).toBe(0);
+
+    const afterSuffix = wakeFake((read) => (read < 2 ? IDLE : holding(suffix)));
+    const outSuffix = await deliverTypedWake(afterSuffix.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(outSuffix).toEqual({ delivered: false, typed: true, tries: 0, reason: 'the box held text other than the line after the line was typed; no Enter was pressed' });
+    expect(afterSuffix.typed).toEqual([LINE]);
+    expect(afterSuffix.enters).toBe(0);
+  });
+
+  test('captured dialog frames (permission, question, trust, confirmation) refuse before any key and before Enter', async () => {
+    const dialogs: ReadonlyArray<readonly [kind: Screen['kind'], frame: string]> = [
+      ['permission', PERMISSION_DIALOG],
+      ['question', QUESTION_DIALOG],
+      ['trust', TRUST_DIALOG],
+      ['confirmation', CONFIRMATION_DIALOG],
+    ];
+    for (const [kind, frame] of dialogs) {
+      expect(readScreen('antigravity', frame).kind).toBe(kind);
+      expect(boxHoldsText('antigravity', LINE, frame)).toBe(false);
+
+      const firstRead = wakeFake(() => frame);
+      const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'antigravity', FAST);
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: `the first read showed ${kind}, not an empty idle prompt; nothing was typed` });
+      expect(firstRead.typed).toEqual([]);
+      expect(firstRead.enters).toBe(0);
+
+      const secondRead = wakeFake((read) => (read === 0 ? IDLE : frame));
+      const outSecond = await deliverTypedWake(secondRead.host, 'pane-1', LINE, 'antigravity', FAST);
+      expect(outSecond).toEqual({ delivered: false, typed: false, tries: 0, reason: `the second read showed ${kind}, not an empty idle prompt; nothing was typed` });
+      expect(secondRead.typed).toEqual([]);
+      expect(secondRead.enters).toBe(0);
+
+      const afterType = wakeFake((read) => (read < 2 ? IDLE : frame));
+      const outAfter = await deliverTypedWake(afterType.host, 'pane-1', LINE, 'antigravity', FAST);
+      expect(outAfter).toEqual({ delivered: false, typed: true, tries: 0, reason: `the screen read ${kind} after the line was typed; no Enter was pressed` });
+      expect(afterType.typed).toEqual([LINE]);
+      expect(afterType.enters).toBe(0);
+    }
+  });
 });
 
 describe('team send: the antigravity typed wake', () => {
@@ -200,6 +281,31 @@ describe('team send: the antigravity typed wake', () => {
       expect(history.entries[0]?.failed).toEqual([
         'mcp-inbox: no live inbox listener',
         'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
+      ]);
+    }
+  });
+
+  test('a dialog frame in team send leaves the message in the bus inbox and types nothing', async () => {
+    const made = agyWorld();
+    const pane = wakeFake(() => PERMISSION_DIALOG);
+    const host = fake(made, {
+      agents: () => [{ name: 'agy', pane: 'pane-1' }],
+      typedWake: () => pane.host,
+    });
+    const io = owner(made.root);
+    expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
+    expect(io.out).toContain('agy: sent (unconfirmed)');
+    expect(io.out).toContain('the typed wake failed (the first read showed permission, not an empty idle prompt; nothing was typed)');
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    const history = readHistory('acme', made.root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]?.failed).toEqual([
+        'mcp-inbox: no live inbox listener',
+        'typed: the first read showed permission, not an empty idle prompt; nothing was typed',
       ]);
     }
   });
