@@ -7,7 +7,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { CrossSessionInbound } from '../launch/declaration.ts';
-import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
+import type { DeliveryLeg, LivenessThresholds, MessagingStore, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
@@ -94,6 +94,12 @@ export type SeatWebhook = {
    */
   timeoutMs?: number;
 };
+
+/**
+ * The words a team file writes in its `messaging` map, at the top level or on a seat. A file
+ * that writes none carries an empty map, and a seat that does the same carries no field at all.
+ */
+export type MessagingWords = { store?: MessagingStore };
 
 export type Seat = {
   role: string;
@@ -213,6 +219,13 @@ export type Seat = {
    */
   senderName?: SenderNameMode;
   /**
+   * The seat's own word on the store a send leaves for it, when the file writes one: `none`
+   * stores nothing and the frame carries the signed bytes alone, `parallel` writes and wakes at
+   * once, and `first` (the shape every file had before the key) stores before the first wake.
+   * Absent otherwise, so a file that writes none keeps the digest it had.
+   */
+  messaging?: MessagingWords;
+  /**
    * The seat's own word on the liveness defaults, when the file writes one: the idle-to-lead and
    * idle-to-owner windows its reports run by, and the blind window its state is read by. Absent
    * otherwise, so a file that writes none keeps the digest it had. Like every other field, a word
@@ -266,6 +279,12 @@ export type TeamFile = {
    * record's.
    */
   senderName: SenderNameMode | null;
+  /**
+   * The file's own word on the store a send leaves for its seats, when the file writes one:
+   * `first`, `parallel` or `none`, read for a seat whose chain says nothing nearer. Non-owner and
+   * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
+   */
+  messaging: MessagingWords;
   /**
    * Owner-signed team-level policy declarations (Kernel amendment 02 §2.12), when present.
    */

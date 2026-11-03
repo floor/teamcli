@@ -16,14 +16,17 @@ import {
   isLivenessSeconds,
   LIVENESS_KEYS,
   LIVENESS_RULE,
+  MESSAGING_STORE,
   orderDeclarationsOf,
   sayThreshold,
   SEATS_CROSS_TEAMS,
   SETTING_LEVELS,
   STATE_THRESHOLDS,
+  wordDeclarationsOf,
   type Declaration,
   type DeliveryLeg,
   type LivenessThresholds,
+  type MessagingStore,
   type NumberDeclaration,
   type NumberSettingSpec,
   type OrderDeclaration,
@@ -31,6 +34,8 @@ import {
   type SettingLevel,
   type SettingSpec,
   type StateThresholds,
+  type WordDeclaration,
+  type WordSettingSpec,
 } from './inherit.ts';
 
 /** When a chain is read: a declaration whose expiry has passed is unset at its level. */
@@ -323,4 +328,66 @@ export function deliveryOrder(
   options?: ResolveOptions,
 ): readonly DeliveryLeg[] {
   return resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(declared), options).value;
+}
+
+/** What a word setting resolves to, and what it cost: the word in force, the level whose word
+ *  set it — null when the fallback stands — and every declaration set aside because its level
+ *  may not loosen this setting. */
+export type WordResolution<W extends string = string> = {
+  value: W;
+  source: SettingLevel | null;
+  refused: WordDeclaration<W>[];
+};
+
+/**
+ * The inheritance itself, word-valued: levels are read outermost first, and within a level the
+ * last word wins. A word that loosens the value in force is honoured only at a level the spec
+ * lists; one set aside changes nothing and the inherited word stands. A word equal to the value
+ * already in force is no word at all — neither loosening nor tightening — so it passes at every
+ * level.
+ */
+export function resolveWordSetting<W extends string>(
+  spec: WordSettingSpec<W>,
+  declared: readonly WordDeclaration<W>[],
+  options: ResolveOptions = {},
+): WordResolution<W> {
+  const policy = policyOf(spec.policy);
+  const now = options.now ?? new Date();
+  const start = policy.parseValue(spec.fallback) as W | null;
+  if (start === null) throw new Error(`settings: "${spec.name}" carries a fallback its policy rejects`);
+  let value = start;
+  let source: SettingLevel | null = null;
+  const refused: WordDeclaration<W>[] = [];
+  for (const level of SETTING_LEVELS) {
+    for (const declaration of declared) {
+      if (declaration.level !== level) continue;
+      const timing = expiryState(declaration, now);
+      if (timing === 'expired') continue;
+      if (timing === 'unreadable') {
+        refused.push(declaration);
+        continue;
+      }
+      const word = policy.parseValue(declaration.value) as W | null;
+      if (word === null) {
+        refused.push(declaration);
+        continue;
+      }
+      if (sameValue(word, value)) continue;
+      if (!policy.isWithin(word, value, declaration.expiry, null) && !spec.looseningLevels.includes(level)) {
+        refused.push(declaration);
+        continue;
+      }
+      value = word;
+      source = level;
+    }
+  }
+  return { value, source, refused };
+}
+
+/** The one call a send makes: the receiving seat's chain in, the store its send walks out. */
+export function messagingStore(
+  declared: Partial<Record<SettingLevel, MessagingStore | undefined>>,
+  options?: ResolveOptions,
+): MessagingStore {
+  return resolveWordSetting(MESSAGING_STORE, wordDeclarationsOf(declared), options).value;
 }

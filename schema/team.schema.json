@@ -590,6 +590,21 @@
             ],
             "$comment": "how a sender reads in this seat's headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record"
           },
+          "messaging": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "store": {
+                "enum": [
+                  "first",
+                  "parallel",
+                  "none"
+                ],
+                "$comment": "the store this seat leaves for itself: first stores the signed record before the walk wakes it, parallel starts both at once, none never stores it (the frame still carries the signed bytes); a seat may always tighten toward first, and only the entity and the project may loosen toward none"
+              }
+            },
+            "$comment": "the seat's own word on message storage; omitted when the file writes no word, so every file that writes none keeps its digest"
+          },
           "liveness": {
             "type": "object",
             "additionalProperties": false,
@@ -778,6 +793,21 @@
         "seat@team"
       ],
       "$comment": "how a sender reads in TeamCLI headlines: auto (the nickname inside its own team, seat@team from another), nickname, seat, or seat@team; the registry id stays in every record, and the default is auto"
+    },
+    "messaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "store": {
+          "enum": [
+            "first",
+            "parallel",
+            "none"
+          ],
+          "$comment": "the store a send leaves for this team's seats: first writes the signed record into the recipient's folder before the walk wakes it, parallel starts both at once and ends the send only when both settle, none never stores the record (the frame still carries the signed bytes); durability is the safe side, so a level may always tighten toward first and only an entity or project may loosen toward none"
+        }
+      },
+      "$comment": "the team's word on message storage; a seat's own `messaging` map closes the door for itself"
     },
     "policies": {
       "type": "object",
