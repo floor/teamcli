@@ -95,10 +95,12 @@ export type HostedWatchAuthorityInput = {
   alive?: (pid: number) => boolean;
   base?: WatchSources;
   /** Reads the processes in one pane of this route's session, for proving that a recorded pane
-   *  watch is the process in the pane its own record names (`watchIdentity`). Absent, or a pane
-   *  this reader cannot read, is `unproven`: the holder is left to the ordinary stand-by and is
-   *  never asked to hand over. No process is signalled by this transfer in any case. */
-  processInfo?: (pane: string) => PaneProcesses | null;
+   *  watch is the process in the pane its own record names (`watchIdentity`). The read may be
+   *  awaited (`paneProcessesAsync`): it runs between the loop's beats, never on the daemon's beat
+   *  timer. Absent, or a pane this reader cannot read, is `unproven`: the holder is left to the
+   *  ordinary stand-by and is never asked to hand over. No process is signalled by this transfer
+   *  in any case. */
+  processInfo?: (pane: string) => PaneProcesses | null | Promise<PaneProcesses | null>;
   /**
    * The owning daemon's fresh per-seat liveness for this route's presence channels, keyed by
    * declared seat name. Absent (presence hosting off, or a test without one) means not known, so
@@ -187,12 +189,12 @@ type PaneHolder =
  *  the pane are all `undefined` and left to the ordinary stand-by: an unproven holder is never
  *  asked to hand over, and nothing is signalled in any case. A pid proven gone is the store's own
  *  dead-pid give-way racing this read, so the caller retries on the fixed beat. */
-function paneHolderWatch(
+async function paneHolderWatch(
   stateDir: string,
   session: string,
   holder: WatchAuthorityHolder,
-  options: { alive(pid: number): boolean; processInfo(pane: string): PaneProcesses | null },
-): PaneHolder | undefined {
+  options: { alive(pid: number): boolean; processInfo(pane: string): PaneProcesses | null | Promise<PaneProcesses | null> },
+): Promise<PaneHolder | undefined> {
   if (holder.pid === undefined || !Number.isInteger(holder.pid) || holder.pid <= 0) return undefined;
   let record: { pid?: number; heartbeat: string; pane?: string; epoch?: string } | undefined;
   try {
@@ -203,7 +205,20 @@ function paneHolderWatch(
   if (!record || record.epoch !== undefined) return undefined;
   const pid = record.pid;
   if (pid === undefined || pid !== holder.pid) return undefined;
-  const identity = watchIdentity({ pid, ...(record.pane === undefined ? {} : { pane: record.pane }) }, options);
+  // The pane's process identity is read outside `watchIdentity`, which stays synchronous: a read
+  // that fails or cannot answer is `null`, the same "cannot tell" the synchronous reader gave.
+  let processes: PaneProcesses | null = null;
+  if (record.pane !== undefined) {
+    try {
+      processes = await options.processInfo(record.pane);
+    } catch {
+      processes = null;
+    }
+  }
+  const identity = watchIdentity(
+    { pid, ...(record.pane === undefined ? {} : { pane: record.pane }) },
+    { alive: options.alive, processInfo: () => processes },
+  );
   if (identity.kind === 'gone') return { kind: 'gone' };
   if (identity.kind === 'unproven') return undefined;
   return { kind: 'pane', pid, heartbeat: record.heartbeat };
@@ -440,7 +455,7 @@ async function runAuthoritativeHost(
         // than waiting forever. Nothing is signalled either way. Every other holder (an
         // authority epoch, a pid-less record, an unreadable one) stands exactly as before and is
         // never asked: an unreadable holder is not permission for a transfer.
-        const pane = paneHolderWatch(stateDir, input.route.session, report.holder, { alive, processInfo });
+        const pane = await paneHolderWatch(stateDir, input.route.session, report.holder, { alive, processInfo });
         if (pane !== undefined && pane.kind === 'gone') {
           // The pid the store still named has gone between its own check and this read: the next
           // beat's acquire finds only a dead pid and takes the record.
