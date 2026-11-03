@@ -51,7 +51,7 @@ through unchanged; a double-quoted one is not — backticks, `$(...)` and `$VAR`
 so never put a command-bearing body in double quotes.
 
 **Never:**
-- type text, send keys or press Enter in any screen but your own, by any tool (herdr or another), even your own team's: a person may be typing there;
+- type text, send keys or press Enter in another seat's screen unless your rules say you may — a lead may, when `team send` cannot reach it or a dialog blocks it, reading the pane before and after — and never in the owner's own screen: a person may be typing there;
 - read a person's screen;
 - merge, push, tag, publish or deploy unless your brief allows it;
 - read credentials or anyone's session files;
