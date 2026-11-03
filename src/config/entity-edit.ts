@@ -103,7 +103,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
   if (why === null && args.values.general !== undefined && verb === 'get') why = '--general takes set';
   if (why === null && !isEntityName(entityName)) {
-    why = `"${entityName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit`;
+    why = `"${entityName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
   if (why !== null) return usageRefused(io, json, why, usage);
 
