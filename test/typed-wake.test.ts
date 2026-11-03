@@ -153,7 +153,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 });
 
 describe('the typed wake is a profile word', () => {
-  test('the word is closed, and only Muse, Cursor, Antigravity and Grok declare it', () => {
+  test('the word is closed, and only Muse, Cursor, Antigravity, Grok and Codex declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
     expect(typedWakeKey('cli: muse')).toBeNull();
     expect(() => typedWakeKey('typed_wake: typing')).toThrow(/typed_wake/);
@@ -161,7 +161,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('cursor')?.typedWake).toBe('screen');
     expect(profileFor('antigravity')?.typedWake).toBe('screen');
     expect(profileFor('grok')?.typedWake).toBe('screen');
-    for (const cli of ['claude-code', 'codex', 'gemini', 'jules']) {
+    expect(profileFor('codex')?.typedWake).toBe('screen');
+    for (const cli of ['claude-code', 'gemini', 'jules']) {
       expect(profileFor(cli)?.typedWake, cli).toBeNull();
     }
   });
@@ -173,7 +174,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('cursor')?.watchWake).toBe(true);
     expect(profileFor('antigravity')?.watchWake).toBe(true);
     expect(profileFor('grok')?.watchWake).toBe(true);
-    for (const cli of ['claude-code', 'codex', 'gemini', 'jules']) {
+    expect(profileFor('codex')?.watchWake).toBe(true);
+    for (const cli of ['claude-code', 'gemini', 'jules']) {
       expect(profileFor(cli)?.watchWake, cli).toBe(false);
     }
     // The bound is the loader's default unless a profile names one, and the shipped ones name none.
@@ -182,6 +184,7 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('cursor')?.watchWakeTries).toBe(3);
     expect(profileFor('antigravity')?.watchWakeTries).toBe(3);
     expect(profileFor('grok')?.watchWakeTries).toBe(3);
+    expect(profileFor('codex')?.watchWakeTries).toBe(3);
   });
 
   test('the watch keys are read by the loader’s own rules', () => {

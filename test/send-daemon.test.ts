@@ -340,7 +340,12 @@ function ownerIo(root: string) {
 /** The bus record a retired typed-delivery edge leaves: one signed drop for `body` at mode 0600 in
  *  the seat's 0700 folder, the drop-leg marker, and the history line the sender was told about.
  *  These scenes' subjects were the typed leg's edges; the record is what the send keeps now. */
-function expectKeptInBus(w: ReturnType<typeof setupWorld>, seat: string, body: string): string {
+function expectKeptInBus(
+  w: ReturnType<typeof setupWorld>,
+  seat: string,
+  body: string,
+  historyMatch: { outcome: string; via?: string } = { outcome: 'sent (unconfirmed)', via: 'drop' },
+): string {
   const drops = join(w.dir, 'send-drops', 'acme', seat);
   expect(lstatSync(drops).mode & 0o777).toBe(0o700);
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -362,8 +367,7 @@ function expectKeptInBus(w: ReturnType<typeof setupWorld>, seat: string, body: s
       id,
       to: seat,
       body: filed(body),
-      outcome: 'sent (unconfirmed)',
-      via: 'drop',
+      ...historyMatch,
     }));
   }
   return id;
@@ -503,8 +507,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
-    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
     const id1 = /id ([0-9a-f-]+)\); queued;/.exec(io1.out)?.[1] ?? '';
     const id2 = /id ([0-9a-f-]+)\); queued;/.exec(io2.out)?.[1] ?? '';
     expect(id1).not.toBe('');
@@ -817,7 +821,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
     // The held lock is the queue's word: the sender is answered now, and the delivery follows
     // once the other command lets go.
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
     expect(host.typed).toEqual([]);
     externalLock.release();
     // 0.5.9: the release types nothing; the copy waits in the bus inbox.
@@ -840,7 +844,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io2 = ownerIo(w.root);
     try {
       expect(await runSend(['native', 'blocked by lock'], io2, host)).toBe(0);
-      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {
@@ -870,7 +874,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
   });
 
   test('no pane messaging, nothing typed and the bus inbox keeps it; was: a non-queued item reaching delivery while the recipient seat lock is held queues at delivery with preserved id, no premature success, and promotes to delivered (read) on receipt while keeping compose seats out of queue acceptance', async () => {
@@ -938,11 +942,11 @@ describe('working seat retry and seat-lock coexistence', () => {
     const retired = await runSend(['native', 'queued at delivery seam'], io, host);
     expect(await retired).toBe(0);
     expect(io.err).toContain('queued, no event adapter');
-    expectKeptInBus(w, 'native', 'queued at delivery seam');
-    // No premature success: the one history line is the drop's own unconfirmed word, never a
-    // delivered one.
+    // The lock is taken while delivery is prepared, so the typed wake reports the seat busy and
+    // the history line is that queue word, never a delivery.
+    expectKeptInBus(w, 'native', 'queued at delivery seam', { outcome: 'queued (receiver busy)' });
     const after = readHistory('acme', w.root, w.home);
-    expect(after.ok ? after.entries.filter((e) => e.outcome !== 'sent (unconfirmed)') : []).toEqual([]);
+    expect(after.ok ? after.entries.map((e) => e.outcome) : []).toEqual(['queued (receiver busy)']);
   });
 
   test('stages the signed copy (create-or-match) before answering queued and refuses on conflicting bytes without touching the held file or typing', async () => {
@@ -1464,7 +1468,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(withoutSendId(io2.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io2.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io2.err).toContain('queued, no event adapter');
   });
 
