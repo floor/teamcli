@@ -15,6 +15,7 @@ import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts'
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
 const FIXTURES_142 = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.2');
@@ -240,7 +241,8 @@ describe('team send: the antigravity typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['agy', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
+    // The closing line ends with the record's id; the scene's subject is the outcome, not the id.
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nagy: delivered (typed wake)\n');
     // One line, one Enter, and the line is the trigger that reads the drop, never the body.
     expect(pane.typed).toHaveLength(1);
     expect(pane.typed[0]).toContain('team drops --read');
@@ -256,7 +258,10 @@ describe('team send: the antigravity typed wake', () => {
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'delivered (typed wake)', via: 'typed' });
-      expect(history.entries[0]?.failed).toEqual(['mcp-inbox: no live inbox listener']);
+      // `mcp-inbox` is not a delivery leg in this build (src/send/walk-cascade.ts): the inbox is
+      // the store's reader, and a declared `mcp-inbox` word is reported as skipped, never
+      // recorded in `failed`. The typed leg took the send, so nothing behind it failed.
+      expect(history.entries[0]?.failed).toBeUndefined();
     }
   });
 
@@ -278,8 +283,9 @@ describe('team send: the antigravity typed wake', () => {
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'sent (unconfirmed)', via: 'drop' });
+      // The declared `mcp-inbox` word is skipped, not a failure; the typed leg is the one that
+      // refused, and the drop leg then took the send.
       expect(history.entries[0]?.failed).toEqual([
-        'mcp-inbox: no live inbox listener',
         'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
       ]);
     }
@@ -303,8 +309,9 @@ describe('team send: the antigravity typed wake', () => {
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'agy', outcome: 'sent (unconfirmed)', via: 'drop' });
+      // As above: the skipped `mcp-inbox` word is no failure, and the dialog is what refused the
+      // typed leg.
       expect(history.entries[0]?.failed).toEqual([
-        'mcp-inbox: no live inbox listener',
         'typed: the first read showed permission, not an empty idle prompt; nothing was typed',
       ]);
     }
