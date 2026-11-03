@@ -6030,7 +6030,8 @@ scene('send.grant-invalid', async (place) => {
   });
   // The team the record's `to` names, registered and laid out the way `up` writes both: the
   // registry record answers `builder-1@teamcli`, and its folder holds the file the send reads.
-  // The receiver is not that team's lead, so no rule admits the pair: only the grant can.
+  // It names another entity, so the entity's main orchestrator reach does not admit this pair
+  // either, and the receiver is not that team's lead: no rule admits the pair, only the grant can.
   const outsideRoot = join(place.base, 'teamcli');
   mkdirSync(join(outsideRoot, '.agents'), { recursive: true });
   writeFileSync(
@@ -6052,7 +6053,7 @@ scene('send.grant-invalid', async (place) => {
   });
   upsertTeam(place.home, 'teamcli', {
     project: 'teamcli',
-    entity: 'acme',
+    entity: 'floor',
     session: 'teamcli',
     root: outsideRoot,
     lobby: lobbyDir(place.home),
