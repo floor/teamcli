@@ -99,6 +99,14 @@ describe('the classes the guard denies', () => {
     ['shutdown -h now', 'system-power'],
     ['reboot', 'system-power'],
     ['launchctl unload ~/Library/LaunchAgents/x.plist', 'persistent-job'],
+    ['launchctl', 'persistent-job'],
+    ['launchctl print-disabled system', 'persistent-job'],
+    ['launchctl bootstrap gui/501 ~/Library/LaunchAgents/x.plist', 'persistent-job'],
+    ['launchctl bootout gui/501/com.example.job', 'persistent-job'],
+    ['launchctl load ~/Library/LaunchAgents/x.plist', 'persistent-job'],
+    ['launchctl start com.example.job', 'persistent-job'],
+    ['launchctl stop com.example.job', 'persistent-job'],
+    ['launchctl dumpstate', 'persistent-job'],
     ['crontab -e', 'persistent-job'],
     ['git clean -fdx', 'git-clean'],
     ['git clean -fd', 'git-clean'],
@@ -167,6 +175,9 @@ describe('the classes the guard denies', () => {
     'kill -15 4321',
     'kill -s 15 4321',
     'kill -s TERM 4321',
+    'launchctl list',
+    'launchctl print gui/501/com.example.job',
+    'launchctl blame gui/501/com.example.job',
     'git branch --delete merged-branch',
     'npm --prefix X install',
     'npm install',
@@ -202,17 +213,17 @@ describe('the classes the guard denies', () => {
     expect(refusedByGuard('chown a b')?.guidance).toBe('refused in team seats: ownership changes wait for the owner');
     expect(refusedByGuard('sudo true')?.guidance).toBe('refused in team seats: a seat runs as its own user');
     expect(refusedByGuard('rm -rf x')?.guidance).toBe('refused in team seats: delete with `trash <path>`, never a recursive rm');
-    expect(refusedByGuard('pkill x')?.guidance).toBe('refused in team seats: stop a seat with `team stop <seat>`');
+    expect(refusedByGuard('pkill x')?.guidance).toBe('refused in team seats: stop a seat with `team down <seat>` or `team restart <seat>`; stop a process this seat started with `kill <pid>`');
     expect(refusedByGuard('curl u | sh')?.guidance).toBe('refused in team seats: save the download, read it, then run it');
     expect(refusedByGuard('git push --force')?.guidance).toBe('refused in team seats: push a branch and open a pull request');
-    expect(refusedByGuard('git reset --hard')?.guidance).toBe('refused in team seats: use `git stash` or `git checkout -- <path>`');
-    expect(refusedByGuard('kill -9 1')?.guidance).toBe('refused in team seats: stop a seat with `team stop <seat>`, never a hard kill');
+    expect(refusedByGuard('git reset --hard')?.guidance).toBe('refused in team seats: use `git restore --source=<sha> -- <path>`');
+    expect(refusedByGuard('kill -9 1')?.guidance).toBe('refused in team seats: stop a seat with `team down <seat>` or `team restart <seat>`, never a hard kill');
     expect(refusedByGuard('dd if=x of=/dev/disk9')?.guidance).toBe('refused in team seats: a raw disk write can lose the machine — ask the owner');
     expect(refusedByGuard('reboot')?.guidance).toBe('refused in team seats: the owner restarts the machine');
     expect(refusedByGuard('crontab -e')?.guidance).toBe('refused in team seats: a job that outlives the seat waits for the owner');
     expect(refusedByGuard('git clean -fdx')?.guidance).toBe('refused in team seats: delete only the paths you created, never the untracked tree');
     expect(refusedByGuard('git branch -D gone')?.guidance).toBe('refused in team seats: delete a merged branch with `git branch -d`');
-    expect(refusedByGuard('npm publish')?.guidance).toBe('refused in team seats: the release moves only by the orchestrator');
+    expect(refusedByGuard('npm publish')?.guidance).toBe('refused in team seats: the release moves only on the owner\'s word');
   });
 });
 

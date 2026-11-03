@@ -47,17 +47,17 @@ const GUIDANCE: Record<GuardRule, string> = {
   chown: 'refused in team seats: ownership changes wait for the owner',
   sudo: 'refused in team seats: a seat runs as its own user',
   'rm-recursive': 'refused in team seats: delete with `trash <path>`, never a recursive rm',
-  kill: 'refused in team seats: stop a seat with `team stop <seat>`',
-  'kill-hard': 'refused in team seats: stop a seat with `team stop <seat>`, never a hard kill',
+  kill: 'refused in team seats: stop a seat with `team down <seat>` or `team restart <seat>`; stop a process this seat started with `kill <pid>`',
+  'kill-hard': 'refused in team seats: stop a seat with `team down <seat>` or `team restart <seat>`, never a hard kill',
   'disk-write': 'refused in team seats: a raw disk write can lose the machine — ask the owner',
   'system-power': 'refused in team seats: the owner restarts the machine',
   'persistent-job': 'refused in team seats: a job that outlives the seat waits for the owner',
   'pipe-to-shell': 'refused in team seats: save the download, read it, then run it',
   'git-push-force': 'refused in team seats: push a branch and open a pull request',
-  'git-reset-hard': 'refused in team seats: use `git stash` or `git checkout -- <path>`',
+  'git-reset-hard': 'refused in team seats: use `git restore --source=<sha> -- <path>`',
   'git-clean': 'refused in team seats: delete only the paths you created, never the untracked tree',
   'git-branch-force-delete': 'refused in team seats: delete a merged branch with `git branch -d`',
-  'npm-publish': 'refused in team seats: the release moves only by the orchestrator',
+  'npm-publish': 'refused in team seats: the release moves only on the owner\'s word',
 };
 
 /** One segment of a shell command line: its words, and whether a `|` put it after another. */
@@ -454,6 +454,19 @@ function gitSubcommand(args: readonly string[]): { sub: string | null; rest: str
   return { sub: null, rest: [] };
 }
 
+/** The `launchctl` questions a seat may ask. Anything else, including `print-disabled`, changes
+ *  or dumps a job that outlives the seat. */
+const LAUNCHCTL_READ = new Set(['list', 'print', 'blame']);
+
+function launchctlReadOnly(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (arg === '--') return false;
+    if (arg.startsWith('-')) continue;
+    return LAUNCHCTL_READ.has(arg);
+  }
+  return false;
+}
+
 function matchSegment(words: readonly string[]): GuardMatch | null {
   const command = commandOf(words);
   if (command.length === 0) return null;
@@ -470,7 +483,13 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
   if (word === 'shutdown' || word === 'reboot') {
     return { rule: 'system-power', guidance: GUIDANCE['system-power'] };
   }
-  if (word === 'launchctl' || word === 'crontab') {
+  if (word === 'launchctl') {
+    // Read-only questions are the seat's own diagnosis. Every other subcommand, and a bare
+    // `launchctl`, installs or changes a job that outlives the seat.
+    if (launchctlReadOnly(args)) return null;
+    return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
+  }
+  if (word === 'crontab') {
     return { rule: 'persistent-job', guidance: GUIDANCE['persistent-job'] };
   }
   if (word === 'rm' && recursiveRm(args)) return { rule: 'rm-recursive', guidance: GUIDANCE['rm-recursive'] };
@@ -523,7 +542,8 @@ function matchSegment(words: readonly string[]): GuardMatch | null {
  * What the guard says about one shell command line: null when it is allowed, or the class it
  * belongs to and the one line the model is told instead. A conservative set — chmod, chown,
  * sudo, a recursive rm, pkill and killall, a hard `kill`, dd and mkfs, shutdown and reboot,
- * launchctl and crontab, a download piped into a shell, `git push --force` (and `-f`),
+ * launchctl other than `list`, `print` and `blame`, crontab, a download piped into a shell,
+ * `git push --force` (and `-f`),
  * `git reset --hard`, a destructive `git clean`, `git branch -D` and `npm publish`.
  *
  * It matches commands, never words: a sentence in a quote, a heredoc body or a `team send` body
