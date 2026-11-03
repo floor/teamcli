@@ -1,9 +1,10 @@
 // The post-trigger outcomes, after 0.5.9: a pane that already holds an unsent draft, or a screen
 // the classifier reads as a dialog, is left exactly as it is — nothing is typed into a seat — and
 // the send's history names the bus drop that carried it, with the typed leg's refusal recorded as
-// the reason the pane was never walked. Fixtures only: a fake seat and a scripted pane; no live
-// session is touched.
-import { NO_PANE_MESSAGING } from '../../src/send/no-pane-messaging.ts';
+// the reason the pane was never walked. The seat is a Codex seat, whose profile declares the typed
+// wake: this fake host binds no pane writer, so the recorded refusal is that missing binding, and
+// the composer is never read or typed into. Fixtures only: a fake seat and a scripted pane; no
+// live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,6 +19,11 @@ import { recordBody, testIo } from '../helpers.ts';
 import { filed } from '../send-native-fixtures.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
+
+/** The refusal a typed wake records when the send host binds no pane-writer operations, as this
+ *  fake's host does not: the profile gate lets the typed leg be walked, and the wake refuses
+ *  before a read or a key for want of that binding. */
+const NO_PANE_WRITER = 'the send host binds no pane writer; nothing was typed';
 
 let base = '';
 
@@ -151,15 +157,16 @@ describe('the history names the channel that carried the send', () => {
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     // The signed record is the drop file, and the history names that channel; the typed leg's
-    // refusal is the recorded reason the pane was not walked.
+    // refusal is the recorded reason the pane was not walked. The walk puts the seat's native
+    // route before the typed wake, so its own missing-session refusal is recorded first.
     const dir = join(root, '.agents', 'send-drops', 'acme', 'native');
     const id = readdirSync(dir).filter((name) => !name.includes('.'))[0] as string;
     expect(recordBody(join(dir, id))).toBe(filed('hello'));
     const entry = lastEntry(root, home);
     expect(entry).toMatchObject({ id, outcome: 'queued, not woken', via: 'drop', body: filed('hello') });
     expect(entry.failed).toEqual([
-      `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+      `typed: ${NO_PANE_WRITER}`,
     ]);
   });
 
@@ -180,9 +187,11 @@ describe('the history names the channel that carried the send', () => {
     expect(recordBody(join(dir, id))).toBe(filed('hello'));
     const entry = lastEntry(root, home);
     expect(entry).toMatchObject({ id, outcome: 'queued, not woken', via: 'drop', body: filed('hello') });
+    // Same walk order as the draft scene: the native route's refusal first, the typed wake's
+    // missing pane writer second.
     expect(entry.failed).toEqual([
-      `typed: ${NO_PANE_MESSAGING}`,
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+      `typed: ${NO_PANE_WRITER}`,
     ]);
   });
 });
