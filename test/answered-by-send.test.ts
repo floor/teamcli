@@ -6,19 +6,35 @@
 // receipt is the answering seat's own signed record, never the sender's.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { checkedMailboxReceipt } from '../src/bus/arrival.ts';
+import { readEvents } from '../src/bus/log.ts';
+import { reconcilePass } from '../src/bus/reconcile.ts';
 import type { Caller } from '../src/caller.ts';
+import { runAck } from '../src/commands/ack.ts';
 import { listUnackedMessages, plantRecord, recordDir } from '../src/commands/messages.ts';
+import { runReply, type ReplyHost } from '../src/commands/reply.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { runTrace } from '../src/commands/trace.ts';
+import type { WatchSources } from '../src/commands/watch.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { channelPushPath } from '../src/mcp/channel.ts';
+import { listUnread, listenerPath, receiptPath } from '../src/mcp/inbox.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { markAnsweredBySend } from '../src/send/answered-by-send.ts';
 import { appendHistory } from '../src/send/history.ts';
-import { signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
 import type { NativePane } from '../src/send/native.ts';
+import { publishRecordRead } from '../src/send/read-receipt.ts';
+import { isRead, signReceiptPayload, signRecord, signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { messageKeyState } from '../src/store/keys.ts';
+import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
+import type { Machine } from '../src/watch/machine.ts';
+import { reportedPath, reportUnreadDrops, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-03T12:00:00.000Z');
@@ -257,5 +273,501 @@ describe('a seat’s send is the read it signs', () => {
     });
 
     expect(outcome).toEqual({ kind: 'marked', id: OLD });
+  });
+});
+
+describe('independent adversarial read-receipt intake and D7 trace checks', () => {
+  test('a receipt cannot be forged by the sender: foreign-key receipt is refused and the sending seat cannot ack, reply, or settle its own outbound message', async () => {
+    const w = makeWorld();
+    const senderHome = join(base, 'foreign-sender-home');
+    mkdirSync(senderHome, { recursive: true });
+    // Ensure both homes have distinct Ed25519 message keys.
+    messageKeyOf(w.home);
+    messageKeyOf(senderHome);
+
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    const dropDir = recordDir(w.root, 'acme', 'lead');
+
+    // Forge a `<OLD>.read.json` receipt signed with `senderHome`'s key instead of `w.home`'s key.
+    const forged = signReceiptPayload(
+      {
+        kind: 'receipt',
+        status: 'read',
+        id: OLD,
+        to: 'lead',
+        root: w.root,
+        session: 'acme',
+        at: NOW_ISO,
+        read_by: 'forged-by-sender',
+      },
+      senderHome,
+    );
+    const forgedPath = join(dropDir, `${OLD}.read.json`);
+    writeFileSync(forgedPath, `${JSON.stringify(forged, null, 2)}\n`, { mode: 0o600 });
+
+    const teamKey = messageKeyState(w.home);
+    if (teamKey.kind !== 'key') throw new Error(teamKey.kind);
+
+    // 1. Direct cryptographic and reader checks refuse the wrong-key receipt.
+    expect(verifyReceipt(forged, teamKey.key)).toBe(false);
+    expect(isRead(dropDir, OLD, { to: 'lead', root: w.root, session: 'acme' }, teamKey.key)).toBe(false);
+    expect(listUnread(dropDir, { to: 'lead', root: w.root, session: 'acme' }, w.home).map((one) => one.id)).toContain(OLD);
+    expect(listUnackedMessages(w.root, 'acme', w.home).map((one) => one.id)).toContain(OLD);
+    expect(
+      checkedMailboxReceipt(
+        forgedPath,
+        { session: 'acme', seat: 'lead', record_id: OLD },
+        { root: w.root, session: 'acme' },
+        teamKey.key,
+      ),
+    ).toEqual({ ok: false, reason: "the receipt is not signed with this checkout's message key" });
+
+    // 2. `publishRecordRead` and `runAck` refuse to trust or overwrite the unverified receipt file.
+    expect(
+      publishRecordRead({
+        dropDir,
+        id: OLD,
+        to: 'lead',
+        root: w.root,
+        session: 'acme',
+        home: w.home,
+        key: teamKey.key,
+        at: NOW_ISO,
+      }),
+    ).toEqual({ kind: 'held', status: 'read', entry: 'file' });
+
+    const ackIo = testIo(w.root, leadCaller);
+    expect(await runAck([OLD], ackIo, { home: w.home, now: () => NOW })).toBe(1);
+    expect(ackIo.err).toContain('the read receipt name is held by a file that does not verify for this message');
+
+    // 3. Remove the foreign file and verify the SENDER seat (`worker`) cannot forge a read receipt
+    // for `OLD` via `team ack`, `team reply`, or `markAnsweredBySend` (`worker -> lead`).
+    rmSync(forgedPath);
+    const workerCaller: Caller = { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' };
+    const senderAckIo = testIo(w.root, workerCaller);
+    expect(await runAck([OLD], senderAckIo, { home: w.home, now: () => NOW })).toBe(1);
+    expect(senderAckIo.err).toContain('addressed to lead, not to worker');
+    expect(existsSync(forgedPath)).toBe(false);
+
+    const senderReplyIo = testIo(w.root, workerCaller);
+    expect(
+      await runReply([OLD, 'sender trying to reply to its own message'], senderReplyIo, {
+        home: w.home,
+        now: () => NOW,
+        newId: () => 'b1000000-0000-4000-8000-000000000088',
+      }),
+    ).toBe(1);
+    expect(senderReplyIo.err).toContain('addressed to lead, not to worker');
+    expect(existsSync(forgedPath)).toBe(false);
+
+    markAnsweredBySend({
+      project: 'acme',
+      root: w.root,
+      session: 'acme',
+      home: w.home,
+      seat: 'worker',
+      sender: 'lead',
+      senderId: null,
+      at: NOW_ISO,
+    });
+    expect(existsSync(forgedPath)).toBe(false);
+  });
+
+  test('team ack and team reply refuse an id addressed to another seat and write no receipt', async () => {
+    const w = makeWorld();
+    delivered(w, 'worker', OLD, { from: 'helper', at: '2026-11-03T09:00:00.000Z' });
+
+    const replyHost: ReplyHost = {
+      home: w.home,
+      now: () => NOW,
+      newId: () => 'b1000000-0000-4000-8000-000000000099',
+    };
+
+    // Calling `team ack <OLD>` as `lead` when `<OLD>` is addressed to `worker` is refused.
+    const ackIo = testIo(w.root, leadCaller);
+    expect(await runAck([OLD], ackIo, { home: w.home, now: () => NOW })).toBe(1);
+    expect(ackIo.err).toContain('addressed to worker, not to lead');
+    expect(readReceiptExists(w, 'worker', OLD)).toBe(false);
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+
+    // Calling `team reply <OLD>` as `lead` when `<OLD>` is addressed to `worker` is refused.
+    const repIo = testIo(w.root, leadCaller);
+    expect(await runReply([OLD, 'not my message'], repIo, replyHost)).toBe(1);
+    expect(repIo.err).toContain('addressed to worker, not to lead');
+    expect(readReceiptExists(w, 'worker', OLD)).toBe(false);
+    expect(existsSync(join(recordDir(w.root, 'acme', 'worker'), `${OLD}.replied.json`))).toBe(false);
+
+    // Even if the file is copied into `lead`'s own drop folder, the signed `to: 'worker'` payload still causes refusal.
+    mkdirSync(recordDir(w.root, 'acme', 'lead'), { recursive: true });
+    copyFileSync(join(recordDir(w.root, 'acme', 'worker'), OLD), join(recordDir(w.root, 'acme', 'lead'), OLD));
+    const ackCopiedIo = testIo(w.root, leadCaller);
+    expect(await runAck([OLD], ackCopiedIo, { home: w.home, now: () => NOW })).toBe(1);
+    const repCopiedIo = testIo(w.root, leadCaller);
+    expect(await runReply([OLD, 'still not mine'], repCopiedIo, replyHost)).toBe(1);
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+    expect(readReceiptExists(w, 'worker', OLD)).toBe(false);
+  });
+
+  test('three messages from X and one newer message from Y followed by one send lead -> X marks only the newest from X and leaves older X and Y untouched', async () => {
+    const w = makeWorld();
+    const X1 = 'a1000000-0000-4000-8000-000000000011';
+    const X2 = 'a1000000-0000-4000-8000-000000000012';
+    const X3 = 'a1000000-0000-4000-8000-000000000013';
+    const Y1 = 'a1000000-0000-4000-8000-000000000014';
+
+    delivered(w, 'lead', X1, { from: 'worker', at: '2026-11-03T08:00:00.000Z' });
+    delivered(w, 'lead', X2, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    delivered(w, 'lead', X3, { from: 'worker', at: '2026-11-03T10:00:00.000Z' });
+    delivered(w, 'lead', Y1, { from: 'helper', at: '2026-11-03T11:00:00.000Z' });
+
+    line(w, X1, 'socket', '2026-11-03T08:00:01.000Z');
+    line(w, X2, 'channel', '2026-11-03T09:00:01.000Z');
+    line(w, X3, 'native', '2026-11-03T10:00:01.000Z');
+    appendHistory('acme', w.root, w.home, {
+      ts: '2026-11-03T11:00:01.000Z',
+      from: 'helper',
+      to: 'lead',
+      body: 'from Y',
+      id: Y1,
+      outcome: 'delivered',
+      via: 'socket',
+    });
+
+    const io = testIo(w.root, leadCaller);
+    expect(await runSend(['worker', 'one answer to X'], io, makeHost(w))).toBe(0);
+
+    expect(readReceiptExists(w, 'lead', X3)).toBe(true);
+    expect(readReceiptOf(w, 'lead', X3)?.payload.read_by).toBe('answered-by-send');
+    expect(readReceiptExists(w, 'lead', X1)).toBe(false);
+    expect(readReceiptExists(w, 'lead', X2)).toBe(false);
+    expect(readReceiptExists(w, 'lead', Y1)).toBe(false);
+    expect(
+      listUnackedMessages(w.root, 'acme', w.home)
+        .filter((m) => m.to === 'lead')
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual([X1, X2, Y1].sort());
+  });
+
+  test('a socket message with no ack gets silent before N, exactly one re-wake at N, nothing at 1.5N, the 2N report once at 2N, and nothing at 3N', async () => {
+    const w = makeWorld();
+    const codexInterrupted = readFileSync(new URL('./fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
+    // Configure `worker` as a Codex seat so profile-gated `typedWake` is active.
+    const teamPath = join(w.root, '.agents', 'team.yaml');
+    writeFileSync(
+      teamPath,
+      readFileSync(teamPath, 'utf8').replace(
+        `  - role: implementer\n    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude`,
+        `  - role: implementer\n    name: worker\n    label: worker\n    cli: codex\n    vendor: test\n    model: Test\n    version: "0.161.0"\n    launch: codex`,
+      ),
+    );
+    const parsed = validateTeamFile(readFileSync(teamPath, 'utf8'));
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    const team = parsed.team;
+
+    const t0 = Date.parse('2026-11-03T10:00:00.000Z');
+    delivered(w, 'worker', OLD, { from: 'lead', at: new Date(t0).toISOString() });
+    const workerDropDir = recordDir(w.root, 'acme', 'worker');
+    utimesSync(join(workerDropDir, OLD), new Date(t0), new Date(t0));
+    appendHistory('acme', w.root, w.home, {
+      ts: new Date(t0).toISOString(),
+      from: 'lead',
+      to: 'worker',
+      body: 'a question',
+      id: OLD,
+      outcome: 'delivered',
+      via: 'socket',
+    });
+
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+    const makeScene = (nowMs: number) => {
+      const sources: WatchSources = {
+        live: () => ({
+          running: true,
+          agents: [{ name: 'worker', agent: 'codex', pane: PANE_WORKER, workspace: 'ws-worker', status: 'idle', cwd: null }],
+          workspaces: [{ id: 'ws-worker', label: 'worker' }],
+          screens: {},
+        }),
+        machine: () => fine,
+        standing: () => ({ kind: 'none' }),
+        readChecks: () => [],
+        screen: () => codexInterrupted,
+        status: () => 'idle',
+        foreground: () => ['codex'],
+        processes: () => null,
+        typeText: () => false,
+        pressEnter: () => false,
+        sendKey: () => false,
+        sleep: async () => {},
+        notify: () => {},
+        now: () => new Date(nowMs),
+        wait: async () => false,
+        alive: () => true,
+        pid: 4242,
+        home: w.home,
+        statusSource: undefined,
+        typedWake: async (pane, lineText, cli, session) => {
+          calls.push({ pane, line: lineText, cli, session });
+          // Even when the Enter is not confirmed (`delivered: false, typed: true`), a socket re-wake is one-shot.
+          return { delivered: false, typed: true, tries: 1, reason: 'no working screen showed' };
+        },
+      };
+      return {
+        dir: join(w.root, '.agents'),
+        session: 'acme',
+        root: w.root,
+        home: w.home,
+        team,
+        live: sources.live('acme', team)!,
+        ownPane: null,
+        sources,
+        now: new Date(nowMs),
+        say: () => {},
+      };
+    };
+
+    const N = 60;
+    // 1. Before N (t0 + 30 s): silent.
+    await wakeUnreadDrops(makeScene(t0 + 30_000), { unreadAfter: N });
+    reportUnreadDrops(makeScene(t0 + 30_000), { unreadAfter: N });
+    expect(calls).toHaveLength(0);
+    expect(existsSync(wakePath(workerDropDir, OLD))).toBe(false);
+    expect(existsSync(reportedPath(workerDropDir, OLD))).toBe(false);
+
+    // 2. At N (t0 + 60 s): exactly ONE re-wake carrying `ack <id> or reply`, reservation stays spent, no retry ledger.
+    await wakeUnreadDrops(makeScene(t0 + 60_000), { unreadAfter: N });
+    reportUnreadDrops(makeScene(t0 + 60_000), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain(`ack ${OLD} or reply`);
+    expect(existsSync(wakePath(workerDropDir, OLD))).toBe(true);
+    expect(existsSync(wakeTryPath(workerDropDir, OLD))).toBe(false);
+    expect(existsSync(reportedPath(workerDropDir, OLD))).toBe(false);
+
+    // 3. At 1.5N (t0 + 90 s): no second wake, not yet reported.
+    await wakeUnreadDrops(makeScene(t0 + 90_000), { unreadAfter: N });
+    reportUnreadDrops(makeScene(t0 + 90_000), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(existsSync(reportedPath(workerDropDir, OLD))).toBe(false);
+
+    // 4. At 2N (t0 + 120 s): 2N flag/report fires once, no second wake.
+    await wakeUnreadDrops(makeScene(t0 + 120_000), { unreadAfter: N });
+    reportUnreadDrops(makeScene(t0 + 120_000), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(existsSync(reportedPath(workerDropDir, OLD))).toBe(true);
+    const leadDropsAt2N = readdirSync(recordDir(w.root, 'acme', 'lead')).filter((n) => !n.startsWith('.'));
+    expect(leadDropsAt2N.length).toBeGreaterThanOrEqual(1);
+
+    // 5. At 3N (t0 + 180 s): nothing added.
+    await wakeUnreadDrops(makeScene(t0 + 180_000), { unreadAfter: N });
+    reportUnreadDrops(makeScene(t0 + 180_000), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(readdirSync(recordDir(w.root, 'acme', 'lead')).filter((n) => !n.startsWith('.'))).toEqual(leadDropsAt2N);
+  });
+
+  test('the channel push writes its read receipt only after the notification is handed over to the stream, and never if alive() halts before the write', async () => {
+    const w = makeWorld();
+    const teamPath = join(w.root, '.agents', 'team.yaml');
+    writeFileSync(
+      teamPath,
+      readFileSync(teamPath, 'utf8').replace(
+        'launch: claude',
+        'launch: claude --dangerously-load-development-channels server:team-inbox',
+      ),
+    );
+    upsertTeam(w.home, teamIdOf(w.root), {
+      project: 'acme',
+      session: 'acme',
+      root: w.root,
+      roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
+    });
+
+    const leadDropDir = recordDir(w.root, 'acme', 'lead');
+    const PUSH_1 = 'c1000000-0000-4000-8000-000000000021';
+    const PUSH_2 = 'c1000000-0000-4000-8000-000000000022';
+
+    const pending: string[] = [];
+    let ended = false;
+    const replies: string[] = [];
+    const observed: {
+      pushMarkerDuringWrite: boolean | null;
+      readReceiptDuringWrite: boolean | null;
+      wake: (() => void) | null;
+    } = {
+      pushMarkerDuringWrite: null,
+      readReceiptDuringWrite: null,
+      wake: null,
+    };
+
+    const stream = {
+      lines: (async function* () {
+        for (;;) {
+          if (pending.length > 0) {
+            yield pending.shift()!;
+            continue;
+          }
+          if (ended) return;
+          await new Promise<void>((resolve) => {
+            observed.wake = resolve;
+          });
+        }
+      })(),
+      write: (lineText: string) => {
+        const parsed = JSON.parse(lineText) as { method?: string };
+        if (parsed.method === 'notifications/claude/channel') {
+          // At the exact moment the notification is handed to `write`, `.channel-push.json` exists
+          // and `.read.json` has NOT been written yet (`publishRecordRead` runs after `write`).
+          observed.pushMarkerDuringWrite = existsSync(channelPushPath(leadDropDir, PUSH_1));
+          observed.readReceiptDuringWrite = existsSync(receiptPath(leadDropDir, PUSH_1));
+        }
+        replies.push(lineText);
+      },
+    };
+
+    const running = runMcpServe({ seat: 'lead', session: 'acme' }, testIo(w.root, leadCaller), stream, {
+      home: w.home,
+    });
+    try {
+      for (let i = 0; i < 400 && !existsSync(listenerPath(leadDropDir)); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const writeSigned = (id: string, body: string) => {
+        const rec = signRecord(
+          {
+            kind: 'message',
+            id,
+            to: 'lead',
+            to_id: null,
+            root: realpathSync(w.root),
+            session: 'acme',
+            at: NOW_ISO,
+            body,
+            from: 'worker',
+            from_id: null,
+            rule: 'the owner',
+            thread: id,
+          },
+          w.home,
+        );
+        mkdirSync(leadDropDir, { recursive: true, mode: 0o700 });
+        writeFileSync(join(leadDropDir, id), `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+      };
+
+      writeSigned(PUSH_1, 'from worker\n\nfirst channel push');
+      for (let i = 0; i < 400 && !existsSync(receiptPath(leadDropDir, PUSH_1)); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(observed.pushMarkerDuringWrite).toBe(true);
+      expect(observed.readReceiptDuringWrite).toBe(false);
+      expect(existsSync(receiptPath(leadDropDir, PUSH_1))).toBe(true);
+      expect(readReceiptOf(w, 'lead', PUSH_1)?.payload.read_by).toBe('channel-push');
+      const pushLine = replies.find((one) => (JSON.parse(one) as Record<string, unknown>).method === 'notifications/claude/channel');
+      expect(pushLine).toBeDefined();
+      expect(pushLine!).not.toContain('"key"');
+      expect(Object.keys((JSON.parse(pushLine!) as { params: Record<string, unknown> }).params)).toEqual(['content', 'meta']);
+
+      // Now move `lead` off its pane in `team.state.json` so `serving.alive()` refuses before `write`:
+      // no notification is handed over and no read receipt is written for `PUSH_2`.
+      updateState(join(w.root, '.agents'), (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.lead = { stage: 'ready', pane: 'pane-moved' };
+      });
+      writeSigned(PUSH_2, 'from worker\n\nsecond channel push');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(existsSync(receiptPath(leadDropDir, PUSH_2))).toBe(false);
+    } finally {
+      ended = true;
+      observed.wake?.();
+      await running;
+    }
+  });
+
+  test('D7: team trace <id> on a socket send that was replied to (via team reply or answered-by-send) shows the message.read step', async () => {
+    const w = makeWorld();
+    const teamPath = join(w.root, '.agents', 'team.yaml');
+    writeFileSync(
+      teamPath,
+      readFileSync(teamPath, 'utf8').replace('delivery_order: [drop]', 'delivery_order: [socket, drop]'),
+    );
+    // Declare crossSessionInbound: 'accept' and live sockets for both `worker` and `lead`.
+    for (const [seat, pid] of [['worker', 222], ['lead', 111]] as const) {
+      const settings = cliHookSettingsPath(join(w.root, '.agents'), 'acme', seat);
+      if (settings === null) throw new Error(`no settings path for ${seat}`);
+      mkdirSync(dirname(settings), { recursive: true });
+      writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+      const past = NOW.getTime() - 60_000;
+      utimesSync(settings, new Date(past), new Date(past));
+      writeFileSync(join(w.sockets, `${String(pid)}.sock`), '');
+    }
+
+    const extractId = (out: string): string => {
+      const m = / \(id ([0-9a-f-]{36})\)/.exec(out);
+      if (m === null) throw new Error(`no id in output: ${out}`);
+      return m[1]!;
+    };
+    const workerCaller: Caller = { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' };
+
+    // Case 1: Socket send `lead -> worker`, answered with `team reply <id>`.
+    const sendIo1 = testIo(w.root, leadCaller);
+    expect(await runSend(['worker', 'socket question 1'], sendIo1, makeHost(w)), sendIo1.err).toBe(0);
+    const id1 = extractId(sendIo1.out);
+
+    const replyIo = testIo(w.root, workerCaller);
+    const replyHost: ReplyHost = {
+      home: w.home,
+      now: () => new Date(NOW.getTime() + 1_000),
+      newId: () => 'd1000000-0000-4000-8000-000000000031',
+    };
+    expect(await runReply([id1, 'replying to socket question 1'], replyIo, replyHost), replyIo.err).toBe(0);
+    expect(readReceiptOf(w, 'worker', id1)?.payload.read_by).toBe('reply');
+
+    reconcilePass({ project: 'acme', root: w.root, home: w.home, session: 'acme', now: new Date(NOW.getTime() + 2_000) });
+
+    const traceIo1 = testIo(w.root, leadCaller);
+    expect(await runTrace([id1, '--json'], traceIo1, { home: w.home }), traceIo1.err).toBe(0);
+    const doc1 = JSON.parse(traceIo1.out) as { steps: { kind: string; record_id: string; via?: string; outcome?: string }[] };
+    expect(doc1.steps.map((s) => s.kind)).toEqual([
+      'message.staged',
+      'leg.tried',
+      'message.arrived',
+      'message.read',
+      'message.replied',
+      'message.delivered',
+    ]);
+    expect(doc1.steps.find((s) => s.kind === 'leg.tried')).toMatchObject({ via: 'socket', outcome: 'delivered' });
+    expect(doc1.steps.find((s) => s.kind === 'message.read')?.record_id).toBe(`${id1}:read`);
+
+    // Case 2: Socket send `lead -> worker`, answered with plain `team send lead "..."` (`answered-by-send`).
+    const sendIo2 = testIo(w.root, leadCaller);
+    expect(
+      await runSend(['worker', 'socket question 2'], sendIo2, { ...makeHost(w), now: () => new Date(NOW.getTime() + 3_000) }),
+      sendIo2.err,
+    ).toBe(0);
+    const id2 = extractId(sendIo2.out);
+
+    const answerSendIo = testIo(w.root, workerCaller);
+    expect(
+      await runSend(['lead', 'answering socket question 2 via send'], answerSendIo, {
+        ...makeHost(w),
+        now: () => new Date(NOW.getTime() + 4_000),
+      }),
+      answerSendIo.err,
+    ).toBe(0);
+    expect(readReceiptOf(w, 'worker', id2)?.payload.read_by).toBe('answered-by-send');
+
+    reconcilePass({ project: 'acme', root: w.root, home: w.home, session: 'acme', now: new Date(NOW.getTime() + 5_000) });
+
+    const traceIo2 = testIo(w.root, leadCaller);
+    expect(await runTrace([id2, '--json'], traceIo2, { home: w.home }), traceIo2.err).toBe(0);
+    const doc2 = JSON.parse(traceIo2.out) as { steps: { kind: string; record_id: string; via?: string; outcome?: string }[] };
+    expect(doc2.steps.map((s) => s.kind)).toEqual([
+      'message.staged',
+      'leg.tried',
+      'message.arrived',
+      'message.read',
+      'message.delivered',
+    ]);
+    expect(doc2.steps.find((s) => s.kind === 'leg.tried')).toMatchObject({ via: 'socket', outcome: 'delivered' });
+    expect(doc2.steps.find((s) => s.kind === 'message.read')?.record_id).toBe(`${id2}:read`);
   });
 });
