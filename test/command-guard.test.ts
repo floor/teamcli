@@ -213,11 +213,11 @@ describe('the classes the guard denies', () => {
     expect(refusedByGuard('chown a b')?.guidance).toBe('refused in team seats: ownership changes wait for the owner');
     expect(refusedByGuard('sudo true')?.guidance).toBe('refused in team seats: a seat runs as its own user');
     expect(refusedByGuard('rm -rf x')?.guidance).toBe('refused in team seats: delete with `trash <path>`, never a recursive rm');
-    expect(refusedByGuard('pkill x')?.guidance).toBe('refused in team seats: stop a seat with `team restart <seat>`; stop the team with `team down`; stop a process this seat started with `kill <pid>`');
+    expect(refusedByGuard('pkill x')?.guidance).toBe('refused in team seats: stop a seat with `team restart <seat>`; stop the team with `team down --session <name>`; stop a process this seat started with `kill <pid>`');
     expect(refusedByGuard('curl u | sh')?.guidance).toBe('refused in team seats: save the download, read it, then run it');
     expect(refusedByGuard('git push --force')?.guidance).toBe('refused in team seats: push a branch and open a pull request');
     expect(refusedByGuard('git reset --hard')?.guidance).toBe('refused in team seats: use `git restore --source=<sha> -- <path>`');
-    expect(refusedByGuard('kill -9 1')?.guidance).toBe('refused in team seats: stop a seat with `team restart <seat>` or the team with `team down`, never a hard kill');
+    expect(refusedByGuard('kill -9 1')?.guidance).toBe('refused in team seats: stop a seat with `team restart <seat>` or the team with `team down --session <name>`, never a hard kill');
     expect(refusedByGuard('dd if=x of=/dev/disk9')?.guidance).toBe('refused in team seats: a raw disk write can lose the machine — ask the owner');
     expect(refusedByGuard('reboot')?.guidance).toBe('refused in team seats: the owner restarts the machine');
     expect(refusedByGuard('crontab -e')?.guidance).toBe('refused in team seats: a job that outlives the seat waits for the owner');
