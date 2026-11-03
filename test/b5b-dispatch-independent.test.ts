@@ -226,9 +226,10 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    // The walk never reached the runtime queue this seat records: the drop leg took the send, so
-    // the line says what actually happens next — its next turn — never a queue nothing addressed.
-    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    // Codex declares the typed wake. This fixture names no live agent, so the wake did not run,
+    // and the walk never reached the runtime queue the seat records: the drop took the send.
+    // The line says both — the wake that did not run, then the next turn — never a queue nothing addressed.
+    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a codex seat whose endpoint names no conversation is read at its next turn, and the line says so', async () => {
@@ -247,7 +248,9 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
+    // The endpoint binds no conversation, and no live agent carries the seat, so the typed wake
+    // Codex declares did not run. The line stays the next turn.
+    expect(io.out).toContain('codex-seat: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); codex-seat reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a codex seat with no managed endpoint has only its next turn, and the line says so', async () => {
@@ -255,7 +258,9 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-plain', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-plain: queued, not woken (drop, 0 ms); queued; codex-plain reads it at its next turn, and nothing here gives it one (pull-only)');
+    // No managed endpoint and no live agent: the typed wake Codex declares did not run, and the
+    // line names the next turn as the only read.
+    expect(io.out).toContain('codex-plain: queued, not woken (drop, 0 ms); queued; the typed wake did not run (no live agent carries that name in the session); codex-plain reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('an MCP-inbox seat is pull-only in its profile, and the line says so', async () => {

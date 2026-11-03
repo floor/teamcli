@@ -209,9 +209,10 @@ describe('team status', () => {
 
   test('the note a stalled not-woken drop adds leads with the send\'s own outcome words', async () => {
     // The same world as the scene above, with the one fact that changes its reading: the drop
-    // has waited eleven minutes, past the watch's 600s unread window. The compact table's note
-    // then names the stall with the same three words the send printed and the history line
-    // carries — `queued, not woken` — so one word finds the stall on every surface.
+    // has waited eleven minutes, past this seat's own unread window. The file does not move
+    // the watch's word, so a pull-on-turn seat takes the class default, 60s. The compact
+    // table's note then names the stall with the same three words the send printed and the
+    // history line carries — `queued, not woken` — and the class's own sentence.
     const inbox = join(dir, '.agents', 'send-drops', 'acme-web', 'codex-acme');
     mkdirSync(inbox, { recursive: true });
     const home = join(dir, 'home');
@@ -228,7 +229,7 @@ describe('team status', () => {
     );
     const io = testIo(dir, { kind: 'owner' });
     expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
-    expect(io.out).toContain('note: codex-acme: queued, not woken — its oldest unread drop has waited 11m, past the 600s unread window');
+    expect(io.out).toContain('note: codex-acme: queued, not woken — its oldest unread drop has waited 11m, past the 60s unread window; the watch\'s typed retry has not delivered for it; codex-acme reads it at its next turn, and nothing here gives it one (pull-only)');
   });
 
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
