@@ -435,11 +435,15 @@ describe('team answer', () => {
 
 describe('independent adversarial checks: five command gates, tighten-only chain, and closed owner-only gates', () => {
   const fakeService: ServiceManager = {
-    label: 'com.floor.teamcli.daemon',
+    kind: 'system-service-manager',
     unitPath: (home: string) => join(home, 'daemon.unit'),
     plan: (home: string) => ({ unitPath: join(home, 'daemon.unit'), program: ['/bin/team', 'daemon', 'run'] }),
     install: (home: string) => ({ ok: true, unitPath: join(home, 'daemon.unit'), program: ['/bin/team', 'daemon', 'run'] }),
-    restart: () => ({ ok: true }),
+    restart: (home: string) => ({
+      ok: true,
+      unitPath: join(home, 'daemon.unit'),
+      undo: () => ({ ok: false, reason: 'refused', why: 'not run', detail: null }),
+    }),
     uninstall: (home: string) => ({ ok: true, unitPath: join(home, 'daemon.unit'), removed: true }),
     unit: () => null,
     job: () => null,
