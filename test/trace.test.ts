@@ -5,13 +5,14 @@
 // The team is a synthetic world under a temp folder, as the send-step scenes build it: the
 // socket is an empty file the fake receiver's declaration points at. No live seat is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEvent } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
 import { runTrace } from '../src/commands/trace.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { COMMAND_GATES } from '../src/permissions/map.ts';
 import { storePath } from '../src/store/store.ts';
 import { fake, owner, world, type World } from './send-native-fixtures.ts';
 
@@ -182,5 +183,55 @@ describe('team trace reads one message story out of the receiving team log', () 
     expect(code).toBe(1);
     expect(io.err).toBe('team trace: the event log cannot be read: the event log path is a directory\n');
     expect(io.out).toBe('');
+  });
+
+  test('team trace is strictly read-only: appends no event, writes no file, and asks for no terminal', async () => {
+    expect(COMMAND_GATES.trace?.kind).toBe('seat-record');
+    expect(COMMAND_GATES.trace?.terminal).toBeUndefined();
+
+    const { at, id } = await socketSend();
+    const store = storePath('acme', at.root, at.home);
+    const eventsFile = join(store, 'events.jsonl');
+    const messagesFile = join(store, 'messages.jsonl');
+    const snapshot = () => ({
+      storeEntries: readdirSync(store).filter((name) => name !== 'verify-checkpoint.json').sort(),
+      dirEntries: readdirSync(at.dir).sort(),
+      eventsBytes: readFileSync(eventsFile, 'utf8'),
+      messagesBytes: readFileSync(messagesFile, 'utf8'),
+    });
+
+    const before = snapshot();
+    expect(await runTrace([id], owner(at.root), { home: at.home })).toBe(0);
+    expect(await runTrace([`${id}:staged`], owner(at.root), { home: at.home })).toBe(0);
+    expect(await runTrace([id, '--json'], owner(at.root), { home: at.home })).toBe(0);
+    expect(await runTrace(['11111111-1111-4111-8111-111111111111'], owner(at.root), { home: at.home })).toBe(1);
+    expect(await runTrace(['not/a/valid/id'], owner(at.root), { home: at.home })).toBe(2);
+    expect(snapshot()).toEqual(before);
+  });
+
+  test('preserves log sequence order and reports negative delta when a later step carries an earlier timestamp', async () => {
+    const { at, id } = await socketSend();
+    const arrived = appendEvent('acme', at.root, at.home, {
+      ts: '2026-10-05T03:59:59.750Z',
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: id,
+      from: 'owner',
+      to: 'lead',
+    });
+    expect(arrived.ok).toBe(true);
+
+    const tableIo = owner(at.root);
+    expect(await runTrace([id], tableIo, { home: at.home })).toBe(0);
+    expect(tableIo.out).toContain('-250 ms');
+
+    const jsonIo = owner(at.root);
+    expect(await runTrace([id, '--json'], jsonIo, { home: at.home })).toBe(0);
+    const doc = JSON.parse(jsonIo.out) as { steps: { kind: string; delta_ms: number | null }[] };
+    expect(doc.steps.map((s) => [s.kind, s.delta_ms])).toEqual([
+      ['message.staged', null],
+      ['leg.tried', 0],
+      ['message.arrived', -250],
+    ]);
   });
 });
