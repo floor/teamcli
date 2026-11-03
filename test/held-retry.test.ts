@@ -236,7 +236,8 @@ function readInbox(at: SeedWorld, id: string, seat: string, session: string): vo
 }
 
 /** A drop and its record, as the drop leg leaves them: the sender's command has already said
- *  `sent (unconfirmed)`, and the marker waits for the seat's own watcher to read it. */
+ *  `queued, not woken` (a seat nothing wakes while idle), and the marker waits for the seat's
+ *  own watcher to read it. */
 function seedDropped(at: SeedWorld, session: string, seat: string, id: string, body: string, ts = NOW): string {
   const dropDir = seedRecord(at, session, seat, id, body, ts);
   markPending(dropDir, { id, from: 'owner', to: seat, body, ts: ts.toISOString(), leg: 'drop' });

@@ -407,7 +407,7 @@ describe('a message-transport full brief sent end to end', () => {
         to: SEAT,
         id: rec.id,
         via: 'drop',
-        outcome: 'sent (unconfirmed)',
+        outcome: 'queued, not woken',
       });
     }
 
