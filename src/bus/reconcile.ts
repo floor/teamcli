@@ -590,7 +590,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             const fresh = fileStampOf(fullPath);
             if (fresh === null) {
               if (isLinkAt(fullPath)) {
-                refusal = 'the record is a symbolic link';
+                // The marker's own sentence, the reader's, not the drop scan's.
+                refusal = 'a symbolic link was found and not followed';
                 break;
               }
               continue;
