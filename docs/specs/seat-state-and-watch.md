@@ -276,12 +276,20 @@ held-send retry and the unread wake.
   owns (a `.pending` marker). A receipt that lands after the listing is read again under the
   seat's lock, and an already-read message is not woken. One line serves every message due for
   that seat at that instant; the history records
-  `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. The wake
+  `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. A socket
+  delivery's re-wake is the ruling's exception: it fires once, and the line it types names the
+  message its frame carried — `ack <id> or reply` — because `team reply <id>` answers and marks
+  it read and `team ack <id>` marks it read with no answer (ADR `zeus-message-path`, D3). An
+  attempt that does not land keeps its reservation spent rather than giving it back: no later
+  pass types the line again and no retry ledger is written for it, so the report at twice the
+  window is the only voice left. A pass that could not attempt the wake at all — no seam bound —
+  still gives the reservation back, because nothing was typed. The wake
   writes its `<id>.wake` reservation before the line is typed and holds it through the
   attempt: a crash after the reservation never types a second line, a definite not-delivered
   outcome (`held`, `not-submitted`, or a delivery whose bindings refused before any key was
   written) gives the reservation back so a later pass may wake, and an uncertain one
-  (`unreachable`) that wrote to the pane keeps it, spent. At twice the seat's window a message
+  (`unreachable`) that wrote to the pane keeps it, spent — and a socket delivery's failed
+  attempt keeps it spent too, by the ruling above. At twice the seat's window a message
   still unread is reported once to its sender as a signed Runtime mailbox record and to the
   team's lead as one signed drop for the pass, listing every message due in it — never by
   typing into a pane —

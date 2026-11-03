@@ -43,7 +43,7 @@ import { teamIdOf } from '../registry/teams.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
-import { frameFor, frameReplyFor } from '../send/frame.ts';
+import { frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf,
   heldSocketPath,
@@ -891,17 +891,12 @@ function defaultVerifyReadReceiptFor(
 
 function resolveSocketFrameFor(
   input: DaemonRelaySendInput,
-  plan: DaemonRelayRoutePlan,
   id: string,
-  from: string,
-  fromTeam: string,
   body: string | undefined,
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
-  const reply = frameReplyFor(plan.home, plan.route.root, from, fromTeam);
-  const replyLine = 'line' in reply ? reply.line : `team send ${from}@${fromTeam} "<reply>"`;
-  return frameFor(body, id, replyLine);
+  return frameFor(body, id, readerLine(id));
 }
 
 /**
@@ -1145,7 +1140,7 @@ export async function handleDaemonRelaySend(
     },
   );
 
-  const frame = resolveSocketFrameFor(input, plan, id, from, fromTeam, body);
+  const frame = resolveSocketFrameFor(input, id, body);
   const message: RuntimeRelayMessage = {
     id,
     record: recordText,

@@ -816,6 +816,55 @@ describe("the watch's typed wake retry", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test('a socket delivery is re-woken once with its own ack hint, and a forgotten ack is never typed again', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    // The frame carried the message, so the record's owner knows its id: the re-wake names it.
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const said: string[] = [];
+    // The line reached the box and the Enter was not confirmed: the seat may have acted on it.
+    const sources = typedSources(one, typedSeam([TYPED_FAILED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live }), { unreadAfter: N });
+
+    // The one re-wake names the message the frame carried, and the two acts that settle it.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain(`ack ${UNREAD_A} or reply`);
+    // Its one attempt has fired: the reservation stays spent rather than going back, and no retry
+    // ledger is written to wait out a backoff.
+    expect(wakeMark(made, 'helper', UNREAD_A)).toMatchObject({ id: UNREAD_A, at: NOW.toISOString(), state: 'reserved' });
+    expect(existsSync(wakeTryPath(dropDir, UNREAD_A))).toBe(false);
+
+    // A later pass inside the window types nothing: the re-wake does not repeat.
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: new Date(NOW.getTime() + 5 * MIN) }), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+
+    // At twice the window the report is the only voice left, and it names the unconfirmed attempt.
+    reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain(`a wake was attempted at ${NOW.toISOString()} and its outcome is unconfirmed`);
+  });
+
+  test('a message no frame carried keeps the profile’s read sentence, never the ack hint', async () => {
+    const { made, team } = typedWorld('muse');
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    // A channel push carried it: the frame's msg_id never reached a reader, so the wake is the
+    // general drop read, not an id the seat could not have been shown.
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'channel' });
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain('team drops --read');
+    expect(calls[0]?.line).not.toContain('or reply');
+  });
+
   test('an attempt that typed nothing is counted as untyped, and the report says no wake line was typed', async () => {
     const { made, team } = typedWorld('muse');
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 11 * MIN));

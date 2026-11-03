@@ -51,7 +51,7 @@ import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
-import { frameFor, frameReplyFor } from './frame.ts';
+import { frameFor, readerLine } from './frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
@@ -1570,35 +1570,12 @@ async function executeSocketSend(
   }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
-  // The reply line rides every agent seat's frame, built from the sender the request carries and
-  // the team this daemon serves; with no team there is no address, and the frame is not dialed.
-  // A person-pane seat has no reply line.
-  const sendingTeam = sentAs.from_team;
-  if (sendingTeam === undefined && !personPane) {
-    return {
-      v: 1,
-      ok: false,
-      id: msgId,
-      seat: seatName,
-      outcome: 'refused',
-      detail: `${seatName}: the sending team is not known, so the frame carries no reply address; nothing was sent`,
-    };
-  }
-  const reply = personPane || sendingTeam === undefined
-    ? null
-    : frameReplyFor(host.home, root, from, sendingTeam);
-  if (reply !== null && 'missing' in reply) {
-    return {
-      v: 1,
-      ok: false,
-      id: msgId,
-      seat: seatName,
-      outcome: 'refused',
-      detail: `${seatName}: ${reply.missing}; nothing was sent`,
-    };
-  }
+  // The reader line names the record's own id: `team reply <id>` answers and marks it read,
+  // `team ack <id>` marks it read with no answer, and either is the receiving seat's own signed
+  // act (ADR D3). It addresses the record, so no sending team is needed for it. A person-pane
+  // seat has no reader line at all: a person answers in their own client.
   const content = header === '' ? body : `${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, reply === null ? null : reply.line);
+  const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId));
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

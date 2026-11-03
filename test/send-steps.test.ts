@@ -34,8 +34,8 @@ afterEach(() => {
 
 /** The team file with an entity, and the entity's own lobby in its trust list: a team that names
  *  an entity starts in `<home>/.config/team/lobbies/<slug>`, and that is the lobby the file must
- *  trust. The entity is also what gives the frame its owner-reply target, without which the
- *  socket leg carries no reply address and is skipped. */
+ *  trust. The frame's reader line names the record's own id, so the socket leg needs nothing
+ *  about the entity's owner-reply target. */
 function declareEntity(at: World, entity = 'floor'): void {
   const path = join(at.dir, 'team.yaml');
   const lobby = resolveLobby(at.home, { entity });

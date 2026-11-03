@@ -7,7 +7,8 @@ link and made durable before the run says it is done. A seat that has already se
 a log line, in a summary, in a wake it acted on — acknowledges it here, and the message stops
 waiting: `team drops` no longer lists it, the unread watch neither rings it nor reports it, and
 the MCP inbox's `inbox_check` no longer counts it unread. `team reply` marks a message read by
-answering it; `team ack` is for a message that needs no answer.
+answering it — it publishes a signed `read` receipt naming `read_by: reply` beside its `replied`
+receipt — and `team ack` is for a message that needs no answer.
 
 `team ack --seat <seat> --older-than <dur>` is the lead's sweep of one stopped seat's folder:
 every record older than the window that no `read` or `replied` receipt serves gets the same signed

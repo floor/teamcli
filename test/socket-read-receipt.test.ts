@@ -53,8 +53,9 @@ function declare(made: World, seat = 'lead', policy = 'accept'): string {
   return path;
 }
 
-/** The team file with an entity, and the entity's own lobby in its trust list: the owner-origin
- *  frame's reply address is read from the entity the team names. */
+/** The team file with an entity, and the entity's own lobby in its trust list: the team a
+ *  registry record reads by. The frame's reader line names the record's own id, so it needs no
+ *  address from the entity. */
 function declareEntity(made: World, entity = 'floor'): void {
   const path = join(made.dir, 'team.yaml');
   const lobby = resolveLobby(made.home, { entity });

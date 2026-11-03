@@ -22,8 +22,9 @@ afterEach(() => {
   made = null;
 });
 
-/** The team file with an entity and that entity's lobby in its trust list, so the frame carries
- *  an owner-reply target: without one the socket leg is skipped and the story is a typed leg. */
+/** The team file with an entity and that entity's lobby in its trust list. The entity is what
+ *  names the team a registry record can read; the frame's reader line needs no address of its
+ *  own, so the socket leg runs whatever the entity declares. */
 function declareEntity(at: World, entity = 'floor'): void {
   const path = join(at.dir, 'team.yaml');
   const lobby = resolveLobby(at.home, { entity });

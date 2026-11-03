@@ -328,7 +328,9 @@ for a seat a message can wake while it is idle, sixty for a typed or pull-only s
 pane. The ring, the retry and the unread wake all build the same wake line: the rendered
 `message-display` header and the hint naming the seat's fastest read path — the profile's
 `read_hint` when it declares one, the shipped `Read it with: team drops --read.` otherwise ([team
-send](send.md#the-message-display-wake-line)). A sender the watch cannot name falls back to the
+send](send.md#the-message-display-wake-line)). One hint names a message's id: a socket delivery's
+single re-wake says `ack <id> or reply`, so the seat can settle exactly the record its frame
+carried (ADR `zeus-message-path`, D3). A sender the watch cannot name falls back to the
 shipped nameless ring, `Team: run team drops --read --seat <seat> --session <session>`, rather
 than building nothing. Automatic work is never typed: the dispatcher's own lines below say what
 it did instead. The lines around them:
@@ -358,7 +360,7 @@ it did instead. The lines around them:
 | `<seat>: a message from <from> was unread and its webhook adapter took it after the unread window (<n> ms)` | the cascade's webhook leg posted the signed record to the seat's declared adapter after the seat's unread window, and the adapter took it: the history records `via: webhook` with `delivered`, the wake marker says a webhook wake was sent, and nothing is typed |
 | `<seat>: a message from <from> was unread and its webhook post's answer was not read (<why>); it is not posted again` | the post went out and its answer never came back: the wake marker stays reserved with `webhook` as its evidence, so no later pass posts the message again, the report at twice the window says the answer was not read, and nothing is typed |
 | `<seat>: a channel send from <from> was read (receipt)` | the seat's channel handling turn acknowledged a pushed message: its signed receipt names the id with `read_by: channel`, the history records `delivered (read)` with `via: channel`, the marker that waited for it is cleared, and nothing is typed |
-| `<seat>: a channel send from <from> was redelivered on the socket` | the push's confirmation window ended with no signed receipt and the receiving seat's socket took the frame: the socket delivery wrote its own `delivered` history line, marked `failed: redelivered: channel unconfirmed`, the marker is cleared, and nothing is typed; no receipt is written — the record stays unread for the seat's own read, and the unread pass re-wakes it like any other message |
+| `<seat>: a channel send from <from> was redelivered on the socket` | the push's confirmation window ended with no signed receipt and the receiving seat's socket took the frame: the socket delivery wrote its own `delivered` history line, marked `failed: redelivered: channel unconfirmed`, the marker is cleared, and nothing is typed; no receipt is written — the record stays unread for the seat's own read, and the unread pass re-wakes it once with `ack <id> or reply` (ADR `zeus-message-path`, D3) |
 | `<seat>: a channel send from <from> was not confirmed; the socket was not taken (<why>); the message waits in the bus inbox` | the push's one redelivery could not go over the socket: the marker already says `redelivered: channel unconfirmed`, the retry that follows stops before the pane, and nothing is typed |
 | `<seat>: an inbox send from <from> was not delivered (<why>); the record is at <path>; send it again` (the word is `a channel send` for that leg; `send it again` alone when the record's file is gone) | the marker ended without a receipt or a delivery — thirty minutes passed, or the retry found a reason not to touch the pane: a watch with no home to verify a sender with, a record that does not verify with this home's key or names no sender, a trigger line that would not fit, a seat back at its shell, a human's pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
@@ -441,7 +443,13 @@ marker is the claim. A wake is reserved on disk before it is attempted, and the 
 the attempt's whole claim: no later pass wakes the same message again; a definite not-delivered
 outcome (`held` or `not-submitted`), an unconfirmed typed attempt, and any delivery that wrote
 nothing to the pane give the reservation back so a later pass may wake, and only an attempt that
-wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. At twice the seat's
+wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. A socket delivery is the
+one message whose re-wake is single by ruling: it is typed once with `ack <id> or reply`, and an
+attempt that does not land keeps its reservation spent rather than giving it back — no retry
+ledger is written and no later pass types the line again (ADR `zeus-message-path`, D3); a pass
+that could not attempt it at all, because no seam was bound, gives it back, since nothing was
+typed. Its report at twice the window keeps the reserved wake's words, `a wake was attempted at
+<at> and its outcome is unconfirmed`. At twice the seat's
 unread window a message still unread is reported once: a signed Runtime mailbox record for its
 sender under `.agents/messages/`, and a signed send-drop for the team's lead under
 `.agents/send-drops/<session>/<lead>` that `team drops --read` serves — never by typing into a

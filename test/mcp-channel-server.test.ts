@@ -1,7 +1,9 @@
 // The seat's inbox server as a Claude Code channel: a launch that carries the development
 // channel naming `team-inbox` makes the server declare `experimental["claude/channel"]`, push
-// each message that arrives after it starts as one `notifications/claude/channel`, and serve the
-// `ack` tool that writes the same signed read receipt as `team ack` with `read_by: channel`.
+// each message that arrives after it starts as one `notifications/claude/channel`, and write the
+// seat-signed read receipt as it hands the notification over (`read_by: channel-push`). It also
+// serves the `ack` tool, which writes the same receipt as `team ack` with `read_by: channel` for
+// a message the push never carried.
 // A launch without the flag is the ordinary inbox server: no capability, no instructions, no
 // push, no ack. Fixtures only: synthetic folders, a synthetic home, and a launch line this test
 // writes; no live session is touched.
@@ -224,9 +226,19 @@ describe('the push', () => {
       expect(marker).toMatchObject({ v: 1, kind: 'channel-push', id: PUSHED_ID, seat: 'lead', session: SESSION, status: 'sent (channel)' });
       expect(String(marker.content_sha256)).toHaveLength(64);
       expect(statSync(channelPushPath(at.dropDir, PUSHED_ID)).mode & 0o777).toBe(0o600);
-      // The signed record is untouched: no receipt was written by the push.
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      // A record already holding a marker is never pushed a second time.
+      // The push is the show: the server writes the seat-signed read receipt itself, with the
+      // key that verified the record, marked read_by channel-push.
+      const receipt = JSON.parse(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')) as SignedReceipt;
+      expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: PUSHED_ID, to: 'lead', session: SESSION, read_by: 'channel-push' });
+      const key = messageKeyState(at.home);
+      if (key.kind !== 'key') throw new Error('the fixture home holds no message key');
+      expect(verifyReceipt(receipt, key.key)).toBe(true);
+      // The push receipt is the read: the record is no longer in the inbox's unread list.
+      feed.push(call('9', 'inbox_check'));
+      await until(() => feed.replies.some((line) => JSON.parse(line).id === '9'));
+      const checked = feed.replies.map((line) => JSON.parse(line) as Record<string, any>).find((one) => one.id === '9')!;
+      expect(JSON.parse(checked.result.content[0].text)).toEqual({ unread: [] });
+      // A record already read and holding a marker is never pushed a second time.
       await new Promise((resolve) => setTimeout(resolve, 400));
       expect(notice(feed.replies)).toHaveLength(1);
       feed.end();
@@ -236,15 +248,38 @@ describe('the push', () => {
     }
   });
 
-  test('ack writes the signed read receipt with read_by channel, and the message is not pushed again', async () => {
+  test('the notification carries the content and meta only: no key object rides in a frame shown to an agent', async () => {
     const at = place();
     try {
       const io = testIo(at.root, seatCaller());
       const feed = queue();
       const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, ACKED_ID, 'from a worker — admitted by: the owner\n\nack me');
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nhello there');
       await until(() => notice(feed.replies).length >= 1);
+      // The raw line the client receives: the key that verified the record signs the read
+      // receipt, and what the client shows to an agent is the content and its meta alone.
+      const raw = feed.replies.find((one) => (JSON.parse(one) as Record<string, any>).method === 'notifications/claude/channel')!;
+      expect(raw).not.toContain('"key"');
+      const params = (JSON.parse(raw) as Record<string, any>).params;
+      expect(Object.keys(params)).toEqual(['content', 'meta']);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('ack writes the signed read receipt with read_by channel for a message no push carried', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      // Mail already waiting at startup is left to inbox_check, so this record is never pushed:
+      // the ack is the only writer on this path.
+      signed(at, ACKED_ID, 'from a worker — admitted by: the owner\n\nack me');
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
       feed.push(call('7', 'ack', { id: ACKED_ID }));
       await until(() => feed.replies.some((line) => JSON.parse(line).id === '7'));
       const answer = feed.replies.map((line) => JSON.parse(line) as Record<string, any>).find((one) => one.id === '7')!;

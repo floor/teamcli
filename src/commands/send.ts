@@ -39,6 +39,7 @@ import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverified
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
+import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -69,7 +70,7 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
+import { frameFor, readerLine } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, preciseSocketSkipReason, readHeldSocket,
   socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
@@ -1635,6 +1636,30 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     stagedWalk = await stageSendRecord(dropDir, record, host.home, host.now, to.project);
     if (!stagedWalk.ok) return;
+    // ADR `zeus-message-path`, D3: the seat's own answer is a read. A send from this seat to its
+    // recipient settles the newest message that recipient delivered it before this send's own
+    // instant — the seat's signed act, never the original sender's — and only the newest, so one
+    // answer never swallows the older unread work. A sweep that cannot read or write is a missing
+    // annotation, never a failed send.
+    if (caller.kind === 'seat') {
+      try {
+        const answered = markAnsweredBySend({
+          seat: caller.name,
+          sender: to.seat,
+          senderId: to.agentId,
+          root,
+          session: team.session,
+          project: team.project,
+          home: host.home,
+          at: record.at,
+        });
+        if (answered.kind === 'unavailable') {
+          logLine(dir, 'send', who, `${caller.name}: the answered message could not be marked read (${answered.reason})`, host.now());
+        }
+      } catch {
+        // The send's record is staged; the read receipt is an annotation beside it.
+      }
+    }
     const begun = beginFallbackWalk({
       caller,
       team,
@@ -1964,7 +1989,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         team.project,
         caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
       );
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, identityHeader, human);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -4679,14 +4704,8 @@ async function deliverClientRecord(
         markLeg('socket', 'skipped', why);
         continue;
       }
-      const reply = frameReplyFor(host.home, root, 'owner', '');
-      if ('missing' in reply) {
-        failures.push(`socket: ${reply.missing}`);
-        markLeg('socket', 'skipped', reply.missing);
-        continue;
-      }
       markLeg('socket', 'attempted');
-      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, root, CLIENT_FRAME_HEADER, false, reply);
+      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, CLIENT_FRAME_HEADER, false);
       if (attempt.kind === 'delivered') return;
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
@@ -5048,15 +5067,10 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
-  /** The sending run's team root: the entity an owner-origin reply line is read from. */
-  callerRoot: string,
   /** The display line the frame opens with; empty, the body alone. */
   header = '',
-  /** True for a person-pane seat: no reply line and no read hint, a person answers in its client. */
+  /** True for a person-pane seat: no reader line, a person answers in its client. */
   personPane = false,
-  /** The reply line for an origin that is not a seat of a sending run — a client grant's owner
-   *  origin. Given, the frame does not need a sending team and the line is used as built. */
-  replyOverride?: FrameReply,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -5064,28 +5078,17 @@ async function deliverSocketFrame(
   // The address as written, when it was a form: every history line carries it beside the seat.
   const sentAs = to.sentAs === null ? {} : to.sentAs;
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
-  // The reply line names the seat the signed record carries and the team this run stood in; a
-  // team the run does not know is no address at all, and the frame is not dialed rather than
-  // answering somewhere guessed. A person-pane seat has no reply line at all, and an injected
-  // line (an owner-origin client grant) already names its target and needs no sending team.
-  let reply: FrameReply | null;
-  if (replyOverride !== undefined) {
-    reply = replyOverride;
-  } else {
-    const sendingTeam = report.from_team;
-    if (sendingTeam === undefined && !personPane) {
-      return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
-    }
-    reply = personPane || sendingTeam === undefined
-      ? null
-      : frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
-  }
-  if (reply !== null && 'missing' in reply) return { kind: 'fallback', reason: reply.missing };
+  // The reader line names the record's own id, the same id the frame carries in `msg_id`: an
+  // answering seat runs `team reply <id>` and a seat that needs no answer runs `team ack <id>`,
+  // and both write its own signed read receipt (ADR D3). It addresses the record, never the
+  // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
+  // seat has no reader line at all: a person answers in their own client.
+  const reply = personPane ? null : readerLine(msgId);
   // The frame opens with the sender's display line, then the signed record's own body: the
   // header is display, and the body it precedes still carries the attribution line a reader
   // judges. One blank line separates them, so no body line can pass for the header.
   const content = header === '' ? body : `${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, reply === null ? null : reply.line);
+  const frame = frameFor(content, msgId, reply);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
@@ -5219,7 +5222,6 @@ export async function redeliverChannelOnSocket(input: {
     host.now().getTime(),
     false,
     inbound,
-    root,
     frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );

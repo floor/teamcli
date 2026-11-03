@@ -89,7 +89,7 @@ export function sourcesOf(one: Book): RetrySources {
 
 /** The team's entity and the entity's own lobby in its trust list: a team that names an entity
  *  starts in `<home>/.config/team/lobbies/<slug>`, and that is the lobby the file must trust.
- *  An owner-origin frame also needs the entity's reply target: `floor` ships one. */
+ *  The frame's reader line names the record's own id, so it takes no address from the entity. */
 export function declareEntity(made: World, entity = 'floor'): void {
   const path = join(made.dir, 'team.yaml');
   const lobby = resolveLobby(made.home, { entity });

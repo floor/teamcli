@@ -63,7 +63,8 @@ export type TypedWakeResult = {
   /** True only when the profile's working screen showed after an Enter this wake pressed. */
   delivered: boolean;
   /** True when this wake put at least one key into the pane (the line, or an Enter). A caller
-   *  that keeps a one-attempt reservation releases it either way, but records this so a later
+   *  that keeps a one-attempt reservation — a socket delivery's single re-wake — holds it when
+   *  this is true; a caller that retries releases it either way and records this so a later
    *  report can say a wake was typed and none was confirmed. */
   typed: boolean;
   /** How many Enters were pressed. */
