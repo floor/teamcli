@@ -67,7 +67,7 @@ import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
-import { dropMessage, readTriggerLine } from '../send/native.ts';
+import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
@@ -310,7 +310,8 @@ function dueForWake(
  * The first history line each message id has: the sender's own walk. Every later line about the
  * message — a retry's typed fall-through, a receipt's promotion — follows it in the store, so
  * the first is the one that says which leg carried the send and which legs it passed. Read once
- * per pass, and only when a seat that could take the webhook leg is due.
+ * per pass, when a seat that could take the webhook leg is due, and when a wake must tell a
+ * socket delivery from any other message.
  */
 function sendLinesOf(scene: RetryScene, home: string): Map<string, HistoryEntry> {
   const lines = new Map<string, HistoryEntry>();
@@ -453,6 +454,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (key.kind !== 'key') return;
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
+  // The first history line per message id names the leg that carried it. Read once per pass, on
+  // the first seat that needs it: a socket delivery's re-wake reads it both for its hint and for
+  // its one-attempt rule.
+  let sendLines: Map<string, HistoryEntry> | null = null;
+  const linesNow = (): Map<string, HistoryEntry> => (sendLines ??= sendLinesOf(scene, home));
   for (const seat of scene.team.seats) {
     // A person's drop is read by a person, and nothing is typed into a human's pane.
     if (seat.human === true) continue;
@@ -484,7 +490,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     let typedDue = due;
     const failedWebhook = new Map<string, string>();
     if (seat.webhook !== undefined) {
-      const lines = sendLinesOf(scene, home);
+      const lines = linesNow();
       typedDue = [];
       for (const message of due) {
         if (!webhookNext(seat, lines.get(message.id))) {
@@ -547,7 +553,10 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // stays unread, its reservations are never taken, and the report pass says why.
       const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
       if (sender === null) continue;
-      const line = readTriggerLine(seat.name, scene.session, sender, seat.cli);
+      // A socket delivery's re-wake names the message the frame carried: answer it or ack it
+      // (ADR `zeus-message-path`, D3). Any other message keeps the profile's read sentence.
+      const wakeHint = linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
+      const line = readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
@@ -581,11 +590,16 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           continue;
         }
         if (!typed.delivered) {
-          // Nothing the module could confirm: the reservations go back, and the ledger counts
-          // the attempt so the next one waits out its backoff and the bound ends a wake that
-          // never lands. A crash instead leaves the reservation linked, which `dueForWake`
-          // already reads as spent.
+          // Nothing the module could confirm. A wake that put no key into the pane spent nothing:
+          // its reservations go back and every message keeps its one wake. Once a socket
+          // delivery's line was typed, its re-wake has fired (ADR `zeus-message-path`, D3): the
+          // reservation stays spent, so no later pass types the line again and the report at
+          // twice the window is the only voice left. Every other typed message gives its
+          // reservation back, and the ledger counts the attempt so the next one waits out its
+          // backoff and the bound ends a wake that never lands. A crash instead leaves the
+          // reservation linked, which `dueForWake` already reads as spent.
           for (const id of reserved) {
+            if (typed.typed && linesNow().get(id)?.via === 'socket') continue;
             release(wakePath(dropDir, id));
             const before = wakeTryOf(dropDir, id);
             const tries = (before?.tries ?? 0) + 1;
@@ -639,13 +653,19 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         receipt,
       });
       // `held` left the box as it was, and `not-submitted` left the trigger in it for the next
-      // Enter: neither put a line the seat could act on, so their reservations go back and a later
-      // pass inside the window may still wake. A delivery that wrote nothing to the pane is the
-      // same: its bindings refused before any key, so it spent nothing and the message keeps its
-      // one wake. `unreachable` keeps the reservation only when something was typed — an attempt
+      // Enter: neither put a line the seat could act on, so a typed seat's reservations go back
+      // and a later pass inside the window may still wake. A delivery that wrote nothing to the
+      // pane is the same: its bindings refused before any key, so it spent nothing and the message
+      // keeps its one wake. A socket delivery is the exception: its re-wake is one attempt by
+      // design (ADR `zeus-message-path`, D3), so once the line was typed its reservation stays
+      // spent — no later pass types the line again, and the report at twice the window is the only
+      // voice left. `unreachable` keeps the reservation only when something was typed — an attempt
       // the seat may have acted on is spent rather than repeated.
       if (result.outcome === 'held' || result.outcome === 'not-submitted' || result.typed !== true) {
-        for (const id of reserved) release(wakePath(dropDir, id));
+        for (const id of reserved) {
+          if (result.typed === true && linesNow().get(id)?.via === 'socket') continue;
+          release(wakePath(dropDir, id));
+        }
         continue;
       }
       if (result.outcome !== 'delivered') continue;
