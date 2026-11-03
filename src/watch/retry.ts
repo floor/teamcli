@@ -259,7 +259,7 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     giveUp(scene, dropDir, drop, 'its signed record does not name a sender this home can pin');
     return;
   }
-  const line = readTriggerLine(drop.to, scene.session, sender);
+  const line = readTriggerLine(drop.to, scene.session, sender, seat.cli);
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;

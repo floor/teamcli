@@ -286,7 +286,7 @@ async function expireOne(
         // not typed nameless: the record stays on disk and the message waits for the unread
         // report's words.
         const sender = wakeTrigger({ ...record, at: record.ts }, home, { root: scene.root, session: record.session, team: scene.team }, scene.now);
-        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender);
+        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender, record.cli);
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);

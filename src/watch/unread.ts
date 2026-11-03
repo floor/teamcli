@@ -546,7 +546,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // stays unread, its reservations are never taken, and the report pass says why.
       const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
       if (sender === null) continue;
-      const line = readTriggerLine(seat.name, scene.session, sender);
+      const line = readTriggerLine(seat.name, scene.session, sender, seat.cli);
       if (line === null) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an

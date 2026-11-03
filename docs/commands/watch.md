@@ -29,7 +29,10 @@ the wake, is recorded once and not woken again in that episode.
 A message waiting for a seat in its own drop folder — `.agents/send-drops/<session>/<seat>/`,
 the folder `team drops --read` serves — is the ring: when that seat's box is an empty idle
 prompt, the watch builds
-the message-display wake line — the rendered header and the fixed `Read it with: team drops --read.` hint — and not the body, but it does not type it: the pane writer refuses, and the record stays where that reader serves it. A record waiting in the older mailbox store `.agents/messages/<seat>/` is never
+the message-display wake line — the rendered header and the hint naming the seat's fastest read
+path, the profile's `read_hint` or the shipped `Read it with: team drops --read.` — and not the
+body, but it does not type it: the pane writer refuses, and the record stays where that reader
+serves it. A record waiting in the older mailbox store `.agents/messages/<seat>/` is never
 rung: the read the line names does not serve it, so the line would print nothing and fire every
 pass; that record still raises the owner's waiting line when its box is not free. A seat whose idle episode the dispatcher owns this pass is not rung: that episode
 is delivered, or reported undelivered, by the dispatcher. Both texts are taken from the live
@@ -323,7 +326,8 @@ unread wake, for a seat whose message has been unread for its seat's unread wind
 for a seat a message can wake while it is idle, sixty for a typed or pull-only seat; ADR
 `zeus-message-path`, D2). None of them ever carries a report's text, and each stops before the
 pane. The ring, the retry and the unread wake all build the same wake line: the rendered
-`message-display` header and the fixed hint `Read it with: team drops --read.` ([team
+`message-display` header and the hint naming the seat's fastest read path — the profile's
+`read_hint` when it declares one, the shipped `Read it with: team drops --read.` otherwise ([team
 send](send.md#the-message-display-wake-line)). A sender the watch cannot name falls back to the
 shipped nameless ring, `Team: run team drops --read --seat <seat> --session <session>`, rather
 than building nothing. Automatic work is never typed: the dispatcher's own lines below say what
