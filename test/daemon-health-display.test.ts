@@ -819,46 +819,46 @@ test('stale watch record with dead pid is never shown as current across plain-te
   updateState(at.dir, (state) => {
     state.sessions.acme = {
       ...state.sessions.acme!,
-      watch: { pid: 90320, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+      watch: { pid: 4242, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
     };
   });
-  const alive = (pid: number) => pid !== 90320;
+  const alive = (pid: number) => pid !== 4242;
 
   // 1. Plain-text `team status` when daemon is not running (`state: 'not-running'`):
-  //    never prints `pid 90320, last heartbeat` and never prints `root not yet hosted by daemon null`.
+  //    never prints `pid 4242, last heartbeat` and never prints `root not yet hosted by daemon null`.
   const stoppedDaemonHealth: DaemonHealth = {
     ...notRunning(),
-    pid: 90320,
+    pid: 4242,
   };
   const plainIo = testIo(at.root, { kind: 'owner' });
   await runStatus([], plainIo, { ...statusSources(at, async () => stoppedDaemonHealth), alive });
-  expect(plainIo.out).toContain('watch record names a stopped daemon (pid 90320)');
-  expect(plainIo.out).not.toContain('pid 90320, last heartbeat');
+  expect(plainIo.out).toContain('watch record names a stopped daemon (pid 4242)');
+  expect(plainIo.out).not.toContain('pid 4242, last heartbeat');
   expect(plainIo.out).not.toContain('root not yet hosted');
 
-  // 2. When the recorded pid IS alive (`pid: 48322`) and the live daemon hosts this root,
+  // 2. When the recorded pid IS alive (`pid: 5151`) and the live daemon hosts this root,
   //    even if another root on the same daemon has `firstPass.running === true`, the current
   //    watch note stands as-is.
   updateState(at.dir, (state) => {
     state.sessions.acme = {
       ...state.sessions.acme!,
-      watch: { pid: 48322, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
+      watch: { pid: 5151, epoch: 'watch_0123456789abcdef0123456789abcdef', heartbeat: '2026-10-19T08:59:50.000Z' },
     };
   });
   const liveIo = testIo(at.root, { kind: 'owner' });
   await runStatus([], liveIo, {
     ...statusSources(at, async () =>
       health({
-        pid: 48322,
+        pid: 5151,
         roots: [
           root({ root: realpathSync(at.root) }),
-          root({ root: '/work/other', team: 'other', firstPass: { running: true, scanned: 500, doneAt: null } }),
+          root({ root: '/work/demo', team: 'acme', firstPass: { running: true, scanned: 500, doneAt: null } }),
         ],
       }),
     ),
     alive,
   });
-  expect(liveIo.out).toContain('watch: pane not recorded, pid 48322, last heartbeat 10s ago');
+  expect(liveIo.out).toContain('watch: pane not recorded, pid 5151, last heartbeat 10s ago');
   expect(liveIo.out).not.toContain('stopped daemon');
   expect(liveIo.out).not.toContain('root not yet hosted');
 });
