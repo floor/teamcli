@@ -651,6 +651,10 @@ export function handleLine(line: string, serving: Serving): string | null {
       return answer(id, { tools: toolList(serving) });
     case 'tools/call':
       return answer(id, callTool(record.params, serving));
+    case 'server/discover':
+      // Not an MCP method. The spec answer for an unknown method is -32601 with
+      // the sentence "Method not found".
+      return failure(id, -32601, 'Method not found');
     default:
       return failure(id, -32601, `Method not found: ${method}`);
   }
