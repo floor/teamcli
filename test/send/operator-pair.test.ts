@@ -15,6 +15,7 @@ import { readHistory } from '../../src/send/history.ts';
 import { updateState } from '../../src/state.ts';
 import { recordBody, testIo } from '../helpers.ts';
 import { dropDir, fake, world, type World } from '../send-native-fixtures.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const made: World[] = [];
 
@@ -90,7 +91,7 @@ describe('team send: two operators of one team', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('operator-b'));
-    expect(io.out).toBe('team acme, session "acme"\noperator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\noperator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)\n');
     const drops = dropDir(one.dir, 'operator-b');
     // The drop leg leaves its retry marker beside the record, and readdir order is the
     // filesystem's: the record is picked by name, never by position.

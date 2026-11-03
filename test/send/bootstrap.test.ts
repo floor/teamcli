@@ -14,6 +14,7 @@ import { updateState } from '../../src/state.ts';
 import { keyOf, signDomain } from '../../src/store/keys.ts';
 import { recordBody, testIo } from '../helpers.ts';
 import { dropDir, fake, scripted, world, type World } from '../send-native-fixtures.ts';
+import { withoutSendId } from '../helpers/output.ts';
 
 const made: World[] = [];
 
@@ -47,7 +48,7 @@ describe("team send: the file's seat, before its record", () => {
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
     // The delivery path stays another suite's subject: the plain word is the outcome here.
     // What this file judges is the header the receiver reads.
-    expect(io.out, `outcome line: ${io.out}`).toBe(
+    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
       'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = dropDir(one.dir, 'lead');
@@ -66,7 +67,7 @@ describe("team send: the file's seat, before its record", () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out, `outcome line: ${io.out}`).toBe(
+    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
       'team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = dropDir(one.dir, 'native');

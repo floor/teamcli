@@ -28,6 +28,7 @@ import type { NativePane } from '../src/send/native.ts';
 import { routesPath } from '../src/send/routes.ts';
 import { updateState } from '../src/state.ts';
 import { liveAgentsOf, testIo, type TestIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const BODY = 'the words the sender carried in its own tool call';
 const NOW = new Date('2026-10-17T07:00:00.000Z');
@@ -286,7 +287,7 @@ describe('native acceptance: the record half', () => {
     const code = await runSend(['--record', 'helper', '--channel', 'native', '--ms', '1234', BODY], leadIo, run);
 
     expect(code).toBe(0);
-    expect(leadIo.out).toBe('team acme, session "acme"\nhelper: recorded (native, 1234 ms)\n');
+    expect(withoutSendId(leadIo.out)).toBe('team acme, session "acme"\nhelper: recorded (native, 1234 ms)\n');
     expect(leadIo.err).toBe('');
     const entry = parseHistoryLine(readFileSync(historyPath('acme', w.root, w.home), 'utf8'));
     expect(entry).toMatchObject({

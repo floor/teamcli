@@ -159,10 +159,11 @@ describe('a registry that cannot be read (a)', () => {
 });
 
 describe('a caller no registry record stands for (b)', () => {
-  test('the map carries the nine seat-record rows this scene walks', () => {
-    // The nine Runtime read surfaces. A command that reads no team file asks for no record
-    // either, so it carries `any-caller`, not this row.
-    expect(SEAT_RECORDS).toHaveLength(9);
+  test('the map carries the nine read surfaces and the trace row this scene walks', () => {
+    // The nine Runtime read surfaces, plus `trace`, which reads the team's own verified event
+    // log and so asks for the same registry record. A command that reads no team file asks for
+    // no record either, so it carries `any-caller`, not this row.
+    expect(SEAT_RECORDS).toHaveLength(10);
   });
 
   test('every seat-record gate refuses a record-less caller, whatever the file declares', () => {

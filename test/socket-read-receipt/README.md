@@ -1,12 +1,15 @@
-# Socket delivery read receipts and the accepted-frame header
+# Socket delivery and the accepted-frame header
 
-Independent, test-only coverage for the 0.5.4-rc.5 hotfix: an accepted socket frame
-delivers a message, and a delivery must not become a second wake. The signed read receipt
-is the one proof of a read, so accepting a frame writes it at once; a frame the receiver's
-box held proves nothing and keeps the watch's ordinary retry.
+Independent, test-only coverage for socket delivery honesty. An accepted socket frame
+delivers a message, and a delivery is not a read: only the seat writes the signed read
+receipt (`inbox_read`, `team drops --read` or the CLI hook's receipt), verified against
+the message key. Acceptance therefore writes no receipt, and a record whose frame was
+taken but never read stays unread — `team messages` lists it as unacked, `team drops
+--read` serves it, the watch's unread pass wakes it at the normal window and, when no
+seat read comes, the sender and the lead are told at twice it. A frame the receiver's box
+held proves nothing and keeps the watch's ordinary retry.
 
-Started from the exact pre-fix source `8b04ddb81e068c6d997bca405ae8954e9c8a80f5`. The
-scenes are written here and built on the suite's existing temporary-world fixtures; none
+The scenes are written here and built on the suite's own temporary-world fixtures; none
 of the product branch's fixtures are used. No live session, socket or owner home is
 touched: the send host's transport is a fake, and the pane is a string.
 
@@ -18,35 +21,43 @@ one pane read by both the send's held-dialog probe and the watch's unread pass. 
 scenes declare an entity (`floor`) so an owner-origin frame has its shipped reply target;
 the seat scenes register `helper` on the team's roster with a nickname, or with none.
 
-`acceptance.test.ts` covers five rows:
+`acceptance.test.ts` covers six rows:
 
-1. An accepted socket frame writes `<id>.read.json` beside the record: mode `0600`,
-   `status: "read"`, `read_by: "socket delivery"`, the record's id, bare seat, root and
-   session, and a payload the checkout's message key verifies. The record's own receipts
-   derive `read` and the reader's unread list is empty.
-2. The accepted record is not served again by `team drops --read`, is absent from the
-   watch's ring list (`listUnacked`), is not typed at past the unread window, and is not
-   reported at twice the window; no report drop appears.
-3. A held frame writes no receipt and leaves the record unread and ringable; the unread
-   pass types nothing before the window, exactly one retry line after it, and nothing on a
-   later pass. The retry is a typed line, not a read: no receipt appears behind it. This
-   row is green at the pre-fix source by design — it pins the behavior the hotfix keeps.
-4. An accepted frame from a seat with nickname `Bea` opens with exactly
+1. An accepted socket frame writes no receipt: `<id>.read.json` is absent, the record's
+   own receipts derive `sent`, and it stays in the reader's unread list.
+2. The accepted record is listed as unacked by `team messages`; the seat's own
+   `team drops --read` then serves the body and writes a receipt the message key
+   verifies — `read` from that point on, and gone from the unread and unacked lists.
+3. With no seat read, the unread pass wakes the record at the normal window like any
+   other message; no pane messaging refuses the typed leg, so nothing is typed and no
+   wake marker is spent. At twice the window the sender and the lead are told, and the
+   reported marker is written.
+4. A held frame writes no receipt and leaves the record unread and ringable; the unread
+   pass types nothing before the window, nothing after it (the typed leg is refused), and
+   nothing on a later pass. This row pins the behavior the frame acceptance leaves
+   unchanged.
+5. An accepted frame from a seat with nickname `Bea` opens with exactly
    `Message from Bea (helper@acme)`, alone on its first line, then one blank line, then
    the unchanged record body. The header is display only: the signed record keeps its own
    `from Bea — admitted by: …` line and its bytes never carry the display header.
-5. With no nickname on the roster, the same frame opens with
+6. With no nickname on the roster, the same frame opens with
    `Message from helper (helper@acme)`.
 
 ## Contract pinned
 
 The product branch's answers, at the strings level:
 
-- Receipt: new optional `read_by` on the receipt payload, exact value `socket delivery`;
-  the whole payload is still signed under the receipt domain, and a receipt whose
-  `read_by` was stripped or changed does not verify. Written by the existing write-once,
-  `0600` receipt writer, only on the accepted branch, after the held-dialog read. A
-  receipt write that fails does not fail the send: the record simply stays unread.
+- Delivery: `team send` writes one signed record and no receipt for an accepted frame.
+  `delivered` (the history line, `via: socket`) means the frame was taken; only a
+  verifying seat receipt makes the record `read`. A receipt write failure cannot occur on
+  this path because no write is attempted.
+- Read: the seat's own reader writes the write-once, `0600` receipt. `read_by` stays an
+  optional signed field: the channel tool names `channel`, and a plain `team drops --read`
+  writes none; a receipt whose `read_by` was stripped or changed does not verify, and a
+  receipt an earlier build wrote naming `socket delivery` still verifies.
+- Unread pass: a socket-delivered record is due like any other. No pane messaging refuses
+  the typed leg, so the pass spends no wake marker; at twice the window
+  `reportUnreadDrops` writes the sender report, the lead report and the reported marker.
 - Frame header: `Message from <name> (<seat>@<team>)`, with no trailing colon, no summary,
   nothing else on the line and no admitted-by suffix. `<name>` is the sender's nickname as
   the naming rule resolves it, falling back to the seat name; `<seat>` is the record's
@@ -54,8 +65,7 @@ The product branch's answers, at the strings level:
   header, blank line, record body (which keeps its own attribution line), blank line, the
   existing reply line. Owner and watch frames follow the same rule
   (`Message from owner (owner@<team>)`, `Message from watch (watch@<team>)`). The typed
-  wake line and the sender-line setting are unchanged; the message-display setting is not
-  part of this fix.
+  wake line and the sender-line setting are unchanged.
 
 ## Running
 
@@ -63,8 +73,3 @@ The product branch's answers, at the strings level:
 bun test test/socket-read-receipt/acceptance.test.ts
 bun run typecheck
 ```
-
-At the pre-fix source the file is red-first by design: typecheck exits 0; four rows fail
-and the held-preservation row passes (1 pass, 4 fail, 24 expects). The red rows are the
-receipt and header rows; row 2 fails first on the ring list, because the acceptance wrote
-no receipt. Run the file at the hotfix head to confirm all five pass.

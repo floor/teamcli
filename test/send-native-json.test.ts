@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 let cleanup: () => void = () => {};
 
@@ -44,7 +45,7 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   expect(doc.dry_run).toBe(false);
   expect(doc.seat).toBe('native');
   expect(doc.status).toBe('sent (unconfirmed)');
-  expect(doc.action_summary).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)');
+  expect(withoutSendId(doc.action_summary)).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)');
   expect(doc.project).toBe('acme');
   expect(doc.session).toBe('acme');
   expect(doc.channel).toBe('drop');
@@ -85,7 +86,11 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
 
   expect(code).toBe(1);
   expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
-  const doc = JSON.parse(io.out) as unknown;
+  const doc = JSON.parse(io.out) as Record<string, unknown> & { error: Record<string, unknown> };
+  // The text line's ` (id <uuid>)` tail rides the error message too; the rest of the document
+  // is asserted exactly.
+  const error = doc.error as { message: string };
+  error.message = withoutSendId(error.message);
   expect(doc).toEqual({
     schema: { name: 'team.error', version: 1 },
     error: {

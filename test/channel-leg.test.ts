@@ -36,13 +36,14 @@ import { publishRecordRead } from '../src/send/read-receipt.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending, readPending } from '../src/send/pending.ts';
-import { signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
+import { isRead, signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetryScene, type RetrySources } from '../src/watch/retry.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { claudeBox, recordBody } from './helpers.ts';
 import { NOW, dropDir, fake, owner, world, type World } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const SESSION = 'acme';
 const CHANNEL_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
@@ -280,7 +281,7 @@ describe('the channel leg', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
     // Nothing was typed and no pane was read: the push is the delivery.
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
@@ -361,7 +362,7 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
+    expect(withoutSendId(io.out)).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);
@@ -488,7 +489,7 @@ describe('the channel redelivery', () => {
     expect(box.enters).toBe(0);
   });
 
-  test('the socket takes the redelivery first: one frame, its signed receipt, and the marker cleared', async () => {
+  test('the socket takes the redelivery first: one frame, no receipt, the marker cleared, the record unread', async () => {
     const made = channelWorld();
     // The owner's frame ends with the entity's owner-reply target, so the receiving team names
     // an entity whose shipped default answers (`floor`).
@@ -525,13 +526,12 @@ describe('the channel redelivery', () => {
     const content = (JSON.parse(frames[0] as string) as { message: { content: string } }).message.content;
     expect(content).toContain(BODY);
     expect(content.split('\n').at(-1)).toBe('Reply with: team send orchestrator@floor "…"');
-    // The socket delivery writes the same signed read receipt a socket send writes; the message
-    // is served, so no later pass rings for it.
-    const receipt = JSON.parse(readFileSync(receiptPath(dir, SOCKET_ID), 'utf8')) as SignedReceipt;
-    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id: SOCKET_ID, to: 'lead', read_by: 'socket delivery' });
+    // Only the seat writes a read receipt: the taken frame leaves the record unread for the
+    // seat's own read, and the watch's unread pass re-wakes it like any other message.
+    expect(existsSync(receiptPath(dir, SOCKET_ID))).toBe(false);
     const key = messageKeyState(made.home);
     if (key.kind !== 'key') throw new Error('the fixture home holds no message key');
-    expect(verifyReceipt(receipt, key.key)).toBe(true);
+    expect(isRead(dir, SOCKET_ID, { to: 'lead', root: realpathSync(made.root), session: SESSION }, key.key)).toBe(false);
     expect(box.typed).toEqual([]);
     expect(box.enters).toBe(0);
     expect(readPending(dir)).toEqual([]);

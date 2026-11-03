@@ -14,6 +14,7 @@ import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 import { recordBody, testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T12:00:00.000Z');
 const DOMAIN = 'team-send-grant-v1\n';
@@ -250,7 +251,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
     expect(err()).toContain('native: queued, no event adapter');
-    expect(out()).toBe(
+    expect(withoutSendId(out())).toBe(
       'team other, session "else"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n',
     );
     const drops = join(otherDir, 'send-drops', 'else', 'native');

@@ -47,6 +47,7 @@ import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
+import { createPresenceHeld, type PresenceHeldStep } from './presence/held.ts';
 import { isPresenceBinding, readPresenceReading } from './presence/contract.ts';
 import { presencePaths } from './presence/spool.ts';
 import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
@@ -195,6 +196,10 @@ export type StartMachineDaemonInput = {
   /** Builds one route's presence publisher step. The default appends through the bus event log;
    *  a test injects its own to observe what is published and when. */
   presencePublish?: (route: HostedRoute, stateDir: string) => PresencePublisherStep;
+  /** Builds one route's held-frame step, which reads a seat's pane after a socket delivery and
+   *  raises `held` when the frame sat at its dialog. The default reads the pane host; a test
+   *  injects its own so a scene never reaches a pane. */
+  presenceHeld?: (route: HostedRoute, stateDir: string) => PresenceHeldStep;
   /**
    * Builds one canonical route's subscribed per-seat read-only runtime sources. The default is
    * the production wiring: for every declared seat it resolves an explicit Codex target under the
@@ -519,6 +524,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
     publisher: PresencePublisherStep;
+    /** The held-frame step: the one place a socket frame is seen at a held-message dialog. */
+    held: PresenceHeldStep;
     /** One read-only runtime source per managed seat; empty for a hook-only route. */
     sources: PresenceSource[];
     /** One in-flight pump per source, so a slow source holds only its own seat's answer. */
@@ -1044,6 +1051,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             project: loaded.team.project,
             root: canonical,
             home,
+          }),
+        held: input.presenceHeld?.(route, stateDir)
+          ?? createPresenceHeld({
+            stateDir,
+            project: loaded.team.project,
+            root: canonical,
+            session: loaded.team.session,
+            home,
+            seats: loaded.team.seats.map((seat) => ({ name: seat.name, launch: seat.launch })),
           }),
         sources,
         sourceRuns: sources.map(() => null),
@@ -1581,6 +1597,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         }
       } catch (error) {
         logPresenceOnce(one.route, `the publish step failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        // The held-frame step runs last and belongs to the receiver, never to the sender: it looks
+        // at a seat's pane only after a socket delivery of this route's history, and raises `held`
+        // when the frame sat at its dialog. A look that cannot answer is retried by a later pass.
+        const held = await one.held(now());
+        if (held.failed !== null) logPresenceOnce(one.route, `the held step failed: ${held.failed}`);
+        for (const id of held.raised) logPresenceOnce(one.route, `a socket frame was held at its seat's dialog: ${id}`);
+      } catch (error) {
+        logPresenceOnce(one.route, `the held step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     })().finally(() => {
       if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);

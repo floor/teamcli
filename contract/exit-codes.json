@@ -5814,6 +5814,41 @@
     },
     {
       "code": 0,
+      "command": "trace",
+      "id": "trace.shown",
+      "meaning": "the message's steps were printed",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "trace",
+      "id": "trace.empty",
+      "meaning": "the event log holds no step under that id",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "trace",
+      "id": "trace.unreadable",
+      "meaning": "the event log cannot be read",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "trace",
+      "id": "trace.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "trace",
+      "id": "trace.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team trace"
+    },
+    {
+      "code": 0,
       "command": "unlock",
       "id": "unlock.released",
       "meaning": "the lock was released",

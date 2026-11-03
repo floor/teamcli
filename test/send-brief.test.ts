@@ -17,6 +17,7 @@ import { signedReceiptOf, verifyReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { testIo, type TestIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-19T20:00:00.000Z');
 const SESSION = 'briefs';
@@ -394,7 +395,7 @@ describe('a message-transport full brief sent end to end', () => {
     // the store afterwards.
     const code = await runSend([SEAT, '--brief', path], on, { ...fake(w), agents: () => [] });
     expect(code, on.err).toBe(0);
-    expect(on.out).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(on.out)).toBe(`team acme, session "briefs"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     const rec = record(w);
     expect(rec.body).toBe(`${HEADER}\n\n${text}`);
 

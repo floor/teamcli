@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { listUnacked, plantMessage } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -49,6 +50,7 @@ import { CHANNEL_HELD_RECEIPT, channelPushHeld, channelPushPath, channelPushed }
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 // Inbox ids are what `team send` writes — a lowercase UUID — because the server serves no other
@@ -326,6 +328,41 @@ function seedLaunchSidecar(
 }
 
 describe('retryHeldDrops', () => {
+  test('a retry attempt writes one wake.retried step under the message id, with its leg and outcome', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    seedHeld(made, 'acme', 'lead', 'drop-wake', 'from the owner — admitted by: the owner\n\nhello');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    await retryHeldDrops({
+      dir: made.dir, session: 'acme', root: made.root, home: made.home, team,
+      live: liveWith('lead', 'pane-lead'), ownPane: null, sources: scripts(one), now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    // The retry reached the typed leg and the leg refused: the step is still the record of the
+    // attempt, one per try, and a later pass's same try is a duplicate rather than a second step.
+    const read = readEvents('acme', made.root, made.home);
+    if (!read.ok) throw new Error(read.reason);
+    const steps = read.events
+      .map((event) => event.payload)
+      .filter((payload) => payload.record_id.startsWith('drop-wake:wake.retried:'));
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({
+      kind: 'wake.retried',
+      record_id: 'drop-wake:wake.retried:1:typed',
+      session: 'acme',
+      from: 'owner',
+      to: 'lead',
+      via: 'typed',
+      outcome: 'unreachable',
+      reason: expect.stringContaining('typing into a seat'),
+    });
+    expect(typeof steps[0]!.ms).toBe('number');
+    expect(steps[0]!.ms!).toBeGreaterThanOrEqual(0);
+  });
+
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: never types into a box that holds someone else\'s text, and delivers once it is free', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
@@ -1324,7 +1361,7 @@ describe('the turn-start read, end to end', () => {
     const io = testIo(made.root, { kind: 'owner' });
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(dialled).toEqual([]);
 
     const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');

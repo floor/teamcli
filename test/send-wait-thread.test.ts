@@ -21,7 +21,7 @@ import { readRecord, statusOf, verifyRecord } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { claudeBox, CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
-import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema, withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 const SENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -190,7 +190,7 @@ describe('team send --wait on the thread across delivery legs', () => {
         format: 1,
         dry_run: false,
         status: 'answered',
-        action_summary: 'worker: answered',
+        action_summary: `worker: answered (id ${SENT_ID})`,
         project: 'acme',
         session: 'acme',
         seat: 'worker',
@@ -231,7 +231,7 @@ describe('team send --wait on the thread across delivery legs', () => {
 
     expect(code).toBe(1);
     const errDoc = assertJsonErrorShape(sendIo.out, { id: 'send.timeout', repair: null });
-    expect(errDoc.error.message).toBe('worker: timeout: sent, no reply on the thread within 3s; the thread stays open');
+    expect(withoutSendId(errDoc.error.message)).toBe('worker: timeout: sent, no reply on the thread within 3s; the thread stays open');
 
     // The sent record is on disk, its status is still `sent`, and the thread is open.
     const workerDrops = dropDir(w.root, 'worker');
@@ -301,7 +301,7 @@ describe('team send --wait on the thread across delivery legs', () => {
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
-    expect(io.err).toBe(queuedLine('lead') + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead') + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
   });
 });
 
@@ -321,7 +321,7 @@ describe('team send --wait to a human: true seat (P3)', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nlead: answered\nhuman says go ahead\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: answered\nhuman says go ahead\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -354,7 +354,7 @@ describe('team send --wait to a human: true seat (P3)', () => {
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 2s; the thread stays open\n');
+    expect(withoutSendId(io.err)).toBe('team send: lead: timeout: sent, no reply on the thread within 2s; the thread stays open\n');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);

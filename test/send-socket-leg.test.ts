@@ -19,6 +19,7 @@ import { readHistory } from '../src/send/history.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 let cleanup: () => void = () => {};
 afterEach(() => {
@@ -732,7 +733,7 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   expect(existsSync(gone)).toBe(false);
   // The final line follows the class the walk proved, never the one cached before it: nothing
   // was woken, and the message waits for the seat's next turn.
-  expect(io.out).toBe(
+  expect(withoutSendId(io.out)).toBe(
     'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
   const history = readHistory('acme', made.root, made.home);
@@ -804,79 +805,47 @@ test('a recorded socket the pane does not own is no attempt, and the line follow
   expect(existsSync(standing)).toBe(true);
   expect(dials).toEqual([]);
   expect(host.frames).toEqual([]);
-  expect(io.out).toBe(
+  expect(withoutSendId(io.out)).toBe(
     'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
 });
 
-test('a held frame is marked once, and the socket stays out until the declaration is re-confirmed', async () => {
-  // The receiver's box holds the frame at its dialog. The walk records `held (socket)` once, in
-  // the history and in a mark under the receiving team's state folder, and falls through to the
-  // typed route with the same record and message id. The next send does not dial again: the
-  // declaration the hold sat under has not moved. Rewriting it re-confirms the word, and the
-  // socket is dialed again.
+test('a taken socket frame is delivered at the frame: the sender reads no pane and leaves no mark', async () => {
+  // The receiver's box shows its held-message dialog, but the sender's work ends when the frame
+  // is taken: it reports `delivered (socket)` at once, reads no pane and writes no `held` line.
+  // Whether the frame sat at the dialog is the daemon's held step to see on its own beat, and a
+  // person's send waits on no other seat's screen. No mark is left for a hold this send did not
+  // see, so with no daemon pass nothing here blocks the next dial.
   const made = world(['socket', 'typed']);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
   const settings = declare(made, 'accept');
   const rule = '─'.repeat(30);
-  const emptyBox = `${rule}\n❯ \n${rule}`;
   const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
-  let frameLanded = false;
-  let dialogShown = false;
-  const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
+  let reads = 0;
+  const pane = scripted(['idle', 'working', 'idle']);
   pane.paneText = () => {
-    if (frameLanded && !dialogShown) {
-      dialogShown = true;
-      return heldDialog;
-    }
-    return emptyBox;
+    reads += 1;
+    return heldDialog;
   };
-  const dials: string[] = [];
-  const host = fake(made, {
-    native: pane,
-    deliver: async (_path: string, frame: string) => {
-      dials.push(frame);
-      frameLanded = true;
-      return { ok: true };
-    },
-  });
+  const host = fake(made, { native: pane });
 
-  // First send: one dial, held once, the typed route takes it.
-  expect(await runSend(['lead', 'hello'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(0);
-  const markPath = join(made.dir, 'send-held', 'acme', 'lead.json');
-  const mark = JSON.parse(readFileSync(markPath, 'utf8')) as { at: string; declaredAt: number | null; source: string | null };
-  expect(mark.source).toBe(settings);
-  expect(typeof mark.declaredAt).toBe('number');
-  expect(Number.isNaN(Date.parse(mark.at))).toBe(false);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.out).toContain('lead: delivered (socket)');
+  expect(host.frames).toHaveLength(1);
+  expect(pane.typed).toEqual([]);
+  // One look, and it is the quota preflight every send makes before its legs; the held-dialog
+  // probe that used to poll this box for up to a second is gone.
+  expect(reads).toBe(1);
+  expect(existsSync(join(made.dir, 'send-held', 'acme', 'lead.json'))).toBe(false);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
-  expect(history.entries.at(-1)?.outcome).toBe('sent (unconfirmed)');
-  expect(history.entries.at(-1)?.failed?.join('\n')).toContain('Held message from another session');
-
-  // Second send under the same declaration: the socket is not dialed, and the walk says why.
-  expect(await runSend(['lead', 'again'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(0);
-  const second = readHistory('acme', made.root, made.home);
-  expect(second.ok).toBe(true);
-  if (!second.ok) return;
-  expect(second.entries.at(-1)?.failed?.join('\n')).toContain('held at its box');
-
-  // The declaration is re-confirmed: the file is rewritten at a new time and the restarted host
-  // exposes a fresh socket. The socket is dialed again, and this frame is taken.
-  const reworded = new Date(Math.max(Date.now(), (mark.declaredAt ?? 0) + 1000));
-  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
-  utimesSync(settings, reworded, reworded);
-  const socket = join(made.sockets, '222.sock');
-  writeFileSync(socket, '');
-  utimesSync(socket, reworded, reworded);
-  expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(2);
-  expect(pane.typed).toHaveLength(0);
+  expect(history.entries.at(-1)).toMatchObject({ to: 'lead', id: expect.any(String), outcome: 'delivered', via: 'socket' });
+  expect(history.entries.some((entry) => entry.outcome === 'held')).toBe(false);
+  // The declaration is untouched: nothing moved it, and the socket stays eligible.
+  expect(readFileSync(settings, 'utf8')).toBe(JSON.stringify({ crossSessionInbound: 'accept' }));
 });
 
 test('a held socket is no wake the send reports either: the class it appends is pull-only', async () => {
@@ -912,7 +881,7 @@ test('a held socket is no wake the send reports either: the class it appends is 
   const io = owner(made.root);
   expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(io.out).toBe(
+  expect(withoutSendId(io.out)).toBe(
     'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
   );
 });

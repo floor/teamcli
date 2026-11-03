@@ -109,6 +109,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'plan', args: ['plan'], schemaKey: 'team.plan', asSeat: true },
   { command: 'queue', args: ['queue', 'list'], schemaKey: 'team.queue' },
   { command: 'feed', args: ['feed'], schemaKey: 'team.feed' },
+  { command: 'trace', args: ['trace', '00000000-0000-4000-8000-000000000000'], schemaKey: 'team.trace' },
   { command: 'messages', args: ['messages'], schemaKey: 'team.messages' },
   { command: 'worktree', args: ['worktree', 'list'], schemaKey: 'team.worktree' },
   { command: 'commits', args: ['commits', 'check', 'HEAD'], schemaKey: 'team.commits' },

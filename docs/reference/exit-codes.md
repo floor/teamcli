@@ -836,6 +836,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `tempo.invocation` | `tempo` | 2 | the invocation can't be read | `team tempo` |
 | `tempo.not-a-repo` | `tempo` | 2 | not inside a git repository | `team tempo urgent` |
 | `tempo.word` | `tempo` | 2 | the word is not a tempo | `team tempo faster` |
+| `trace.shown` | `trace` | 0 | the message's steps were printed | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.empty` | `trace` | 1 | the event log holds no step under that id | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.unreadable` | `trace` | 1 | the event log cannot be read | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.configuration` | `trace` | 2 | the team file can't be read | `team trace 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `trace.usage` | `trace` | 2 | the invocation can't be read | `team trace` |
 | `unlock.released` | `unlock` | 0 | the lock was released | `team unlock heavy-run` |
 | `unlock.io` | `unlock` | 1 | the lock directory could not be removed | `team unlock heavy-run` |
 | `unlock.not-held` | `unlock` | 1 | the lock is not held | `team unlock heavy-run` |

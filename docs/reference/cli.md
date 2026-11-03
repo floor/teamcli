@@ -3685,6 +3685,34 @@ Usage:
 | --- | --- | --- |
 | `word` | no | no |
 
+## `trace`
+
+Hidden: no
+
+Usage:
+
+    team trace <id> [--json]
+
+### Who may run it
+
+`seat-record` — a trace reads the team's own verified event log and changes nothing: any seat with a registry record reads one message's steps, as it reads the Runtime's read surfaces
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `unlock`
 
 Hidden: no

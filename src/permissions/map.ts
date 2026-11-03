@@ -417,6 +417,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the tempo word is the owner\'s, from a terminal outside herdr',
     },
+    trace: {
+      kind: 'seat-record',
+      why: 'a trace reads the team\'s own verified event log and changes nothing: any seat with a registry record reads one message\'s steps, as it reads the Runtime\'s read surfaces',
+    },
     unlock: {
       kind: 'any-caller',
       why: 'a lock is anyone\'s to take, and its release is the holder\'s alone: the caller the holder file names releases it, and anyone else is shown the holder',

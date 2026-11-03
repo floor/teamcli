@@ -1095,12 +1095,10 @@ describe('the client send walk', () => {
     expect(frame.message.content).toBe(
       'Message from Grok Bot (owner)\n\nhello orchestrator\n\nReply with: team send orchestrator@floor "…"',
     );
-    // One signed record and the one receipt the socket write leaves, never a second of either.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
-    const receipt = JSON.parse(readFileSync(join(w.dropDir, 'drop-1.read.json'), 'utf8')) as {
-      payload: { id: string; status: string; to: string; read_by: string };
-    };
-    expect(receipt.payload).toMatchObject({ id: 'drop-1', status: 'read', to: 'orchestrator', read_by: 'socket delivery' });
+    // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
+    // leaves the record unread and the watch re-wakes it like any other message.
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
+    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
   });
 
@@ -1164,7 +1162,7 @@ describe('the client send walk', () => {
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
-  test('the record the walk carries is the grant\'s own: one drop, one receipt, client principal intact', async () => {
+  test('the record the walk carries is the grant\'s own: one drop, no receipt, client principal intact', async () => {
     const w = walkFixture('walk-identity');
     acceptInbound(w);
     let atDial: { names: string[]; bytes: string } = { names: [], bytes: '' };
@@ -1181,7 +1179,9 @@ describe('the client send walk', () => {
     // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
     expect(atDial.names).toEqual(['drop-1']);
     expect(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')).toBe(atDial.bytes);
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
+    // The taken frame wrote no receipt: only the seat writes a read receipt, so the record stays
+    // unread for its own reader and the watch re-wakes it like any other message.
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
     const parsed = signedRecordOf(JSON.parse(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')));
     expect(parsed).not.toBeNull();
     if (parsed === null) return;

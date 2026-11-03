@@ -78,12 +78,14 @@ TeamCLI launched, that launch setting is the authorization on its own and the te
 `inbound` line; a session launched some other way is dialed only when its team file also says
 `inbound: accept`. An explicit team-file `hold` or `refuse` always keeps the socket out — the
 documented opt-out — and a launch that says `hold`, `refuse` or nothing is never dialed. A frame
-the receiver's box holds at its
-dialog ends `held (socket)`: the signed record is already on disk, the walk falls through to the
-next route with the same message id, and that seat's socket is not dialed again until the
-declaration the hold sat under is re-confirmed, by its settings file being rewritten. The
-hold's mark lives under the receiving team's state folder, outside the seat's drop folder, so
-its reader never sees it as a message.
+the socket takes ends `delivered (socket)` at the frame: the send never waits on the receiving
+box, so a frame that then sits at that box's held-message dialog is not the sender's to see. The
+daemon's presence pass looks at the receiving seat's pane after a socket delivery and, when the
+frame is at its dialog, writes one `held` line for that id — its fields are the signed record's —
+and marks the socket held; that seat's socket is not dialed again until the declaration the hold
+sat under is re-confirmed, by its settings file being rewritten. The hold's mark lives under the
+receiving team's state folder, outside the seat's drop folder, so its reader never sees it as a
+message.
 
 The `channel` leg is the second implied default outside a declared word, and the only one that is
 never a declared word: with no level of the receiving seat's chain declaring an order, a Claude
@@ -543,7 +545,9 @@ word is no leg in this build.
 Every leg keeps its ordinary pane-safety checks. A human's pane is never dialed or typed into, a
 bare shell is never typed into, and a held frame keeps the socket out until the seat's
 declaration is re-confirmed. No leg writes a second record: each write accepts the record at the
-same id, and a frame the socket takes writes its one signed read receipt beside it. The frame
+same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
+the record stays unread until the seat's own read, and the watch re-wakes it like any other
+message. The frame
 names its sender `Message from Grok Bot (owner)`, with the owner's reply target as its reply
 line, so the receiving seat reads a person's message and not a seat address. The walk's ending
 never changes the invocation: the drop is on disk, the confirmation already printed, and the
@@ -698,23 +702,32 @@ line has none, because the delivery itself is the answer. A webhook-only route r
 unless the send's own post settles: a post the adapter took replaces these words with
 `webhook delivered (<n> ms)`, one whose answer was not read replaces them with
 `webhook delivery unknown: <reason>`, and a post that provably failed leaves them standing beside
-`webhook not delivered: <reason>`. The bus carries the same arrival after the send returns, so a
-post the send did not make is still the bus's to report. A fallback whose walk proved the
+`webhook not delivered: <reason>`. The send's own post is bound at one second, so a person's
+command never waits out the bus's budget: a post that outlives the bound is `unknown`, never a
+failure, and the claim keeps its place. The bus carries the same arrival after the send returns,
+so a post the send did not make is still the bus's to report. A fallback whose walk proved the
 receiving session has no dialable socket lowers the class the line reports: it never claims a
 wake the attempt just disproved.
 
+Every line that ends a send names the message id its steps are filed under: a trailing
+` (id <id>)` on the last line, or the id in the line's own words where it already carries one —
+the queued answer's `(…; id <id>)`, the handoff's `team send --confirm <id>`. A run that wrote no
+record (a refusal before it, a dry run, the roster) names none, and the rows below quote the
+wording without the trailing tail. The id is the key to `team trace <id>`, which prints that
+message's signed steps in order.
+
 | Outcome | Exit | Printed |
 | --- | --- | --- |
-| delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
+| delivered | 0 | `<seat>: delivered` on stdout; `<seat>: delivered (socket)` when the receiver's socket took the frame, reported at the frame with no look at the box; or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
 | delivered (webhook) | 0 | `<seat>: delivered (webhook, <n> ms)` on stdout, for the sender-posted webhook leg: the seat's adapter answered 2xx to the signed record this run posted, which is the leg's whole proof, and the history records `delivered` with `via: webhook`; an adapter's 2xx is not a read receipt, so this is never `delivered (read)` |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the channel's ack or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox's `inbox_read` receipt, the channel's ack, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
 | delivered (typed wake) | 0 | `<seat>: delivered (typed wake)` on stdout, for the profile-gated typed wake: the signed drop record was written under the seat lock, the one-line trigger was typed into the seat's composer and Enter pressed, and the profile's working screen appeared after that Enter; the trigger is the seat reading the drop at its next turn, never the body |
 | sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (webhook, <n> ms); webhook delivery unknown: <reason>` on stdout, for the sender-posted webhook leg whose answer was never read: the post may have been taken, the history records `via: webhook` with `sent (unconfirmed)`, and the claim keeps its place so no later pass posts the same record again |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
 | queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
-| held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
+| held | 1 | `team send: <seat>: held: <reason>` on stderr — a hold the walk itself sees; a socket frame that later sits at the receiving dialog is the daemon's to record, and the send has already ended `delivered (socket)` |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr — no send ends here in this build, which types nothing into a seat; the outcome stays in the vocabulary |
 | listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, the word a seat signed standing where the file's word does, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
@@ -756,13 +769,13 @@ invocation or team file can't be read.
 
 `answered` and `timeout` belong to `--wait` on the thread: `answered` when a verified reply
 record on the thread arrives within the window, and `timeout` when the window closes with no
-reply on the thread (leaving the thread open). `held (socket)` stays for the socket write's
-return.
+reply on the thread (leaving the thread open).
 
-`held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
-receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
-the reason it prints says what held it. A socket write the dialog keeps is `held (socket)`, and
-nothing is typed into the blocked box while the dialog stands.
+`held` is nothing typed and nothing further dialed: the message is safely on disk, the run exits
+1, and the reason it prints says what held it. A socket frame that ends at the receiving box's
+held-message dialog is not a hold this run reports — the send ended `delivered (socket)` when the
+frame was taken, and the daemon's presence pass records the hold afterwards, once for that id,
+and marks the socket held. Nothing is typed into the blocked box while the dialog stands.
 
 One hold writes nothing at all. When the recipient has a signed registry record and its pane
 names a model or version other than the record's, the run is `held` before the body is read and
@@ -867,7 +880,7 @@ receipt, which a running watch records as one `delivered (read)` history line.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only)
+claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -879,7 +892,7 @@ like any other:
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team send: operator-b: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only)
+operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -909,7 +922,7 @@ finds none:
 ```console caller=claude-keeper
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team beacon, session "beacon"
-claude-scribe: delivered (native, 0 ms)
+claude-scribe: delivered (native, 0 ms) (id 22222222-2222-4222-8222-222222222222)
 exit 0
 $ team send --confirm 22222222-2222-4222-8222-222222222222 ; echo "exit $?"
 team send: refused: 22222222-2222-4222-8222-222222222222: no pending native record holds that id; nothing was recorded
@@ -923,7 +936,7 @@ verified reply record:
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: answered
+claude-keeper: answered (id 44444444-4444-4444-8444-444444444444)
 the gate is green
 exit 0
 ```
@@ -1054,7 +1067,7 @@ own read hands it the message. The receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -1064,7 +1077,7 @@ it exits 1 and leaves the thread open:
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open
+team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open (id <id>)
 exit 1
 ```
 

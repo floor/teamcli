@@ -7792,6 +7792,57 @@
         }
       ],
       "hidden": false,
+      "name": "trace",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team trace <id> [--json]"
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a trace reads the team's own verified event log and changes nothing: any seat with a registry record reads one message's steps, as it reads the Runtime's read surfaces"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "unlock",
       "positionals": [
         {

@@ -13,6 +13,7 @@ import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messag
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'muse', '1.4.11');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
@@ -217,7 +218,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nmuse: delivered (typed wake)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: delivered (typed wake)\n');
     // One line, one Enter, and the line is the trigger that reads the drop, never the body.
     expect(pane.typed).toHaveLength(1);
     expect(pane.typed[0]).toContain('team drops --read');
@@ -247,7 +248,7 @@ describe('team send: the typed wake', () => {
     });
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
     expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);

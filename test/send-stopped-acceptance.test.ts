@@ -24,6 +24,7 @@ import { readAllHistories } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { testIo, type TestIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T13:00:00.000Z');
 const SESSION = 'alpha';
@@ -252,7 +253,7 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     const delivered = io(w);
     const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
     expect(deliveredCode, said(delivered)).toBe(0);
-    expect(delivered.out, said(delivered)).toBe(
+    expect(withoutSendId(delivered.out), said(delivered)).toBe(
       `team acme, session "${SESSION}"\n${STOPPED}: sent (unconfirmed) (drop, 0 ms); queued; ${STOPPED} reads it at its next turn, and nothing here gives it one (pull-only)\n`,
     );
     expect(host.typed.length).toBe(0);

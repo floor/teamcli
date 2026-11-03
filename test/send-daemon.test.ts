@@ -44,6 +44,7 @@ import { LOG_FILE, readState } from '../src/state.ts';
 import { storePath } from '../src/store/store.ts';
 import { filed } from './send-native-fixtures.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-14T16:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -869,7 +870,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
   });
 
   test('no pane messaging, nothing typed and the bus inbox keeps it; was: a non-queued item reaching delivery while the recipient seat lock is held queues at delivery with preserved id, no premature success, and promotes to delivered (read) on receipt while keeping compose seats out of queue acceptance', async () => {
@@ -1262,7 +1263,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const io = ownerIo(w.root);
     const code = await runSend(['lead', 'ping over socket', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
-    expect(io.err).toBe(
+    expect(withoutSendId(io.err)).toBe(
       `${queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT)}team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n`,
     );
 
@@ -1463,7 +1464,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io2.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io2.err).toContain('queued, no event adapter');
   });
 
@@ -1505,7 +1506,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);

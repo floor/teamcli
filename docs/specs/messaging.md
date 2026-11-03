@@ -400,12 +400,23 @@ read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached
-a session but sits in a dialog the sender cannot see — is `held`, with the side named, never
-`delivered`. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
+a session but sits in a dialog the sender cannot see — is not the sender's to report: the socket
+frame ends `delivered (socket)` at the frame, and the daemon's presence pass looks at the
+receiving pane after that delivery and, when the frame is at its dialog, writes one `held` line
+for the id — its fields are the signed record's — and marks the socket held, so the history
+carries both facts, taken at the frame and held at the box, and a sender that never saw the box
+never claims one for the other. At most three Enters are pressed, each try waited on 1 s, 3 s, then 9 s, with a
 further window for a cleared box to show the seat took the line. The whole verify window is
 bounded at 20 seconds (`VERIFY_TOTAL_MS`, `src/send/deliver.ts`): the three waits and the further
 window all fall inside it. The tag's measurements — about six seconds from send to a working
 seat, one millisecond to write the record — are measured, not promised.
+
+Every send that wrote a record names the message id on its closing line: a trailing ` (id <id>)`
+on that line, or the line's own words where it already carries one (the queued answer's
+`id <id>`, the handoff's `team send --confirm <id>`). A run that wrote no record — a refusal
+before it, a dry run, the roster — names none. The id is the key to that message's trace: the
+signed steps the send, the bus, the seat and the watch write for it, in one log, which
+`team trace <id>` prints in order.
 
 ### Typing into a pane
 

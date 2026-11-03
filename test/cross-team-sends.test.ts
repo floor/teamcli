@@ -27,6 +27,7 @@ import { historyPath } from '../src/send/history.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { installKey } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -416,7 +417,7 @@ describe('cross-team --record', () => {
     const reading = await record({ team: 'web', seat: 'web-lead' }, 'api-lead@api');
 
     expect(reading.code).toBe(0);
-    expect(reading.out).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
+    expect(withoutSendId(reading.out)).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
     const written = readFileSync(historyPath('api', world.roots.api as string, world.home), 'utf8');
     expect(written).toContain('"from":"web-lead"');
     expect(written).toContain('"to":"api-lead"');
@@ -430,7 +431,7 @@ describe('cross-team --record', () => {
     const reading = await record({ team: 'web', seat: 'web-lead' }, 'zeus@api');
 
     expect(reading.code).toBe(0);
-    expect(reading.out).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
+    expect(withoutSendId(reading.out)).toBe('team api, session "api"\napi-lead: recorded (native, 812 ms)\n');
     const teams = readTeams(world.home);
     const zeus = teams[teamIdOf(world.roots.api as string)]?.roster.find((line) => line.seat === 'api-lead');
     if (!zeus) throw new Error('the test world has no api-lead roster line');

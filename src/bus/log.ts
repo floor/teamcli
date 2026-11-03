@@ -91,6 +91,15 @@ export type EventPayload = {
   presence_event_id?: string;
   presence_observed_at?: string;
   presence_seq?: number;
+  /** On a message step (`message.staged`, `webhook.posted`, `leg.tried`, `wake.retried`): the
+   *  step's own machine word — the walk's (`delivered`, `refused`, `unreachable`, `held`,
+   *  `timeout`) or the webhook post's (`posted`, `failed`, `unknown`) — never free text. A reader
+   *  that does not know the word still prints it; nothing routes on it. */
+  outcome?: string;
+  /** On a message step: milliseconds the step itself took, measured by the writer. Zero is a real
+   *  measurement (a refusal decided before anything was dialed), so it is kept apart from the
+   *  sequence fields, which start at one. */
+  ms?: number;
   /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
    *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
   reconciled?: string;
@@ -489,6 +498,7 @@ const OPTIONAL_STRING_FIELDS = [
   'config_old',
   'config_new',
   'reconciled',
+  'outcome',
   'presence_state',
   'presence_event',
   'presence_source',
@@ -498,6 +508,10 @@ const OPTIONAL_STRING_FIELDS = [
 ] as const;
 
 const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
+
+/** Measured quantities carry a zero legitimately: an attempt refused before it dialed took no
+ *  time. They are not sequences, and the one-based check above would refuse the honest value. */
+const OPTIONAL_MEASURE_FIELDS = ['ms'] as const;
 
 /** The shape every event's `record_id` must have: a generated token — a UUID, a digest, or a
  *  colon-joined name — never free text. The append index searches a retained line for the id as a
@@ -517,6 +531,7 @@ const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'record_id',
   ...OPTIONAL_STRING_FIELDS,
   ...OPTIONAL_SEQUENCE_FIELDS,
+  ...OPTIONAL_MEASURE_FIELDS,
 ]);
 
 export function parseEventPayload(value: unknown): EventPayload | null {
@@ -550,6 +565,13 @@ export function parseEventPayload(value: unknown): EventPayload | null {
     if (field in obj && obj[field] !== undefined) {
       const value = obj[field];
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return null;
+      payload[field] = value;
+    }
+  }
+  for (const field of OPTIONAL_MEASURE_FIELDS) {
+    if (field in obj && obj[field] !== undefined) {
+      const value = obj[field];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
       payload[field] = value;
     }
   }
@@ -1266,6 +1288,11 @@ function eventPayloadOf(input: EventAppendInput, seq: number): EventPayload | nu
     }
   }
   for (const field of OPTIONAL_SEQUENCE_FIELDS) {
+    if (input[field] !== undefined) {
+      candidate[field] = input[field];
+    }
+  }
+  for (const field of OPTIONAL_MEASURE_FIELDS) {
     if (input[field] !== undefined) {
       candidate[field] = input[field];
     }

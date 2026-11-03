@@ -31,15 +31,19 @@ export type Book = {
   status: string;
   typed: string[];
   enters: number;
+  /** Screen reads the send's own pane did, counted so a scene can pin that a socket delivery
+   *  reads none: the held-dialog check belongs to the daemon's presence pass now. */
+  reads: number;
 };
 
-/** One pane, read by both the send's held-dialog probe and the watch's unread pass. Typing
- *  follows the box: the line lands in the composer, Enter sends it and leaves an empty box. */
+/** One pane, read by the watch's unread pass. A delivery's frame is taken without a look: only
+ *  the daemon's held step reads the screen for a socket frame. Typing follows the box: the line
+ *  lands in the composer, Enter sends it and leaves an empty box. */
 export function book(screen: string | null = claudeBox(''), status = 'idle'): Book {
-  return { screen, status, typed: [], enters: 0 };
+  return { screen, status, typed: [], enters: 0, reads: 0 };
 }
 
-/** The pane the send reads: only the held-dialog probe is part of a socket send. */
+/** The pane a socket send never reads: the host is here for the frame's own delivery. */
 export function nativeOf(one: Book): NativePane {
   return {
     typeText: (_session, _pane, text) => {
@@ -54,7 +58,10 @@ export function nativeOf(one: Book): NativePane {
       return true;
     },
     status: () => one.status,
-    paneText: () => one.screen,
+    paneText: () => {
+      one.reads += 1;
+      return one.screen;
+    },
     wait: async () => {},
   };
 }
