@@ -853,6 +853,7 @@
     "test/workflow/next-reservation-command.test.ts": 0,
     "test/workflow/next-reservation-daemon.test.ts": 3,
     "test/workflow/next-reservation-fallback.test.ts": 2,
+    "test/workflow/redispatch-max.test.ts": 2,
     "test/workflow/registry.test.ts": 0,
     "test/workflow/replay-independent.test.ts": 0,
     "test/workflow/replay-stale-roundtrip.test.ts": 3,
