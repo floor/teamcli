@@ -18,7 +18,8 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
-`swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `client-bundles`,
+`swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `webhook-sender-deadline-ms`,
+`client-bundles`,
 `client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`,
 `actions-commands`, `daemon.heartbeat`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
@@ -94,6 +95,17 @@ before its child process is killed. Both default to 2000 milliseconds, take a wh
 milliseconds from 100 to 30000, and take the entity, project and team levels; a shorter value is
 the tighter one. A chain that cannot be read leaves both defaults in force, and the watch holds
 its automated work on the unreadable pace as it always does.
+
+`webhook-sender-deadline-ms` is how long a send's own arrival post waits on the receiving seat's
+webhook routine before the send reports the answer unknown: 3000 milliseconds when nothing
+declares it, a whole number of milliseconds from 500 to 10000, and a shorter value is the tighter
+one. It takes the entity, project and team levels. The post is a wake beside a record that is
+already durable and staged for the bus and the seat's pull, so the bound never costs the message:
+a post that outlives it is reported `unknown`, never `failed`, and its claim keeps the record from
+being posted a second time. A chain that cannot be read leaves the default in force. The bus
+delivery keeps the adapter's own budget — three attempts, five seconds each — and does not read
+this value. `team status` and `team check` report a claim left `sent` when no bus serves the root
+to finish it, and never count such a post as delivered.
 
 `brief-transport` says how a general seat brief reaches its seat. `file`, the default, writes the
 claim and the signed drop and nothing else; `message` sends the whole brief as a real send body

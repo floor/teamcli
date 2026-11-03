@@ -13,6 +13,7 @@ import { runTeamCheck } from '../src/check/team.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { displayPath } from '../src/output/text.ts';
 import { emptySession, updateState, type WebhookDeliveryRecord } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
@@ -108,15 +109,21 @@ function scene(w: { root: string; text: string }) {
   const parsed = validateTeamFile(w.text);
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
   const standing = verifiedOf(parsed.team, w.text, w.root, NOW);
-  const sources = (): StatusSources => ({ live: () => live(w.text), branch: () => 'main', standing: () => standing, now: () => NOW });
-  const status = async () => {
+  const sources = (alive?: (pid: number) => boolean): StatusSources => ({
+    live: () => live(w.text),
+    branch: () => 'main',
+    standing: () => standing,
+    now: () => NOW,
+    ...(alive === undefined ? {} : { alive }),
+  });
+  const status = async (alive?: (pid: number) => boolean) => {
     const io = testIo(w.root, { kind: 'owner' });
-    const code = await runStatus(['--file', join(w.root, '.agents/team.yaml')], io, sources());
+    const code = await runStatus(['--file', join(w.root, '.agents/team.yaml')], io, sources(alive));
     return { code, out: `${io.out}${io.err}` };
   };
-  const check = () => {
+  const check = (alive?: (pid: number) => boolean) => {
     const io = testIo(w.root, { kind: 'owner' });
-    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, { ...sources(), home: w.root });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, { ...sources(alive), home: w.root });
     return { code, out: `${io.out}${io.err}` };
   };
   return { status, check };
@@ -187,4 +194,41 @@ test('a sent-unknown delivery is noted in its own words, and a delivered one cle
   record(w.root, session, { record_id: 'msg-2', at: AT, outcome: 'delivered', attempts: 1, reason: 'HTTP 204' });
   expect((await status()).out).not.toContain('webhook delivery did not arrive');
   expect(check().out).not.toContain('webhook delivery did not arrive');
+});
+
+test('a sent claim with no bus serving the root is flagged, and clears once one serves', async () => {
+  const w = world();
+  const { status, check } = scene(w);
+  const session = sessionOf(w);
+  const drops = join(w.root, '.agents', 'send-drops', session, 'iris');
+  mkdirSync(drops, { recursive: true });
+  const claim = (id: string, state: string): void => {
+    writeFileSync(join(drops, `${id}.posting`), `${JSON.stringify({ state, at: AT })}\n`);
+  };
+  // A claim still `claimed` proves the request was never handed to the transport: no line.
+  claim('msg-1', 'claimed');
+  expect((await status()).out).not.toContain('webhook post');
+  expect(check().out).not.toContain('webhook post');
+
+  // A `sent` claim may have reached the routine: with no bus serving the root, nobody finishes it.
+  claim('msg-2', 'sent');
+  const ONE = `1 webhook post awaits a bus that isn't serving (${w.root})`;
+  // The check prints its notes through the home it was given — this scene's root — so its line
+  // abbreviates that home; the status run is given no home and keeps the absolute path.
+  expect((await status()).out).toContain(ONE);
+  expect(check().out).toContain(displayPath(ONE, w.root));
+
+  claim('msg-3', 'sent');
+  const TWO = `2 webhook posts await a bus that isn't serving (${w.root})`;
+  expect((await status()).out).toContain(TWO);
+  expect(check().out).toContain(displayPath(TWO, w.root));
+
+  // A dead bus is not serving: the line stands.
+  writeFileSync(join(w.root, '.agents/bus.pid'), `${JSON.stringify({ pid: 4242, started: AT })}\n`);
+  expect((await status(() => false)).out).toContain(TWO);
+  expect(check(() => false).out).toContain(displayPath(TWO, w.root));
+
+  // A serving bus finishes the claims itself: the line clears, and the delivery record stands.
+  expect((await status(() => true)).out).not.toContain('webhook post');
+  expect(check(() => true).out).not.toContain('webhook post');
 });

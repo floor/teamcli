@@ -134,6 +134,13 @@ arrive: it failed after <n> attempts at <instant>: <reason>; the delivery left t
 for the seat's own pull`, or the same sentence with the sent-unknown or refused words — and it
 never enters the total or the exit. A delivered record draws no line.
 
+A webhook post a send left in flight is the same kind of note. When a record's claim beside it
+is still `sent` — the request may have reached the routine and its answer was never read — and no
+bus is serving the root to finish it, one line says how many wait:
+`<n> webhook posts await a bus that isn't serving (<root>)` (`1 webhook post awaits` for one).
+A bus that serves the root draws no line: its own pass records the outcome. The line never
+reports a post as delivered, and it never enters the total or the exit.
+
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
 process team launched — back at its shell, or replaced by one the state's stored session does not

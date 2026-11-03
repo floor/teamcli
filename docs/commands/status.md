@@ -103,7 +103,10 @@ difference, never in a total, never an exit.
 
 The seat's last webhook delivery is one more note when its recorded outcome is not delivered, in
 the check's words (`<seat>: its last webhook delivery did not arrive: …; the delivery left the
-drop record for the seat's own pull`); a delivered record draws none.
+drop record for the seat's own pull`); a delivered record draws none. A webhook post a send left
+in flight with no bus serving the root to finish it is a note in the same words as the check's:
+`<n> webhook posts await a bus that isn't serving (<root>)` (`1 webhook post awaits` for one);
+it never reports a post as delivered, and it changes no count.
 
 ## A leftover team file
 

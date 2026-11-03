@@ -38,7 +38,7 @@ import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { declaredUnreadAfter, unreadWindowSeconds, watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
-import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
+import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
@@ -721,6 +721,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   comparison.notes.push(...unmanagedEndpointNotes(team.seats, state));
   // A seat whose last webhook delivery did not arrive, in the same words `team check` prints.
   comparison.notes.push(...webhookDeliveryNotes(team.seats, state));
+  // A send's webhook post left in flight with no bus serving the root to finish it: a reading,
+  // never a delivered post.
+  comparison.notes.push(...unfinishedWebhookNotes({ root, alive: sources.alive ?? pidAlive }));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),

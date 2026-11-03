@@ -705,12 +705,15 @@ line has none, because the delivery itself is the answer. A webhook-only route r
 unless the send's own post settles: a post the adapter took replaces these words with
 `webhook delivered (<n> ms)`, one whose answer was not read replaces them with
 `webhook delivery unknown: <reason>`, and a post that provably failed leaves them standing beside
-`webhook not delivered: <reason>`. The send's own post is bound at one second, so a person's
+`webhook not delivered: <reason>`. The send's own post is bound at three seconds by default — the
+`webhook-sender-deadline-ms` policy in force for the receiving team, whose word is a whole number
+of milliseconds from 500 to 10000 and whose shorter value is the tighter one — so a person's
 command never waits out the bus's budget: a post that outlives the bound is `unknown`, never a
-failure, and the claim keeps its place. The bus carries the same arrival after the send returns,
-so a post the send did not make is still the bus's to report. A fallback whose walk proved the
-receiving session has no dialable socket lowers the class the line reports: it never claims a
-wake the attempt just disproved.
+failure, and the claim keeps its place. The bound leaves the post off the critical path: the
+record is already durable and staged for the bus and the seat's pull. The bus carries the same
+arrival after the send returns, so a post the send did not make is still the bus's to report. A
+fallback whose walk proved the receiving session has no dialable socket lowers the class the
+line reports: it never claims a wake the attempt just disproved.
 
 Every line that ends a send names the message id its steps are filed under: a trailing
 ` (id <id>)` on the last line, or the id in the line's own words where it already carries one —

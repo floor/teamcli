@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
 
 /** How hard one record is tried when the request could not be sent at all: three attempts in
@@ -56,14 +57,6 @@ export const WEBHOOK_POLICY: WebhookPolicy = {
   backoffMs: [1000, 4000],
   claimStaleMs: 30_000,
 };
-
-/** The longest a send's own arrival post waits on the routine. The bus delivery has the adapter's
- *  budget (three attempts, five seconds each); a person's `team send` never sits on a webhook for
- *  it: the post is a wake beside the record, and the record is already staged for the bus and the
- *  seat's pull. A row's own shorter bound still applies; this one only caps a longer one. A post
- *  that times out leaves its claim in `sent`, the state that forbids a second post, and the bus
- *  reports the record instead. */
-export const SENDER_POST_DEADLINE_MS = 1000;
 
 /** What one delivery ended as: the routine took it (`delivered`, only after a 2xx), the request
  *  could not be sent and its attempts ran out (`failed`), the body may have reached the routine
@@ -711,6 +704,9 @@ export type SenderPostInput = {
   seat: string;
   /** The seat's adapter row, as the receiving team file declares it. */
   webhook: SeatWebhook;
+  /** The receiving team file, as the policy chain's team level reads it; absent, the release
+   *  default bound stands. */
+  team?: TeamFile | null;
   root: string;
   session: string;
   id: string;
@@ -805,6 +801,13 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
         reason: cls === null ? 'request refused before sending' : `request refused before sending (${cls})`,
       };
     }
+    // The row's own answer bound, when it names one, as the bus delivery reads it — capped by the
+    // sender's own deadline: a send is a person's command and never waits out the bus's budget.
+    // The deadline is the `webhook-sender-deadline-ms` policy in force for the receiving team,
+    // three seconds when nothing declares it. Read before the claim is taken, so a chain that
+    // cannot be read fails the post with no claim left behind.
+    const deadlineMs = webhookSenderDeadlineMs({ home: input.home, root: input.root, team: input.team ?? null });
+    const timeoutMs = Math.min(input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs, deadlineMs);
     // Claim before posting, exclusively: of this send and every bus pass, exactly one posts.
     if (!takeClaim(input.dropDir, input.id)) return { kind: 'none', why: 'claim-held' };
     held = 'claimed';
@@ -822,9 +825,6 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
-    // The row's own answer bound, when it names one, as the bus delivery reads it — capped by the
-    // sender's own deadline: a send is a person's command and never waits out the bus's budget.
-    const timeoutMs = Math.min(input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs, SENDER_POST_DEADLINE_MS);
     try {
       const response = await (input.fetch ?? fetch)(request.url, {
         ...prepared,

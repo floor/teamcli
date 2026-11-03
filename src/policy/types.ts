@@ -27,6 +27,7 @@ import {
 } from '../settings/message-display.ts';
 import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
+import { WEBHOOK_SENDER_DEADLINE_MAX_MS, WEBHOOK_SENDER_DEADLINE_MIN_MS, WEBHOOK_SENDER_DEADLINE_MS } from '../settings/webhook-sender.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
@@ -123,6 +124,7 @@ export const ENFORCED_POLICY_NAMES = [
   'idle-threshold',
   'watch-read-budget-ms',
   'watch-read-timeout-ms',
+  'webhook-sender-deadline-ms',
   'daemon.broker',
   'daemon.fallback-backlog-above',
   'daemon.fallback-backlog-limit',
@@ -262,6 +264,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'watch-read-timeout': 'watch-read-timeout-ms',
   read_timeout_ms: 'watch-read-timeout-ms',
   'read-timeout': 'watch-read-timeout-ms',
+  webhook_sender_deadline_ms: 'webhook-sender-deadline-ms',
+  webhook_sender_deadline: 'webhook-sender-deadline-ms',
   watch_rhythm: 'watch-rhythm',
   grant_emission: 'grant-emission',
   owner_signers: 'owner-signers',
@@ -379,6 +383,19 @@ function parseReadMillis(raw: unknown): number | null {
 function readMillisProblem(name: string, raw: unknown): string | null {
   if (parseReadMillis(raw) !== null) return null;
   return `policy "${name}" needs a whole number of milliseconds from 100 to 30000, such as 2000`;
+}
+
+/** One send's own webhook answer bound: a whole number of milliseconds from 500 to 10000. */
+function parseWebhookSenderDeadline(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[0-9]+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= WEBHOOK_SENDER_DEADLINE_MIN_MS && n <= WEBHOOK_SENDER_DEADLINE_MAX_MS
+    ? n
+    : null;
+}
+
+function webhookSenderDeadlineProblem(name: string, raw: unknown): string | null {
+  if (parseWebhookSenderDeadline(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from ${String(WEBHOOK_SENDER_DEADLINE_MIN_MS)} to ${String(WEBHOOK_SENDER_DEADLINE_MAX_MS)}, such as ${String(WEBHOOK_SENDER_DEADLINE_MS)}`;
 }
 
 function parsePositiveSeconds(raw: unknown): number | null {
@@ -1158,6 +1175,25 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseReadMillis,
     valueProblem: (raw: unknown) => readMillisProblem('watch-read-timeout-ms', raw),
     // A shorter or equal call is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The longest a send's own arrival post waits on the receiving seat's routine: whole
+  // milliseconds from 500 to 10000, 3000 when nothing declares it, and a shorter bound is the
+  // tighter one. The post is a wake beside a record that is already durable and staged for the
+  // bus and the seat's pull, so a person's command never waits out the bus's budget; the release
+  // default leaves a routine that answers in one to two seconds its full answer instead of an
+  // `unknown` it never had. The bus delivery keeps its own budget (`WEBHOOK_POLICY`) and does not
+  // read this value. `webhookSenderDeadlineMs` in `src/settings/webhook-sender-policy.ts` reads
+  // it for the receiving team's chain.
+  'webhook-sender-deadline-ms': {
+    name: 'webhook-sender-deadline-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: WEBHOOK_SENDER_DEADLINE_MS,
+    gateLifting: false,
+    parseValue: parseWebhookSenderDeadline,
+    valueProblem: (raw: unknown) => webhookSenderDeadlineProblem('webhook-sender-deadline-ms', raw),
+    // A shorter or equal bound is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The machine daemon's broker feature: on keeps the broker handler serving `team next` over the
