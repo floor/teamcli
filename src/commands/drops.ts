@@ -17,7 +17,7 @@
 // is named on stderr, one line per message, whether or not another body was served. The hook
 // takes no placed caller.
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -114,30 +114,59 @@ export type DropsSources = {
   poll?: (tick: number) => Promise<boolean>;
 };
 
-function defaultPoll(): Promise<boolean> {
+/** How long a `--follow` waits with no file event before it reads the folder again anyway: the
+ *  fallback that catches an event the platform dropped, or a folder that did not exist yet. */
+export const FOLLOW_FALLBACK_MS = 1500;
+
+/** The seams the wait takes in tests: the folder watch and the fallback timer. */
+export type FollowWaiters = {
+  watch?: (dir: string, options: { persistent: boolean }) => FSWatcher;
+  setTimer?: (run: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+};
+
+/**
+ * The wait between `--follow` reads: a file event in the drop folder, or the slow fallback timer,
+ * whichever comes first; SIGINT or SIGTERM stop the follow. The folder may not exist yet — the
+ * first drop creates it — so a folder that cannot be watched leans on the fallback, which brings
+ * the next pass and another try. An idle follow costs one watch and one timer, never a spinning
+ * read loop.
+ */
+export function defaultPoll(dropDir: string, waiters: FollowWaiters = {}): Promise<boolean> {
+  const watchDir = waiters.watch ?? watch;
+  const setTimer = waiters.setTimer ?? ((run: () => void, ms: number) => setTimeout(run, ms));
+  const clearTimer = waiters.clearTimer ?? ((timer: ReturnType<typeof setTimeout>) => clearTimeout(timer));
   return new Promise((resolvePoll) => {
     let settled = false;
-    const stop = () => {
+    let watcher: FSWatcher | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const settle = (again: boolean): void => {
       if (settled) return;
       settled = true;
       process.off('SIGINT', stop);
       process.off('SIGTERM', stop);
-      clearTimeout(timer);
-      resolvePoll(false);
+      if (watcher !== null) watcher.close();
+      if (timer !== null) clearTimer(timer);
+      resolvePoll(again);
     };
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      process.off('SIGINT', stop);
-      process.off('SIGTERM', stop);
-      resolvePoll(true);
-    }, 250);
+    const stop = (): void => settle(false);
+    const wake = (): void => settle(true);
+    try {
+      watcher = watchDir(dropDir, { persistent: false });
+      watcher.on('change', wake);
+      watcher.on('rename', wake);
+      watcher.on('error', wake);
+    } catch {
+      // The folder is not there yet; the fallback timer brings the next pass, which tries again.
+      watcher = null;
+    }
+    timer = setTimer(wake, FOLLOW_FALLBACK_MS);
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
   });
 }
 
-export const realSources: DropsSources = { home: homedir(), poll: () => defaultPoll() };
+export const realSources: DropsSources = { home: homedir() };
 
 /** How many bodies one `--read` hands over. The newest are read first: a bounded batch keeps a
  *  turn from carrying an unbounded folder, and the newest mail is the mail the turn is for.
@@ -519,7 +548,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   let unreadable: string | null = first.kind === 'unreadable' ? first.reason : null;
   const rows = first.kind === 'ok' ? first.rows : [];
   if (follow) {
-    const poll = sources.poll ?? (() => defaultPoll());
+    const poll = sources.poll ?? (() => defaultPoll(dropDir));
     // The drops already there are waiting, not new: a Monitor starts quiet and prints only what
     // lands while it runs.
     const seen = new Set(rows.map((row) => row.id));
