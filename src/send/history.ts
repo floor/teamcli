@@ -154,8 +154,10 @@ function fileProblem(at: string, label = 'history log'): string | null {
 
 /**
  * Ensures `<home>/.config`, `<home>/.config/team`, and `<storeDir>` exist as real directories
- * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Shared
- * with the pending records (`pending.ts`), which live in the same store beside the history.
+ * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Several
+ * writers may start in a brand-new empty home at once: only one process can win the `mkdir` for
+ * a level, and the others accept the winner's folder instead of failing the write. Shared with
+ * the pending records (`pending.ts`), which live in the same store beside the history.
  */
 export function ensureStoreLadder(storeDir: string, home: string): string | null {
   const stateRoot = storesFolder(home);
@@ -168,21 +170,17 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
   for (const level of levels) {
     const held = heldAt(level.at);
     if (held.kind === 'missing') {
+      const made = createDir0700(level.at);
+      if (made !== null) return made;
+      continue;
+    }
+    const problem = ladderProblem(level.at);
+    if (problem !== null) return problem;
+    if (level.seal && held.kind === 'folder' && held.mode !== 0o700) {
       try {
-        // Import mkdirSync lazily or use node:fs; created one level at a time so no parent link is traversed.
-        createDir0700(level.at);
+        chmodSync(level.at, 0o700);
       } catch {
-        return 'the state folder could not be created';
-      }
-    } else {
-      const problem = ladderProblem(level.at);
-      if (problem !== null) return problem;
-      if (level.seal && held.kind === 'folder' && held.mode !== 0o700) {
-        try {
-          chmodSync(level.at, 0o700);
-        } catch {
-          return 'the state folder permissions could not be set to 0700';
-        }
+        return 'the state folder permissions could not be set to 0700';
       }
     }
   }
@@ -191,9 +189,27 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
 
 import { mkdirSync } from 'node:fs';
 
-function createDir0700(path: string): void {
-  mkdirSync(path, { mode: 0o700 });
-  chmodSync(path, 0o700);
+/**
+ * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent
+ * link is traversed. Only one writer can win the `mkdir` for a level; `EEXIST` is then success
+ * only when what stands there is a real folder of this user's, judged by the same no-link rule
+ * every level gets, and anything else is a refusal rather than a folder to write into.
+ */
+function createDir0700(path: string): string | null {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return 'the state folder could not be created';
+    const problem = ladderProblem(path);
+    if (problem !== null) return problem;
+    if (heldAt(path).kind !== 'folder') return 'the state folder could not be created';
+  }
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    return 'the state folder permissions could not be set to 0700';
+  }
+  return null;
 }
 
 /**
@@ -215,11 +231,8 @@ export function ensureFoldersBelow(storeDir: string, folders: readonly string[])
       if (ready.has(at)) continue;
       const held = heldAt(at);
       if (held.kind === 'missing') {
-        try {
-          createDir0700(at);
-        } catch {
-          return `${at}: the state folder could not be created`;
-        }
+        const made = createDir0700(at);
+        if (made !== null) return `${at}: ${made}`;
       } else {
         const problem = ladderProblem(at);
         if (problem !== null) return `${at}: ${problem}`;
