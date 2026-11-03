@@ -17,6 +17,7 @@ import { withoutSendId } from './helpers/output.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'muse', '1.4.11');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
+const GOAL = readFileSync(join(FIXTURES, 'goal-hint-synthetic.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working-synthetic.txt'), 'utf8');
 const UNSENT = readFileSync(join(FIXTURES, 'unsent-synthetic.txt'), 'utf8');
 
@@ -66,6 +67,14 @@ const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
 describe('the typed wake: one line into an empty idle box', () => {
   test('two idle reads, one line, one Enter: the working screen is the delivery', async () => {
     const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('the /goal hint is an empty box: two reads of it, one line, one Enter', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? GOAL : holding(LINE)));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
     expect(pane.typed).toEqual([LINE]);

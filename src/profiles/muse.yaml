@@ -35,11 +35,12 @@ rules:
 delivery: none
 # The typed-wake exception to the no-pane-messaging rule (2026-10-31), granted per profile and
 # narrowly: a send may type one trigger line into a composer two reads showed as the empty
-# idle prompt, presses Enter only while the box still holds exactly that line, and calls itself
-# delivered only when the `working` screen above appears. Nothing else is typed, no draft is
-# moved or cleared, and a wake that cannot deliver leaves the message in the bus inbox. The
-# screen rules below are what the wake reads back: `idle` is the empty box, `working` is the
-# acknowledgement. See src/send/typed-wake.ts.
+# idle prompt, presses Enter (this CLI's submit; Return is not) only while the box still
+# holds exactly that line, and calls itself delivered only when the `working` screen above
+# appears. Nothing else is typed, no draft is moved or cleared, and a wake that cannot
+# deliver leaves the message in the bus inbox. The screen rules below are what the wake
+# reads back: `idle` is the empty box, `working` is the acknowledgement. See
+# src/send/typed-wake.ts.
 typed_wake: screen
 # herdr 0.7.1 reports a muse pane as no agent, or `unknown`, while the CLI runs: `agent list`
 # carried the 1.4.11 pane with no `agent` type and `agent_status: "unknown"` while Muse sat at
@@ -156,6 +157,9 @@ screen:
       # The pane's rotating prompt hint, drawn greyed in the input row between the Voice input
       # rules; confirmed on a running 1.4.11 pane, which drew it as the box's whole input.
       - equals: 'Tab queues or steers while a run is active'
+      # The rotating /goal hint, drawn as the input row's whole text. A plain read of that row
+      # was unsent until this equals: the words are the pane's hint, and the box is empty.
+      - equals: '/goal pins a session objective with a progress bar'
     # 1.4.14 draws a completion row of its own under the input row, inside the box, for the text
     # being typed — `  /exit  Quit when idle` for `/exit` (muse-unsent-ansi.txt). The row is the
     # pane's, not text: it is left out of the box's rows, so the box reads back as the typed text

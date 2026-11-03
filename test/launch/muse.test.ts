@@ -110,6 +110,7 @@ describe('muse launch and captured screens', () => {
     ['ambiguous-synthetic', 'unknown', 'unknown'],
     ['rules-line-unsent', 'unsent', 'unsent'],
     ['placeholder-synthetic', 'idle', 'idle'],
+    ['goal-hint-synthetic', 'idle', 'idle'],
   ] as const)('1.4.11 %s reads %s, its composer %s', (file, kind, composer) => {
     const text = fixture1411(file);
     expect(readScreen('muse', text).kind).toBe(kind);
@@ -181,6 +182,19 @@ describe('muse launch and captured screens', () => {
     expect(classifyComposer('muse', text.split('\n')).kind).toBe('idle');
     expect(readBox('muse', text)).toBeNull();
     expect(boxHoldsText('muse', 'Tab queues or steers while a run is active', text)).toBe(false);
+  });
+
+  test('the /goal hint row is the empty box, and the same words with more text are a draft', () => {
+    const text = fixture1411('goal-hint-synthetic');
+    expect(readScreen('muse', text).kind).toBe('idle');
+    expect(readBox('muse', text)).toBeNull();
+    expect(boxHoldsText('muse', '/goal pins a session objective with a progress bar', text)).toBe(false);
+    const draft = text.replace(
+      '❯ /goal pins a session objective with a progress bar',
+      '❯ /goal pins a session objective with a progress bar now',
+    );
+    expect(readScreen('muse', draft).kind).toBe('unsent');
+    expect(boxHoldsText('muse', '/goal pins a session objective with a progress bar now', draft)).toBe(true);
   });
 
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {

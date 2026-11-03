@@ -53,6 +53,11 @@ These files are derived from `idle.txt` for the tests; nothing in them was read 
   `❯ Tab queues or steers while a run is active`. The hint row itself was confirmed on a running
   1.4.11 pane; the frame around it is constructed here, and a full authorized capture of that
   screen replaces this file as it stands.
+- `goal-hint-synthetic.txt`: `idle.txt` with the input row replaced by
+  `❯ /goal pins a session objective with a progress bar`. The row is the pane's rotating hint.
+  A plain read of that exact line was `unsent` until the profile listed it as a placeholder;
+  with the equals, the same frame reads `idle` and the box is empty. The frame around the row
+  is constructed, the same way as `placeholder-synthetic.txt`.
 - `ambiguous-synthetic.txt`: the banner, skills line and footer with the composer box removed: an
   idle-looking screen that is not the ready box, expected to read `unknown`.
 
