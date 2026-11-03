@@ -102,8 +102,9 @@ function rig(overrides: Partial<DownSources> = {}, caller: Caller = CALLER) {
     alive: () => false,
     screen: () => ({ kind: 'idle' }),
     // The pane is physical, as the live harness models it: the empty idle box before any
-    // typing, the box holding the typed text after one, empty again after the clearing key —
-    // the read-back the exit typing confirms against is what the pane would really show.
+    // typing, the box holding the typed text after one, empty again after the clearing key
+    // or a delivered Enter — each sends the text out of the box, and the read-back the exit
+    // typing confirms against is what the pane would really show.
     screenText: () => box,
     status: () => 'idle',
     foreground: () => ['claude'],
@@ -113,7 +114,7 @@ function rig(overrides: Partial<DownSources> = {}, caller: Caller = CALLER) {
     launch: {
       typeText: (_session, _pane, text) => { typed.push(text); box = claudeBox(text); return true; },
       sendKey: (_session, _pane, key) => { keys.push(key); box = claudeBox(''); return true; },
-      pressEnter: () => true,
+      pressEnter: () => { box = claudeBox(''); return true; },
       agentPanes: () => [],
       closeWorkspace: () => true,
       stopSession: () => true,

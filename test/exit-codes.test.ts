@@ -2337,6 +2337,9 @@ seats:
         return true;
       },
       sendKey: () => { letBox = claudeBox(''); return true; },
+      // A delivered Enter sends the text out of the box, as everywhere the pane is modeled
+      // physically here; the swap the typing carries is what this scene is about.
+      pressEnter: () => { letBox = claudeBox(''); return true; },
     }),
   })), 'coordinator "worker"');
 });
