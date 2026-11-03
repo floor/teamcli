@@ -1841,6 +1841,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('webhook', 'unreachable', false, host.now(), startedAt, { reason: posted.reason }));
         logLine(dir, 'send', who, `${to.seat}: the webhook post may have been taken; no answer was read (${posted.reason})`, host.now());
         appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'sent (unconfirmed)', ms: hookMs, via: 'webhook', ...hookFailures() });
+        noteLateWebhook(
+          posted,
+          {
+            store: { project: to.project, root: to.root, home: host.home },
+            id: msgId,
+            session: to.session,
+            from: who,
+            to: to.seat,
+            thread: record.thread,
+            ts: host.now().toISOString(),
+          },
+          (ms) => {
+            appendHistory(to.project, to.root, host.home, {
+              ...hookEntry,
+              ...historySender(report),
+              ts: host.now().toISOString(),
+              outcome: 'delivered (late)',
+              ms,
+              via: 'webhook',
+              ...hookFailures(),
+            });
+          },
+        );
         return sentUnconfirmed(io, to.seat, report, hookMs, 'webhook');
       }
       if (posted.kind === 'none') {
@@ -2766,6 +2789,22 @@ type RecordWritten =
  * that cannot prove the request never left leaves the claim in `sent` so no one posts the record
  * again. Never throws and never fails the send.
  */
+/** A request that outlived the deadline keeps running after the command has said unknown. A late
+ *  2xx appends `delivered (late)` for the same message id and files `webhook.posted` under the
+ *  `late` record id. A late non-2xx files `failed` under that id and does not append a delivery.
+ *  An unanswered continuation files nothing: the claim stays `sent`. History is only appended. */
+function noteLateWebhook(posted: SenderPostOutcome, fields: StepFields, onDelivered: (ms: number) => void): void {
+  if (posted.kind !== 'unknown' || posted.late === undefined) return;
+  void posted.late.then((late) => {
+    if (late.kind === 'posted') {
+      webhookStep(fields, { kind: 'posted', ms: late.ms }, 'late');
+      onDelivered(late.ms);
+      return;
+    }
+    if (late.kind === 'failed') webhookStep(fields, { kind: 'failed', reason: late.reason }, 'late');
+  });
+}
+
 async function postSeatWebhook(
   seat: string,
   webhook: NonNullable<Seat['webhook']>,
@@ -2890,18 +2929,32 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
   const posted = await postArrivalNow(dropDir, payload, written.signed, home, now);
   if (posted.kind !== 'none') {
     report.webhookPost = posted;
+    const fields: StepFields = {
+      store: { project, root: payload.root, home },
+      id: payload.id,
+      session: payload.session,
+      from: payload.from,
+      to: payload.to,
+      thread: payload.thread,
+      ts: now().toISOString(),
+    };
     webhookStep(
-      {
-        store: { project, root: payload.root, home },
-        id: payload.id,
-        session: payload.session,
-        from: payload.from,
-        to: payload.to,
-        thread: payload.thread,
-        ts: now().toISOString(),
-      },
+      fields,
       posted.kind === 'posted' ? { kind: 'posted', ms: posted.ms } : { kind: posted.kind, reason: posted.reason },
     );
+    noteLateWebhook(posted, fields, (ms) => {
+      appendHistory(project, payload.root, home, {
+        ts: now().toISOString(),
+        from: payload.from,
+        to: payload.to,
+        body: payload.body,
+        id: payload.id,
+        thread: payload.thread,
+        outcome: 'delivered (late)',
+        ms,
+        via: 'webhook',
+      });
+    });
   }
   await announceArrival(payload);
   return written;

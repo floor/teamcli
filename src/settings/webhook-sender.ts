@@ -1,9 +1,10 @@
-// The release bounds of a send's own arrival post: how long the person's `team send` waits on the
-// receiving seat's routine before it reports the answer unknown. The post is a wake beside a
-// record that is already durable and staged for the bus and the seat's pull, so it is off the
-// critical path; three seconds gives an endpoint that answers in one to two seconds its full
-// answer instead of an `unknown` it never had. The bounds are the policy's range, not the bus's:
-// the bus delivery keeps its own, longer budget (`WEBHOOK_POLICY` in `src/bus/webhook.ts`).
+// The release bounds of a send's own arrival post: how long the person's `team send` waits before
+// it reports the answer unknown. The request is not aborted there. It runs on to the policy max,
+// and a late 2xx is recorded beside that unknown line. The post is a wake beside a record that
+// is already durable and staged for the bus and the seat's pull, so it is off the critical path;
+// three seconds gives an endpoint that answers in one to two seconds its full answer instead of
+// an `unknown` it never had. The bounds are the policy's range, not the bus's: the bus delivery
+// keeps its own, longer budget (`WEBHOOK_POLICY` in `src/bus/webhook.ts`).
 export const WEBHOOK_SENDER_DEADLINE_MS = 3000;
 
 /** The least a level may name: half a second, so a declared send bound still reads some answer. */

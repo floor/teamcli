@@ -80,12 +80,13 @@ export function stagedStep(fields: StepFields): StepResult {
 
 /** The send's own webhook post ended: `posted` with its cost, or `failed`/`unknown` with the
  *  reason. The bus's later post, when the send's attempt released its claim, is the bus's own
- *  step; a trace shows both posts by their own outcome words. */
-export function webhookStep(fields: StepFields, outcome: { kind: 'posted' | 'failed' | 'unknown'; ms?: number; reason?: string }): StepResult {
+ *  step; a trace shows both posts by their own outcome words. A late answer uses the `late`
+ *  tail, so its record id is `<id>:webhook.posted:late` and the deadline's own step stays. */
+export function webhookStep(fields: StepFields, outcome: { kind: 'posted' | 'failed' | 'unknown'; ms?: number; reason?: string }, tail?: string): StepResult {
   return appendStep(fields.store, {
     ...base(fields),
     kind: 'webhook.posted',
-    record_id: stepRecordId(fields.id, 'webhook.posted'),
+    record_id: stepRecordId(fields.id, 'webhook.posted', tail),
     via: 'webhook',
     outcome: outcome.kind,
     ...(outcome.ms === undefined ? {} : { ms: outcome.ms }),

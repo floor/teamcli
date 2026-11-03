@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
 
@@ -689,14 +690,24 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
  *  (`already-posted`); or an unexpected failure left the claim as it was (`unexpected`). */
 export type SenderPostNone = 'no-route' | 'claim-held' | 'already-posted' | 'unexpected';
 
-/** What the send's own post ended as: the routine answered 2xx within the adapter's timeout; the
- *  one attempt provably did not reach it (a non-2xx, a refused connection); the request may have
- *  been sent and no answer was read, so it is reported and never posted again; or nothing was
- *  tried here, with the reason the walk needs to decide whether its leg was taken. */
+/** What a request that outlived the sender's deadline ended as, once its answer arrived or the
+ *  policy max elapsed. `posted` is a late 2xx and the claim is the `posted` mark. `failed` is an
+ *  answer that was not 2xx; the claim stays `sent`. `unanswered` is a cap, a kill, or a later
+ *  error: the claim is left exactly as it was. */
+export type LateWebhook =
+  | { kind: 'posted'; ms: number }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'unanswered' };
+
+/** What the send's own post ended as: the routine answered 2xx within the sender's deadline; the
+ *  one attempt provably did not reach it (a non-2xx, a refused connection); the deadline passed
+ *  with no answer read yet, so the command reports unknown and `late` keeps that same request
+ *  until the policy max; or nothing was tried here, with the reason the walk needs to decide
+ *  whether its leg was taken. */
 export type SenderPostOutcome =
   | { kind: 'posted'; ms: number }
   | { kind: 'failed'; reason: string }
-  | { kind: 'unknown'; reason: string }
+  | { kind: 'unknown'; reason: string; late?: Promise<LateWebhook> }
   | { kind: 'none'; why: SenderPostNone };
 
 export type SenderPostInput = {
@@ -729,11 +740,13 @@ export type SenderPostInput = {
  * fully sent is not retried here; the unchanged record stays for the bus and the seat's pull.
  *
  * The post holds the record's claim, taken exclusively, so a bus pass that reaches the same
- * record first makes this send post nothing. A 2xx ends the claim as the `posted` mark the
- * adapter skips; a non-2xx or a connection that was refused releases it, and the bus and the
- * seat's pull keep the fallback; a failure that does not prove the request never left keeps the
- * claim in `sent` and reports the outcome as unknown, so no one posts it a second time. Never
- * throws and never fails the send.
+ * record first makes this send post nothing. A 2xx within the deadline ends the claim as the
+ * `posted` mark the adapter skips; a non-2xx or a connection that was refused before the
+ * deadline releases it, and the bus and the seat's pull keep the fallback. The deadline does
+ * not abort the request. The command hears unknown, and the same request runs on, bounded by
+ * the policy max. A late 2xx settles the claim to `posted`; any other answer leaves it `sent`.
+ * A kill leaves it `sent` as well. Nothing here posts a second time. Never throws and never
+ * fails the send.
  */
 export async function postArrivalWebhook(input: SenderPostInput): Promise<SenderPostOutcome> {
   // What the claim currently says this process may do: nothing, still provably unsent, or sent.
@@ -801,13 +814,11 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
         reason: cls === null ? 'request refused before sending' : `request refused before sending (${cls})`,
       };
     }
-    // The row's own answer bound, when it names one, as the bus delivery reads it — capped by the
-    // sender's own deadline: a send is a person's command and never waits out the bus's budget.
-    // The deadline is the `webhook-sender-deadline-ms` policy in force for the receiving team,
-    // three seconds when nothing declares it. Read before the claim is taken, so a chain that
-    // cannot be read fails the post with no claim left behind.
+    // The sender's deadline is how long the command waits, not how long the request lives. It is
+    // the `webhook-sender-deadline-ms` policy in force for the receiving team, three seconds when
+    // nothing declares it. Read before the claim is taken, so a chain that cannot be read fails
+    // the post with no claim left behind. The request itself is bounded by the policy max.
     const deadlineMs = webhookSenderDeadlineMs({ home: input.home, root: input.root, team: input.team ?? null });
-    const timeoutMs = Math.min(input.webhook.timeoutMs ?? WEBHOOK_POLICY.timeoutMs, deadlineMs);
     // Claim before posting, exclusively: of this send and every bus pass, exactly one posts.
     if (!takeClaim(input.dropDir, input.id)) return { kind: 'none', why: 'claim-held' };
     held = 'claimed';
@@ -825,12 +836,24 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
-    try {
-      const response = await (input.fetch ?? fetch)(request.url, {
-        ...prepared,
-        redirect: 'error',
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+    // One request, built above. The signal is the policy max, never the deadline: aborting at
+    // the deadline is what reported unknown after the routine had already taken the body.
+    const pending = (input.fetch ?? fetch)(request.url, {
+      ...prepared,
+      redirect: 'error',
+      signal: AbortSignal.timeout(WEBHOOK_SENDER_DEADLINE_MAX_MS),
+    }).then(
+      (response) => ({ kind: 'response' as const, response }),
+      (error: unknown) => ({ kind: 'error' as const, error }),
+    );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineHit = new Promise<{ kind: 'deadline' }>((resolve) => {
+      timer = setTimeout(() => resolve({ kind: 'deadline' }), deadlineMs);
+    });
+    const raced = await Promise.race([pending, deadlineHit]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (raced.kind === 'response') {
+      const response = raced.response;
       if (response.status >= 200 && response.status < 300) {
         finishClaim(input.dropDir, input.id, input.now);
         held = 'none';
@@ -838,8 +861,9 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       giveUp();
       return { kind: 'failed', reason: `HTTP ${response.status}` };
-    } catch (error) {
-      const unsent = unsentReason(error);
+    }
+    if (raced.kind === 'error') {
+      const unsent = unsentReason(raced.error);
       if (unsent !== null) {
         // The request provably never left: the fallback may post it.
         giveUp();
@@ -847,8 +871,23 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       }
       // The body may have reached the routine and the answer was not read: the claim stays in
       // `sent`, and neither the bus nor a later pass posts the record again.
-      return { kind: 'unknown', reason: unknownReason(error, timeoutMs) };
+      return { kind: 'unknown', reason: unknownReason(raced.error, deadlineMs) };
     }
+    // The deadline won and the request is still the one above. The command returns unknown.
+    // This promise settles the claim when the answer arrives, or leaves it `sent` when the max
+    // elapses or the process is killed. It never releases and never posts again.
+    const late = pending.then((result): LateWebhook => {
+      if (result.kind === 'error') return { kind: 'unanswered' };
+      const response = result.response;
+      const ms = Math.max(0, input.now().getTime() - started);
+      if (response.status >= 200 && response.status < 300) {
+        finishClaim(input.dropDir, input.id, input.now);
+        held = 'none';
+        return { kind: 'posted', ms };
+      }
+      return { kind: 'failed', reason: `HTTP ${response.status}` };
+    }).catch((): LateWebhook => ({ kind: 'unanswered' }));
+    return { kind: 'unknown', reason: `no answer within ${String(deadlineMs)} ms`, late };
   } catch {
     // An unexpected failure before the request was marked sent releases the claim, so the
     // fallback still posts it; after that, the claim stays and the routine is never asked twice.

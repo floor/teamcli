@@ -61,6 +61,7 @@ export function statusOfOutcome(outcome: string): MessageStatus {
     case 'delivered (read)':
       return 'read';
     case 'delivered':
+    case 'delivered (late)':
       return 'delivered';
     case 'held':
       return 'held';
