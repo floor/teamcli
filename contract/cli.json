@@ -1809,6 +1809,12 @@
           "takesValue": false
         },
         {
+          "hidden": true,
+          "name": "--inherited",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": false,
           "name": "--key",
           "repeatable": false,
@@ -1825,6 +1831,43 @@
       "name": "daemon",
       "positionals": [],
       "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": true,
+          "name": "chores",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [],
+          "who": {
+            "gate": "owner-only",
+            "why": "the hidden child start is the daemon's own act: the daemon starts its chores children through their own program entry, and this verb is the same start with the whole command table loaded, so it runs only from the daemon's one-use token — never from a seat or a pane, and the owner's terminal is the one interactive caller the row admits while the token still decides inside"
+          }
+        },
         {
           "flags": [
             {

@@ -206,6 +206,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
     },
+    'daemon:chores': {
+      kind: 'owner-only',
+      why: 'the hidden child start is the daemon\'s own act: the daemon starts its chores children through their own program entry, and this verb is the same start with the whole command table loaded, so it runs only from the daemon\'s one-use token — never from a seat or a pane, and the owner\'s terminal is the one interactive caller the row admits while the token still decides inside',
+    },
     client: {
       kind: 'any-caller',
       why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
