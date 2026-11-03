@@ -77,11 +77,13 @@ export type DaemonRootPresence = { state: 'pending'; why: string } | DaemonRootP
  * How far the route's bus first reconcile pass has got. A daemon-hosted bus serves as soon as its
  * listener is bound and answering, while the first pass over the store still runs; this is what
  * keeps a reader from reading "serving" as "caught up". While the pass runs, `scanned` is live;
- * once it settles, `scanned` is the pass total and `doneAt` is the instant it settled.
+ * once it settles, `scanned` is the pass total and `doneAt` is the instant it settled, and
+ * `errors` says whether the walk finished or stopped on a failure. A pass a closing bus aborted
+ * settles nothing and is never recorded here.
  */
 export type DaemonRootFirstPass =
   | { running: true; scanned: number; doneAt: null }
-  | { running: false; scanned: number; doneAt: string };
+  | { running: false; scanned: number; doneAt: string; errors: boolean };
 
 /** One checkout this process hosts, recorded so a later `team daemon status` can tell a running
  *  daemon from a running daemon that silently hosts nothing for a checkout. */
@@ -347,8 +349,8 @@ function positiveInt(value: unknown): boolean {
 
 /** A bus first-pass record is display data, not a hosting fact: a malformed one is left out
  *  rather than making the whole daemon record unreadable. A running record carries no settle
- *  instant, and a settled one must name it — a "done" without a time could not be printed
- *  honestly, so it is left out too. */
+ *  instant, and a settled one must name it and say whether the walk finished or stopped on a
+ *  failure — a "done" without either could not be printed honestly, so it is left out too. */
 function firstPassOf(raw: unknown): DaemonRootFirstPass | null {
   if (raw === undefined) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -361,7 +363,8 @@ function firstPassOf(raw: unknown): DaemonRootFirstPass | null {
     return { running: true, scanned: entry.scanned as number, doneAt: null };
   }
   if (typeof entry.doneAt !== 'string' || entry.doneAt === '') return null;
-  return { running: false, scanned: entry.scanned as number, doneAt: entry.doneAt };
+  if (typeof entry.errors !== 'boolean') return null;
+  return { running: false, scanned: entry.scanned as number, doneAt: entry.doneAt, errors: entry.errors };
 }
 
 /** A presence lifecycle record is display evidence for an operator, not a hosting fact: a

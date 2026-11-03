@@ -727,7 +727,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
           firstPass: () =>
             root1Running
               ? { running: true, scanned: root1Scanned, doneAt: null }
-              : { running: false, scanned: root1Scanned, doneAt: '2026-11-03T19:45:00.000Z' },
+              : { running: false, scanned: root1Scanned, doneAt: '2026-11-03T19:45:00.000Z', errors: false },
         },
       };
     };

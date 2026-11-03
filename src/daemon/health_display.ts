@@ -173,7 +173,8 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
  * The first-pass progress each hosted route's bus carries, as phrases. A daemon-hosted bus reads
  * serving once its listener is bound and answering, while the first pass over the store still
  * runs; these phrases keep that from being read as caught up. A pass that settled names the
- * instant it did, so "done" is never printed without a time.
+ * instant it did, so "done" is never printed without a time; a pass that stopped on a failure says
+ * so and keeps its partial count, so it is never printed as a clean finish.
  */
 export function firstPassPhrases(roots: DaemonRootState[]): string[] {
   return roots.flatMap((root) => {
@@ -181,6 +182,11 @@ export function firstPassPhrases(roots: DaemonRootState[]): string[] {
     if (pass === undefined) return [];
     if (pass.running) {
       return [`first pass running for ${root.root} (${groupedCount(pass.scanned)} files scanned)`];
+    }
+    if (pass.errors) {
+      return [
+        `first pass ended with errors at ${pass.doneAt} for ${root.root} (${groupedCount(pass.scanned)} files scanned)`,
+      ];
     }
     return [`first pass done at ${pass.doneAt} for ${root.root}`];
   });
