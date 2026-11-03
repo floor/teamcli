@@ -11,7 +11,8 @@
 //
 // It lives in its own module so the child's entry can read a token without loading the spawner.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { claimOneUseToken } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 
 /** What one restore pass may act on: the route and the home its reads resolve under. */
@@ -64,36 +65,18 @@ export type RestoreInheritRead =
 /**
  * Reads and consumes the token named on a child's command line. The nonce is restricted to the
  * exact spelling this program writes, so a command line cannot point the reader at another file.
- * The claim is a rename: the file system admits exactly one mover of that name, so a second child
- * started with the same nonce finds no token and refuses.
+ * The claim is shared with the chores child: a rename, so a second child started with the same
+ * nonce finds no token and refuses.
  */
 export function readRestoreInherit(home: string, nonce: string): RestoreInheritRead {
   if (!/^[0-9a-f]{32}$/.test(nonce)) {
     return { kind: 'refused', why: 'the token name is not one this daemon writes' };
   }
-  const path = restoreInheritPath(home, nonce);
-  const claimed = `${path}.claim.${process.pid}`;
-  try {
-    renameSync(path, claimed);
-  } catch {
-    // No token, or a machine folder this uid cannot claim in: either way no pass runs.
-    return { kind: 'refused', why: 'no one-use token names this child' };
-  }
-  let text: string;
-  try {
-    text = readFileSync(claimed, 'utf8');
-  } catch {
-    return { kind: 'refused', why: 'the claimed token cannot be read' };
-  } finally {
-    try {
-      unlinkSync(claimed);
-    } catch {
-      // The claimed copy is spent; a file that cannot be removed grants nothing further.
-    }
-  }
+  const claimed = claimOneUseToken(restoreInheritPath(home, nonce));
+  if (claimed.kind === 'refused') return claimed;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(claimed.text);
   } catch {
     return { kind: 'refused', why: 'the token is not readable JSON' };
   }
