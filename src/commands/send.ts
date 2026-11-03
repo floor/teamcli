@@ -1792,7 +1792,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         continue;
       }
       markLeg('webhook', 'attempted');
-      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now, receiving.ok ? receiving.team : null);
+      const posted = await postSeatWebhook(to.seat, hook, record, stagedHook.signed, dropDir, host.home, host.now, receiving.ok ? receiving.team : null, to.project, body);
       if (posted.kind !== 'none') {
         // The walk's own post is one signed event beside the bus's arrival; a `none` is another
         // poster's claim, whose post the bus records as its own step. A step that cannot be
@@ -2814,6 +2814,8 @@ async function postSeatWebhook(
   home: string,
   now: () => Date,
   team: TeamFile | null,
+  project?: string,
+  body?: string,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
@@ -2829,6 +2831,8 @@ async function postSeatWebhook(
       dropDir,
       home,
       now,
+      ...(project === undefined ? {} : { project }),
+      ...(body === undefined ? {} : { body }),
     });
   } catch {
     return { kind: 'none', why: 'unexpected' };
@@ -2848,13 +2852,14 @@ async function postArrivalNow(
   message: SignedRecord,
   home: string,
   now: () => Date,
+  project: string,
 ): Promise<SenderPostOutcome> {
   try {
     const loaded = readTeamConfig(payload.root, { home });
     if (!loaded.ok) return { kind: 'none', why: 'no-route' };
     const seat = loaded.team.seats.find((one) => one.name === payload.to);
     if (seat === undefined || seat.webhook === undefined) return { kind: 'none', why: 'no-route' };
-    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now, loaded.team);
+    return await postSeatWebhook(payload.to, seat.webhook, payload, message, dropDir, home, now, loaded.team, project, payload.body);
   } catch {
     return { kind: 'none', why: 'unexpected' };
   }
@@ -2926,7 +2931,7 @@ async function stageSendRecord(dropDir: string, payload: RecordPayload, home: st
 async function writeSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, report: Report, project: string): Promise<RecordWritten> {
   const written = await stageSendRecord(dropDir, payload, home, now, project);
   if (!written.ok || written.existing === true) return written;
-  const posted = await postArrivalNow(dropDir, payload, written.signed, home, now);
+  const posted = await postArrivalNow(dropDir, payload, written.signed, home, now, project);
   if (posted.kind !== 'none') {
     report.webhookPost = posted;
     const fields: StepFields = {

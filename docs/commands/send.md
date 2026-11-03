@@ -709,8 +709,9 @@ unless the send's own post settles: a post the adapter took replaces these words
 `webhook-sender-deadline-ms` policy in force for the receiving team, whose word is a whole number
 of milliseconds from 500 to 10000 and whose shorter value is the tighter one — so a person's
 command never waits out the bus's budget: a post that outlives the bound is `unknown`, never a
-failure, and the claim keeps its place. The request is not aborted at that bound. It runs on to
-the policy max, ten seconds. A 2xx in that window appends a new history line for the same id,
+failure, and the claim keeps its place. The request is not aborted at that bound. The command
+returns and the process exits; the same request runs on in a detached process, to the policy
+max, ten seconds. A 2xx in that window appends a new history line for the same id,
 `delivered (late)` via webhook with its milliseconds, and files `webhook.posted` under
 `<id>:webhook.posted:late`; the earlier unknown line stays. A non-2xx files `failed` under that
 same late id and leaves the claim `sent`, so nothing posts it again. A continuation that is

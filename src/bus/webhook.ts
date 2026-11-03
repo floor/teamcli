@@ -29,10 +29,14 @@
 // reached the routine and the owner's rule is that a routine never gets the same message twice.
 // A poster that knows the request never left (a refused connection, a non-2xx) removes the claim,
 // so the bus and the seat's pull keep the fallback they always had.
-import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
+import { appendHistory } from '../send/history.ts';
+import { webhookStep, type StepFields } from '../send/steps.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
@@ -729,7 +733,13 @@ export type SenderPostInput = {
   dropDir: string;
   home: string;
   now: () => Date;
-  /** The POST itself, injectable so a test can watch it without a socket. */
+  /** The receiving project, so a detached continuation can file the late step and history line
+   *  after this process has exited. */
+  project?: string;
+  /** The message body the late history line carries. */
+  body?: string;
+  /** The POST itself, injectable so a test can watch it without a socket. A test's fetch stays
+   *  in this process. The real fetch is a detached process, so `team send` can exit at the deadline. */
   fetch?: typeof fetch;
 };
 
@@ -743,10 +753,10 @@ export type SenderPostInput = {
  * record first makes this send post nothing. A 2xx within the deadline ends the claim as the
  * `posted` mark the adapter skips; a non-2xx or a connection that was refused before the
  * deadline releases it, and the bus and the seat's pull keep the fallback. The deadline does
- * not abort the request. The command hears unknown, and the same request runs on, bounded by
- * the policy max. A late 2xx settles the claim to `posted`; any other answer leaves it `sent`.
- * A kill leaves it `sent` as well. Nothing here posts a second time. Never throws and never
- * fails the send.
+ * not abort the request. The command hears unknown and this process exits. The same request
+ * runs on in a detached process, bounded by the policy max. A late 2xx settles the claim to
+ * `posted`; any other answer leaves it `sent`. A kill leaves it `sent` as well. Nothing here
+ * posts a second time. Never throws and never fails the send.
  */
 export async function postArrivalWebhook(input: SenderPostInput): Promise<SenderPostOutcome> {
   // What the claim currently says this process may do: nothing, still provably unsent, or sent.
@@ -836,9 +846,14 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     }
     held = 'sent';
     const started = input.now().getTime();
+    // The real fetch belongs to a detached process. This one exits at the deadline. A test's
+    // own fetch stays here, where the test can see it.
+    if (input.fetch === undefined) {
+      return await detachedArrival(input, request.url, prepared, deadlineMs);
+    }
     // One request, built above. The signal is the policy max, never the deadline: aborting at
     // the deadline is what reported unknown after the routine had already taken the body.
-    const pending = (input.fetch ?? fetch)(request.url, {
+    const pending = input.fetch(request.url, {
       ...prepared,
       redirect: 'error',
       signal: AbortSignal.timeout(WEBHOOK_SENDER_DEADLINE_MAX_MS),
@@ -894,6 +909,296 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     if (held === 'claimed') giveUp();
     return { kind: 'none', why: 'unexpected' };
   }
+}
+
+type LateJob = {
+  url: string;
+  headers: [string, string][];
+  body: string;
+  capMs: number;
+  dropDir: string;
+  id: string;
+  project: string;
+  root: string;
+  home: string;
+  session: string;
+  from: string;
+  to: string;
+  thread?: string;
+  messageBody: string;
+};
+
+type LateLine = { status: number; ms: number } | { unsent: string } | { unknown: string };
+
+function headerPairs(headers: HeadersInit | undefined): [string, string][] {
+  if (headers instanceof Headers) return [...headers.entries()];
+  if (Array.isArray(headers)) return headers.map(([name, value]) => [name, value]);
+  if (headers === undefined) return [];
+  return Object.entries(headers);
+}
+
+function unrefPipe(pipe: unknown): void {
+  const socket = pipe as { unref?: () => void } | null;
+  socket?.unref?.();
+}
+
+/** The request, in its own process. The parent's pipes are unreferenced, so the parent can exit
+ *  at the deadline and this process is what finishes the claim. `took` tells the child the parent
+ *  settled the answer itself; `stop` closes the pipes so the child settles after the parent is gone. */
+function spawnLateWorker(job: LateJob): { stop: () => void; took: () => void; done: Promise<LateLine | null> } {
+  const entry = fileURLToPath(import.meta.url);
+  const child = spawn(process.execPath, [entry, '--finish-late'], {
+    detached: true,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  });
+  child.unref();
+  child.stdin?.write(`${JSON.stringify(job)}\n`);
+  // The pipe objects are sockets at runtime. Leaving them referenced is what kept `team send` up
+  // until the request finished.
+  unrefPipe(child.stdin);
+  unrefPipe(child.stdout);
+  const done = new Promise<LateLine | null>((resolve) => {
+    let buf = '';
+    let settled = false;
+    const finish = (line: LateLine | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(line);
+    };
+    const take = (text: string): void => {
+      const nl = text.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        finish(JSON.parse(text.slice(0, nl)) as LateLine);
+      } catch {
+        finish(null);
+      }
+    };
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      buf += chunk;
+      take(buf);
+    });
+    child.stdout?.on('error', () => finish(null));
+    child.stdout?.on('close', () => {
+      take(buf);
+      finish(null);
+    });
+  });
+  return {
+    done,
+    took: () => {
+      try {
+        child.stdin?.write('taken\n');
+        child.stdin?.end();
+      } catch {
+        child.stdin?.destroy();
+      }
+    },
+    stop: () => {
+      child.stdout?.destroy();
+      child.stdin?.destroy();
+    },
+  };
+}
+
+function lateFields(job: LateJob, ts: string): StepFields {
+  return {
+    store: { project: job.project, root: job.root, home: job.home },
+    id: job.id,
+    session: job.session,
+    from: job.from,
+    to: job.to,
+    ...(job.thread === undefined ? {} : { thread: job.thread }),
+    ts,
+  };
+}
+
+/** The parent has gone. A 2xx settles the claim and appends the late history line. Any other
+ *  answer is a failed step and the claim stays `sent`. No answer leaves the claim `sent`. */
+function settleDetached(job: LateJob, line: LateLine | null, ms: number): void {
+  const now = (): Date => new Date();
+  if (line !== null && 'status' in line && line.status >= 200 && line.status < 300) {
+    finishClaim(job.dropDir, job.id, now);
+    if (job.project === '') return;
+    const fields = lateFields(job, now().toISOString());
+    webhookStep(fields, { kind: 'posted', ms }, 'late');
+    appendHistory(job.project, job.root, job.home, {
+      ts: now().toISOString(),
+      from: job.from,
+      to: job.to,
+      body: job.messageBody,
+      id: job.id,
+      ...(job.thread === undefined ? {} : { thread: job.thread }),
+      outcome: 'delivered (late)',
+      ms,
+      via: 'webhook',
+    });
+    return;
+  }
+  if (line !== null && 'status' in line && job.project !== '') {
+    webhookStep(lateFields(job, now().toISOString()), { kind: 'failed', reason: `HTTP ${String(line.status)}` }, 'late');
+  }
+}
+
+async function detachedArrival(
+  input: SenderPostInput,
+  url: string,
+  prepared: RequestInit,
+  deadlineMs: number,
+): Promise<SenderPostOutcome> {
+  const job: LateJob = {
+    url,
+    headers: headerPairs(prepared.headers),
+    body: typeof prepared.body === 'string' ? prepared.body : '',
+    capMs: WEBHOOK_SENDER_DEADLINE_MAX_MS,
+    dropDir: input.dropDir,
+    id: input.id,
+    project: input.project ?? '',
+    root: input.root,
+    home: input.home,
+    session: input.session,
+    from: input.from,
+    to: input.seat,
+    ...(input.thread === undefined ? {} : { thread: input.thread }),
+    messageBody: input.body ?? '',
+  };
+  const worker = spawnLateWorker(job);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineHit = new Promise<'deadline'>((resolve) => {
+    timer = setTimeout(() => resolve('deadline'), deadlineMs);
+  });
+  const raced = await Promise.race([worker.done.then((line) => ({ kind: 'line' as const, line })), deadlineHit]);
+  if (timer !== undefined) clearTimeout(timer);
+  if (raced === 'deadline' || raced.line === null) {
+    // The child is detached and unreferenced. Closing the pipes is how it learns to finish alone.
+    // This process holds no promise for the request, so it can exit at the deadline.
+    worker.stop();
+    return { kind: 'unknown', reason: `no answer within ${String(deadlineMs)} ms` };
+  }
+  // The child wrote the line and is waiting. Saying so is what keeps it from settling too.
+  worker.took();
+  const line = raced.line;
+  if ('unsent' in line) {
+    releaseClaim(input.dropDir, input.id);
+    return { kind: 'failed', reason: line.unsent };
+  }
+  if ('unknown' in line) return { kind: 'unknown', reason: line.unknown };
+  if (line.status >= 200 && line.status < 300) {
+    finishClaim(input.dropDir, input.id, input.now);
+    return { kind: 'posted', ms: line.ms };
+  }
+  releaseClaim(input.dropDir, input.id);
+  return { kind: 'failed', reason: `HTTP ${String(line.status)}` };
+}
+
+function tellParent(line: string): boolean {
+  try {
+    if (process.stdout.destroyed) return false;
+    writeSync(process.stdout.fd, line);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readOneLine(): Promise<string> {
+  const stream = process.stdin;
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    let settled = false;
+    const finish = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      stream.removeListener('data', onData);
+      stream.removeListener('error', onClose);
+      stream.removeListener('end', onClose);
+      if (value === null) reject(new Error('closed'));
+      else resolve(value);
+    };
+    const onData = (chunk: Buffer | string): void => {
+      buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      finish(buf.slice(0, nl));
+    };
+    const onClose = (): void => {
+      const nl = buf.indexOf('\n');
+      finish(nl === -1 ? null : buf.slice(0, nl));
+    };
+    stream.on('data', onData);
+    stream.on('error', onClose);
+    stream.on('end', onClose);
+  });
+}
+
+/** True when the parent read the result line and settled it. A closed pipe means the parent has
+ *  gone, and this process is the one that settles. */
+function parentTookIt(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let buf = '';
+    let settled = false;
+    const finish = (yes: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve(yes);
+    };
+    process.stdin.on('data', (chunk: Buffer | string) => {
+      buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      if (buf.includes('taken')) finish(true);
+    });
+    process.stdin.on('end', () => finish(buf.includes('taken')));
+    process.stdin.on('close', () => finish(buf.includes('taken')));
+    process.stdin.on('error', () => finish(false));
+  });
+}
+
+async function finishLateWorker(): Promise<void> {
+  const job = JSON.parse(await readOneLine()) as LateJob;
+  const started = Date.now();
+  let line: LateLine;
+  try {
+    const response = await fetch(job.url, {
+      method: 'POST',
+      headers: job.headers,
+      body: job.body,
+      redirect: 'error',
+      signal: AbortSignal.timeout(job.capMs),
+    });
+    line = { status: response.status, ms: Math.max(0, Date.now() - started) };
+  } catch (error) {
+    const unsent = unsentReason(error);
+    line = unsent !== null ? { unsent } : { unknown: unknownReason(error, job.capMs) };
+  }
+  process.stdout.on('error', () => {});
+  const told = tellParent(`${JSON.stringify(line)}\n`);
+  const taken = told ? await parentTookIt() : false;
+  if (!taken) settleDetached(job, 'status' in line ? line : null, 'status' in line ? line.ms : 0);
+}
+
+if (import.meta.main && process.argv.includes('--finish-late')) {
+  process.stdout.on('error', () => {});
+  void finishLateWorker().then(
+    () => process.exit(0),
+    () => process.exit(0),
+  );
+}
+
+// A measurement driver: one real post, then the process ends the way `team send` does — by the
+// event loop draining, not by `process.exit`. A leaked request handle keeps it alive and the
+// deadline test fails.
+if (import.meta.main && process.argv.includes('--measure-exit')) {
+  const specPath = process.argv[process.argv.indexOf('--measure-exit') + 1] ?? '';
+  const spec = JSON.parse(readFileSync(specPath, 'utf8')) as Omit<SenderPostInput, 'now'>;
+  process.stdout.write('start\n');
+  void postArrivalWebhook({ ...spec, now: () => new Date() }).then(
+    () => {
+      process.exitCode = 0;
+    },
+    () => {
+      process.exitCode = 1;
+    },
+  );
 }
 
 export type WebhookFactoryInput = {

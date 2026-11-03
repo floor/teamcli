@@ -8,8 +8,9 @@
 //
 // Every policy write here is signed with the scratch home's own key; nothing reads a live policy.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { postArrivalWebhook, type LateWebhook } from '../src/bus/webhook.ts';
 import { entitiesPath } from '../src/entities.ts';
@@ -269,4 +270,64 @@ describe("the send's own post under the deadline", () => {
     expect(held.state).toBe('sent');
     expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
   }, 10_000);
+
+  test('a real child returns the sender at the deadline, and the late 2xx settles after that process is gone', async () => {
+    signedAtTeam('webhook-sender-deadline-ms', 500);
+    const dir = dropFolder();
+    const message = signRecord(messagePayload(), home);
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => new Promise((resolve) => setTimeout(() => resolve(new Response('ok', { status: 200 })), 1500)),
+    });
+    try {
+      writeFileSync(join(root, 'hook-url'), `${server.url.href}\n`);
+      const spec = join(base, 'sender.json');
+      writeFileSync(spec, JSON.stringify({
+        seat: 'iris',
+        webhook: { urlFile: join(root, 'hook-url'), secretFile: join(root, 'hook-secret'), body: 'inbox' },
+        team: teamAt(),
+        root,
+        session: 'beacon',
+        id: ID,
+        from: 'lead',
+        message,
+        dropDir: dir,
+        home,
+        project: 'beacon',
+        body: messagePayload().body,
+      }));
+      const entry = fileURLToPath(new URL('../src/bus/webhook.ts', import.meta.url));
+      const sender = spawn(process.execPath, [entry, '--measure-exit', spec], { stdio: ['ignore', 'pipe', 'ignore'] });
+      let mark = 0;
+      sender.stdout?.setEncoding('utf8');
+      sender.stdout?.on('data', (chunk: string) => {
+        if (mark === 0 && chunk.includes('start')) mark = performance.now();
+      });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const killer = setTimeout(() => {
+          sender.kill('SIGKILL');
+          resolve(null);
+        }, 2000);
+        sender.on('exit', (code) => {
+          clearTimeout(killer);
+          resolve(code);
+        });
+      });
+      const elapsed = mark === 0 ? 9999 : performance.now() - mark;
+      // The sender's own process is gone at the bound. It does not stay up for the slow answer.
+      expect(exitCode).toBe(0);
+      expect(elapsed).toBeLessThan(700);
+      expect(existsSync(join(dir, `${ID}.posted`))).toBe(false);
+      const posted = join(dir, `${ID}.posted`);
+      const until = Date.now() + 8_000;
+      while (!existsSync(posted) && Date.now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(existsSync(posted)).toBe(true);
+      expect(existsSync(join(dir, `${ID}.posting`))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
 });

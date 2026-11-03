@@ -7,7 +7,7 @@ timeline with the verified `presence.changed` records in the same state folder's
 (`events.jsonl`), which the daemon's presence publisher writes from each seat's durable presence
 log. It reads: it writes nothing, and following the logs never grows either of them.
 
-Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (typed wake)`,
+Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (late)`, `delivered (typed wake)`,
 `sent (unconfirmed)`, `queued, not woken`, `sent (channel)`, `answered`, `held`, `queued (receiver busy)`,
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per line to
 `messages.jsonl`:
