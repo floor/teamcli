@@ -37,12 +37,13 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard('gh api user')).toBeNull();
 
   expect(refusedByGuard('gh run rerun 12345')?.rule).toBe('github-actions');
-  expect(refusedByGuard('gh run list')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh run list')).toBeNull();
   expect(refusedByGuard('gh run cancel 12345')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow run release.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow run ci.yml')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh workflow enable ci.yml')?.rule).toBe('github-actions');
-  expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/1')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/1')).toBeNull();
+  expect(refusedByGuard('gh api -X POST repos/floor/teamcli/actions/runs')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api -X POST repos/floor/teamcli/dispatches')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api -X POST repos/floor/teamcli/deployments')?.rule).toBe('github-actions');
   expect(refusedByGuard('gh api --method=PATCH repos/acme/demo')?.rule).toBe('github-actions');
@@ -61,9 +62,26 @@ test('the default allowlist permits the three commands and nothing else on Actio
   expect(refusedByGuard("gh api graphql -f query='mutation { anythingElse }'")?.rule).toBe('github-actions');
   expect(refusedByGuard("gh api graphql -f query='MUTATION { anythingElse }'")?.rule).toBe('github-actions');
   expect(refusedByGuard("gh api graphql -f query='query { viewer { login } }'")).toBeNull();
-  expect(refusedByGuard('gh run list')?.guidance).toBe(
+  expect(refusedByGuard('gh run cancel 12345')?.guidance).toBe(
     'refused in team seats: the actions-commands policy does not allow that Actions command',
   );
+});
+
+test('Actions reads are allowed, including a GET under /actions', () => {
+  expect(refusedByGuard('gh run list')).toBeNull();
+  expect(refusedByGuard('gh run list --commit abc123')).toBeNull();
+  expect(refusedByGuard('gh run view 12345')).toBeNull();
+  expect(refusedByGuard('gh run watch 12345')).toBeNull();
+  expect(refusedByGuard('gh pr checks')).toBeNull();
+  expect(refusedByGuard('gh workflow list')).toBeNull();
+  expect(refusedByGuard('gh workflow view deploy.yml')).toBeNull();
+  expect(refusedByGuard('gh api actions/runs')).toBeNull();
+  expect(refusedByGuard('gh api actions/runs/12345')).toBeNull();
+  expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs')).toBeNull();
+  expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs/12345')).toBeNull();
+  expect(refusedByGuard("gh api graphql -f query='query { viewer { login } }'")).toBeNull();
+  expect(refusedByGuard('gh api repos/floor/teamcli/actions/runs -f name=x')?.rule).toBe('github-actions');
+  expect(refusedByGuard('gh api repos/floor/teamcli/actions/workflows/ci.yml/dispatches')?.rule).toBe('github-actions');
 });
 
 test('a caller that drops a command removes only that command', () => {
