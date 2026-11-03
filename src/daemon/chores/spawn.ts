@@ -30,6 +30,9 @@ export type ChoresChildEvent =
 /** The daemon's handle on one child: send it a message, hear what it says, and end it. */
 export type ChoresChild = {
   pid: number | null;
+  /** True until the child's process has exited, however it left. A beat to a child that has
+   *  left is a beat written into a pipe with no reader, so the supervisor asks first. */
+  readonly alive: boolean;
   /** Writes one frame. False when the child is already gone or its input is closed. */
   send(message: ChoresHostMessage): boolean;
   /** Listens for the child's messages, notes and exit; the returned function unsubscribes. */
@@ -70,6 +73,12 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   const entry = input.entry ?? choresEntryOf();
   const listeners = new Set<(event: ChoresChildEvent) => void>();
   let settled = false;
+  /** The process has exited. A beat may still be in flight when this turns true, so `send`
+   *  reads it together with the input stream's own state. */
+  let gone = false;
+  /** The input stream reported an error (a peer that left first raises EPIPE): the child takes
+   *  no more frames, and the error is a note instead of the daemon's last breath. */
+  let inputBroken = false;
   let resolveExited!: () => void;
   const exited = new Promise<void>((resolve) => {
     resolveExited = resolve;
@@ -97,6 +106,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     });
     return {
       pid: null,
+      alive: false,
       send: () => false,
       subscribe(listener) {
         listeners.add(listener);
@@ -148,6 +158,19 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     emit({ kind: 'note', text: `the child was ended: ${why}` });
   };
 
+  // Every stream this handle writes to or reads from carries an error listener from the moment
+  // it exists. A child that left between two beats closes the read end of its input, and the
+  // write that follows raises EPIPE as an event: without a listener that event is unhandled and
+  // takes the whole daemon down with the child.
+  const inputFailed = (error: Error): void => {
+    if (inputBroken) return;
+    inputBroken = true;
+    emit({ kind: 'note', text: `the child's input closed: ${error.message}` });
+  };
+  child.stdin?.on('error', inputFailed);
+  child.stdout?.on('error', (error: Error) => emit({ kind: 'note', text: `the child's output failed: ${error.message}` }));
+  child.stderr?.on('error', (error: Error) => emit({ kind: 'note', text: `the child's errors failed: ${error.message}` }));
+
   child.stdout?.setEncoding('utf8');
   let stdoutBuffer = '';
   child.stdout?.on('data', (chunk: string) => {
@@ -190,19 +213,41 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   });
 
   child.on('error', (error: Error) => emit({ kind: 'note', text: `the child failed: ${error.message}` }));
-  child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+  // The process' own exit is the instant its pipe has no reader. The group is told here, before
+  // the next beat, and the streams are released: a `close` that waits for stdio a child's
+  // grandchild inherited must not delay the replacement.
+  child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+    if (gone) return;
+    gone = true;
+    child.stdin?.destroy();
     emit({ kind: 'exit', code, signal });
     settle();
+  });
+  child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+    // A spawn that never produced a process leaves without `exit`; its close is the exit.
+    if (!gone) {
+      gone = true;
+      emit({ kind: 'exit', code, signal });
+    }
+    settle();
+    child.stdin?.destroy();
   });
 
   return {
     pid: child.pid ?? null,
+    get alive(): boolean {
+      return !gone;
+    },
     send(message: ChoresHostMessage): boolean {
-      if (settled || child.stdin === null || child.stdin.destroyed) return false;
+      const input = child.stdin;
+      if (settled || gone || inputBroken || input === null || input.destroyed || !input.writable) return false;
       try {
-        child.stdin.write(`${JSON.stringify(message)}\n`);
+        input.write(`${JSON.stringify(message)}\n`, (error: Error | null | undefined) => {
+          if (error) inputFailed(error);
+        });
         return true;
-      } catch {
+      } catch (error) {
+        inputFailed(error instanceof Error ? error : new Error(String(error)));
         return false;
       }
     },

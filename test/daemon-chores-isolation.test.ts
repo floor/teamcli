@@ -426,9 +426,16 @@ function fakeChild(pid: number): Fake {
   });
   const sends: ChoresHostMessage[] = [];
   const kills: string[] = [];
+  let alive = true;
   const child: ChoresChild = {
     pid,
+    get alive() {
+      return alive;
+    },
     send(message) {
+      // A beat to a child that left is exactly the write this scene is about: it must never
+      // reach the pipe, so the fake refuses loudly instead of recording it.
+      if (!alive) throw new Error('a beat was written to a child that left');
       sends.push(message);
       return true;
     },
@@ -451,6 +458,7 @@ function fakeChild(pid: number): Fake {
       for (const listener of [...listeners]) listener({ kind: 'message', message });
     },
     leave(code = null, signal = 'SIGTERM') {
+      alive = false;
       for (const listener of [...listeners]) listener({ kind: 'exit', code, signal });
       settle();
     },
@@ -589,8 +597,12 @@ describe('the chores fleet', () => {
     expect(fleet.stateFor(made.root)?.why).toContain('missed 2 heartbeats');
     expect(made2[0]!.kills).toHaveLength(1);
     expect(made2[0]!.kills[0]).toContain('missed 2 heartbeats');
+    // A child that is being ended gets no beat either: a tick written into a stopping child's
+    // pipe is the write this fix removes, and the fake refuses a send once it has left.
+    const sendsBefore = made2[0]!.sends.length;
     tickAt(3500);
     expect(made2[0]!.kills).toHaveLength(1);
+    expect(made2[0]!.sends).toHaveLength(sendsBefore);
 
     // The exit schedules the first replacement one second later; the row names when.
     made2[0]!.leave(null, 'SIGTERM');
@@ -628,6 +640,85 @@ describe('the chores fleet', () => {
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     // 4000 would be the uncapped wait; the policy's 3000 holds it.
     expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 12_500 + 3000).toISOString() });
+  });
+
+  test('a child that exits right after it starts is replaced, and no beat is written to its pipe', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy())],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4260 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    fleet.tick(new Date(NOW));
+    expect(made2).toHaveLength(1);
+
+    // The child leaves before it ever beats, and the very next beat is issued in the same turn
+    // the exit lands, before the group's own exit turn has run. The group already reads the
+    // child as gone, so the fake's send (which throws for a child that left) is never reached.
+    made2[0]!.leave(0, null);
+    clock.at = NOW + 1000;
+    expect(() => fleet.tick(new Date(clock.at))).not.toThrow();
+    expect(made2[0]!.sends).toHaveLength(0);
+
+    // The exit is the restart's own trigger; the replacement starts on the beat after it.
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 1, pid: null });
+    clock.at = NOW + 2000;
+    expect(() => fleet.tick(new Date(clock.at))).not.toThrow();
+    expect(made2).toHaveLength(2);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'starting', pid: 4261 });
+  });
+
+  test('a beat that arrives late is the daemon\'s own stall, not a child missing it, and ends nothing', () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4270 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4270, at: AT });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
+
+    // The daemon's loop is held for eight beats. The child kept beating; its frames were
+    // waiting unread in the pipe. The late beat must not charge the child for that silence.
+    tickAt(8000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    // The poll that follows the beat reads the backlog: the child is current again.
+    made2[0]!.emit({
+      type: 'heartbeat', at: new Date(NOW + 8000).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null,
+    });
+    tickAt(9000);
+    tickAt(10_000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    // A child that really stopped beating is still ended, on an on-time beat.
+    tickAt(11_000);
+    expect(made2[0]!.kills).toHaveLength(1);
+    expect(made2[0]!.kills[0]).toContain('missed 2 heartbeats');
   });
 
   test('a child that beats twice resets the doubling wait to its first step', async () => {
@@ -1705,6 +1796,63 @@ describe('a real child', () => {
     }
   }, 30_000);
 
+  test('a child whose input closes mid-send throws nowhere, and its exit is marked', async () => {
+    const made = world();
+    const entry = join(made.base, 'closing-child.mjs');
+    writeFileSync(entry, [
+      "const write = (message) => { try { process.stdout.write(JSON.stringify(message) + '\\n'); } catch {} };",
+      "write({ type: 'ready', pid: process.pid, at: new Date().toISOString() });",
+      'let closed = false;',
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', () => {",
+      '  if (closed) return;',
+      '  closed = true;',
+      "  // The read end goes away while the host is still writing: the next write is EPIPE.",
+      '  // The process stays alive for a moment after that, so the failure lands while the child',
+      '  // is still running and is the input\'s own, not a write raced by the exit.',
+      '  process.stdin.destroy();',
+      '  setTimeout(() => process.exit(0), 500);',
+      '});',
+    ].join('\n'));
+    const events: ChoresChildEvent[] = [];
+    const child = spawnChoresChild({
+      config: {
+        version: 1,
+        home: made.home,
+        beatMs: 100,
+        sliceMs: 2000,
+        since: AT,
+        routes: [{ root: made.root, team: 'acme', session: 'acme-dev' }],
+      },
+      entry,
+    });
+    child.subscribe((event) => events.push(event));
+    try {
+      await waitUntil(() => events.some((event) => event.kind === 'message' && event.message.type === 'ready'), 20_000);
+      // Write across the moment the child closes its input. The write that meets the closed
+      // pipe is reported as a note; before this fix it was an unhandled 'error' event and the
+      // whole process went down with the child.
+      for (let beat = 0; beat < 40; beat += 1) {
+        if (!child.send({ type: 'tick', id: String(beat), at: AT })) break;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await waitUntil(() => events.some((event) => event.kind === 'exit'), 10_000);
+      // A child that has left takes no frame: the write is refused, never attempted.
+      expect(child.send({ type: 'tick', id: 'after', at: AT })).toBe(false);
+      expect(child.alive).toBe(false);
+      // The writes above crossed the moment the child closed its input. Measured under this
+      // runtime: the closure is buffered and surfaces only as the stream's destruction when the
+      // process leaves — no 'error' event, and the write after the exit is refused. Under the
+      // node runtime the same closure raises EPIPE as an 'error' event, which spawn.ts turns
+      // into a note instead of the daemon's last breath. What this scene pins for both is that
+      // the write path itself throws nowhere and the exit is marked exactly once.
+      expect(events.filter((event) => event.kind === 'exit')).toHaveLength(1);
+    } finally {
+      child.kill('the test is done');
+      await child.exited;
+    }
+  }, 30_000);
+
   test('a watched route drives a hosted watch here, and a stop ends it before the child leaves', async () => {
     const made = world();
     const second = join(made.base, 'other');
@@ -1945,6 +2093,9 @@ describe('under the machine daemon', () => {
     // The fake answers a stop by leaving, so the daemon's close is not held by the kill bound.
     const child: ChoresChild = {
       ...fake.child,
+      get alive() {
+        return fake.child.alive;
+      },
       kill(why: string) {
         fake.child.kill(why);
         fake.leave();
@@ -2050,6 +2201,9 @@ describe('under the machine daemon', () => {
     // The fake answers a stop by leaving, so the daemon's close is not held by the kill bound.
     const child: ChoresChild = {
       ...fake.child,
+      get alive() {
+        return fake.child.alive;
+      },
       kill(why: string) {
         fake.child.kill(why);
         fake.leave();
