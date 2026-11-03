@@ -12,17 +12,17 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WatchSources } from '../src/commands/watch.ts';
+import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { routeOf } from '../src/daemon/routes.ts';
 import { createHostedWatch } from '../src/daemon/watch.ts';
-import { hostedWatchRun } from '../src/daemon/watch-run.ts';
+import { hostedWatchRun, hostedWatchSources } from '../src/daemon/watch-run.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { signRecord } from '../src/send/record.ts';
-import type { TypedWakeResult } from '../src/send/typed-wake.ts';
+import { deliverTypedWake, type TypedWakeResult } from '../src/send/typed-wake.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { reportedPath, wakePath } from '../src/watch/unread.ts';
+import { reportedPath, wakePath, wakeTryPath } from '../src/watch/unread.ts';
 
 const MIN = 60_000;
 const NOW = Date.parse('2026-10-20T03:00:00Z');
@@ -37,6 +37,8 @@ const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTot
 /** The interrupted Codex frame: the banner, the empty placeholder and the warning on the status
  *  row. It reads as an idle box, which is what the typed wake needs before it types. */
 const CODEX_INTERRUPTED = readFileSync(new URL('./fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
+const CODEX_WORKING = readFileSync(new URL('./fixtures/codex/0.161.0/working.txt', import.meta.url), 'utf8');
+const CODEX_UNSENT = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt', import.meta.url), 'utf8');
 
 const CREW = `format: 1
 project: acme-web
@@ -198,6 +200,369 @@ describe('the unread pass of a daemon-hosted watch', () => {
       expect(typed).toHaveLength(1);
       expect(rawWrites).toBe(0);
       expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+      expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(true);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('stepped N -> 2N -> 3N on the interrupted Codex frame through the real deliverTypedWake gate wakes once at N, reports once at 2N, and adds nothing later', async () => {
+    const made = scratch();
+    world = made;
+    // At t = NOW, the message is 75 s old (>= N = 60 s, < 2N = 120 s).
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 75_000));
+
+    const clock = { at: NOW };
+    const typedLines: string[] = [];
+    let enters = 0;
+    let rawWrites = 0;
+    let paneState: 'idle' | 'typed' | 'working' = 'idle';
+    let currentLine = '';
+
+    const readPane = (): string => {
+      if (paneState === 'working') return CODEX_WORKING;
+      if (paneState === 'typed') return CODEX_INTERRUPTED.replace('› Ask Codex to do anything', `› ${currentLine}`);
+      return CODEX_INTERRUPTED;
+    };
+
+    const sources: WatchSources = {
+      live: () => live(),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => readPane(),
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => { rawWrites += 1; return false; },
+      pressEnter: () => { rawWrites += 1; return false; },
+      sendKey: () => { rawWrites += 1; return false; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: undefined,
+      typedWake: async (pane, line, cli) =>
+        deliverTypedWake(
+          {
+            read: () => readPane(),
+            type: (_p, text) => {
+              typedLines.push(text);
+              currentLine = text;
+              paneState = 'typed';
+              return true;
+            },
+            enter: () => {
+              enters += 1;
+              paneState = 'working';
+              return true;
+            },
+            wait: async () => {},
+          },
+          pane,
+          line,
+          cli,
+          { settleMs: 0, enterSettleMs: 0, pollMs: 0, verifyMs: 10 },
+        ),
+    };
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: hostedWatchRun({ route, log: () => {}, base: sources, pid: 4244 }),
+    });
+
+    try {
+      // Pass 1 at 75 s (between N and 2N): re-wakes once through deliverTypedWake; not yet due for 2N report.
+      await waitUntil(() => host.state().cycles === 1);
+      expect(typedLines).toHaveLength(1);
+      expect(enters).toBe(1);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+      expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(false);
+
+      // Pass 2 at >= 2N: 2N report fires once; no second wake.
+      paneState = 'idle';
+      clock.at = NOW + 5 * MIN;
+      host.tick(new Date(clock.at));
+      await waitUntil(() => host.state().cycles === 2);
+      expect(typedLines).toHaveLength(1);
+      expect(enters).toBe(1);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+      expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(true);
+
+      // Pass 3 on a later tick: adds nothing.
+      clock.at = NOW + 10 * MIN;
+      host.tick(new Date(clock.at));
+      await waitUntil(() => host.state().cycles === 3);
+      expect(typedLines).toHaveLength(1);
+      expect(enters).toBe(1);
+      expect(rawWrites).toBe(0);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('a working seat is never typed into, and the 2N report still fires once', async () => {
+    const made = scratch();
+    world = made;
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 21 * MIN));
+
+    const clock = { at: NOW };
+    let typedCalls = 0;
+    let rawWrites = 0;
+    const sources: WatchSources = {
+      live: () => live(),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => CODEX_WORKING,
+      status: () => 'working',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => { rawWrites += 1; return false; },
+      pressEnter: () => { rawWrites += 1; return false; },
+      sendKey: () => { rawWrites += 1; return false; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: undefined,
+      typedWake: async () => {
+        typedCalls += 1;
+        return TYPED_DELIVERED;
+      },
+    };
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: hostedWatchRun({ route, log: () => {}, base: sources, pid: 4244 }),
+    });
+
+    try {
+      await waitUntil(() => host.state().cycles === 1);
+      expect(typedCalls).toBe(0);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
+      expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(true);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('a composer box holding unsent text is refused both before and inside deliverTypedWake without typing', async () => {
+    const made = scratch();
+    world = made;
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 75_000));
+
+    const clock = { at: NOW };
+    let outerUnsent = true;
+    let typedCalls = 0;
+    let typedKeystrokes = 0;
+    let rawWrites = 0;
+    const sources: WatchSources = {
+      live: () => live(),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => (outerUnsent ? CODEX_UNSENT : CODEX_INTERRUPTED),
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => { rawWrites += 1; return false; },
+      pressEnter: () => { rawWrites += 1; return false; },
+      sendKey: () => { rawWrites += 1; return false; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: undefined,
+      typedWake: async (pane, line, cli) => {
+        typedCalls += 1;
+        let reads = 0;
+        return deliverTypedWake(
+          {
+            // First read inside deliverTypedWake is idle; second read shows a draft (`CODEX_UNSENT`).
+            read: () => {
+              reads += 1;
+              return reads === 1 ? CODEX_INTERRUPTED : CODEX_UNSENT;
+            },
+            type: () => {
+              typedKeystrokes += 1;
+              return true;
+            },
+            enter: () => {
+              typedKeystrokes += 1;
+              return true;
+            },
+            wait: async () => {},
+          },
+          pane,
+          line,
+          cli,
+          { settleMs: 0, enterSettleMs: 0, pollMs: 0, verifyMs: 10 },
+        );
+      },
+    };
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: hostedWatchRun({ route, log: () => {}, base: sources, pid: 4244 }),
+    });
+
+    try {
+      // Pass 1: outer look sees `CODEX_UNSENT` (`kind === 'unsent'`) and skips before calling `typedWake`.
+      await waitUntil(() => host.state().cycles === 1);
+      expect(typedCalls).toBe(0);
+      expect(typedKeystrokes).toBe(0);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
+
+      // Pass 2: outer look sees `CODEX_INTERRUPTED`, and `deliverTypedWake`'s second read sees `CODEX_UNSENT`:
+      // `deliverTypedWake` refuses with 0 keystrokes, releases `<id>.wake`, and records `<id>.wake-try`.
+      outerUnsent = false;
+      clock.at = NOW + 5 * MIN;
+      host.tick(new Date(clock.at));
+      await waitUntil(() => host.state().cycles === 2);
+      expect(typedCalls).toBe(1);
+      expect(typedKeystrokes).toBe(0);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
+      expect(existsSync(wakeTryPath(dropDir, UNREAD))).toBe(true);
+      const ledger = JSON.parse(readFileSync(wakeTryPath(dropDir, UNREAD), 'utf8')) as { tries: number; typed: boolean };
+      expect(ledger).toMatchObject({ tries: 1, typed: false });
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('a human seat is never typed into by the hosted unread pass', async () => {
+    const made = scratch();
+    world = made;
+    writeFileSync(join(made.root, '.agents', 'team.yaml'), `${CREW}    human: true\n`);
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 21 * MIN));
+
+    const clock = { at: NOW };
+    let typedCalls = 0;
+    let rawWrites = 0;
+    const sources: WatchSources = {
+      live: () => live(),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => CODEX_INTERRUPTED,
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => { rawWrites += 1; return false; },
+      pressEnter: () => { rawWrites += 1; return false; },
+      sendKey: () => { rawWrites += 1; return false; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: undefined,
+      typedWake: async () => {
+        typedCalls += 1;
+        return TYPED_DELIVERED;
+      },
+    };
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: hostedWatchRun({ route, log: () => {}, base: sources, pid: 4244 }),
+    });
+
+    try {
+      await waitUntil(() => host.state().cycles === 1);
+      expect(typedCalls).toBe(0);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
+
+  test('--no-nudge suppresses the hosted N re-wake while still filing the 2N report once', async () => {
+    const made = scratch();
+    world = made;
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 21 * MIN));
+
+    const clock = { at: NOW };
+    let typedCalls = 0;
+    let rawWrites = 0;
+    const sources: WatchSources = {
+      live: () => live(),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => CODEX_INTERRUPTED,
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => { rawWrites += 1; return false; },
+      pressEnter: () => { rawWrites += 1; return false; },
+      sendKey: () => { rawWrites += 1; return false; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: undefined,
+      typedWake: async () => {
+        typedCalls += 1;
+        return TYPED_DELIVERED;
+      },
+    };
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: async (loop) =>
+        runWatch(
+          ['--no-nudge'],
+          {
+            stdout: () => {},
+            stderr: () => {},
+            cwd: route.root,
+            env: {},
+            stdinIsTTY: true,
+            stdoutIsTTY: true,
+            stderrIsTTY: true,
+            caller: { kind: 'owner' },
+          },
+          hostedWatchSources(route, loop, sources, undefined, 4244),
+        ),
+    });
+
+    try {
+      await waitUntil(() => host.state().cycles === 1);
+      expect(typedCalls).toBe(0);
+      expect(rawWrites).toBe(0);
+      expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
       expect(existsSync(reportedPath(dropDir, UNREAD))).toBe(true);
     } finally {
       await host.stop('the test is done');
