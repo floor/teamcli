@@ -1058,7 +1058,7 @@ function walkHistory(w: WalkWorld): HistoryEntry[] {
 }
 
 describe('the client send walk', () => {
-  test('a live inbox channel takes the drop and nothing is typed', async () => {
+  test('a live inbox listener is no leg: the client drop waits in the bus inbox, and nothing is typed', async () => {
     const w = walkFixture('walk-inbox');
     liveInboxIn(w);
     const host = walkHost(w);
@@ -1071,9 +1071,11 @@ describe('the client send walk', () => {
     expect(host.enters).toEqual([]);
     expect(host.frames).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
+    // The listener beside the seat is the store's reader, not a delivery leg (ADR D1): no
+    // marker is written for it, and no receipt exists.
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
   });
 
   test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
@@ -1142,23 +1144,24 @@ describe('the client send walk', () => {
     const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The typed leg is first in the receiver's own word and is refused (no pane messaging); the
-    // walk goes on in the declared order to the live inbox, which takes it.
+    // inbox word behind it is no leg (ADR D1), so the drop is where the walk ends.
     expect(host.typed).toEqual([]);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
   test('a declared order naming a leg a client grant cannot walk keeps only the client legs', async () => {
     const w = walkFixture('walk-declared-drop');
     liveInboxIn(w);
-    // `drop` is the durable copy the grant already wrote; the walk skips it and takes the channel.
+    // `drop` is the durable copy the grant already wrote, and the inbox word beside it is no
+    // client leg of this build (ADR D1): the durable copy is the whole delivery.
     const host = walkHost(w, { delivery: { seat: ['drop', 'mcp-inbox'] } });
     const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(host.typed).toEqual([]);
     expect(host.frames).toEqual([]);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
   test('the record the walk carries is the grant\'s own: one drop, one receipt, client principal intact', async () => {

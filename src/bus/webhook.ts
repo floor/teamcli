@@ -682,15 +682,21 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   return done({ outcome: 'failed', attempts, reason: 'could not connect' });
 }
 
+/** Why the send's own post did nothing: the row names no usable route (`no-route`); another
+ *  poster holds the record's claim, so this process may not post (`claim-held`); the route's
+ *  `posted` mark appeared while the claim was being taken, so the arrival was already posted
+ *  (`already-posted`); or an unexpected failure left the claim as it was (`unexpected`). */
+export type SenderPostNone = 'no-route' | 'claim-held' | 'already-posted' | 'unexpected';
+
 /** What the send's own post ended as: the routine answered 2xx within the adapter's timeout; the
  *  one attempt provably did not reach it (a non-2xx, a refused connection); the request may have
- *  been sent and no answer was read, so it is reported and never posted again; or the seat named
- *  no usable route, or another poster holds the record's claim (so nothing was tried here). */
+ *  been sent and no answer was read, so it is reported and never posted again; or nothing was
+ *  tried here, with the reason the walk needs to decide whether its leg was taken. */
 export type SenderPostOutcome =
   | { kind: 'posted'; ms: number }
   | { kind: 'failed'; reason: string }
   | { kind: 'unknown'; reason: string }
-  | { kind: 'none' };
+  | { kind: 'none'; why: SenderPostNone };
 
 export type SenderPostInput = {
   /** The seat the record was written for, as the receiving team names it. */
@@ -734,7 +740,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
   };
   try {
     const route = webhookRouteOf(input.webhook);
-    if (route === null || !route.ok) return { kind: 'none' };
+    if (route === null || !route.ok) return { kind: 'none', why: 'no-route' };
     const header = route.header === undefined ? {} : { header: route.header };
     let shape: WebhookShape;
     let event: SignedEventRecord;
@@ -792,13 +798,13 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
       };
     }
     // Claim before posting, exclusively: of this send and every bus pass, exactly one posts.
-    if (!takeClaim(input.dropDir, input.id)) return { kind: 'none' };
+    if (!takeClaim(input.dropDir, input.id)) return { kind: 'none', why: 'claim-held' };
     held = 'claimed';
     // The bus may have posted and marked the record while this send was building its request:
     // that mark is the newer word, and the claim this send just took is redundant.
     if (existsSync(join(input.dropDir, `${input.id}${POSTED_SUFFIX}`))) {
       giveUp();
-      return { kind: 'none' };
+      return { kind: 'none', why: 'already-posted' };
     }
     // From here on the claim says `sent`, whether or not the transport has taken the bytes: a
     // poster that dies after this rewrite is reported, never asked twice.
@@ -838,7 +844,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     // An unexpected failure before the request was marked sent releases the claim, so the
     // fallback still posts it; after that, the claim stays and the routine is never asked twice.
     if (held === 'claimed') giveUp();
-    return { kind: 'none' };
+    return { kind: 'none', why: 'unexpected' };
   }
 }
 

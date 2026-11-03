@@ -208,8 +208,9 @@ describe('C1 round 1: a re-broadcast writes no new sidecar', () => {
     expect(delivery.existing).not.toBe(true);
     expect(claimOf(w, WISP)?.id).toBe(delivery.id);
 
-    // A live inbox listener takes the brief; the walk leaves the claim's retry marker beside
-    // the signed record the launch already wrote.
+    // A live inbox listener is the store's reader, not a delivery leg (ADR D1): the walk ends on
+    // the drop and leaves the claim's retry marker beside the signed record the launch already
+    // wrote.
     writeListener(dropDir(w, WISP), {
       v: 1,
       seat: WISP,
@@ -220,7 +221,7 @@ describe('C1 round 1: a re-broadcast writes no new sidecar', () => {
       ts: NOW.toISOString(),
     });
     await walkBriefDeliveries(first, { dir: w.dir, home: w.home, sendHost: fake(w) });
-    expect(delivery.message).toMatchObject({ via: 'mcp-inbox', walked: true, exit: 0 });
+    expect(delivery.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
     const held = snapshot(w, WISP);
     expect(Object.keys(held).filter((name) => name.endsWith('.pending'))).toEqual([`${delivery.id}.pending`]);
     const record = held[delivery.id];

@@ -24,6 +24,7 @@ import { getPolicySpec, normalizePolicyName, type Policy } from '../policy/types
 import type { ProjectRecord } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
+import { deliveryOrder } from '../settings/resolve.ts';
 
 /** A chain as the levels that declare an order; a level left out declares nothing. */
 export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
@@ -117,13 +118,13 @@ export function deliveryChainOf(input: {
   const teamPolicy = file ? signedOrderOf(readTeamPolicySource(input.home, input.root, file), now) : undefined;
   const team = teamPolicy !== undefined ? (teamPolicy ?? undefined) : (file?.deliveryOrder ?? undefined);
   const found: Seat | undefined = file?.seats.find((one) => one.name === input.seat);
-  const seat = input.overrides?.deliveryOrder ?? found?.deliveryOrder ?? seatDefault(found);
-  return {
+  const wider: DeliveryChain = {
     ...(entity !== undefined ? { entity } : {}),
     ...(project !== undefined ? { project } : {}),
     ...(team !== undefined ? { team } : {}),
-    ...(seat !== undefined ? { seat } : {}),
   };
+  const seat = input.overrides?.deliveryOrder ?? found?.deliveryOrder ?? seatDefault(found, wider);
+  return { ...wider, ...(seat !== undefined ? { seat } : {}) };
 }
 
 /**
@@ -169,10 +170,17 @@ function expiredPolicy(policy: Policy, now: Date): boolean {
  * drop, so the drop leg is left out of its order — the launch's plan says which CLI watches
  * nothing and why. A seat with a watcher, and one no profile answers for, declare nothing and
  * take the default order. A word the file does declare is the seat's, never replaced here.
+ * The watcherless shape is read off the chain the wider levels resolve, less the drop leg: the
+ * shape says only that this seat reads no drop file, never that a channel leg a word declares is
+ * unreachable. Under the default (`typed`, `drop`) the shape is `typed` alone; a team word such
+ * as `[socket, typed]` keeps its socket, and an `mcp-inbox` word stays in the order so the walk
+ * can report it unavailable (`src/send/walk-cascade.ts`).
  */
-function seatDefault(seat: Seat | undefined): readonly DeliveryLeg[] | undefined {
+function seatDefault(seat: Seat | undefined, wider: DeliveryChain): readonly DeliveryLeg[] | undefined {
   if (seat === undefined) return undefined;
   if (seat.human === true) return ['drop'];
-  if (cliWatcher(seat.cli, seat.launch) === 'none') return ['mcp-inbox', 'typed'];
+  if (cliWatcher(seat.cli, seat.launch) === 'none') {
+    return deliveryOrder(wider).filter((leg) => leg !== 'drop');
+  }
   return undefined;
 }

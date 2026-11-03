@@ -177,21 +177,27 @@ reply tool writes the reply record. Nothing is typed into the pane.
 
 ### The delivery order, with `drop`
 
-`DELIVERY_LEGS` at the tip: `native`, `mcp-inbox`, `typed`, `drop`. The fallback order
-(`src/settings/inherit.ts`): `mcp-inbox`, then `typed`, then `drop`.
+`DELIVERY_LEGS` at the tip: `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+`session`; `channel` is the seat's own server push, implied by its launch rather than named by an
+order. The fallback order (`src/settings/inherit.ts`): `typed`, then `drop`. The walk that uses the
+order is the owner's cascade (ADR `zeus-message-path`, D1): channel-class legs first — a serving
+`channel` ahead of them, then the ones the chain names, in its own order — then the sender-posted
+webhook where the seat declares an adapter row, then the typed leg, then the mailbox.
 
-- `mcp-inbox` takes a send only while the seat's own inbox server is listening, and writes the
-  message to that inbox without typing; otherwise it is skipped as `no live inbox listener`.
-- `typed` is the leg that wakes an idle seat: one trigger line, the seat's own drop read, whose
-  signed receipt is what makes the send `delivered (read)`; without a receipt the line is
+- `mcp-inbox` is not a delivery leg in this build: the MCP inbox is the store's reader, and the
+  walk reports the word `unavailable` rather than attempting it.
+- `typed` is the leg that wakes an idle seat, and only a profile that declares a typed wake has
+  it: one trigger line into a box the wake read twice as the empty idle prompt, then the seat's
+  own drop read. The profile's working screen after that Enter is `delivered (typed wake)`; the
+  signed receipt the drop read leaves is `delivered (read)`; without either the line is
   `sent (unconfirmed)`.
 - `drop` writes the same 0600 file and types nothing at all: a receiver that watches its folder —
   the inbox server where its CLI has an MCP front, the launch's start-of-turn read where it has a
   hook — takes the message there, and a seat that watches nothing never walks this leg. Nothing
   on this leg wakes an idle seat.
 - `native` is not in the default: a level that names it is the sender choosing its own
-  cross-session channel and recording the delivery itself; it is the one leg a declared word may
-  add.
+  cross-session channel and recording the delivery itself; it is one of the legs a declared word
+  may add (`native`, `socket`, `headless-resume`, `session`).
 
 ## 5. Rules
 

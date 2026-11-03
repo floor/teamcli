@@ -361,15 +361,15 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (mcp-inbox, 0 ms); woken through its event adapter\n`);
+    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); woken through its event adapter\n`);
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
-    // The channel's own marker was cleared when its leg fell through; the inbox leg's marker is
+    // The channel's own marker was cleared when its leg fell through; the drop leg's marker is
     // the one left standing, so a watch pass treats it as the seat's own message, never a push.
     expect(readPending(dir)).toEqual([
-      { id: SEND_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'mcp-inbox', thread: SEND_ID },
+      { id: SEND_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'drop' },
     ]);
     expect(lastEntry(made)).toEqual({
       ts: NOW.toISOString(),
@@ -381,7 +381,7 @@ describe('the channel leg', () => {
       thread: SEND_ID,
       outcome: 'sent (unconfirmed)',
       ms: 0,
-      via: 'mcp-inbox',
+      via: 'drop',
       failed: [`typed: ${NO_PANE_MESSAGING}`, 'channel: no push receipt within 0 ms'],
     });
   });

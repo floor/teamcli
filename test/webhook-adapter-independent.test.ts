@@ -300,9 +300,10 @@ test('send dry-run names the actual webhook route and leaves no drop or pane eff
     native: { typeText: () => { paneEffects += 1; return false; }, pressEnter: () => { paneEffects += 1; return false; }, status: () => 'idle', wait: async () => {} },
   };
   expect(await runSend(['routine', 'synthetic dry body', '--dry-run'], io, host), io.err + io.out).toBe(0);
-  // No bus serves this world, and the adapter fires only when one announces the record: the
-  // preview names the route without claiming a wake the send cannot make.
-  expect(io.out).toContain('queued; its webhook fires when the bus takes it');
+  // The adapter is a leg the send itself walks, so the preview names it with the drop as its
+  // fallback; nothing is dialled and nothing is written on a dry run.
+  expect(io.out).toContain('its own webhook adapter');
+  expect(io.out).toContain('falling back to a 0600 drop file');
   expect(io.out).not.toContain('woken through its webhook adapter'); expect(io.out + io.err).not.toContain(w.secret);
   expect(paneEffects).toBe(0); expect(held.posts).toEqual([]); expect(fs.existsSync(join(w.dir, 'send-drops'))).toBe(false);
 });

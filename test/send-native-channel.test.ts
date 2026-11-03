@@ -1,4 +1,5 @@
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
 // since a word naming native is what puts it in the walk. A sender whose own file declares Claude
 // Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
@@ -452,8 +453,8 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     confirm: `team send --confirm ${ID}`,
     message: HANDOFF_BODY,
     delivery: [
+      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       { leg: 'native', state: 'attempted' },
-      { leg: 'mcp-inbox', state: 'not-reached' },
       { leg: 'drop', state: 'not-reached' },
     ],
     ids: { sent: ID, reply: null },
@@ -681,7 +682,6 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       failed: [
         `typed: ${NO_PANE_MESSAGING}`,
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
-        'mcp-inbox: no live inbox listener',
       ],
     },
   ]);
@@ -988,7 +988,7 @@ test('a native hold keeps an expired handoff pending: no claim, no drop fallback
   expect(watchPane.typed).toEqual([]);
 });
 
-test('expiry writes the handoff into a live MCP inbox and leaves the retry a marker, zero pane writes', async () => {
+test('expiry writes the handoff into the bus inbox whatever the listener says, and leaves the retry a marker, zero pane writes', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1016,7 +1016,9 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
   const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
   await expirePendingNative(scene);
 
-  // The handoff's body is the inbox message, marked for the inbox leg; nothing was typed.
+  // The handoff's body is the store's record, marked for the drop leg; nothing was typed. The
+  // listener beside the seat is not a leg in this build (ADR D1): the inbox is the store's
+  // reader, so its presence changes neither the walk nor the marker.
   expect(existsSync(pending(made))).toBe(false);
   expect(watchPane.typed).toEqual([]);
   expect(watchPane.enters).toBe(0);
@@ -1028,12 +1030,11 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
     to: 'lead',
     body: HANDOFF_BODY,
     ts: expiredAt.toISOString(),
-    thread: ID,
     tries: 0,
-    leg: 'mcp-inbox',
+    leg: 'drop',
   });
   expect(said).toEqual([
-    'lead: a native handoff from helper was unconfirmed after 10m; written to its MCP inbox',
+    `lead: a native handoff from helper was unconfirmed after 10m; sent (unconfirmed) (dropped ${String(HANDOFF_BODY.length)} characters)`,
   ]);
 
   const history = readHistory('acme', made.root, made.home);
@@ -1047,7 +1048,7 @@ test('expiry writes the handoff into a live MCP inbox and leaves the retry a mar
       thread: ID,
       outcome: 'sent (unconfirmed)',
       ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      via: 'mcp-inbox',
+      via: 'drop',
       failed: ['native: unconfirmed after 10m'],
     },
   ]);
@@ -1141,7 +1142,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   ]);
 });
 
-test('an expired handoff with no inbox listener lands in the bus inbox, and its history names every refused leg', async () => {
+test('an expired handoff lands in the bus inbox, and its history names the refused leg', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1193,10 +1194,10 @@ test('an expired handoff with no inbox listener lands in the bus inbox, and its 
     via: 'drop',
   });
   // The walk never carries the typed leg (the no pane messaging rule filters it out before the
-  // pending record is written), so the expiry names the inbox refusal and then the drop.
+  // pending record is written), so the drop is what takes the expiry and the native refusal is
+  // the only word it keeps; an `mcp-inbox` name is no leg of this build.
   expect(history.entries[0]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    'mcp-inbox: no live inbox listener',
   ]);
 });
 
@@ -1494,7 +1495,6 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.via).toBe('drop');
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
-    "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
   ]);
 });
 
@@ -1555,7 +1555,6 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       via: 'drop',
       failed: [
         'native: unconfirmed after 10m',
-        "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
       ],
     },
   ]);

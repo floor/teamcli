@@ -93,6 +93,7 @@
             "headless-resume",
             "channel",
             "session",
+            "webhook",
             null
           ]
         },
@@ -198,7 +199,8 @@
                   "typed",
                   "drop",
                   "headless-resume",
-                  "session"
+                  "session",
+                  "webhook"
                 ]
               },
               "state": {

@@ -71,17 +71,18 @@ export function messageNameOk(name: string): boolean {
   return MESSAGE_ID.test(name) || LEGACY_REPORT_ID.test(name);
 }
 
-/** How long a send on the mcp-inbox leg waits for the read receipt before it reports
- *  `sent (unconfirmed)`: long enough for a seat that checks its inbox at a turn boundary, short
- *  enough not to block a sender. Nothing waits longer than this. */
+/** How long a send waits for the read receipt before it reports `sent (unconfirmed)`: long
+ *  enough for a seat that checks its inbox at a turn boundary, short enough not to block a
+ *  sender. The native queue's receipt wait uses it, as does any record an older build wrote on
+ *  the mcp-inbox leg (that name is no delivery leg in this build). Nothing waits longer than this. */
 export const INBOX_GRACE_MS = 2_000;
 
 /** How often that wait looks for the receipt. */
 export const INBOX_POLL_MS = 25;
 
-/** The one reason a send skips the mcp-inbox leg: no server is serving this inbox. A marker that
- *  is absent, malformed, dead, or names another seat, session or root says the same thing — there
- *  is no listener here that could take the message. */
+/** The one reason an inbox read or a record an older build wrote is skipped: no server is
+ *  serving this inbox. A marker that is absent, malformed, dead, or names another seat, session
+ *  or root says the same thing — there is no listener here that could take the message. */
 export const NO_INBOX_LISTENER = 'no live inbox listener';
 
 /** How long an unread inbox message waits before the watch types its drop as the fallback: the

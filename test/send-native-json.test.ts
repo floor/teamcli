@@ -1,4 +1,5 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // --json for a native seat. The socket documents live in send.test.ts. No live pane.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -94,7 +95,7 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
     },
     // The error document carries the resolved walk, as the delivered one does.
     delivery: [
-      { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+      { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
       // The declared `typed` word wakes a Codex seat through its runtime queue (codex-daemon on).
       { leg: 'native', state: 'attempted', reason: 'no trusted runtime session is recorded for this seat (no agent record for this seat)' },
       { leg: 'drop', state: 'attempted' },

@@ -555,6 +555,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // names, so the owner sees the old and the new session before the next launch.
     ...sessionDefaultMoveNotes(standing, team),
     ...lobbyNotes(team, root, sources.home, session),
+    // A delivery_order word still naming `mcp-inbox`: the inbox is the store's reader, not a leg
+    // (ADR D1), and the word is read so the walk can report it unavailable.
+    ...deliveryOrderInboxNotes(team),
     ...policyChecked.notes,
     ...modelRule.notes,
     ...socketSkipped.notes,
@@ -1584,7 +1587,9 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
  * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
  * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
- * `native` is the one leg a word may add, so a declaration naming it is no difference.
+ * `native`, `socket`, `headless-resume` and `session` are legs a word may add, and `mcp-inbox` is
+ * a name this build reads but never walks, so a declaration naming any of them is no difference;
+ * a word naming `mcp-inbox` is named in a note instead (`deliveryOrderInboxNotes`).
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   let projectOrder: readonly DeliveryLeg[] | undefined;
@@ -1657,6 +1662,32 @@ function wrapperLaunch(cli: string, launch: string): boolean {
   if (words[at] === 'exec' || words[at] === 'command') at += 1;
   const program = words[at];
   return program !== undefined && (program.split('/').pop() ?? program) !== binary;
+}
+
+/**
+ * A `delivery_order` word in `.agents/team.yaml` — the team's own, or a seat's — that names
+ * `mcp-inbox`. The name is read rather than set aside (a word may add it, `src/policy/types.ts`),
+ * and the walk registers it as unavailable instead of travelling it: the MCP inbox is the store's
+ * reader, like `team drops --read`, and a push from its server is not a wake (ADR D1,
+ * `src/send/walk-cascade.ts`). The note names the word so the owner can drop it when the file is
+ * next edited; the word changes no leg the walk travels, so it is not a difference and the exit
+ * stays as it is. A human seat's word is named too: the walk reports the name unavailable for
+ * every seat, whatever the human ruling otherwise spares.
+ */
+function deliveryOrderInboxNotes(team: TeamFile): string[] {
+  const notes: string[] = [];
+  if (team.deliveryOrder !== null && team.deliveryOrder.includes('mcp-inbox')) {
+    notes.push(
+      `delivery_order [${team.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it when the file is next edited`,
+    );
+  }
+  for (const seat of team.seats) {
+    if (seat.deliveryOrder === undefined || !seat.deliveryOrder.includes('mcp-inbox')) continue;
+    notes.push(
+      `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited`,
+    );
+  }
+  return notes;
 }
 
 /**

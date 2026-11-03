@@ -159,7 +159,6 @@ describe('the history names the channel that carried the send', () => {
     expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
     expect(entry.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
-      'mcp-inbox: no live inbox listener',
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
     ]);
   });
@@ -183,7 +182,6 @@ describe('the history names the channel that carried the send', () => {
     expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
     expect(entry.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
-      'mcp-inbox: no live inbox listener',
       'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
     ]);
   });

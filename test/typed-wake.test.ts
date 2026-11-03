@@ -233,7 +233,8 @@ describe('team send: the typed wake', () => {
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'delivered (typed wake)', via: 'typed' });
-      expect(history.entries[0]?.failed).toEqual(['mcp-inbox: no live inbox listener']);
+      // The typed leg took the send, so no leg behind it failed: the inbox is no leg to skip.
+      expect(history.entries[0]?.failed).toBeUndefined();
     }
   });
 
@@ -256,7 +257,6 @@ describe('team send: the typed wake', () => {
       expect(history.entries).toHaveLength(1);
       expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'sent (unconfirmed)', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'mcp-inbox: no live inbox listener',
         'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
       ]);
     }
@@ -281,7 +281,6 @@ describe('team send: the typed wake', () => {
     if (history.ok) {
       expect(history.entries[0]?.failed).toEqual([
         "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
-        'mcp-inbox: no live inbox listener',
       ]);
     }
   });

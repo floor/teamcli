@@ -85,6 +85,7 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
+import { MCP_INBOX_UNAVAILABLE } from '../send/walk-cascade.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Dial, RelayReceipt as PackageRelayReceipt, RelayStage } from '../../packages/relay/index.js';
@@ -239,7 +240,8 @@ function humanSkipReasonFor(leg: DeliveryLeg): string {
     case 'headless-resume':
       return "the pane is a human's, and no session is resumed";
     case 'mcp-inbox':
-      return "the pane is a human's, and the drop leg is the only one walked";
+      // No seat walks this name (ADR D1): the store's reader, never a spared pane leg.
+      return MCP_INBOX_UNAVAILABLE;
     case 'channel':
       return "the pane is a human's, and the drop leg is the only one walked";
     case 'session':
@@ -455,9 +457,11 @@ export function selectDaemonRelayRoutes(
       skippedLegs.push({
         leg,
         reason:
-          selfSend && leg === 'typed'
-            ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
-            : 'handled outside the relay runtime-adapter walk',
+          leg === 'mcp-inbox'
+            ? MCP_INBOX_UNAVAILABLE
+            : selfSend && leg === 'typed'
+              ? `own-seat self-send (${seat} -> ${seat}): nothing is typed into the sender's own active pane`
+              : 'handled outside the relay runtime-adapter walk',
       });
       continue;
     }

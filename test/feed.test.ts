@@ -222,12 +222,11 @@ describe('team send history log & team feed', () => {
       thread: sentDoc.ids.sent,
       ms: 0,
       via: 'drop',
-      // The walk passed the declared typed word, set aside with the ruling's reason, and the
-      // inbox ahead of the drop: no server was listening. The drop is what took the send, so
-      // nothing is claimed beyond the stored copy.
+      // The walk passed the declared typed word, set aside with the ruling's reason: a name the
+      // order keeps (`mcp-inbox`) is the store's reader and no leg, so the drop is what took the
+      // send, and nothing is claimed beyond the stored copy.
       failed: [
         `typed: ${NO_PANE_MESSAGING}`,
-        'mcp-inbox: no live inbox listener',
       ],
     });
 
@@ -297,7 +296,6 @@ describe('team send history log & team feed', () => {
     });
     expect(doc.events[0]?.failed).toEqual([
       `typed: ${NO_PANE_MESSAGING}`,
-      'mcp-inbox: no live inbox listener',
     ]);
   });
 

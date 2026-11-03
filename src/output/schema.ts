@@ -201,7 +201,10 @@ const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
     additionalProperties: false,
     required: ['leg', 'state'],
     properties: {
-      leg: { type: 'string', enum: [...DELIVERY_LEGS] },
+      // The report names the sender-posted webhook among the walk's legs. No policy declares
+      // it — the receiving seat's adapter row decides it — so it is added here, where the
+      // report's shape is published, and not to the declared-order schemas below.
+      leg: { type: 'string', enum: [...DELIVERY_LEGS, 'webhook'] },
       state: { type: 'string', enum: ['attempted', 'queued', 'skipped', 'refused', 'not-reached', 'candidate'] },
       eligible: { type: 'boolean' },
       reason: { type: 'string', minLength: 1 },
@@ -2131,7 +2134,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', 'channel', 'session', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', 'channel', 'session', 'webhook', null] },
         to: { type: 'string', minLength: 1 },
         confirm: { type: 'string', minLength: 1 },
         message: { type: 'string' },
