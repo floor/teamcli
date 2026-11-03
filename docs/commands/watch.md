@@ -318,10 +318,12 @@ the one in the mailbox.
 
 The watch builds four fixed lines and types none of them in this build: the ring, when a message
 waits for a seat; a pause notice, when a pause lands; a retry for a marker a send left; and the
-unread wake, for a seat whose message has been unread for `watch.unread_after` (ten minutes by
-default). None of them ever carries a report's text, and each stops before the pane. The ring,
-the retry and the unread wake all build the same wake line: the rendered `message-display`
-header and the fixed hint `Read it with: team drops --read.` ([team
+unread wake, for a seat whose message has been unread for its seat's unread window — the file's
+`watch.unread_after` when it moved the section, else the delivery class's default (thirty seconds
+for a seat a message can wake while it is idle, sixty for a typed or pull-only seat; ADR
+`zeus-message-path`, D2). None of them ever carries a report's text, and each stops before the
+pane. The ring, the retry and the unread wake all build the same wake line: the rendered
+`message-display` header and the fixed hint `Read it with: team drops --read.` ([team
 send](send.md#the-message-display-wake-line)). A sender the watch cannot name falls back to the
 shipped nameless ring, `Team: run team drops --read --seat <seat> --session <session>`, rather
 than building nothing. Automatic work is never typed: the dispatcher's own lines below say what
@@ -348,7 +350,9 @@ it did instead. The lines around them:
 | `<seat>: a dropped send from <from> was read in its drop folder` | the seat's own turn-start read (`team drops --read`) wrote its signed receipt; the history records `delivered (read)` and the marker beside the record is cleared, and nothing is typed |
 | `<seat>: a dropped send from <from> was not read (no receipt within 30m); the drop file is at <path>` | thirty minutes passed with no signed receipt on a `drop`-leg marker: the marker is cleared, the record stays in the folder, and nothing is ever typed for it |
 | `<seat>: an inbox send from <from> was read on retry (receipt)` (the word is `a channel send` for that leg) | the retry's line is the message-display wake line, whose hint is `team drops --read`, and the seat's own signed receipt landed before the retry could act: the history records `delivered (read)`, the marker is cleared, and nothing is typed |
-| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` / `<seat>: a message from <from> was still unread after <n> min; reported to <lead> only: the sender's own mailbox could not be resolved (<why>)` | the message is still unread at twice `watch.unread_after`: its sender gets one signed Runtime mailbox record under `.agents/messages/`, resolved through the signed record's agent id and this home's agent and team registries (the owner's own for the owner's messages), which `team messages` lists; the team's lead gets one signed send-drop per pass, listing every message due in it, under `.agents/send-drops/<session>/<lead>`, which `team drops --read` serves; its id is fixed by the set of messages it lists, so a repeat pass writes no second — never a keystroke into a pane. Nothing is typed, so `--no-nudge` writes both too. A sender the registries cannot pin to one team, seat and session is never routed by name: only the lead's drop is written, and the line and the drop carry the reason. A signed client-origin record is not unresolved: it carries `from_client`, names `client:<id>` as `from`, and holds no agent id by construction, so its report is the lead's drop alone, the line reads `<seat>: a message from client:<id> was still unread after <n> min; reported to <lead>`, and neither says anything about a sender mailbox |
+| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` / `<seat>: a message from <from> was still unread after <n> min; reported to <lead> only: the sender's own mailbox could not be resolved (<why>)` | the message is still unread at twice the seat's unread window (`watch.unread_after` when the file moved the section, else the delivery class's default): its sender gets one signed Runtime mailbox record under `.agents/messages/`, resolved through the signed record's agent id and this home's agent and team registries (the owner's own for the owner's messages), which `team messages` lists; the team's lead gets one signed send-drop per pass, listing every message due in it, under `.agents/send-drops/<session>/<lead>`, which `team drops --read` serves; its id is fixed by the set of messages it lists, so a repeat pass writes no second — never a keystroke into a pane. Nothing is typed, so `--no-nudge` writes both too. A sender the registries cannot pin to one team, seat and session is never routed by name: only the lead's drop is written, and the line and the drop carry the reason. A signed client-origin record is not unresolved: it carries `from_client`, names `client:<id>` as `from`, and holds no agent id by construction, so its report is the lead's drop alone, the line reads `<seat>: a message from client:<id> was still unread after <n> min; reported to <lead>`, and neither says anything about a sender mailbox |
+| `<seat>: a message from <from> was unread and its webhook adapter took it after the unread window (<n> ms)` | the cascade's webhook leg posted the signed record to the seat's declared adapter after the seat's unread window, and the adapter took it: the history records `via: webhook` with `delivered`, the wake marker says a webhook wake was sent, and nothing is typed |
+| `<seat>: a message from <from> was unread and its webhook post's answer was not read (<why>); it is not posted again` | the post went out and its answer never came back: the wake marker stays reserved with `webhook` as its evidence, so no later pass posts the message again, the report at twice the window says the answer was not read, and nothing is typed |
 | `<seat>: a channel send from <from> was read (receipt)` | the seat's channel handling turn acknowledged a pushed message: its signed receipt names the id with `read_by: channel`, the history records `delivered (read)` with `via: channel`, the marker that waited for it is cleared, and nothing is typed |
 | `<seat>: a channel send from <from> was redelivered on the socket` | the push's confirmation window ended with no signed receipt and the receiving seat's socket took the frame: the socket delivery wrote the signed read receipt and its own `delivered` history line, marked `failed: redelivered: channel unconfirmed`, the marker is cleared, and nothing is typed |
 | `<seat>: a channel send from <from> was not confirmed; the socket was not taken (<why>); the message waits in the bus inbox` | the push's one redelivery could not go over the socket: the marker already says `redelivered: channel unconfirmed`, the retry that follows stops before the pane, and nothing is typed |
@@ -400,14 +404,29 @@ pass, so no marker is followed, spent or given up on in that watch; the receipt 
 runs, and types nothing.
 
 A delivery that found no busy box is watched the same way. A message still without a signed
-receipt `watch.unread_after` after it landed — ten minutes by default — gets one wake: the same
-`team drops --read` line a retry builds, under the retry's rules (a readable idle prompt, the seat
-lock taken, never a human's pane). A seat whose profile declares the typed wake has that wake
-typed for it by the one module that types, `src/send/typed-wake.ts`, with the send's own
-guarantees: two reads that must show an empty idle prompt, Enter only into a box that reads back
-as exactly the line, and delivery only when the working screen shows. A seat whose profile has no
-typed wake takes the drop-file leg, which this build stops before the pane: nothing is typed. On
-the typed leg a profile whose terminal-host status is unreliable is not gated on that status —
+receipt after its seat's unread window gets the next leg down the cascade below the one the
+send's first history line names (ADR `zeus-message-path`, D2). The window is `watch.unread_after`
+when the file moved the section, else the class default: thirty seconds for a seat a message can
+wake while it is idle, sixty for a typed or pull-only seat. A seat that declares a webhook
+adapter is posted the signed record first — a post is no keystroke and needs no pane, so it goes
+before any pane is looked for — and a post the adapter took writes the message's second history
+line, `via: webhook` with `outcome: delivered`, so the pass types nothing. Only a post that
+provably did not reach the routine moves the same pass down to the typed wake, and that typed
+line's history then names the leg it passed in `failed`: `webhook: <reason>`. The position is the
+send's own record, never a guess: a line whose `via` is a channel-class leg has the webhook below
+it; a line that already names `webhook`, carries a `webhook: ` failure, or cannot be found in
+this home's history is never posted again — a post that may already have fired is worse than a
+line sent late. A post whose answer was never read keeps its reservation and is not posted again,
+and the report says the answer was not read; a message whose posting another pass already holds
+is left for a later pass, unmarked and untyped this time. The typed wake is otherwise one wake:
+the same `team drops --read` line a retry builds, under the retry's rules (a readable idle
+prompt, the seat lock taken, never a human's pane). A seat whose profile declares the typed wake
+has that wake typed for it by the one module that types, `src/send/typed-wake.ts`, with the
+send's own guarantees: two reads that must show an empty idle prompt, Enter only into a box that
+reads back as exactly the line, and delivery only when the working screen shows. A seat whose
+profile has no typed wake takes the drop-file leg, which this build stops before the pane:
+nothing is typed. On the typed leg a profile whose terminal-host status is unreliable is not
+gated on that status —
 the wake's own two reads are the truth — and `watch_wake: off` on the seat's record or profile
 keeps the drop-file leg for that seat. The retry is bounded by `watch_wake_tries` (three by
 default, at most ten): a refused or unconfirmed attempt gives its wake reservation back — it
@@ -418,16 +437,18 @@ marker is the claim. A wake is reserved on disk before it is attempted, and the 
 the attempt's whole claim: no later pass wakes the same message again; a definite not-delivered
 outcome (`held` or `not-submitted`), an unconfirmed typed attempt, and any delivery that wrote
 nothing to the pane give the reservation back so a later pass may wake, and only an attempt that
-wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. At twice `watch.unread_after` a message
-still unread is reported once: a signed Runtime mailbox record for its sender under
-`.agents/messages/`, and a signed send-drop for the team's lead under
+wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. At twice the seat's
+unread window a message still unread is reported once: a signed Runtime mailbox record for its
+sender under `.agents/messages/`, and a signed send-drop for the team's lead under
 `.agents/send-drops/<session>/<lead>` that `team drops --read` serves — never by typing into a
 pane — after a report reservation of its own, so a crash between a report and its marker neither
 drops it nor writes it twice, and a record or drop already there is left byte for byte. The
 words keep the wake states apart: a standing reserved wake says `a wake was attempted at <at> and
 its outcome is unconfirmed`, one never attempted says no wake line was typed, one whose typed
-attempts never landed says how many were tried and that none was confirmed, and one that was sent
-says when.
+attempts never landed says how many were tried and that none was confirmed, one a webhook post
+took says `its webhook adapter took the wake at <at>`, one whose post's answer was never read
+says `a webhook wake was posted at <at> and its answer was not read`, and one that was sent says
+when.
 `--no-nudge` skips the wake but still writes the report.
 
 The report's sender mailbox is resolved through the signed record's agent id and the agent and

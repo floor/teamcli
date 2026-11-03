@@ -695,7 +695,7 @@ describe('team drops --read', () => {
       'acme',
       'lead',
       legacyId,
-      'writer-01: a message from architect has been unread for 4 min',
+      'writer-01: a message from architect is queued, not woken - unread for 4 min',
       {
         from: 'runtime',
         from_id: null,
@@ -714,7 +714,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
     expect(result).toEqual({
       code: 0,
-      out: 'writer-01: a message from architect has been unread for 4 min\n',
+      out: 'writer-01: a message from architect is queued, not woken - unread for 4 min\n',
       err: '',
     });
     // Its receipt is the signed read receipt every record gets, at the name its id derives.

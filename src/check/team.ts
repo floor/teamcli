@@ -18,7 +18,7 @@ import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
-import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
+import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -439,7 +439,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
     ...briefs.differences,
-    ...unreadDifferences(team, state, live, root, dir, sources.home, session, sources.sockets ?? defaultSocketsDirs(), inForce.unreadAfter, sources.now()),
+    ...unreadDifferences(team, state, live, root, dir, sources.home, session, sources.sockets ?? defaultSocketsDirs(), declaredUnreadAfter(inForce, watchPace), sources.now()),
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
@@ -1062,12 +1062,14 @@ function generalBriefDifferences(
 }
 
 /**
- * Every seat with work still unread past `watch.unread_after`. The reading is the watch's own —
+ * Every seat with work still unread past its seat's window. The reading is the watch's own —
  * `listUnread`, with the same receipt, superseded and claim rules — so the check and the unread
- * wake agree on what unread means. One difference per seat names the oldest message and counts
- * the rest. The general seat brief has its own read difference and is not counted twice; a
- * person's drop is read by a person and is never asked for a receipt, and without a message key
- * no receipt can be judged, so neither is named here.
+ * wake agree on what unread means, window included: the file's declared `watch.unread_after` when
+ * it moved the section, else the seat class's own default (30 s wakeable, 60 s typed; ADR
+ * zeus-message-path, D2). One difference per seat names the oldest message and counts the rest.
+ * The general seat brief has its own read difference and is not counted twice; a person's drop is
+ * read by a person and is never asked for a receipt, and without a message key no receipt can be
+ * judged, so neither is named here.
  */
 function unreadDifferences(
   team: TeamFile,
@@ -1078,13 +1080,16 @@ function unreadDifferences(
   home: string | undefined,
   session: string,
   sockets: string | readonly string[],
-  windowSeconds: number,
+  declaredSeconds: number | null,
   now: Date,
 ): Difference[] {
   if (home === undefined) return [];
   const key = messageKeyState(home);
   if (key.kind !== 'key') return [];
   const out: Difference[] = [];
+  // The shortest window any seat class can earn: a seat with nothing older than this is left
+  // before its launch records are read at all.
+  const floorSeconds = declaredSeconds ?? UNREAD_AFTER_WAKEABLE_SECONDS;
   for (const seat of team.seats) {
     if (seat.human === true) continue;
     const brief = state.briefs?.[seat.name];
@@ -1096,22 +1101,9 @@ function unreadDifferences(
     const context = { to: seat.name, root, session };
     const unread = listUnread(dropDir, context, home).filter((message) => {
       if (briefIds.has(message.id)) return false;
-      return now.getTime() - Date.parse(message.ts) >= windowSeconds * 1000;
+      return now.getTime() - Date.parse(message.ts) >= floorSeconds * 1000;
     });
-    const oldest = unread[0];
-    if (oldest === undefined) continue;
-    const minutes = Math.max(1, Math.round((now.getTime() - Date.parse(oldest.ts)) / 60_000));
-    // The sender is the verified record's own word, and only that. The `.pending` marker beside
-    // it is unsigned: it is never read as the message's sender, so it can never lend a message the
-    // owner's name or a seat's standing. A record that cannot be opened or verified is named as
-    // what it is — an unverified message — and keeps its age, its id and its count.
-    let who = 'an unverified message';
-    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
-    if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
-      const from = looked.record.payload.from;
-      who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
-    }
-    const more = unread.length > 1 ? `; ${String(unread.length - 1)} more unread` : '';
+    if (unread.length === 0) continue;
     // The class the seat's own launch left, read exactly as the socket reading and a send read
     // it, so the repair cannot promise a wake the seat does not have. Only a seat nothing can
     // wake while it is idle needs the turn said out loud: a wakeable seat's silence is a stuck
@@ -1129,6 +1121,23 @@ function unreadDifferences(
       processes: listed === undefined ? null : live.processes?.[listed.pane] ?? null,
       sockets,
     });
+    // This seat's own window: the wake it earns and the gate this difference reads are one value.
+    const windowSeconds = unreadWindowSeconds(declaredSeconds, delivery.class);
+    const past = unread.filter((message) => now.getTime() - Date.parse(message.ts) >= windowSeconds * 1000);
+    const oldest = past[0];
+    if (oldest === undefined) continue;
+    const minutes = Math.max(1, Math.round((now.getTime() - Date.parse(oldest.ts)) / 60_000));
+    // The sender is the verified record's own word, and only that. The `.pending` marker beside
+    // it is unsigned: it is never read as the message's sender, so it can never lend a message the
+    // owner's name or a seat's standing. A record that cannot be opened or verified is named as
+    // what it is — an unverified message — and keeps its age, its id and its count.
+    let who = 'an unverified message';
+    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
+    if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
+      const from = looked.record.payload.from;
+      who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
+    }
+    const more = past.length > 1 ? `; ${String(past.length - 1)} more unread` : '';
     const watcher = recorded?.watcher;
     const readNow = `team drops --read --seat ${seat.name} reads it now`;
     const repair = watcher === undefined || watcher === 'none'

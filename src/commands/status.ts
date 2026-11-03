@@ -36,7 +36,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type QueuedSwap, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
-import { watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
+import { declaredUnreadAfter, unreadWindowSeconds, watchInForceWithPace, watchPaceOf } from '../watch/rhythm.ts';
 import { unmanagedEndpointNotes } from '../launch/codex-endpoint.ts';
 import { webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -758,18 +758,21 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     ? undefined
     : new Map<string, SeatWake>([...compactReadings].map(([name, reading]): [string, SeatWake] => [name, reading.wake]));
 
-  // A row whose seat cannot be woken while it is idle and whose oldest drop has waited past the
-  // window the watch's unread pass uses: the cell's `!` marks the class, and this line says what
-  // the class means in the class's own words (`deliveryWords`), so the table and a send's console
-  // line cannot promise different things. The window is the watch's, paced exactly as the check
-  // paces the same reading. A note only: `status` never fails the gate for it — `check` does.
+  // A row whose oldest drop has waited past its seat's unread window — the window the watch's
+  // unread pass uses for that seat: the file's declared word, or the class's own default (ADR
+  // zeus-message-path, D2). The cell's `!` marks a class nothing wakes while idle, and this line
+  // says what the class means in the class's own words (`deliveryWords`), so the table and a
+  // send's console line cannot promise different things. The window is the watch's, paced exactly
+  // as the check paces the same reading. A note only: `status` never fails the gate for it —
+  // `check` does.
   if (compactReadings !== undefined) {
     const pace = watchPaceOf({ team, root, home: sources.home, standing, now });
-    const windowSeconds = watchInForceWithPace(standing, team, pace).unreadAfter;
+    const declared = declaredUnreadAfter(watchInForceWithPace(standing, team, pace), pace);
     for (const [name, reading] of compactReadings) {
       if (reading.wake.wakeable) continue;
-      const declared = team.seats.find((one) => one.name === name);
-      if (declared?.human === true) continue;
+      const row = team.seats.find((one) => one.name === name);
+      if (row?.human === true) continue;
+      const windowSeconds = unreadWindowSeconds(declared, reading.wake.class);
       const age = reading.wake.oldest_unread_seconds;
       if (age === null || age < windowSeconds) continue;
       const waits = reading.words.replace(/^queued; /, '');

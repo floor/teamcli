@@ -133,8 +133,9 @@ once per setting as a line of its own — never a report, never a typed line:
 
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
-`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and `unread_after`, and
-the idle window after the tighten-only check; it never scales `idle_owner` or `blind_after`.
+`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and a declared
+`unread_after`, and the idle window after the tighten-only check; it never scales `idle_owner` or
+`blind_after`, and it does not scale the per-seat unread defaults below (30 s and 60 s).
 
 ### 3.3 The sixteen checks
 
@@ -164,7 +165,10 @@ A file switches a check off under `watch.checks`; the four always-on checks igno
 
 The shipped watch defaults, as `defaultWatch()` carries them: a pass every 120 s, `team_idle`
 600 s, `unsent_after` 60 s, `nudge_wait` 600 s and `unread_after` 600 s
-(`src/file/sections/watch.ts`). The machine's
+(`src/file/sections/watch.ts`). The `unread_after` figure is the section's: the unread window in
+force for a seat is the file's word when it moved the section, else the seat's delivery-class
+default — 30 s for a seat a message can wake while it is idle, 60 s for a typed or pull-only
+seat (ADR `zeus-message-path`, D2). The machine's
 readings, checks 11 to 15, are logged every ten minutes: `READINGS_EVERY` is 600 s
 (`src/commands/watch.ts`).
 
@@ -255,21 +259,32 @@ held-send retry and the unread wake.
   the retry would type settles the marker as `delivered (read)` and types nothing. The retry is
   bounded, and giving up says the drop's path. The default nudge body `NUDGE_TEXT` is never
   typed.
-- **The unread wake**: the same line, `Run team drops --read --seat <seat> --session
-  <session> and do that.`, typed once for a seat whose message has had no signed receipt for
-  `watch.unread_after` seconds (600 when the file omits it) and whose box is free. It is the
-  same delivery the retry makes, with the same status, screen, seat-lock and human-pane rules,
-  and it skips a message a held send's retry owns (a `.pending` marker). A receipt that lands
-  after the listing is read again under the seat's lock, and an already-read message is not
-  woken. One line serves every message due for that seat at that instant; the history records
+- **The unread wake**: a message still without a signed receipt after the seat's unread window
+  — the file's `watch.unread_after` when it moved the section, else the class default, 30 s for
+  a seat a message can wake while it is idle and 60 s for a typed or pull-only seat (ADR
+  `zeus-message-path`, D2) — gets the next leg down the cascade below the one the send's first
+  history line names. A seat that declares a webhook adapter is posted the signed record before
+  any pane is looked for; a post the adapter took writes the message's second history line,
+  `via: webhook` with `delivered`, and the pass types nothing. Only a definite failure before
+  the post went through moves the same pass down to the typed line, whose history then carries
+  `failed: [webhook: <reason>]`; a line that already names `webhook`, carries a `webhook: `
+  failure, or cannot be found in this home's history is never posted, and a post whose answer
+  was never read keeps its reservation and is not posted again. The typed line is the same line
+  a retry builds, `Run team drops --read --seat <seat> --session <session> and do that.`, typed
+  once for a seat whose box is free. It is the same delivery the retry makes, with the same
+  status, screen, seat-lock and human-pane rules, and it skips a message a held send's retry
+  owns (a `.pending` marker). A receipt that lands after the listing is read again under the
+  seat's lock, and an already-read message is not woken. One line serves every message due for
+  that seat at that instant; the history records
   `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. The wake
   writes its `<id>.wake` reservation before the line is typed and holds it through the
   attempt: a crash after the reservation never types a second line, a definite not-delivered
   outcome (`held`, `not-submitted`, or a delivery whose bindings refused before any key was
   written) gives the reservation back so a later pass may wake, and an uncertain one
-  (`unreachable`) that wrote to the pane keeps it, spent. At twice the window a message still unread is
-  reported once to its sender as a signed Runtime mailbox record and to the team's lead as one
-  signed drop for the pass, listing every message due in it — never by typing into a pane —
+  (`unreachable`) that wrote to the pane keeps it, spent. At twice the seat's window a message
+  still unread is reported once to its sender as a signed Runtime mailbox record and to the
+  team's lead as one signed drop for the pass, listing every message due in it — never by
+  typing into a pane —
   after a `<id>.reported` reservation for each message; the sender's record is published
   write-once, so a mailbox already holding it keeps those bytes. The lead drop's UUID is fixed
   by the sorted set of messages it lists, so a repeat pass — even one whose markers were lost —
@@ -283,8 +298,10 @@ held-send retry and the unread wake.
   line. A signed client-origin record carries `from_client` and no agent id by construction; it
   is reported to the receiving team's lead alone, no sender mailbox resolution is attempted for
   it, and no missing-metadata reason is named. The report's words say whether a wake line was
-  sent, was attempted with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the
-  wake but still writes the report.
+  sent, was attempted with an unconfirmed outcome, or was never typed, and when the wake was a
+  webhook post, whether the adapter took it (`its webhook adapter took the wake at <at>`) or its
+  answer was never read (`a webhook wake was posted at <at> and its answer was not read`);
+  `--no-nudge` skips the wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that

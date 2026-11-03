@@ -1,8 +1,10 @@
 // `team check` names unread work: every seat carrying a message with no signed read receipt
-// past `watch.unread_after` gets one difference, read through the same `listUnread` the watch's
-// unread wake uses. A read receipt clears it, a message inside the window is not named, the
-// general seat brief keeps its own read difference, and a person's drop is never asked for a
-// receipt. The pane here is a scripted screen; no live session is touched.
+// past its seat's unread window — the file's `watch.unread_after` when it moved the section, else
+// the class default (60 s for this file's pull-only seats; ADR zeus-message-path, D2) — read
+// through the same `listUnread` the watch's unread wake uses. A read receipt clears it, a message
+// inside the window is not named, the general seat brief keeps its own read difference, and a
+// person's drop is never asked for a receipt. The pane here is a scripted screen; no live session
+// is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -171,7 +173,9 @@ describe('unread work in team check', () => {
 
   test('a message inside the window is not named', () => {
     const at = place();
-    seed(at, 'lead', ID_A, 5);
+    // This file declares no `watch.unread_after`, so the lead's pull-only class earns the 60 s
+    // default: half a minute is inside it.
+    seed(at, 'lead', ID_A, 0.5);
     const { code, out } = check(at);
     expect(out).not.toContain('has been unread');
     expect(code).toBe(0);
@@ -213,9 +217,10 @@ describe('unread work in team check', () => {
 
   test("a verified record's own signed time wins over the marker's unsigned age", () => {
     const at = place();
-    seed(at, 'lead', ID_A, 1);
+    seed(at, 'lead', ID_A, 0.5);
     // The marker beside the drop is unsigned: its age is a word this pass may not believe for a
-    // record the key did sign. The record's own `at` is one minute old, so nothing is due.
+    // record the key did sign. The record's own `at` is half a minute old, inside the lead's
+    // 60 s window, so nothing is due.
     writeFileSync(
       join(at.dir, 'send-drops', at.session, 'lead', `${ID_A}.pending`),
       JSON.stringify({ id: ID_A, from: 'owner', ts: new Date(NOW.getTime() - 40 * MIN).toISOString() }),
