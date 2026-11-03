@@ -256,7 +256,7 @@ function resetWatchMirror(
   }
 }
 
-function tickGroup(input: ChoresFleetInput, group: Group, at: Date): void {
+function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boolean): void {
   if (group.stopping) return;
   const ms = at.getTime();
   const child = group.child;
@@ -265,8 +265,16 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date): void {
     startGroup(input, group, at);
     return;
   }
+  // A child that is being ended, or whose process has already left, gets no beat: its pipe has
+  // no reader, and the write that follows is the daemon's own fault, not the child's. The exit
+  // settles the group and schedules the replacement; this beat has nothing to say to it.
+  if (group.killing || !child.alive) return;
   child.send({ type: 'tick', id: `${String(ms)}-${String(group.restarts)}`, at: at.toISOString() });
-  if (group.killing) return;
+  // A beat that itself arrived late is the daemon's own loop having been held, not a child that
+  // stopped beating: the heartbeats sent during the stall are still unread in its pipe, and a
+  // reading this daemon could not hear must not end the child. The next on-time beat reads the
+  // backlog and judges again.
+  if (stalled) return;
   const missed = overdueBeats(group.lastBeatMs, group.startedAtMs, ms, input.beatMs);
   if (missed < group.policy.missedBeats) return;
   group.killing = true;
@@ -532,9 +540,15 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
 
   let stopRun: Promise<void> | null = null;
   let presenceSeq = 0;
+  /** The previous beat's instant, kept to tell a beat that arrived on time from one this
+   *  daemon's own loop delivered late. */
+  let lastTickMs: number | null = null;
   return {
     tick(at: Date): void {
-      for (const group of groups) tickGroup(input, group, at);
+      const ms = at.getTime();
+      const stalled = lastTickMs !== null && ms - lastTickMs > input.beatMs * 2;
+      lastTickMs = ms;
+      for (const group of groups) tickGroup(input, group, at, stalled);
     },
     presence(request: ChoresPresenceRequest): Promise<ChoresPresenceAnswer> | null {
       for (const group of groups) {
