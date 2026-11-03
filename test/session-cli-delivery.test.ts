@@ -299,13 +299,13 @@ describe('a send to a seat whose CLI creates its own session', () => {
     const code = await runSend([SEAT, 'hello'], io, host(made, { sendId: () => SEND_ID }));
 
     expect(code).toBe(0);
-    expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
+    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
     expect(io.err).toContain('the message waits in its bus inbox');
     expect(existsSync(join(seatDropDir(made), SEND_ID))).toBe(true);
     expect(recordBody(join(seatDropDir(made), SEND_ID))).toContain('hello');
     expect(jules.calls()).toHaveLength(1);
     const entry = lastEntry(made);
-    expect(entry).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(entry).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
     expect(entry.failed).toEqual(expect.arrayContaining([
       `session: the jules CLI exited 1 (Error: no account)`,
     ]));
@@ -320,12 +320,12 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     expect(code).toBe(0);
     expect(jules.calls()).toEqual([]);
-    expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
+    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
     // The local copy keeps the body: the message is not lost, it is not handed to a public
     // service. The refusal names the rule it matched and never repeats the text.
     expect(recordBody(join(seatDropDir(made), SEND_ID))).toContain('Zephyrine Quillfeather');
     const entry = lastEntry(made);
-    expect(entry).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(entry).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
     const failed = (entry.failed as string[] | undefined) ?? [];
     expect(failed).toEqual(expect.arrayContaining([
       'session: the body matches a private rule (names entry 1); no session was created',
@@ -344,9 +344,9 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     expect(code).toBe(0);
     expect(jules.calls()).toEqual([]);
-    expect(io.out).toContain(`${SEAT}: sent (unconfirmed) (drop`);
+    expect(io.out).toContain(`${SEAT}: queued, not woken (drop`);
     expect(existsSync(join(seatDropDir(made), SEND_ID))).toBe(true);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
     const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
     expect(failed).toEqual(expect.arrayContaining([
       'session: the target repository acme/site is not public; no session was created',
@@ -362,7 +362,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     expect(code).toBe(0);
     expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
     const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
     expect(failed).toEqual(expect.arrayContaining([
       'session: the target repository acme/site could not be read for visibility; no session was created',
@@ -387,7 +387,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
     // There is no repository to read: the guard refuses without inventing a lookup.
     expect(read).toEqual([]);
     expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
     const failed = (lastEntry(made).failed as string[] | undefined) ?? [];
     expect(failed).toEqual(expect.arrayContaining([
       "session: the seat's folder names no repository, so the session's target cannot be proved public; no session was created",
@@ -441,7 +441,7 @@ describe('a send to a seat whose CLI creates its own session', () => {
 
     expect(code).toBe(0);
     expect(jules.calls()).toEqual([]);
-    expect(lastEntry(made)).toMatchObject({ outcome: 'sent (unconfirmed)', via: 'drop' });
+    expect(lastEntry(made)).toMatchObject({ outcome: 'queued, not woken', via: 'drop' });
   });
 
   test('a declared order keeps its words; the retired typed wake stands where the session call can', async () => {

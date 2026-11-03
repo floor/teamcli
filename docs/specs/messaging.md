@@ -64,7 +64,7 @@ nothing. Fields (`src/send/history.ts`):
 | `to` | string | yes | — | 0.4.x | the recipient seat |
 | `body` | string | yes | — | 0.4.x | the message body, whole |
 | `id` | string | yes | — | 0.4.x | the drop's id |
-| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent (unconfirmed)`, `sent (channel)`, `held`, `queued (receiver busy)`, `not-submitted`, `unreachable`, `answered`, `timeout` |
+| `outcome` | string | yes | — | 0.4.x | one of `delivered`, `delivered (read)`, `delivered (typed wake)`, `sent (unconfirmed)`, `queued, not woken`, `sent (channel)`, `held`, `queued (receiver busy)`, `not-submitted`, `unreachable`, `answered`, `timeout` |
 | `spec` | string | no | absent | 0.5.0 | the address the caller wrote, when not the resolved seat's own name |
 | `resolved` | string | no | absent | 0.5.0 | the agent id the spec resolved to, written with `spec` |
 | `ms` | number | no | absent | 0.5.0 | send to outcome in whole milliseconds, when measured |

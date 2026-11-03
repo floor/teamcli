@@ -126,6 +126,7 @@ export const ENFORCED_POLICY_NAMES = [
   'daemon.broker',
   'daemon.fallback-backlog-above',
   'daemon.fallback-backlog-limit',
+  'daemon.heartbeat',
   'watch-rhythm',
   'grant-emission',
   'owner-signers',
@@ -196,6 +197,12 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'daemon-fallback-backlog-limit': 'daemon.fallback-backlog-limit',
   fallback_backlog_limit: 'daemon.fallback-backlog-limit',
   'fallback-backlog-limit': 'daemon.fallback-backlog-limit',
+  daemon_heartbeat: 'daemon.heartbeat',
+  'daemon-heartbeat': 'daemon.heartbeat',
+  daemon_heartbeat_seconds: 'daemon.heartbeat',
+  'daemon-heartbeat-seconds': 'daemon.heartbeat',
+  heartbeat_seconds: 'daemon.heartbeat',
+  'heartbeat-seconds': 'daemon.heartbeat',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -720,6 +727,25 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
  */
 export const DAEMON_BACKLOG_DEFAULTS = { above: 256, limit: 500 } as const;
 
+/** The machine daemon's loop heartbeat, in whole seconds: the release default and the bounds a
+ *  level's word may choose between. The default is the beat the daemon ran hard-coded before the
+ *  word existed (ADR D6, the message path). */
+export const DAEMON_HEARTBEAT_SECONDS = { min: 1, max: 60, release: 5 } as const;
+
+/** The heartbeat word: a whole number of seconds from 1 to 60, optionally with the `s` suffix
+ *  every seconds policy takes. */
+function parseHeartbeatSeconds(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*s?$/.test(raw.trim())
+    ? Number.parseInt(raw.trim().replace(/s$/, ''), 10)
+    : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= DAEMON_HEARTBEAT_SECONDS.min && n <= DAEMON_HEARTBEAT_SECONDS.max ? n : null;
+}
+
+function heartbeatSecondsProblem(name: string, raw: unknown): string | null {
+  if (parseHeartbeatSeconds(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of seconds from ${String(DAEMON_HEARTBEAT_SECONDS.min)} to ${String(DAEMON_HEARTBEAT_SECONDS.max)}, such as 5`;
+}
+
 const BACKLOG_ABOVE_RANGE: BacklogRange = { min: 1, max: 1_000_000, release: DAEMON_BACKLOG_DEFAULTS.above };
 const BACKLOG_LIMIT_RANGE: BacklogRange = { min: 1, max: 10_000, release: DAEMON_BACKLOG_DEFAULTS.limit };
 
@@ -1180,6 +1206,26 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: (raw: unknown) => parseBacklogCount(raw, BACKLOG_LIMIT_RANGE),
     valueProblem: (raw: unknown) => backlogCountProblem('daemon.fallback-backlog-limit', raw, BACKLOG_LIMIT_RANGE),
     // A smaller bulk limit is tighter: one pass retires fewer episodes.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The machine daemon's loop heartbeat, in whole seconds from 1 to 60: how often the daemon
+  // refreshes its state record, probes its hosted endpoints and runs the fallback sweep, which
+  // still rides the beat in this release. One process serves every hosted checkout, so the
+  // daemon resolves the word for each hosted root at start and again on its housekeeping pass,
+  // and runs the shortest effective word among them: no hosted team loosens another's beat, and
+  // a longer beat must be declared at a level every hosted checkout shares. A root whose chain
+  // cannot be read keeps the release default as its word, because the beat is liveness and never
+  // stops on a word no level could prove. While the sweep still rides the beat, a shorter beat
+  // makes a backlog stall more often, not less; the bounds keep a word inside 1 to 60 seconds.
+  'daemon.heartbeat': {
+    name: 'daemon.heartbeat',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: DAEMON_HEARTBEAT_SECONDS.release,
+    gateLifting: false,
+    parseValue: parseHeartbeatSeconds,
+    valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
+    // A shorter or equal beat is tighter, the same direction as every interval policy.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The watch's own pace: how often a pass sweeps and how long its six waits run. One value

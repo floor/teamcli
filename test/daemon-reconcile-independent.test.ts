@@ -327,6 +327,7 @@ function health(w: World, endpoint: 'send' | 'bus', failedAt: string | undefined
     daemon: 'teamcli', socket: join(w.home, 'unused.sock'), state: 'running', running: true,
     pid: 123456789, uid: 12345, since: new Date(NOW.getTime() - 600_000).toISOString(), startedBy: 'service-manager',
     version: 'fixture', gitHead: null, heartbeatAt: NOW.toISOString(), features: { broker: 'absent' },
+    heartbeatSeconds: null,
     roots: [root], stuck: [], probe: { state: 'answered', at: NOW.toISOString() }, why: null,
   };
 }

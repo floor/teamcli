@@ -1075,7 +1075,7 @@ describe('the client send walk', () => {
     // marker is written for it, and no receipt exists.
     expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
   test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
@@ -1118,7 +1118,7 @@ describe('the client send walk', () => {
     // The frame was never taken, so no read receipt exists for it.
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     const last = walkHistory(w).at(-1);
-    expect(last).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(last).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
     expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
   });
 
@@ -1132,7 +1132,7 @@ describe('the client send walk', () => {
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
   test('a declared order is walked as written, and a live channel is not reached ahead of it', async () => {

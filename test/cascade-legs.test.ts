@@ -25,6 +25,7 @@ import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailab
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { fake, filed, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
+import { withoutSendId } from './helpers/output.ts';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
@@ -150,7 +151,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
     // The typed leg cannot wake a working pane, and the drop behind it takes the send; the
     // listener beside the seat is not walked, so the old inbox ending is not reachable.
-    expect(io.out).toContain('cursor: sent (unconfirmed) (drop, 0 ms)');
+    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms)');
     expect(io.out).toContain('the typed wake failed');
     expect(io.out).not.toContain('(mcp-inbox');
     // The splice line the old walk printed when a listener stood beside the seat is gone.
@@ -162,7 +163,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
       // The listener is not a leg, so it is not a failed one either.
       expect((history.entries[0]?.failed ?? []).some((line) => line.startsWith('mcp-inbox'))).toBe(false);
       expect(history.entries[0]?.failed?.[0]).toMatch(/^typed: /);
@@ -212,7 +213,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     });
     const io = owner(one.root);
     expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
@@ -237,7 +238,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       status: string;
       delivery: { leg: string; state: string; reason?: string }[];
     };
-    expect(doc.status).toBe('sent (unconfirmed)');
+    expect(doc.status).toBe('queued, not woken');
     const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
     expect(legs.get('mcp-inbox')).toEqual({ leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE });
     expect(legs.get('drop')).toBeDefined();
@@ -247,7 +248,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
     const history = readHistory('acme', one.root, host.home);
     expect(history.ok).toBe(true);
-    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'sent (unconfirmed)', via: 'drop' });
+    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
   });
 
   test('the sender-posted webhook fires once and stops the walk, whatever the listener beside the seat says', async () => {
@@ -280,9 +281,9 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     });
     const io = owner(one.root);
     expect(await runSend(['person', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe(
+    expect(withoutSendId(io.out)).toBe(
       'team acme, session "acme"\n'
-      + 'person: sent (unconfirmed) (drop, 0 ms); queued; person has no way to be woken while idle\n',
+      + 'person: queued, not woken (drop, 0 ms); queued; person has no way to be woken while idle\n',
     );
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);

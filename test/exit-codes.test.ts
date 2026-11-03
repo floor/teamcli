@@ -4927,6 +4927,7 @@ function answeringHealth(): DaemonHealth {
     version: 'test',
     gitHead: null,
     heartbeatAt: '2026-10-20T10:00:05.000Z',
+    heartbeatSeconds: null,
     features: { broker: 'absent' },
     stuck: [],
     roots: [],
@@ -6111,11 +6112,12 @@ scene('send.stopped', async (place) => {
 });
 scene('send.delivered', async (place) => {
   write(place, TEAM);
-  // The typed leg took the trigger line: a trigger sent, and no signed receipt, so the words say
-  // `sent (unconfirmed)` and never claim a read. The contract row's own meaning is unchanged.
+  // No leg woke the seat and nothing wakes it while it is idle, so the words say `queued, not
+  // woken` and never claim a read. The contract row's own meaning is unchanged: exit 0, the
+  // record stored.
   return show(
     await sent(place, ['lead', 'hello'], owner, sendHost(place)),
-    'lead: sent (unconfirmed) (drop, 0 ms)',
+    'lead: queued, not woken (drop, 0 ms)',
   );
 });
 scene('send.delivered-webhook', async (place) => {
@@ -6154,10 +6156,10 @@ delivery_order: [mcp-inbox, typed]
 });
 scene('send.sent-unconfirmed', async (place) => {
   write(place, TEAM);
-  // A live listener takes the message into the seat's inbox; the grace is zero, so the receipt
-  // never has time to land and the leg ends `sent (unconfirmed)` — exit 0, nothing typed.
+  // A live listener is no leg: the walk ends at the drop, and a pull-only lead's ending there
+  // reads `queued, not woken` — exit 0, nothing typed.
   liveInbox(place);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (drop, 0 ms)');
+  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: queued, not woken (drop, 0 ms)');
 });
 /** The development channel: a Claude lead launched with the channel naming the team server, a
  *  live listener that declared it, and no declared order. The server's push marker lands while

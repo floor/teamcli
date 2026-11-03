@@ -203,7 +203,7 @@ function expectKeptInBus(world: ReturnType<typeof setupWorld>, seat: string, bod
       id,
       to: seat,
       body: filed(body),
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       via: 'drop',
     }));
   }
@@ -313,7 +313,7 @@ describe('the composer read-back at its boundaries', () => {
     expect(await runSend(['lead', 'delivered unread'], io, host)).toBe(0);
     expect(host.typed.length).toBe(0);
     expect(host.enters.length).toBe(0);
-    expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
+    expect(outcomes(world)).toEqual(['queued, not woken']);
   });
 });
 

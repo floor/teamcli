@@ -112,6 +112,7 @@ const ANSWERING: DaemonHealth = {
   version: 'test',
   gitHead: null,
   heartbeatAt: null,
+  heartbeatSeconds: null,
   features: null,
   stuck: [],
   roots: [],
@@ -500,7 +501,7 @@ describe('the hosted send server per-seat proof', () => {
       await waitFor(async () => (await projectionState(w.dir, 'clerk')) === 'idle');
       const idle = testIo(w.root, owner);
       expect(await runSend(['clerk', 'the projected turn ended'], idle, host)).toBe(0);
-      expect(idle.out).toContain('clerk: sent (unconfirmed)');
+      expect(idle.out).toContain('clerk: queued, not woken');
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
 
@@ -508,7 +509,7 @@ describe('the hosted send server per-seat proof', () => {
       // exists only where there is no native record to prove.
       const fallback = testIo(w.root, owner);
       expect(await runSend(['op-1', 'legacy unbound seat'], fallback, host)).toBe(0);
-      expect(fallback.out).toContain('op-1: sent (unconfirmed)');
+      expect(fallback.out).toContain('op-1: queued, not woken');
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {

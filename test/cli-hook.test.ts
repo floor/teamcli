@@ -399,9 +399,9 @@ seats:
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
     // The bus inbox carried it: the seat's own drop-read trigger is never typed, and the
-    // sender's side has only the unconfirmed ending until the seat's own read writes the
-    // receipt. The drop leg wrote the record the trigger reads.
-    expect(io.out).toContain('sent (unconfirmed)');
+    // sender's side has only the queued, not woken ending until the seat's own read writes
+    // the receipt. The drop leg wrote the record the trigger reads.
+    expect(io.out).toContain('queued, not woken');
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
@@ -416,7 +416,7 @@ seats:
     expect(run(command)).toBe('');
   }, 60_000);
 
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, queued, not woken, nothing typed', async () => {
     const io = testIo(project, { kind: 'owner' });
     const typed: { pane: string; text: string }[] = [];
     const host: SendHost = {
@@ -443,9 +443,9 @@ seats:
     expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
 
     // The bus inbox is the channel: the drop file is written whole and nothing is typed, and
-    // the sender's side knows only the unconfirmed end. The reason the typed leg passed rides
-    // the one history line the drop leg wrote.
-    expect(io.out).toContain('sent (unconfirmed)');
+    // the sender's side knows only the queued, not woken end. The reason the typed leg passed
+    // rides the one history line the drop leg wrote.
+    expect(io.out).toContain('queued, not woken');
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
@@ -465,7 +465,7 @@ seats:
     if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
     const entry = history.entries.filter((one) => one.id === id).at(-1);
     if (entry === undefined) throw new Error('the send wrote no history line');
-    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.outcome).toBe('queued, not woken');
     expect(entry.via).toBe('drop');
     const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
     expect(reason).toBe(`typed: ${NO_PANE_MESSAGING}`);

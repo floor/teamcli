@@ -217,7 +217,7 @@ describe('team send history log & team feed', () => {
       from_team: teamIdOf(root),
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       // The thread is the first message's id; a first message is its own thread's id.
       thread: sentDoc.ids.sent,
       ms: 0,
@@ -273,8 +273,8 @@ describe('team send history log & team feed', () => {
     expect(await runFeed([], feedIo, { home })).toBe(0);
     expect(feedIo.out).toBe(
       'team acme, session "acme"\n' +
-        '  TIME      KIND                                   SEAT            DETAIL\n' +
-        `  15:30:00  sent (unconfirmed) (via drop in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '  TIME      KIND                                  SEAT            DETAIL\n' +
+        `  15:30:00  queued, not woken (via drop in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
         '1 event\n',
     );
 
@@ -290,7 +290,7 @@ describe('team send history log & team feed', () => {
       from: 'helper',
       to: 'lead',
       id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
+      outcome: 'queued, not woken',
       ms: 0,
       via: 'drop',
     });
@@ -520,8 +520,8 @@ describe('team send history log & team feed', () => {
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome, via: e.via }))).toEqual([
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-dropped`, outcome: 'sent (unconfirmed)', via: 'drop' },
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-no-agent`, outcome: 'sent (unconfirmed)', via: 'drop' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-dropped`, outcome: 'queued, not woken', via: 'drop' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-no-agent`, outcome: 'queued, not woken', via: 'drop' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered', via: 'socket' },
       { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout', via: 'drop' },
     ]);

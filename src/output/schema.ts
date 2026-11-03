@@ -2178,7 +2178,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         schema: schemaTagFragment('team.send', 1),
         format: { type: 'integer', const: 1 },
         dry_run: { type: 'boolean' },
-        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'sent (channel)', 'queued (receiver busy)', 'answered', 'recorded', 'native', 'dry-run'] },
+        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'queued, not woken', 'sent (channel)', 'queued (receiver busy)', 'answered', 'recorded', 'native', 'dry-run'] },
         action_summary: { type: 'string', minLength: 1 },
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },

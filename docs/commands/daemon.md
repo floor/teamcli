@@ -31,8 +31,10 @@ silently dropped, because a unit that hosts nothing must not be written in its p
 
 `status` reads the daemon's state record, probes the machine socket and prints one line:
 
-- `team daemon: running (pid <pid>); started <source>; since <time>; heartbeat <time>; …; socket <path>`
-  — the daemon answered its health probe; a process that exists but does not answer adds
+- `team daemon: running (pid <pid>); started <source>; since <time>; heartbeat <time> (every
+  <seconds>s); …; socket <path>` — the daemon answered its health probe; the beat it runs is the
+  `daemon.heartbeat` word its hosted checkouts resolved (omitted when no word is known); a
+  process that exists but does not answer adds
   `probe unanswered (<reason>)` (or `probe refused (<code>)`) and is still reported running,
   never healthy and never not running; stuck requests are counted on the same line;
 - `team daemon: unknown (<why>); socket <path>` — the state record or the socket cannot be read,
@@ -159,7 +161,8 @@ the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault
 
 Under the machine folder `~/.config/team`: the daemon's state record
 `daemon.state.json` (pid, uid, start time, launcher, version and packaged commit, heartbeat,
-hosted features and stuck requests), the local socket `daemon.sock` (mode 0600 in a 0700 folder),
+the whole seconds of the `daemon.heartbeat` word it runs, hosted features and stuck requests),
+the local socket `daemon.sock` (mode 0600 in a 0700 folder),
 the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
 remove the user service unit the platform adapter owns; `restart` reads that unit and writes
 nothing; no command prints that path as prose except under `--json` and in the refusal of an
@@ -225,9 +228,11 @@ a start that names `service-manager` without the manager's record to back it is 
 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,
 "daemon": …}` with the health reading's fields: `state`, `running`, `pid`, `uid`, `since`,
-`startedBy`, `version`, `gitHead`, `heartbeatAt`, `features`, `stuck`, `probe`, `why` and
-`socket`. `gitHead` is the commit a packaged install was built from; it is `null` in a source
-checkout, and an install that changes the version or the packaged commit is a new daemon identity.
+`startedBy`, `version`, `gitHead`, `heartbeatAt`, `heartbeatSeconds`, `features`, `stuck`, `probe`,
+`why` and `socket`. `gitHead` is the commit a packaged install was built from; it is `null` in a
+source checkout, and an install that changes the version or the packaged commit is a new daemon
+identity. `heartbeatSeconds` is the whole seconds of the `daemon.heartbeat` word the daemon runs;
+`null` when no word is known, as for a daemon on an injected test beat or an older record.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
 `installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the

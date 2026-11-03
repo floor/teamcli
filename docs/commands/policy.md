@@ -20,7 +20,7 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
 `swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `client-bundles`,
 `client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`,
-`actions-commands`).
+`actions-commands`, `daemon.heartbeat`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -53,6 +53,16 @@ pass takes up to the second instead of the steady 256, so a store that was never
 empties over a few passes. The defaults are 256 and 500. A higher threshold and a smaller bulk
 limit are the tighter words. The daemon reads both for each hosted root; a chain that cannot be
 read keeps the release defaults and says which word it could not read.
+
+`daemon.heartbeat` (alias `daemon-heartbeat-seconds`) is the machine daemon's loop heartbeat, in
+whole seconds from 1 to 60 — 5 by default: how often the daemon refreshes its state record,
+probes its hosted endpoints and runs the fallback sweep, which still rides the beat in this
+release. The daemon reads it for each hosted root when it starts and again on its housekeeping
+pass, and runs the shortest word any hosted root declares, so no hosted team loosens another's
+beat; a longer beat has to be declared at a level every hosted checkout shares. A shorter beat is
+the tighter word. `team daemon status` prints the beat it runs (`heartbeat <time> (every
+<seconds>s)`). While the sweep still rides the beat, a shorter beat makes a backlog stall more
+often, not less.
 
 The seven `event-*` policies are the owner's event thresholds: how long an unanswered thread
 stays open (72 hours by default), how many records a thread may hold (50), how many days the

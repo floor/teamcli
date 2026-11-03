@@ -101,11 +101,13 @@ const ANSWERING: DaemonHealth = {
   daemon: 'teamcli', socket: '/synthetic/daemon.sock', state: 'running', running: true, pid: 42, uid: 501,
   since: '2026-11-01T00:00:00.000Z', startedBy: 'system-service-manager', version: 'test', gitHead: null,
   heartbeatAt: null, features: null, stuck: [], roots: [],
+  heartbeatSeconds: null,
   probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' }, why: null,
 };
 const SILENT: DaemonHealth = {
   daemon: 'teamcli', socket: '/synthetic/daemon.sock', state: 'not-running', running: false, pid: null, uid: null,
   since: null, startedBy: null, version: null, gitHead: null, heartbeatAt: null, features: null, stuck: [], roots: [],
+  heartbeatSeconds: null,
   probe: { state: 'unanswered', at: '2026-11-01T00:00:01.000Z', reason: 'closed' }, why: null,
 };
 

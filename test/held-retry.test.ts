@@ -236,7 +236,8 @@ function readInbox(at: SeedWorld, id: string, seat: string, session: string): vo
 }
 
 /** A drop and its record, as the drop leg leaves them: the sender's command has already said
- *  `sent (unconfirmed)`, and the marker waits for the seat's own watcher to read it. */
+ *  `queued, not woken` (a seat nothing wakes while idle), and the marker waits for the seat's
+ *  own watcher to read it. */
 function seedDropped(at: SeedWorld, session: string, seat: string, id: string, body: string, ts = NOW): string {
   const dropDir = seedRecord(at, session, seat, id, body, ts);
   markPending(dropDir, { id, from: 'owner', to: seat, body, ts: ts.toISOString(), leg: 'drop' });
@@ -1361,7 +1362,7 @@ describe('the turn-start read, end to end', () => {
     const io = testIo(made.root, { kind: 'owner' });
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(dialled).toEqual([]);
 
     const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
@@ -1416,7 +1417,7 @@ describe('the turn-start read, end to end', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
-      [id, 'sent (unconfirmed)', 'drop'],
+      [id, 'queued, not woken', 'drop'],
       [id, 'delivered (read)', 'drop'],
     ]);
   }, 30_000);

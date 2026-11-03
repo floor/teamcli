@@ -157,7 +157,7 @@ describe('team send names the webhook route', () => {
     const io = owner(at.root);
     const code = await runSend(['iris', 'the gate is green'], io, fake(at));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('sent (unconfirmed)');
+    expect(io.out).toContain('queued, not woken');
     expect(io.out).toContain('queued; iris reads it at its next turn, and nothing here gives it one (pull-only)');
     expect(io.out).not.toContain('woken through its event adapter');
     const dir = dropDir(at.dir, 'iris');

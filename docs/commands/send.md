@@ -38,7 +38,7 @@ frame, nothing read from a pane — so a receiver that watches its own drop fold
 message there. It is the cascade's last class and the order's own last word: the default order
 names it, it is chosen alone with `delivery_order: [drop]`, and a human's seat walks it alone
 unless it declares a webhook adapter, which is no pane route and is posted before it. Its console
-line is `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>`, exit 0, with `via: drop` on the
+line is `<seat>: queued, not woken (drop, <n> ms); <delivery>`, exit 0, with `via: drop` on the
 history line: the record is the message, safely on disk, and no receipt has come back yet. Beside
 the record the send leaves the marker `<id>.pending`, which says the drop leg left it. The seat's
 own watcher reads it: at turn start its hook runs `team drops --read`,
@@ -205,7 +205,7 @@ The typed leg is the profile-gated typed wake: only a profile that declares `typ
 shipped `cursor` and `muse` profiles do — lets the walk reach it; a `typed` word in any other
 profile's order is set aside before any leg runs, and the seat's own event adapters stand in its
 place, so a send no adapter takes ends at the drop leg with the record in the bus inbox. The drop
-leg never types: there the run ends `sent (unconfirmed)` once the signed record and its marker are
+leg never types: there the run ends `queued, not woken` once the signed record and its marker are
 in place, and no box, status or transcript is read.
 
 A seat whose live screen is its provider's usage wall is refused before the walk: no leg is
@@ -255,7 +255,7 @@ down: a run that ends `delivered`, `delivered (read)`, `delivered (typed wake)`,
 to the project's message history, which [team feed](feed.md) reads. The daily log keeps the seat and the sizes.
 
 The outcome is always one of `delivered` (or `delivered (read)`, or `delivered (typed wake)`),
-`sent (unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
+`sent (unconfirmed)`, `queued, not woken`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`,
 `unreachable` or `refused` — printed and matched by the exit code, or written as one machine-readable document
 with `--json`. `--list` sends nothing: it prints the addressable seats — the file's own roster,
 each seat's human name as its `@<nickname>` address (the name a seat signed standing where the
@@ -672,7 +672,7 @@ Every run that reads a team file opens on stdout with one context line,
 line on stderr and has none.
 
 A line that ends without a delivery — `sent (channel)`, every `sent (unconfirmed)`,
-`queued (receiver busy)` — carries the receiving seat's delivery class in plain words after the
+`queued, not woken`, `queued (receiver busy)` — carries the receiving seat's delivery class in plain words after the
 leg's own parenthetical, so `unconfirmed` is never the whole answer to whether the seat will read
 the message:
 
@@ -727,7 +727,7 @@ message's signed steps in order.
 | delivered (typed wake) | 0 | `<seat>: delivered (typed wake)` on stdout, for the profile-gated typed wake: the signed drop record was written under the seat lock, the one-line trigger was typed into the seat's composer and Enter pressed, and the profile's working screen appeared after that Enter; the trigger is the seat reading the drop at its next turn, never the body |
 | sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (webhook, <n> ms); webhook delivery unknown: <reason>` on stdout, for the sender-posted webhook leg whose answer was never read: the post may have been taken, the history records `via: webhook` with `sent (unconfirmed)`, and the claim keeps its place so no later pass posts the same record again |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
+| queued, not woken | 0 | `<seat>: queued, not woken (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed — the seat's delivery class is pull-only or none, so nothing on the sender's side wakes it and the words say so; the seat's own read promotes it to `delivered (read)` later |
 | queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr — a hold the walk itself sees; a socket frame that later sits at the receiving dialog is the daemon's to record, and the send has already ended `delivered (socket)` |
@@ -883,7 +883,7 @@ receipt, which a running watch records as one `delivered (read)` history line.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
+claude-keeper: queued, not woken (drop, 0 ms); queued; claude-keeper reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -895,7 +895,7 @@ like any other:
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team send: operator-b: queued, no event adapter (typing into a seat's pane is never a delivery: messages go through the bus and an event adapter); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
+operator-b: queued, not woken (drop, 0 ms); queued; operator-b reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -1070,7 +1070,7 @@ own read hands it the message. The receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
+gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
 exit 0
 ```
 
@@ -1089,6 +1089,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via its native runtime queue, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written
+gpt-reviewer: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line; nothing was written
 exit 0
 ```

@@ -344,7 +344,7 @@ function expectKeptInBus(
   w: ReturnType<typeof setupWorld>,
   seat: string,
   body: string,
-  historyMatch: { outcome: string; via?: string } = { outcome: 'sent (unconfirmed)', via: 'drop' },
+  historyMatch: { outcome: string; via?: string } = { outcome: 'queued, not woken', via: 'drop' },
 ): string {
   const drops = join(w.dir, 'send-drops', 'acme', seat);
   expect(lstatSync(drops).mode & 0o777).toBe(0o700);
@@ -767,7 +767,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io = ownerIo(w.root);
     const code = await runSend(['native', 'the projected turn ended'], io, host);
     expect(code).toBe(0);
-    expect(io.out).toContain('native: sent (unconfirmed)');
+    expect(io.out).toContain('native: queued, not woken');
     expect(host.typed).toHaveLength(0);
     expect(host.enters).toHaveLength(0);
   });
@@ -874,7 +874,7 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
   });
 
   test('no pane messaging, nothing typed and the bus inbox keeps it; was: a non-queued item reaching delivery while the recipient seat lock is held queues at delivery with preserved id, no premature success, and promotes to delivered (read) on receipt while keeping compose seats out of queue acceptance', async () => {
@@ -1468,7 +1468,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(withoutSendId(io2.out)).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io2.out)).toBe('team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n');
     expect(io2.err).toContain('queued, no event adapter');
   });
 
@@ -1510,13 +1510,13 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
     expect(hist.entries).toEqual([
-      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'sent (unconfirmed)' }),
+      expect.objectContaining({ to: 'lead', spec: 'zeus', resolved: lead.id, outcome: 'queued, not woken' }),
     ]);
   });
 });

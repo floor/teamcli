@@ -29,7 +29,7 @@ import { launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcesses, type PaneProcesses } from '../herdr.ts';
-import { eventThresholdsInForce } from '../policy/index.ts';
+import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { isSeatId, pidAlive, readState } from '../state.ts';
@@ -37,6 +37,7 @@ import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, ty
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
@@ -272,7 +273,9 @@ export type StartMachineDaemonResult =
   | { kind: 'locked'; pid: number | null }
   | { kind: 'bind-failed'; reason: string };
 
-const HEARTBEAT_MS = 5_000;
+/** The beat the daemon runs when no injected seam and no policy word names one: the release
+ *  default of `daemon.heartbeat` (ADR D6), the beat the daemon ran hard-coded before the word. */
+const HEARTBEAT_MS = DAEMON_HEARTBEAT_SECONDS.release * 1000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
 /** The store's retirement pass rides the heartbeat, but at most once per this interval: the
@@ -382,6 +385,8 @@ function snapshotOf(fields: {
   version: string;
   gitHead?: string | null;
   heartbeatAt: string;
+  /** The whole seconds the loop's policy word runs at; absent while a test seam owns the beat. */
+  heartbeatSeconds?: number | null;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
   roots?: DaemonRootHealthSnapshot[];
@@ -394,6 +399,7 @@ function snapshotOf(fields: {
     version: fields.version,
     ...(fields.gitHead === undefined ? {} : { gitHead: fields.gitHead }),
     heartbeatAt: fields.heartbeatAt,
+    ...(fields.heartbeatSeconds === undefined ? {} : { heartbeatSeconds: fields.heartbeatSeconds }),
     stuck: fields.stuck,
     features: fields.features,
     ...(fields.roots === undefined ? {} : { roots: fields.roots }),
@@ -461,7 +467,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const now = input.now ?? (() => new Date());
   const startedBy = input.startedBy ?? 'manual';
   const features: DaemonFeatures = input.features ?? { broker: 'absent' };
-  const heartbeatMs = input.heartbeatMs ?? HEARTBEAT_MS;
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
@@ -572,12 +577,28 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     appendDaemonLog(home, line, now());
   };
 
+  // The loop's beat: an injected seam owns it whole (a test that must not wait the release beat),
+  // and otherwise the `daemon.heartbeat` word the hosted roots' chains declare — resolved once
+  // here at start, then re-read on the housekeeping pass, where a changed word re-arms the timer
+  // below. `heartbeatSeconds` is the word the state record and the health answer carry; null
+  // while the seam owns the beat.
+  const heartbeatPolicy = createHeartbeatPolicy({
+    seamMs: input.heartbeatMs ?? null,
+    initialRoots: input.roots,
+    roots: () => (sweepRoots.length > 0 ? sweepRoots : input.roots),
+    home,
+    now,
+    log: (text) => logLine(text),
+  });
+  let heartbeatMs = heartbeatPolicy.ms();
+  let heartbeatSeconds = heartbeatPolicy.seconds();
+
   // The beat between hosted routes: the interval owns it, and a hosted pass that holds the event
   // loop carries the due beats it displaces to every other route. It never touches the calling
   // route's state — that pass may hold the state lock — and it writes no daemon record: the
   // interval's own beat does that when it next runs.
   const hostedBeat = createHostedBeat({
-    intervalMs: heartbeatMs,
+    intervalMs: () => heartbeatMs,
     watches: () => hostedWatches.map((one) => one.watch),
     log: (text) => logLine(text),
     now,
@@ -676,6 +697,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       heartbeatAt,
       features,
       stuck: stuckNow(),
+      ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
   };
@@ -698,6 +720,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         features,
         stuck: stuckNow(),
         roots: [...roots],
+        ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       });
     } catch {
       // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
@@ -871,12 +894,25 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // ticks, endpoint probes, fallback sweep) is attached once that wiring exists; until then a
   // tick refreshes the heartbeat and the record alone.
   let beat: (() => void) | null = null;
-  const timer = setInterval(() => {
+  const beatTick = (): void => {
     heartbeatAt = now().toISOString();
     writeState();
     beat?.();
-  }, heartbeatMs);
+  };
+  let timer = setInterval(beatTick, heartbeatMs);
   timer.unref();
+  /** The reload half of the heartbeat word: the housekeeping pass re-reads it, and a changed
+   *  word re-arms the timer here, so the next tick is the first on the new beat. The state
+   *  record this tick writes already carries the word. */
+  const rearmHeartbeat = (): void => {
+    heartbeatPolicy.refresh();
+    if (heartbeatPolicy.ms() === heartbeatMs) return;
+    heartbeatMs = heartbeatPolicy.ms();
+    heartbeatSeconds = heartbeatPolicy.seconds();
+    clearInterval(timer);
+    timer = setInterval(beatTick, heartbeatMs);
+    timer.unref();
+  };
 
   // Staged limitation, and the exact block the extraction replaces: the machine protocol
   // socket is the daemon's own endpoint, but send and bus still have no machine route, so this
@@ -1935,7 +1971,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (closed) return;
     const beatAt = now().getTime();
     const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
-    if (housekeeping) lastStorePassAt = beatAt;
+    if (housekeeping) {
+      lastStorePassAt = beatAt;
+      // The daemon re-reads its own knobs on the housekeeping pass; the heartbeat word re-arms
+      // the timer when it changed, beside the sweep's backlog reads below.
+      rearmHeartbeat();
+    }
     const swept = sweepFallbackEscalations({
       home,
       roots: sweepRoots,

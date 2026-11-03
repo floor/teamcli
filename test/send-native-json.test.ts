@@ -16,9 +16,9 @@ afterEach(() => {
   cleanup = () => {};
 });
 
-test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async () => {
-  // The drop file is the whole record: no read receipt came back, so the document says
-  // `sent (unconfirmed)` and the exit is 0 — the record is on disk.
+test('--json queued, not woken names the seat, exit 0, and the drop id', async () => {
+  // The drop file is the whole record: no read receipt came back and nothing wakes the seat,
+  // so the document says `queued, not woken` and the exit is 0 — the record is on disk.
   const made = world();
   cleanup = made.cleanup;
   const { host, pane } = nativeHost(made, ['idle', 'working']);
@@ -44,8 +44,8 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   expect(doc.format).toBe(1);
   expect(doc.dry_run).toBe(false);
   expect(doc.seat).toBe('native');
-  expect(doc.status).toBe('sent (unconfirmed)');
-  expect(withoutSendId(doc.action_summary)).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)');
+  expect(doc.status).toBe('queued, not woken');
+  expect(withoutSendId(doc.action_summary)).toBe('native: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)');
   expect(doc.project).toBe('acme');
   expect(doc.session).toBe('acme');
   expect(doc.channel).toBe('drop');

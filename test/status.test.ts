@@ -207,6 +207,30 @@ describe('team status', () => {
     });
   });
 
+  test('the note a stalled not-woken drop adds leads with the send\'s own outcome words', async () => {
+    // The same world as the scene above, with the one fact that changes its reading: the drop
+    // has waited eleven minutes, past the watch's 600s unread window. The compact table's note
+    // then names the stall with the same three words the send printed and the history line
+    // carries — `queued, not woken` — so one word finds the stall on every surface.
+    const inbox = join(dir, '.agents', 'send-drops', 'acme-web', 'codex-acme');
+    mkdirSync(inbox, { recursive: true });
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    expect(writeListener(inbox, {
+      v: 1, seat: 'codex-acme', session: 'acme-web', root: dir, cli: 'codex',
+      pid: process.pid, ts: NOW.toISOString(),
+    })).toBe(true);
+    const drop = '019a0000-4444-7555-8666-777788889aaa';
+    writeFileSync(join(inbox, drop), 'hello\n');
+    writeFileSync(
+      join(inbox, `${drop}.pending`),
+      `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 11 * 60_000).toISOString() })}\n`,
+    );
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
+    expect(io.out).toContain('note: codex-acme: queued, not woken — its oldest unread drop has waited 11m, past the 600s unread window');
+  });
+
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
     const { code, out } = await status();
     expect(out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');

@@ -33,6 +33,7 @@ export type HistoryOutcome =
   | 'delivered (read)'
   | 'delivered (typed wake)'
   | 'sent (unconfirmed)'
+  | 'queued, not woken'
   | 'sent (channel)'
   | 'held'
   | 'queued (receiver busy)'

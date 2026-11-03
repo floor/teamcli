@@ -675,7 +675,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex app-server answered for thread another-thread, not the bound thread ${THREAD_ID}`;
@@ -695,7 +695,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex thread ${THREAD_ID} does not report whether it accepts direct input; readiness is unknown`;
@@ -715,7 +715,7 @@ describe('the ordinary send native leg (Codex)', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
 
     const reason = `codex thread ${THREAD_ID} does not currently accept direct turn input; codex queue would hold the message`;
@@ -762,7 +762,7 @@ exit 1
     ]);
     // The queue refused the pointer, and the drop leg took the send: the line follows the leg
     // actually taken, never the runtime queue the attempt just failed to reach.
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     const entry = lastEntry(scene);
     expect(entry.via).toBe('drop');
     expect((entry.failed as string[])[0]).toMatch(/^native: /);
@@ -1098,7 +1098,7 @@ exit 1
     const sent = await sendWith(scene, codexHomeServer);
     expect(sent.code).toBe(0);
     expect(sent.err).toContain(`${SEAT}: queued, no event adapter`);
-    expect(withoutSendId(sent.out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(sent.out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(sent.calls).toEqual([]);
     expect(codexHomeServer.requests).toEqual([]);
     if (recorded !== undefined) expect(recorded.requests).toEqual([]);
@@ -1256,7 +1256,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, calls } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('drop');
@@ -1307,7 +1307,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     // the store's reader, the declared drop is the one route the cascade reaches, and the drop
     // is what the sender's line names.
     expect(err).toBe(queuedLine(SEAT, NO_PANE_MESSAGING));
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(calls).toEqual([]);
     expect(server.requests).toEqual([]);
     expect(lastEntry(scene).via).toBe('drop');
@@ -1321,7 +1321,7 @@ describe('the implied native-first default for a Codex receiver', () => {
     const { code, out, err } = await sendWith(scene, server);
 
     expect(code).toBe(0);
-    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
+    expect(withoutSendId(out)).toBe(`team acme, session "${SESSION}"\n${SEAT}: queued, not woken (drop, 0 ms); queued; the typed wake did not run (the delivery order leaves the typed leg out); ${SEAT} reads it at its next turn, and nothing here gives it one (pull-only)\n`);
     expect(err).not.toContain('the delivery order names the drop before its inbox');
     expect(lastEntry(scene).via).toBe('drop');
   });
