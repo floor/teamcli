@@ -12,10 +12,10 @@
 // still honored for one release.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { eventLogPath, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
+import { appendEvent, eventLogPath, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
 import { recipientsForEvent } from '../src/bus/kinds.ts';
 import type { Caller } from '../src/caller.ts';
 import { messageFile } from '../src/commands/messages.ts';
@@ -978,6 +978,186 @@ seats:
     if (!log.ok) throw new Error(log.reason);
     expect(log.events).toHaveLength(0);
     expect(readFileSync(legacy, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
+  test('escalates a cross-root episode once by the receiver sweep after sender lock contention and never duplicates across retries', () => {
+    const world = makeCrossWorld();
+    const firstLeg = noteTransport(
+      world.ctx,
+      crossFact(world, { messageId: 'm-cross-race', route: 'socket', liveRoutesRemain: true }),
+    );
+    if (!firstLeg.ok) throw new Error(firstLeg.reason);
+    expect(firstLeg.state).toBe('continued');
+
+    const exhausted = noteTransport(
+      world.ctx,
+      crossFact(world, {
+        messageId: 'm-cross-race',
+        route: 'native',
+        at: '2026-10-20T10:00:05.000Z',
+        liveRoutesRemain: false,
+      }),
+    );
+    if (!exhausted.ok) throw new Error(exhausted.reason);
+    expect(exhausted.state).toBe('all-failed');
+    const due = Date.parse(exhausted.dueAt!);
+
+    // While the sender holds the canonical episode lock in the receiving team's store, both a
+    // receiver sweep and a concurrent non-blocking sender note defer on the same lock folder.
+    holdEpisodeLock(world, 'm-cross-race');
+    const sweepWhileLocked = escalateDue(world.receiver(new Date(due).toISOString()), {
+      at: new Date(due),
+      lockWaitMs: 0,
+    });
+    expect(sweepWhileLocked.deferred).toEqual([{ messageId: 'm-cross-race', recipient: world.cross }]);
+    expect(sweepWhileLocked.escalated).toHaveLength(0);
+    expect(sweepWhileLocked.refused).toHaveLength(0);
+
+    const senderWhileLocked = noteTransportSoon(
+      world.ctx,
+      crossFact(world, {
+        messageId: 'm-cross-race',
+        route: 'drop',
+        at: new Date(due + 500).toISOString(),
+      }),
+    );
+    if (!senderWhileLocked.ok) throw new Error(senderWhileLocked.reason);
+    expect(senderWhileLocked.state).toBe('deferred');
+    expect(verifiedEvents(world.cross.team, world.cross.root, world.home)).toHaveLength(1);
+
+    // Once the sender releases the lock, the receiver sweep escalates the episode exactly once.
+    rmSync(episodeLockDir(world, 'm-cross-race'), { recursive: true });
+    const fired = escalateDue(world.receiver(new Date(due + 1_000).toISOString()), {
+      at: new Date(due + 1_000),
+      lockWaitMs: 0,
+    });
+    expect(fired.deferred).toHaveLength(0);
+    expect(fired.refused).toHaveLength(0);
+    expect(fired.escalated).toHaveLength(1);
+    expect(fired.escalated[0]!.duplicate).toBe(false);
+    expect(fired.escalated[0]!.event.payload.record_id).toBe(escalatedRecordId(world.cross, 'm-cross-race'));
+
+    // Neither a later receiver sweep nor a later sender fact emits a second escalation event,
+    // and the pre-fix sender-keyed store directory never comes into existence.
+    const laterSweep = escalateDue(world.receiver(new Date(due + 30_000).toISOString()), {
+      at: new Date(due + 30_000),
+      lockWaitMs: 0,
+    });
+    expect(laterSweep.escalated).toHaveLength(0);
+    const laterSender = noteTransport(
+      world.ctx,
+      crossFact(world, {
+        messageId: 'm-cross-race',
+        route: 'drop',
+        at: new Date(due + 35_000).toISOString(),
+      }),
+    );
+    if (!laterSender.ok) throw new Error(laterSender.reason);
+    expect(laterSender.state).toBe('duplicate');
+    expect(laterSender.event).toBeUndefined();
+    expect(verifiedEvents(world.cross.team, world.cross.root, world.home)).toHaveLength(2);
+    expect(existsSync(senderStoreOverReceiverRoot(world))).toBe(false);
+  });
+
+  test('a release-straddling crash with a pending outbox intent drains from the pre-fix sender store without writing to it', () => {
+    const world = makeCrossWorld();
+    const first = noteTransport(world.ctx, crossFact(world, { messageId: 'm-straddle' }));
+    if (!first.ok) throw new Error(first.reason);
+    const due = Date.parse(first.dueAt!);
+    const fired = escalateDue(world.receiver(), { at: new Date(due) });
+    expect(fired.escalated).toHaveLength(1);
+
+    // Move the publication ledger to the pre-fix sender-keyed store, remove the canonical ledger
+    // and the rotated event log, and leave a pending `escalated` outbox intent as if a pre-fix
+    // process crashed after recording the publication and before clearing `marker.outbox`.
+    const canonical = join(receiverStore(world), publicationLedgerFileName(world.cross, 'm-straddle'));
+    const legacyDir = senderStoreOverReceiverRoot(world);
+    const legacy = join(legacyDir, publicationLedgerFileName(world.cross, 'm-straddle'));
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyBytes = readFileSync(canonical, 'utf8');
+    writeFileSync(legacy, legacyBytes);
+    unlinkSync(canonical);
+    unlinkSync(eventLogPath(world.cross.team, world.cross.root, world.home));
+
+    const marker = readCrossMarker(world, 'm-straddle');
+    marker.outbox = {
+      kind: 'escalated',
+      recordId: escalatedRecordId(world.cross, 'm-straddle'),
+      at: new Date(due).toISOString(),
+      reason: 'still undelivered after 300s: all live routes failed',
+    };
+    writeFileSync(markerPathOf(world.cross, 'm-straddle'), `${JSON.stringify(marker)}\n`);
+
+    const drained = escalateDue(world.receiver(), { at: new Date(due + 5_000) });
+    expect(drained.refused).toHaveLength(0);
+    expect(drained.escalated).toHaveLength(1);
+    expect(drained.escalated[0]!.duplicate).toBe(true);
+    expect(drained.escalated[0]!.event.signature).toBe(fired.escalated[0]!.event.signature);
+    expect(readCrossMarker(world, 'm-straddle').outbox).toBeUndefined();
+
+    // The rotated log stays empty and the pre-fix store is untouched (read-only bridge).
+    const log = readEvents(world.cross.team, world.cross.root, world.home);
+    if (!log.ok) throw new Error(log.reason);
+    expect(log.events).toHaveLength(0);
+    expect(readdirSync(legacyDir)).toEqual([publicationLedgerFileName(world.cross, 'm-straddle')]);
+    expect(readFileSync(legacy, 'utf8')).toBe(legacyBytes);
+  });
+
+  test('does not read a foreign store over the same root hash as ours', () => {
+    const world = makeCrossWorld();
+    const first = noteTransport(world.ctx, crossFact(world, { messageId: 'm-foreign' }));
+    if (!first.ok) throw new Error(first.reason);
+    const due = Date.parse(first.dueAt!);
+
+    // Mint a validly structured event signed by a DIFFERENT home's message key (`foreignHome`).
+    const foreignHome = realpathSync(mkdtempSync(join(tmpdir(), 'team-fallback-foreign-home-')));
+    dirs.push(foreignHome);
+    mkdirSync(join(foreignHome, '.config', 'team'), { recursive: true });
+    const foreignAppended = appendEvent('foreign', world.cross.root, foreignHome, {
+      ts: new Date(due).toISOString(),
+      kind: 'message.held',
+      session: world.cross.session,
+      record_id: escalatedRecordId(world.cross, 'm-foreign'),
+      from: 'worker-1',
+      to: world.cross.seat,
+      seat: world.cross.seat,
+      thread: 'm-foreign',
+      via: 'fallback',
+      reason: 'forged foreign escalation',
+    });
+    if (!foreignAppended.ok) throw new Error(foreignAppended.reason);
+    expect(verifySignedEvent(foreignAppended.record, foreignHome)).toBe(true);
+    expect(verifySignedEvent(foreignAppended.record, world.home)).toBe(false);
+
+    // Plant a sibling directory in `world.home/.config/team` sharing the receiving root's
+    // `-<12-hex>` suffix that holds the foreign-signed record for the exact `escalatedRecordId`,
+    // plus a symlink sibling store pointing to `foreignHome`'s store.
+    const foreignSiblingDir = dirname(historyPath('aaa-foreign', world.cross.root, world.home));
+    mkdirSync(foreignSiblingDir, { recursive: true });
+    const ledgerName = publicationLedgerFileName(world.cross, 'm-foreign');
+    writeFileSync(
+      join(foreignSiblingDir, ledgerName),
+      `${JSON.stringify({
+        ts: new Date(due).toISOString(),
+        recordId: escalatedRecordId(world.cross, 'm-foreign'),
+        kind: 'escalated',
+        record: foreignAppended.record,
+      })}\n`,
+    );
+    const symlinkSiblingDir = dirname(historyPath('aab-symlink', world.cross.root, world.home));
+    symlinkSync(foreignSiblingDir, symlinkSiblingDir);
+    unlinkSync(join(receiverStore(world), ledgerName));
+
+    // Neither the symlinked store nor the foreign-signed ledger in the same-root-hash sibling
+    // suppresses or refuses our real escalation: `escalateDue` appends a fresh event signed by
+    // `world.home` and records it in the canonical receiver store.
+    const fired = escalateDue(world.receiver(), { at: new Date(due) });
+    expect(fired.refused).toHaveLength(0);
+    expect(fired.escalated).toHaveLength(1);
+    expect(fired.escalated[0]!.duplicate).toBe(false);
+    expect(fired.escalated[0]!.event.signature).not.toBe(foreignAppended.record.signature);
+    expect(verifySignedEvent(fired.escalated[0]!.event, world.home)).toBe(true);
+    expect(existsSync(join(receiverStore(world), ledgerName))).toBe(true);
   });
 });
 
