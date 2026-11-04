@@ -245,7 +245,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   const standingAt = standingOf(dir, session, caller);
   const callerProblem = callerProblemOf(caller, team, seatName, standingAt);
   if (callerProblem) {
-    // Ruling D5 (owner answer A3): the file's own operator place answers too, while dev mode is
+    // The file's own operator place answers too, while dev mode is
     // on and the `lead-gates` policy includes it — with the same placement proof the
     // orchestrator shows, its own warning, and its own audit line beside the answer's. Every
     // other caller keeps the refusal, word for word.
@@ -506,7 +506,7 @@ function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatS
 }
 
 /**
- * The operator's admission to `team answer` (ruling D5, owner answer A3): while dev mode is `on`
+ * The operator's admission to `team answer`: while dev mode is `on`
  * for the caller's place and the `lead-gates` policy reads `lead+operator` on a chain that
  * loads, the file's own `operator:` seat — placed on the pane the judged session records for
  * it, the same proof the orchestrator shows — may answer. The admission returns its warning

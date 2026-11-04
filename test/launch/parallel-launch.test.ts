@@ -140,7 +140,7 @@ describe('launchConcurrency', () => {
       swapUsed: 18.1e9,
     };
     // Below `swap_free_min` and below 1.5x it alike: the figure the OS keeps nearly full
-    // decides nothing here (ruling D8); pressure and swap growth keep their refusals.
+    // decides nothing here; pressure and swap growth keep their refusals.
     expect(launchConcurrency(ample, limits)).toBe(8);
     expect(launchConcurrency({ ...ample, swapFree: 0 }, limits)).toBe(8);
     expect(launchConcurrency({ ...ample, swapFree: null }, limits)).toBe(8);

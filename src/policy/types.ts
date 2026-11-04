@@ -420,7 +420,7 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   return null;
 }
 
-/** `lead-gates`: which placed roles dev mode admits to the owner-only gates (ruling D5, A3). */
+/** `lead-gates`: which placed roles dev mode admits to the owner-only gates. */
 export type LeadGatesValue = 'lead' | 'lead+operator';
 
 /** `lead-gates` accepts exactly its two words; anything else is a load refusal. */

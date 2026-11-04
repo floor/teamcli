@@ -368,7 +368,7 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb:
     refusal: message,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     ...(sources.now !== undefined ? { now: sources.now() } : {}),
-    // Ruling D5: the placed operator may restart the daemon, under the lead-gates policy — and
+    // The placed operator may restart the daemon, under the lead-gates policy — and
     // nothing else here: install, uninstall and fault-watch stay the owner's or the lead's.
     admitsOperator: verb === 'restart',
   });
