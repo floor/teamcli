@@ -32,12 +32,15 @@ import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
 // seat is the one its record names, and the waiting record's sender is the planted record's `lead`.
-const ringFor = (seat: string): string => readTriggerLine(seat, 'acme-web', {
+const ringFor = (seat: string, cli?: string): string => readTriggerLine(seat, 'acme-web', {
   seat: 'lead',
   team: 'acme-web',
   body: 'the message body itself',
-}) as string;
+}, cli) as string;
 const RING_TEXT = ringFor('deepseek-acme');
+// The same ring for a Cursor seat ends with that profile's own read hint, not the shipped
+// sentence — and the longer hint leaves the header three columns less before it is cut.
+const CURSOR_RING_TEXT = ringFor('deepseek-acme', 'cursor');
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
   .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
@@ -1777,7 +1780,8 @@ describe('team watch', () => {
         return true;
       },
     }));
-    expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
+    const pane = typed[0]!.split(' ')[0];
+    expect(typed).toEqual([`${pane} ${CURSOR_RING_TEXT}`, `${pane} <enter>`]);
     expect(io.out).toContain('rang deepseek-acme');
   });
 
