@@ -322,7 +322,8 @@ export async function runWaits(argv: string[], io: Io, sources: WaitsSources): P
       roster,
       declared: new Set(team.seats.map((seat) => seat.name)),
       scopeSeat: lead ? null : caller.name,
-      retentionSeconds: retentionDays * 86_400,
+      // Zero is the explicit keep-all word: no wait is outside the window.
+      retentionSeconds: retentionDays === 0 ? Number.POSITIVE_INFINITY : retentionDays * 86_400,
       projects,
     };
     const collected: Wait[] = [];
