@@ -61,6 +61,7 @@ import {
   type HerdrAgent,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
@@ -82,6 +83,7 @@ import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { dropMessage } from '../send/native.ts';
 import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
@@ -124,6 +126,8 @@ export type RestartSources = RemoveSources & {
   /** Reads the threads a managed Codex endpoint holds, for the seat state and record a fresh
    *  pane could not fill. Absent: this run reads no endpoint and the seat stays pull-only. */
   codexThreads?: (endpoint: string) => Promise<CodexLoadedThreadsRead>;
+  /** The automatic order pass after a ready restart. Absent: the real one. */
+  autoOrder?: typeof maybeAutoOrder;
 };
 
 function aim(session: string): string | undefined {
@@ -688,7 +692,23 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return herdrRefused(out, json);
     case 'run-lock':
       return runLockRefused(out, json, performed.held, session, dir, performed.startedAt);
-    case 'ready':
+    case 'ready': {
+      // The restarted seat sits at the sidebar's end: the automatic order pass runs
+      // detached when the tail is idle, or the answer carries its one hint line. Off
+      // under the sidebar policy's manage word, and silent inside an order pass. The
+      // restart is already earned; this never bends its answer.
+      const orderNote = (sources.autoOrder ?? maybeAutoOrder)(
+        {
+          root, dir, team, session,
+          ...(args.values.file !== undefined ? { file: args.values.file } : {}),
+          manage: sidebarPolicy({ home, root, team, now: sources.now() }).manage,
+        },
+        { ...realAutoOrderSources, workspaces: sources.workspaces, agents: sources.agents },
+      );
+      if (orderNote !== null) {
+        if (!json) out.stdout(`team restart: ${plainText(orderNote)}\n`);
+        notes.push(`team restart: ${orderNote}`);
+      }
       return readyExit(
         out,
         json,
@@ -703,6 +723,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         notes,
         performed.pullOnly,
       );
+    }
     default: {
       // Every result the launch sequence returns is handled above. This arm is the contract the
       // exit gate reads: a run that ends in a shape this version does not know can only be a bug.

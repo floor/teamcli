@@ -683,6 +683,39 @@ describe('team restart <seat>', () => {
     expect(doc.action_summary).toContain('pull-only: no agent record for this seat');
   });
 
+  // The automatic order pass hangs off the ready exit only: a ready restart offers the
+  // sidebar to it once (its hint rides the notes), and a dry run never does.
+  test('a ready restart offers the sidebar to the automatic order pass; a dry run does not', async () => {
+    const calls: string[] = [];
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const sources = {
+      ...makeHarness(fixture).sources,
+      autoOrder: (input: { session: string; manage: boolean }) => {
+        calls.push(`${input.session}:${input.manage}`);
+        return 'the sidebar is out of roster order; run team order once its tail is idle';
+      },
+    };
+    expect(await runRestart(['worker', '--json'], io, sources)).toBe(0);
+    expect(calls).toEqual(['acme:true']);
+    const doc = JSON.parse(io.out) as { notes?: string[] };
+    expect(doc.notes?.some((note) => note.includes('run team order'))).toBe(true);
+
+    const dryFixture = makeFixture();
+    updateState(dryFixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+    });
+    const dryIo = testIo(dryFixture.root, { kind: 'owner' });
+    const drySources = { ...makeHarness(dryFixture).sources, autoOrder: sources.autoOrder };
+    expect(await runRestart(['worker', '--dry-run'], dryIo, drySources)).toBe(0);
+    expect(calls).toEqual(['acme:true']);
+  });
+
   // The Codex native route is addressed by the conversation the seat holds (`codex queue
   // --thread <agent_session>`), so the record alone does not make native delivery possible: a
   // relaunch whose new pane has not reported its session yet ends ready and says pull-only with
