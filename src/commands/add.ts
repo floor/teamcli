@@ -78,6 +78,8 @@ import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../fil
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
   ownerSeatStore?: OwnerSeatKeyStore;
+  /** Whether a request is presented to the owner seat's Touch ID signer at once. */
+  present?: boolean;
   home: string;
   getuid?(): number;
   fs?: FsReader;
@@ -245,29 +247,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
-  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
-  // returns; `--approval <id>` admits this run when the owner seat signed for exactly it.
+  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat after
+  // every validation gate below has passed, so a command that would fail locally never opens an
+  // owner card or prompts Touch ID; `--approval <id>` and a signed charter still admit here.
   // The root it records and admits is the one the record's readers resolve: a checkout's root, or
   // the plain folder itself (the registry record is keyed by that folder). The step's own
   // findRoot alone refused every team whose folder is not a repository.
+  const approvalRefused = (): number => {
+    // exit: add.approval-refused
+    return 1;
+  };
   const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
-  if (seatStep.kind === 'requested') {
-    // exit: add.approval-requested
-    return 0;
-  }
-  if (seatStep.kind === 'refused') {
-    // exit: add.approval-refused
-    return 1;
-  }
+    : args.flags.has('request') && args.values.approval !== undefined
+      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
+      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
+  if (seatStep.kind === 'refused') return approvalRefused();
   const seatApproved = seatStep.kind === 'admitted';
+  const requesting = args.flags.has('request') && !seatApproved;
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
   // send every reader to the owner.
-  const detached = clientRun !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
@@ -421,7 +424,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // run. The map's own rows are the judge; a caller it refuses is refused before any standing.
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, sources.home, 'add', at, sources.now);
-  const mayChange = verdictOf(caller, standingOf(dir, session, caller));
+  const mayChange = requesting ? { kind: 'ok' as const } : verdictOf(caller, standingOf(dir, session, caller));
   // A create-grant the record holds for this loaded root is the run's admission: the ordinary
   // rule's sentence is then not a refusal, and the delegate gate — which the ordinary refusal
   // alone summons — has nothing to replace. Asked only where the ordinary rule has just refused,
@@ -579,7 +582,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
-  const original = readTeamText(path, { home: sources.home ?? homedir() });
+  const original = loaded.text ?? readTeamText(path, { home: sources.home ?? homedir() });
   // The place the refusals below name: the file this run read, or the registry's record when that
   // is the team's source — a seat the team does not declare is absent from that, not from a file
   // a registry team need not have.
@@ -588,8 +591,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const built = temporary
     ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now(), place)
     : args.values.like !== undefined
-      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place)
-      : declaredSeat(asked, original, team, sources.home, sources.fs, place);
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place, root)
+      : declaredSeat(asked, original, team, sources.home, sources.fs, place, root);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
     // …); the plain line is the sentence it always printed, and the repair, when the builder has
@@ -630,7 +633,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Refusing first would skip that write.
   if (continuity === 'restored' && held?.agent_session && proc) {
     const next = launchedIdentity(proc);
-    if (next) {
+    if (next && !requesting) {
       const sessionId = held.agent_session;
       updateState(dir, (file) => {
         const seat = file.sessions[session]?.seats[built.name];
@@ -709,7 +712,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.no-profile
     return 1;
   }
-  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun) {
+  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun && !seatApproved && !requesting) {
     refuse(io, json, 'add', {
       id: 'add.override-owner',
       message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
@@ -786,9 +789,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   // Nothing here is held to the entity's `names.unique` word: an add never sets a new nickname.
-  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy repeats the
-  // source's `nickname:` line, which the file's own check refuses as a duplicate above (exit 2)
-  // before this point. A team file's own wording is the only nickname an add can bring.
+  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy drops the source's
+  // `nickname:` line so the new seat takes no persona. A team file's own wording is the only
+  // nickname an add can bring.
   // The session this run addresses — `--session`, or the caller's own placement — reads its own
   // recorded lobby, which is the file's own unless the run names another.
   const runTeam = { ...prepared.team, session };
@@ -1036,6 +1039,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (intoLobby && wouldLaunch && !trustSeat.launchProblem) {
     const line = lobbyPretrustLine(trustSeat, sources.home, { write: false, now: sources.now() });
     if (line) return refusePretrust(io, json, built.name, line, dry);
+  }
+  if (requesting) {
+    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root });
+    if (askedStep.kind === 'requested') {
+      // exit: add.approval-requested
+      return 0;
+    }
+    if (askedStep.kind === 'refused') return approvalRefused();
   }
   if (dry) {
     if (decision.kind === 'unknown') out.stdout(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
@@ -1309,7 +1320,7 @@ function declaringForm(name: string): string {
 }
 
 function declaredSeat(
-  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
+  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string, root?: string,
 ): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `${place} has no seat ${JSON.stringify(name)}`, repair: declaringForm(name) };
@@ -1322,7 +1333,7 @@ function declaredSeat(
     if (!cleared.ok) return { id: 'add.not-restored', error: `couldn't clear the stopped mark on ${name} in ${place}: ${cleared.why}` };
     edited = cleared.text;
   }
-  const again = validateTeamFile(edited, { home, fs });
+  const again = validateTeamFile(edited, { home, fs, root });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
   if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into ${place}` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
@@ -1330,12 +1341,13 @@ function declaredSeat(
 
 /**
  * The new declared seat `team add <name> --like <seat>` writes: the file gains one entry, named
- * `name`, that the source describes field for field except for the name, the title and the
- * stopped flag. The copy starts now, so it is written without `stopped: true` and launched like
- * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
+ * `name`, that the source describes field for field except for the name, the title, the nickname
+ * and the stopped flag. The copy starts now, so it is written without `stopped: true` or
+ * `nickname:` and launched like any declared seat. A source that is a human's pane is refused:
+ * nothing is launched over it.
  */
 function copiedSeat(
-  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
+  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string, root?: string,
 ): Built | BuildRefusal {
   const source = team.seats.find((item) => item.name === like);
   if (!source) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(like)}`, repair: declaringForm(name) };
@@ -1347,14 +1359,14 @@ function copiedSeat(
   if (edited === current || !hasSeat(edited, name)) {
     return { id: 'add.not-restored', error: `couldn't copy ${like} into ${place} as ${name}` };
   }
-  // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
-  // seat carries what the file would say; the validation before the write then refuses it by
-  // name and the file is never touched.
-  const again = validateTeamFile(edited, { home, fs });
+  // A copy the file refuses — a second `leads` or `assistant` — is read here so the seat carries
+  // what the file would say; the validation before the write then refuses it by name and the file
+  // is never touched.
+  const again = validateTeamFile(edited, { home, fs, root });
   const copied = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
   return {
     name,
-    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, stopped: false },
+    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, nickname: undefined, stopped: false },
     edited,
     copiedFrom: like,
     temporary: undefined,
