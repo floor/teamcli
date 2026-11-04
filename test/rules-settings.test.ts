@@ -1,7 +1,8 @@
 // The lead rules OD-20261103-03 decided, carried in every seat's generated rules: the entity
 // main orchestrator's relay of the owner's word, pane actions and self-service for leads, and
-// the owner's reserved scope with the team-owned rest. Defaults print; a setting turned off
-// drops its line; the rules file is checked against the live team file's text.
+// the owner's reserved scope with the team-owned rest. The lead lines print at their defaults
+// and a setting turned off drops its line; the relay line is off by default and prints only
+// when the entity turns it on. The rules file is checked against the live team file's text.
 // Synthetic homes and repositories only.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -84,22 +85,44 @@ function set(w: { home: string; root: string }, level: 'entity' | 'team', name: 
 }
 
 describe('the generated rules carry the lead rules of OD-20261103-03', () => {
-  test('a lead reads all four at their defaults; the defaults are what an unset chain gives', () => {
+  test('the relay line is off until the entity turns it on, and on when it does', () => {
     const w = world();
     const work = workOf(w);
-    expect(work.relaysOwner).toEqual({ value: 'on', from: 'default' });
+    // The entity sets a main orchestrator and still no setting: the relay line is absent, because
+    // a relayed decision carries the owner's authority and sender claims do not verify yet.
+    expect(work.relaysOwner).toEqual({ value: 'off', from: 'default' });
+    const lead = w.team.seats.find((s) => s.name === 'lead')!;
+    const offText = rulesOf(w.team, lead, w.root, work);
+    expect(offText).not.toContain(RELAY);
+    expect(offText).toContain(PANE);
+    expect(offText).toContain(SCOPE);
+
+    // The entity turns it on: a relayed decision is acted on without asking again.
+    expect(set(w, 'entity', 'entity.main-orchestrator.relays-owner', 'on').ok).toBe(true);
+    const on = workOf(w);
+    expect(on.relaysOwner).toEqual({ value: 'on', from: 'entity' });
+    expect(rulesOf(w.team, lead, w.root, on)).toContain(RELAY);
+  });
+
+  test('a lead reads the lead rules at their defaults; the relay line waits for the entity to turn it on', () => {
+    const w = world();
+    const work = workOf(w);
+    expect(work.relaysOwner).toEqual({ value: 'off', from: 'default' });
     expect(work.paneActions).toEqual({ value: 'on', from: 'default' });
     expect(work.leadSelfService).toEqual({ value: 'on', from: 'default' });
     expect(work.ownerReservedScope.from).toBe('default');
     const lead = w.team.seats.find((s) => s.name === 'lead')!;
     const text = rulesOf(w.team, lead, w.root, work);
-    for (const line of [RELAY, PANE, SELF, SCOPE]) expect(text).toContain(`- ${line}`);
-    // A chain that could not be read keeps the same defaults: these lines never vanish silently.
-    expect(policyRuleLines(null, { lead: true, entity: true })).toEqual([RELAY, PANE, SELF, SCOPE]);
+    for (const line of [PANE, SELF, SCOPE]) expect(text).toContain(`- ${line}`);
+    expect(text).not.toContain(RELAY);
+    // A chain that could not be read keeps the same defaults: the relay line is off there too,
+    // and the lead lines that are on by default never vanish silently.
+    expect(policyRuleLines(null, { lead: true, entity: true })).toEqual([PANE, SELF, SCOPE]);
   });
 
-  test('a seat that is not a lead reads the relay and the reserved scope, never the lead-only lines', () => {
+  test('a seat that is not a lead reads the relay once the entity turns it on, and the reserved scope', () => {
     const w = world();
+    expect(set(w, 'entity', 'entity.main-orchestrator.relays-owner', 'on').ok).toBe(true);
     const worker = w.team.seats.find((s) => s.name === 'worker')!;
     const text = rulesOf(w.team, worker, w.root, workOf(w));
     expect(text).toContain(RELAY);
@@ -137,6 +160,7 @@ describe('the generated rules carry the lead rules of OD-20261103-03', () => {
 
   test("an entity with no main orchestrator drops the relay line even while the setting is on", () => {
     const w = world();
+    expect(set(w, 'entity', 'entity.main-orchestrator.relays-owner', 'on').ok).toBe(true);
     expect(set(w, 'entity', 'entity-orchestrator', 'off').ok).toBe(true);
     const lead = w.team.seats.find((s) => s.name === 'lead')!;
     const text = rulesOf(w.team, lead, w.root, workOf(w));
@@ -161,7 +185,10 @@ describe('the generated rules carry the lead rules of OD-20261103-03', () => {
     const lead = w.team.seats.find((s) => s.name === 'lead')!;
     const delivery = rulesDeliveryOf({ kind: 'none' }, w.team, lead, w.root, w.home);
     if ('refusal' in delivery) throw new Error(delivery.refusal);
-    for (const line of [RELAY, PANE, SELF, SCOPE]) expect(delivery.text).toContain(`- ${line}`);
+    // The relay line follows the entity's policy chain, which this delivery reads from the
+    // process home; the lines that are on by default are the ones this scene proves.
+    for (const line of [PANE, SELF, SCOPE]) expect(delivery.text).toContain(`- ${line}`);
+    expect(delivery.text).not.toContain(RELAY);
     // The read sentence rides along whatever the settings add, and this codex seat's own is the
     // inbox one — both ends of a turn in one line — so no drops line joins it here.
     expect(delivery.text).toContain('- If your tools include `inbox_check`, call it at the start and the end of every turn');

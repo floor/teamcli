@@ -1651,12 +1651,12 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   },
   // Whether the entity's main orchestrator relays the owner's word: a relayed decision quotes
   // the owner and cites its owner-decisions entry, and seats act on it without asking again.
-  // On by default where the entity sets a main orchestrator; `off` turns the rule line off.
+  // Off by default until sender claims are verified; an entity may turn it on.
   'entity.main-orchestrator.relays-owner': {
     name: 'entity.main-orchestrator.relays-owner',
     kind: 'advised',
     levels: ['entity'],
-    defaultValue: 'on',
+    defaultValue: 'off',
     gateLifting: false,
     lowerLevelChooses: true,
     parseValue: parseOnOff,
