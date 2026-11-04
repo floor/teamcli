@@ -1006,7 +1006,8 @@ export function finishedKind(marker: FallbackMarker): FinishedKind | null {
   return 'expired';
 }
 
-/** The retention word in force for a receiver, in seconds, or why it could not be read. */
+/** The retention word in force for a receiver, in seconds, or why it could not be read. A null
+ *  window with no refusal is the explicit keep-all word: no age retires an expired episode. */
 export type FallbackRetention = { seconds: number | null; refusal: string | null };
 
 /**
@@ -1043,7 +1044,10 @@ export function fallbackRetentionOf(
     const said = inForce.refusals.map((refusal) => refusal.message).join('; ');
     return { seconds: null, refusal: said === '' ? 'the event retention word could not be read' : said };
   }
-  return { seconds: inForce.thresholds.retention_days * 86_400, refusal: null };
+  // Zero is the explicit keep-all word: there is no age at which an expired episode stops being
+  // kept. A null window with no refusal is that choice; a refusal stays a refusal.
+  const days = inForce.thresholds.retention_days;
+  return { seconds: days === 0 ? null : days * 86_400, refusal: null };
 }
 
 /** One finished episode the store could retire, with the age that decides an expired one. */

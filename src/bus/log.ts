@@ -341,7 +341,8 @@ function pruneSealed(path: string, home: string, kept: number, options: EventLog
   const dropped: DroppedSegment[] = [];
   for (const segment of sealed) {
     const overCap = total > maxTotal;
-    const tooOld = segment.writtenAt < cutoff;
+    // Zero is the explicit keep-all word: no age bound, so the size cap alone drops.
+    const tooOld = retentionSeconds > 0 && segment.writtenAt < cutoff;
     if (!overCap && !tooOld) break;
     const range = verifiedRangeOf(segment.path, home);
     try {
@@ -473,8 +474,11 @@ export function pruneEventLog(
     withEventLock(storeDir, () => {
       const path = eventLogPath(project, root, home);
       const drops: DroppedSegment[] = [];
-      const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-      if (sealed !== null) drops.push(sealed);
+      // Under keep-all there is no age to seal against; the live segment is bounded by its size.
+      if (retentionSeconds > 0) {
+        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+        if (sealed !== null) drops.push(sealed);
+      }
       drops.push(...pruneSealed(path, home, kept, options));
       declareDrop(project, root, home, kept, options, drops, options.session ?? project);
     });
@@ -1965,8 +1969,10 @@ export function appendEvent(
       // old one holds are dropped by the prune below as one past-the-window segment.
       try {
         const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
-        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-        if (sealed !== null) drops.push(sealed);
+        if (retentionSeconds > 0) {
+          const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+          if (sealed !== null) drops.push(sealed);
+        }
       } catch {
         // Retention never fails an append: the write below carries on.
       }

@@ -28,7 +28,7 @@ import {
 import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS, WEBHOOK_SENDER_DEADLINE_MIN_MS, WEBHOOK_SENDER_DEADLINE_MS } from '../settings/webhook-sender.ts';
-import { EVENT_THRESHOLDS } from './events.ts';
+import { EVENT_SEGMENT_MB, EVENT_SEGMENT_MB_MAX, EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
@@ -113,6 +113,7 @@ export const ENFORCED_POLICY_NAMES = [
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
+  'event-segment-mb',
   'event-held-threshold-seconds',
   'event-unreachable-threshold-seconds',
   'event-idle-threshold-seconds',
@@ -258,6 +259,15 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   event_retention_days: 'event-retention-days',
   retention_days: 'event-retention-days',
   retention: 'event-retention-days',
+  'bus.retain_days': 'event-retention-days',
+  'bus.retain-days': 'event-retention-days',
+  bus_retain_days: 'event-retention-days',
+  event_segment_mb: 'event-segment-mb',
+  segment_mb: 'event-segment-mb',
+  'segment-mb': 'event-segment-mb',
+  'bus.segment_mb': 'event-segment-mb',
+  'bus.segment-mb': 'event-segment-mb',
+  bus_segment_mb: 'event-segment-mb',
   event_held_threshold_seconds: 'event-held-threshold-seconds',
   held_threshold_seconds: 'event-held-threshold-seconds',
   held: 'event-held-threshold-seconds',
@@ -564,6 +574,52 @@ function parsePositiveCount(raw: unknown): number | null {
     return Number.parseInt(raw.trim(), 10);
   }
   return null;
+}
+
+/**
+ * `event-retention-days`: a whole positive count, or the explicit keep-all words. Keep-all is
+ * `0` — the number or the string "0" — and the bare word `all`; it means no age-based drop. The
+ * widening lives here, not in `parsePositiveCount`, because every other count policy still
+ * refuses zero: a zero-cap thread or a zero-second delay has no meaning, while a zero-day window
+ * does. Absence is not keep-all: an unset policy resolves to its fallback, still 30 days.
+ */
+function parseRetentionDays(raw: unknown): number | null {
+  if (raw === 0) return 0;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (text === '0' || text === 'all') return 0;
+  }
+  return parsePositiveCount(raw);
+}
+
+function retentionDaysProblem(name: string, raw: unknown): string | null {
+  if (parseRetentionDays(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of days above 0, or the keep-all words 0 and all`;
+}
+
+/**
+ * `event-segment-mb`: a whole number of megabytes from 1 to half the retained-size cap. Above
+ * the ceiling a full live segment and its predecessor could not both fit under the cap, and the
+ * store would drop every segment it sealed.
+ */
+function parseSegmentMb(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= EVENT_SEGMENT_MB_MAX ? n : null;
+}
+
+function segmentMbProblem(name: string, raw: unknown): string | null {
+  if (parseSegmentMb(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of megabytes from 1 to ${String(EVENT_SEGMENT_MB_MAX)}, such as ${String(EVENT_SEGMENT_MB)}`;
+}
+
+/**
+ * The retention policy's order: fewer days kept is the tighter word, and keep-all (0) is looser
+ * than every positive count, because it gives up the age bound entirely. A lower level may
+ * narrow a window but may not widen one to keep-all.
+ */
+function retentionDaysWithin(lower: number, higher: number): boolean {
+  const rank = (value: number): number => (value === 0 ? Number.POSITIVE_INFINITY : value);
+  return rank(lower) <= rank(higher);
 }
 
 /** One daemon store backlog knob's accepted range, and the release default its message offers. */
@@ -1095,9 +1151,23 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team', 'seat'],
     defaultValue: EVENT_THRESHOLDS.retention_days,
     gateLifting: false,
-    parseValue: parsePositiveCount,
-    // Fewer or equal days kept is tighter.
-    isWithin: (lower: number, higher: number) => lower <= higher,
+    parseValue: parseRetentionDays,
+    valueProblem: (raw: unknown) => retentionDaysProblem('event-retention-days', raw),
+    // Fewer or equal days kept is tighter; keep-all is looser than every positive count.
+    isWithin: retentionDaysWithin,
+  },
+  // The bus log's segment size (`bus.segment_mb`): a mechanical number, so every word inside
+  // the parser's range is accepted and no level's word tightens another's. The nearest level's
+  // word wins, and an absent chain resolves to the shipped 8 MB.
+  'event-segment-mb': {
+    name: 'event-segment-mb',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: EVENT_SEGMENT_MB,
+    gateLifting: false,
+    parseValue: parseSegmentMb,
+    valueProblem: (raw: unknown) => segmentMbProblem('event-segment-mb', raw),
+    isWithin: () => true,
   },
   'event-held-threshold-seconds': {
     name: 'event-held-threshold-seconds',
