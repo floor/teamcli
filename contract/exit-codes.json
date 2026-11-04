@@ -1208,6 +1208,13 @@
     {
       "code": 1,
       "command": "check",
+      "id": "check.close-orphans-lead",
+      "meaning": "--close-orphans is the team's lead's or the owner's",
+      "trigger": "team check --close-orphans"
+    },
+    {
+      "code": 1,
+      "command": "check",
       "id": "check.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team check --file .agents/team.yaml"
@@ -1232,6 +1239,20 @@
       "id": "check.session-owner",
       "meaning": "--session is the owner's",
       "trigger": "team check --session team"
+    },
+    {
+      "code": 2,
+      "command": "check",
+      "id": "check.close-orphans-terminal",
+      "meaning": "--close-orphans asks before it closes anything; it needs a terminal",
+      "trigger": "team check --close-orphans"
+    },
+    {
+      "code": 2,
+      "command": "check",
+      "id": "check.close-orphans-unavailable",
+      "meaning": "--close-orphans has no process reading here",
+      "trigger": "team check --close-orphans"
     },
     {
       "code": 2,

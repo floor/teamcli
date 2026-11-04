@@ -5,7 +5,9 @@ It reads the team file, the record this machine holds of it, the state, herdr an
 and changes nothing except the repairs the owner's `--repair` makes — the state's two leftovers
 dropped, the dev-mode mark an agent's registration left cleared, and herdr's drifted sidebar
 lines set back from the
-file — no git is needed, so it answers as well in a plain folder as in a repository. Where
+file — and the one close the team's lead's or the owner's `--close-orphans` makes: the live agent
+processes no pane holds, ended after one question at a terminal. No git is needed, so it answers
+as well in a plain folder as in a repository. Where
 [`team status`](status.md) says what the team is, the check says what to act on: the differences
 alone, each with its repair.
 It is also the old name of [`team commits check`](commits.md) and [`team pr check`](pr.md), still
@@ -188,6 +190,43 @@ with this one line, so a held seat is named once. A temporary seat — one `team
 recorded and the file never names — is read the same way, from its record, with its like-seat's
 CLI.
 
+Live agent processes no pane holds are named on the same pass, and one flag closes them. The
+reading proves a process two ways: the state's own launch records name the shell and the pids a
+seat's CLI ran as, and a process no record accounts for is found by the working folder it runs
+in, named only when that folder is inside this team's root. Every row says the pid, the CLI, the
+age and the team record it answers to — `pid <pid>: a live <cli> process with no pane in session
+"<session>" (started <age>; last team <project>, seat <seat>)`, or `no seat record` in place of
+the seat — and it is a difference: exit 1. The repair is `close it through the team (team check
+--close-orphans)` for a process the close may end, and `inspect it, then stop it by hand if it is
+not a seat's` for one it may not (the first repair is the team's lead's, the second the owner's):
+a process the state does not name is closeable only when it started at or after the daemon's own
+start — a run that cannot read that start names such a process and does not close it — and one
+the state names is closeable whatever its start. The reading never guesses. A pane list that cannot be read, or that
+reads no agents while the state records seats, names nothing and closes nothing — a failed read
+must never make a live seat's CLI look orphaned — and a pane the session could not say what runs
+in is named as a note, with processes found by their folder left unnamed under it. A recorded CLI
+whose pane went unanswered is proved by the launch's own shell instead: a chain without that
+shell proves the CLI left the pane, and a chain that cannot be read names nothing.
+
+`--close-orphans` is the team's lead's or the owner's: a plain seat sees every row and is refused
+the close. It asks one question at a terminal — `team check: close <n> orphan processes? [y/N] `
+— and a no signals nothing (`left: <n> orphan processes: you answered no`). Before each stop it
+re-proves the candidate: the pid still runs the same CLI, its start instant has not moved, no
+other session's pane holds it, no pane of this session holds it — read again right before the
+signal, because the reading that named the candidate was taken before the question — and a
+recorded CLI's launch shell is no longer above it. A stop is the terminate signal, then the
+process's identity and this session's panes are read again, then the kill signal for a process
+that has not gone in two seconds, and one more second's wait; every outcome is its own line —
+`closed: pid <pid>: <cli> (seat <seat>)`,
+`forced: pid <pid>: <cli> (seat <seat>)` for one that needed the kill, and `left: pid <pid>:
+<why>` for one whose proof no longer held, one it could not end, or one the system refused to
+stop. The reading runs again after any close, so the report describes the world the close left,
+and the exit is 1 while any difference remains. The close never shares a run with `--repair` (two
+acts, and one run could not say which left what) and never runs with `--json` (there is no
+terminal to ask at); both are refused at the invocation. The reading costs one process-table read
+and one working-folder read for all the pids it needs — never a folder read per process on every
+run — and reads nothing at all until a seat record or a listed agent exists.
+
 A watch the machine daemon hosts is read on the same pass. Three states are differences with one
 repair: a required watch that stopped or failed reads `watch: stopped in the daemon (<reason>)` or
 `watch: failed in the daemon (<reason>)`, and a running watch whose outbound effects are closed
@@ -299,7 +338,7 @@ repair.
 
 ## Synopsis
 
-    team check [--session <name>] [--file <path>] [--repair] [--json]
+    team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
 
 ## Flags
 
@@ -308,6 +347,7 @@ repair.
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--repair` | — | the owner's repair, one write: drop the state's leftovers (a record for a seat the file no longer declares, a session with no seat of the team in it), re-record a seat an agent registered under dev mode with the caller gate in force, and set herdr's drifted sidebar lines back from the file; the owner's alone |
+| `--close-orphans` | — | close the live agent processes the run proves no pane holds, after one question at a terminal: every candidate is re-proven just before it is signalled, a process that will not stop is left and named, and the reading is taken again after the close; the team's lead's or the owner's; never with `--repair` or `--json` |
 | `--json` | — | emit the structured `team.check` JSON document on stdout (`schema/check.schema.json`) |
 
 ## Who may run it
@@ -322,6 +362,11 @@ repair.
 Aimed by a caller that passes the gate but is not the owner, `--file`, `--session` and `--repair`
 meet the refusal every command gives them and exit 1.
 
+`--close-orphans` is narrower than the check's own gate: the team's lead's or the owner's, never a
+plain seat's. Every caller that passes the check still sees every row the reading names, but a
+seat that is neither the orchestrator nor the operator, and a delegate pane the file names, is
+refused the close with `team check: --close-orphans is the team's lead's or the owner's`, exit 1.
+
 ## Output and exit codes
 
 Every run prints the declared limitation of a client app key, on stdout in text mode and as
@@ -331,9 +376,14 @@ the `key_isolation` field in JSON: `key isolation: enforced against team panes (
 | --- | --- | --- |
 | nothing needs acting on | `team <project>, session "<session>"`, any deprecation `warning:` or `note:` lines, and `no differences` | 0 |
 | the owner's `--repair` repaired what it can (the state's leftovers dropped, dev-mode marks cleared, drifted sidebar lines set back), and nothing else needs acting on | `team <project>, session "<session>"`, one `repaired: <what was repaired>` line per repair, and `no differences` | 0 |
+| the team's lead's or the owner's `--close-orphans` settled every orphan the reading named, and nothing else needs acting on | `team <project>, session "<session>"`, one `closed: pid <pid>: <cli> (<seat>)` line per process stopped, one `forced: …` line for a process that needed the kill, a `left: pid <pid>: <why>` line for a candidate that left on its own first, and `no differences` | 0 |
+| the close ran, and something still needs acting on: a process it left, or any other finding | the same `closed:`/`forced:`/`left:` lines, then each remaining `difference:` block and the summary | 1 |
+| the close question is answered no | `left: <n> orphan processes: you answered no`, nothing signalled, then the rows as they stood | 1 |
+| a plain seat or a delegate pane aims `--close-orphans` | `team check: --close-orphans is the team's lead's or the owner's`, before any question | 1 |
 | something needs acting on | `team <project>, session "<session>"`, one `difference:` block per finding with its `  repair:` and `  who:` lines under it, then `<n> difference` / `<n> differences` (and `, <m> for the owner` when any finding is the owner's) | 1 |
 | a flag the caller may not aim | the refusal every command gives it | 1 |
 | the check can't run (the loader's, the state's or herdr's own text), the invocation can't be read, or the caller may not check this team | `team check: <problem>`, or the one fixed sentence | 2 |
+| `--close-orphans` with no terminal, or where no process reading is wired | `team check: --close-orphans asks before it closes anything; it needs a terminal`, or `team check: --close-orphans has no process reading here`; nothing is signalled | 2 |
 
 ## Example
 
