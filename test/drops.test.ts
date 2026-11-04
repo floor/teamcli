@@ -229,12 +229,13 @@ describe('team drops', () => {
       code: 0,
       out: [
         'team acme, session "acme"',
-        // Nothing attests a sender yet: every row names the drop's claim and marks it.
-        '  FROM                       PATH',
-        `  the owner (unverified)     ${ownerPath}`,
-        `  orchestrator (unverified)  ${agentPath}`,
-        `  unknown                    ${headlessPath}`,
-        `  orchestrator (unverified)  ${recordPath}`,
+        // The signed record is attributed on the shared key; a raw drop's first line is only the
+        // file's word, so it is unattributed.
+        '  FROM                         PATH',
+        `  the owner (unattributed)     ${ownerPath}`,
+        `  orchestrator (unattributed)  ${agentPath}`,
+        `  unknown                      ${headlessPath}`,
+        `  orchestrator (attributed)    ${recordPath}`,
         '',
         '4 drops',
         '',
@@ -376,7 +377,7 @@ describe('team drops', () => {
     const after = join(dropDir, D_AGENT);
     expect(result).toEqual({
       code: 0,
-      out: `from orchestrator (unverified) — ${after}\n`,
+      out: `from orchestrator (unattributed) — ${after}\n`,
       err: '',
     });
     // The drop already on disk is not a new one.
@@ -466,7 +467,7 @@ describe('team drops in a folder that is not a git repository', () => {
     const result = await run();
     expect(result).toEqual({
       code: 0,
-      out: `team acme, session "acme"\n  FROM                    PATH\n  the owner (unverified)  ${path}\n\n1 drop\n`,
+      out: `team acme, session "acme"\n  FROM                      PATH\n  the owner (unattributed)  ${path}\n\n1 drop\n`,
       err: '',
     });
   });
@@ -489,7 +490,7 @@ describe('team drops in a folder that is not a git repository', () => {
     const result = await run(['--follow'], seatCaller('lead', 'w1:p1'), sources);
     expect(result).toEqual({
       code: 0,
-      out: `from orchestrator (unverified) — ${join(dropDir, D_AGENT)}\n`,
+      out: `from orchestrator (unattributed) — ${join(dropDir, D_AGENT)}\n`,
       err: '',
     });
     expect(polls).toBe(2);
@@ -499,7 +500,7 @@ describe('team drops in a folder that is not a git repository', () => {
     plainRoot();
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello from the root');
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
-    expect(result).toEqual({ code: 0, out: '[unverified sender: claimed lead]\n\nhello from the root\n', err: '' });
+    expect(result).toEqual({ code: 0, out: '[attributed sender: lead]\n\nhello from the root\n', err: '' });
     const at = receiptPath(dropDir, D_RECORD);
     const receipt = signedReceiptOf(JSON.parse(readFileSync(at, 'utf8')));
     const key = messageKeyState(home);
@@ -525,7 +526,7 @@ describe('team drops --read', () => {
   test('the launch read serves the seat with no placed caller, receipting each record before its body', async () => {
     plantRecord(home, root, 'acme', 'lead', D_RECORD, 'hello');
     const first = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
-    expect(first).toEqual({ code: 0, out: '[unverified sender: claimed lead]\n\nhello\n', err: '' });
+    expect(first).toEqual({ code: 0, out: '[attributed sender: lead]\n\nhello\n', err: '' });
     expectReceipt(D_RECORD);
     // The receipt is what says it was handed over: the next turn finds nothing waiting.
     const second = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
@@ -637,7 +638,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('[unverified sender: claimed lead]\n\na signed body\n');
+    expect(result.out).toBe('[attributed sender: lead]\n\na signed body\n');
     expect(result.err).toBe('team drops: 1 drop(s) are not signed records and are not served\n');
     expect(result.out).not.toContain('an old raw drop');
     expect(result.err).not.toContain('an old raw drop');
@@ -715,7 +716,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
     expect(result).toEqual({
       code: 0,
-      out: '[unverified sender: claimed runtime]\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n',
+      out: '[attributed sender: runtime]\n\nwriter-01: a message from architect is queued, not woken - unread for 4 min\n',
       err: '',
     });
     // Its receipt is the signed read receipt every record gets, at the name its id derives.
@@ -791,7 +792,7 @@ describe('team drops --read', () => {
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('[unverified sender: claimed lead]\n\na signed body\n');
+    expect(result.out).toBe('[attributed sender: lead]\n\na signed body\n');
     expect(result.err).toBe('');
     // The record that verified is receipted; the one that did not never is.
     expectReceipt(D_RECORD_READ);

@@ -31,7 +31,7 @@ import type { BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
-import { unverifiedBody, verifySenderClaim } from '../send/sender-claim.ts';
+import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
   fileStatStamp,
@@ -123,10 +123,17 @@ export type InboxListener = {
 /** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
  *  record claims — never the unsigned `.pending` marker's word when a record is there — and the
  *  marker's `ts` is there when the send left one beside the drop; otherwise `ts` is the record's
- *  own signed time, or the file's for a file this key cannot vouch for. `sender_verified` is true
- *  only for the launch's general seat brief bound to the seat's current claim: every other record
- *  is signed with the shared checkout key, which any seat can read. */
-export type InboxMessage = { id: string; from?: string; ts: string; bytes: number; sender_verified: boolean };
+ *  own signed time, or the file's for a file this key cannot vouch for. `sender_attribution` says
+ *  what the sender rests on: the shared checkout key every seat can read, the launch's general
+ *  seat brief bound to the seat's current claim, or nothing at all when the name is a marker's
+ *  word or no key could vouch for the file. */
+export type InboxMessage = {
+  id: string;
+  from?: string;
+  ts: string;
+  bytes: number;
+  sender_attribution: SenderAttribution;
+};
 
 export function listenerPath(dropDir: string): string {
   return join(dropDir, LISTENER_FILE);
@@ -505,16 +512,18 @@ export function listUnread(
     // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
     // dates only a record the key cannot vouch for. The sender follows the same rule: the
     // record's own signed claim when it verifies, the marker's word only when it does not — and
-    // never as a verified sender.
-    const signed = payload === null ? null : { payload, at: signedTimeIn(payload) };
-    const sender = signed !== null ? signed.payload.from : marker.from;
-    const senderVerified = signed !== null && verifySenderClaim(signed.payload, { briefClaim: claim }).verified;
+    // only the record's claim can be attributed to anything.
+    const signedAt = signedTimeOfPayload(payload);
+    const sender = payload !== null ? payload.from : marker.from;
+    const senderAttribution = payload === null
+      ? 'none' as const
+      : attributeSenderClaim(payload, { briefClaim: claim });
     messages.push({
       id: name,
       ...(sender !== undefined ? { from: sender } : {}),
-      ts: signed?.at ?? marker.ts ?? new Date(mtime).toISOString(),
+      ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
       bytes: size,
-      sender_verified: senderVerified,
+      sender_attribution: senderAttribution,
     });
   }
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
@@ -793,11 +802,10 @@ export function readMessage(
   // this is the at-most-once side — and the caller returns this refusal instead of the body.
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
-  // The body is the sender's own words under a marked claim unless the claim verifies: only the
-  // launch's general seat brief, served under the seat's current claim, does. Every other record
-  // carries the shared checkout key's signature and nothing about who wrote it.
-  const claimVerified = verifySenderClaim(payload, { briefClaim: servedClaim ?? null }).verified;
-  return { ok: true, body: claimVerified ? payload.body : unverifiedBody(payload.body, payload.from) };
+  // The body is the sender's own words under the attribution mark. Every sender is attributed —
+  // the launch's general seat brief rests on the seat's current claim, every other record on the
+  // shared checkout key — and the mark is always present so its absence never reads as proof.
+  return { ok: true, body: attributedBody(payload.body, payload.from) };
 }
 
 /**

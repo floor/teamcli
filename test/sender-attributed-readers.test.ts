@@ -2,9 +2,11 @@
 // checkout message key, so a signed record proves only that the key signed it — not who wrote it.
 // These scenes forge the claims a reader used to print plainly: an orchestrator relaying the
 // owner's word, and the owner itself, beside an unsigned `.pending` marker that says another
-// name. `team messages`, `team drops` (its listing, `--follow` and `--read`), `inbox_check` and
-// `inbox_read` mark the claim unverified, and the launch's own seat brief — whose id, incarnation
-// and digest are the seat's current claim — stays unmarked and its body untouched.
+// name. Every sender a reader displays is attributed — `team messages`, `team drops` (its
+// listing, `--follow` and `--read`), `inbox_check` and `inbox_read` — and a file the shared key
+// cannot vouch for is unattributed. The launch's own seat brief, whose id, incarnation and digest
+// are the seat's current claim, is attributed too: the JSON says `launch-brief`, the text says
+// the same `(attributed)`, and the mark is always present so its absence can never read as proof.
 // Synthetic homes, repositories and panes only.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
@@ -14,9 +16,10 @@ import { join } from 'node:path';
 import { currentClaimIn, listUnread, readMessage } from '../src/mcp/inbox.ts';
 import { runDrops, type DropsSources } from '../src/commands/drops.ts';
 import { plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
-import { generalBriefBody, generalBriefRecord, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
+import { generalBriefBody, generalBriefRecord, GENERAL_BRIEF_RULE, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
 import { signRecord, writeRecord } from '../src/send/record.ts';
 import { updateState } from '../src/state.ts';
+import { messageKeyOf } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -56,7 +59,7 @@ let home: string;
 let dropDir: string;
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-sender-unverified-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-sender-attributed-')));
   root = join(base, 'acme');
   home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
@@ -105,22 +108,25 @@ async function runMailbox(argv: string[] = []) {
 }
 
 describe('a forged orchestrator claim', () => {
-  test('the drops listing marks the sender unverified, in the table and in --json', async () => {
+  test('the drops listing attributes the sender, in the table and in --json', async () => {
     const path = forge('orchestrator', orchestratorBody());
     const result = await runDropsAs();
     expect(result.code).toBe(0);
-    expect(result.out).toContain(`orchestrator (unverified)`);
+    expect(result.out).toContain(`orchestrator (attributed)`);
     expect(result.out).toContain(path);
 
     const json = await runDropsAs(['--json']);
     expect(json.code).toBe(0);
-    const doc = JSON.parse(json.out) as { drops: { from: string | null; sender_verified?: boolean }[] };
+    const doc = JSON.parse(json.out) as { drops: { from: string | null; sender_attribution?: string }[] };
     expect(doc.drops).toHaveLength(1);
     expect(doc.drops[0]?.from).toBe('orchestrator');
-    expect(doc.drops[0]?.sender_verified).toBe(false);
+    expect(doc.drops[0]?.sender_attribution).toBe('attributed');
   });
 
-  test('a drop that lands during --follow is named unverified in its one line', async () => {
+  test('a drop that lands during --follow is attributed in its one line', async () => {
+    // The reader takes this checkout's key once, when it starts: seed it first, as an earlier
+    // send would have, so the drop that lands during the follow can be verified and attributed.
+    messageKeyOf(home);
     const result = await runDropsAs(['--follow'], {
       home,
       poll: async (tick) => {
@@ -132,42 +138,42 @@ describe('a forged orchestrator claim', () => {
       },
     });
     expect(result.code).toBe(0);
-    expect(result.out).toContain(`from orchestrator (unverified) — ${join(dropDir, FORGED_ID)}`);
+    expect(result.out).toContain(`from orchestrator (attributed) — ${join(dropDir, FORGED_ID)}`);
   });
 
-  test('drops --read rewrites the sender line and keeps the owner quote under the mark', async () => {
+  test('drops --read marks the sender line and keeps the owner quote under the mark', async () => {
     forge('orchestrator', orchestratorBody());
     const result = await runDropsAs(['--read', '--seat', 'lead', '--session', 'acme']);
     expect(result.code).toBe(0);
     expect(result.out).toContain(
-      `from orchestrator@acme [unverified sender — shared checkout key only] — admitted by: ${RULE} (unverified claim)`,
+      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
     );
     expect(result.out).toContain(QUOTE);
   });
 
-  test('inbox_check names the signed claim unverified, and inbox_read marks the body', async () => {
+  test('inbox_check attributes the signed claim, and inbox_read marks the body', async () => {
     forge('orchestrator', orchestratorBody());
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('orchestrator');
-    expect(unread[0]?.sender_verified).toBe(false);
+    expect(unread[0]?.sender_attribution).toBe('attributed');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.body).toContain(
-      `from orchestrator@acme [unverified sender — shared checkout key only] — admitted by: ${RULE} (unverified claim)`,
+      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
     );
     expect(read.body).toContain(QUOTE);
   });
 
-  test('team messages marks the table cell, keeps the signed body, and says so in --json', async () => {
+  test('team messages attributes the table cell, keeps the signed body, and says so in --json', async () => {
     forge('orchestrator', orchestratorBody());
     const text = await runMailbox();
     expect(text.code).toBe(0);
-    expect(text.out).toContain('orchestrator [unverified sender]');
+    expect(text.out).toContain('orchestrator (attributed)');
     expect(text.out).toContain(
-      `from orchestrator@acme [unverified sender — shared checkout key only] — admitted by: ${RULE} (unverified claim)`,
+      `from orchestrator@acme (attributed) — admitted by: ${RULE}`,
     );
     expect(text.out).toContain(QUOTE);
 
@@ -177,19 +183,18 @@ describe('a forged orchestrator claim', () => {
     const json = await runMailbox(['--json']);
     expect(json.code).toBe(0);
     const doc = JSON.parse(json.out) as {
-      rows: { from: string | null; body?: string; sender_verified?: boolean; sender_trust?: string }[];
+      rows: { from: string | null; body?: string; sender_attribution?: string }[];
     };
     expect(doc.rows).toHaveLength(1);
     expect(doc.rows[0]?.from).toBe('orchestrator');
-    expect(doc.rows[0]?.sender_verified).toBe(false);
-    expect(doc.rows[0]?.sender_trust).toBe('shared-key-only');
+    expect(doc.rows[0]?.sender_attribution).toBe('attributed');
     // The JSON body stays the signed bytes; only the text reading is marked.
     expect(doc.rows[0]?.body).toBe(orchestratorBody());
   });
 });
 
 describe('a forged owner claim beside an unsigned marker', () => {
-  test('inbox_check keeps the record claim, never the marker word, and marks it unverified', async () => {
+  test('inbox_check keeps the record claim, never the marker word, and attributes it', async () => {
     forge('owner', ownerBody());
     writeFileSync(
       join(dropDir, `${FORGED_ID}.pending`),
@@ -198,23 +203,34 @@ describe('a forged owner claim beside an unsigned marker', () => {
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('owner');
-    expect(unread[0]?.sender_verified).toBe(false);
+    expect(unread[0]?.sender_attribution).toBe('attributed');
 
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, FORGED_ID, home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect(read.body).toContain(
-      'from the owner [unverified sender — shared checkout key only] — admitted by: the owner (unverified claim)',
+      'from the owner (attributed) — admitted by: the owner',
     );
     expect(read.body).toContain(QUOTE);
   });
 
-  test('the drops listing marks the owner claim unverified too', async () => {
+  test('the drops listing attributes the owner claim too', async () => {
     forge('owner', ownerBody());
     const result = await runDropsAs();
     expect(result.code).toBe(0);
     // The record's own claim is the word `owner`; only a raw drop's first line says `the owner`.
-    expect(result.out).toContain('owner (unverified)');
+    expect(result.out).toContain('owner (attributed)');
+  });
+
+  test('a plain-text file this key cannot vouch for is listed as unattributed', async () => {
+    mkdirSync(dropDir, { recursive: true });
+    writeFileSync(join(dropDir, 'raw-note'), `from stranger — admitted by: handed over by hand\n\nhello\n`);
+    const result = await runDropsAs();
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('stranger (unattributed)');
+    const json = await runDropsAs(['--json']);
+    const doc = JSON.parse(json.out) as { drops: { sender_attribution?: string }[] };
+    expect(doc.drops[0]?.sender_attribution).toBe('none');
   });
 });
 
@@ -251,28 +267,30 @@ describe('the launch brief the seat currently holds', () => {
     return record.id;
   }
 
-  test('it stays verified and its body is served untouched', async () => {
+  test('it is attributed like every other sender, and its body keeps its words under the mark', async () => {
     const id = plantCurrentBrief();
     const unread = listUnread(dropDir, { to: 'lead', root, session: 'acme' }, home);
     expect(unread).toHaveLength(1);
     expect(unread[0]?.from).toBe('the launch');
-    expect(unread[0]?.sender_verified).toBe(true);
+    expect(unread[0]?.sender_attribution).toBe('launch-brief');
 
-    // The listing names it without a mark: its claim is the seat's own. It runs before the read,
-    // because reading writes the brief's receipt and a read drop no longer lists.
+    // The listing names it with the same mark as every other sender: the mark's absence must
+    // never read as verification. It runs before the read, because reading writes the brief's
+    // receipt and a read drop no longer lists.
     const listing = await runDropsAs();
     expect(listing.code).toBe(0);
-    expect(listing.out).toContain('the launch');
-    expect(listing.out).not.toContain('(unverified)');
+    expect(listing.out).toContain('the launch (attributed)');
     const json = await runDropsAs(['--json']);
-    const doc = JSON.parse(json.out) as { drops: { sender_verified?: boolean }[] };
-    expect(doc.drops[0]?.sender_verified).toBe(true);
+    const doc = JSON.parse(json.out) as { drops: { sender_attribution?: string }[] };
+    expect(doc.drops[0]?.sender_attribution).toBe('launch-brief');
 
     const claim = currentClaimIn(root, 'acme', 'lead');
     const read = readMessage({ dropDir, root, seat: 'lead', session: 'acme' }, id, home, { claim: () => claim });
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.body).toBe(generalBriefBody());
-    expect(read.body).not.toContain('[unverified sender');
+    expect(read.body).toBe(generalBriefBody().replace(
+      `from the launch — admitted by: ${GENERAL_BRIEF_RULE}`,
+      `from the launch (attributed) — admitted by: ${GENERAL_BRIEF_RULE}`,
+    ));
   });
 });

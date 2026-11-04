@@ -42,12 +42,15 @@ still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
-is a name the writer put on the record. A reader therefore marks a sender it cannot verify:
-`team messages` appends `[unverified sender]` to the cell and marks the served body's attribution
-line, `team drops` appends `(unverified)`, and `inbox_check` reports `sender_verified: false`. One
-claim verifies today — the launch's own general seat brief, bound to the seat's current claim;
-every other record, and every raw drop, is a claim on the shared checkout key. The receipt says a
-process was shown the body, not that the recipient acted on it.
+is a name the writer put on the record. A reader therefore attributes a sender, and never calls
+it verified: `team messages` appends `(attributed)` to the cell and marks the served body's
+attribution line, `team drops` appends `(attributed)` or `(unattributed)`, and `inbox_check`
+reports `sender_attribution`. The word **verified** is kept for an owner's own device-signed
+action. A record on the shared checkout key is attributed on that key alone; the launch's own
+general seat brief, bound to the seat's current claim, is attributed as `launch-brief` and marked
+the same in text, because a mark that only sometimes appears would make its absence read as
+proof. A raw drop, or a record no key could vouch for, is `none`, shown `(unattributed)`. The
+receipt says a process was shown the body, not that the recipient acted on it.
 
 The signature covers the complete payload exactly as it was parsed, and it is checked before any
 field is read: a field inserted, altered or removed after signing is a signature refusal whatever
@@ -106,11 +109,11 @@ table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
 `format`, `project`, `session`, every row as
-`{ id, from, to, sent, sent_display, status, sender_verified, sender_trust, body? }` — `sent` the
+`{ id, from, to, sent, sent_display, status, sender_attribution, body? }` — `sent` the
 exact ISO string `SENT` renders as an age, `body` only on a row that verified, and the body stays
-the signed bytes even when the text reading marks it; `sender_verified` is true only for the
-seat's current general seat brief, and `sender_trust` names what the claim rests on,
-`launch-brief` or `shared-key-only`; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
+the signed bytes even when the text reading marks it; `sender_attribution` is `attributed` for a
+record the shared checkout key verified, `launch-brief` for the seat's current general seat brief
+bound to its claim, and `none` for a row that was not vouched for; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no
@@ -119,6 +122,16 @@ or key refusal
 under `--json` writes a `team.error` v1 document on stdout instead — `messages.invocation`,
 `messages.not-a-repo`, `messages.file`, `messages.caller` or `messages.key`, its `message` and a
 null `repair` — and stderr stays empty. The exit code is the same as without `--json`.
+
+A note for a reader of an older build: `sender_verified` and `sender_trust` were the fields of
+0.5.13's development builds and never reached a release. They are replaced by
+`sender_attribution`. Map the old pair forward as an old `sender_verified: true` was
+`launch-brief`; an old `sender_verified: false` with `sender_trust: shared-key-only` was a record
+the key did verify, now `attributed`, or a claim nothing could vouch for, now `none`. The trust
+word is no longer emitted. A `config.changed` event the reconcile pass raised in an earlier build
+of this development line carried `sender_verified: "false"`; the event writer no longer stamps
+it, and a bus log line still carrying it is counted unverified and skipped until the log's
+retention passes it.
 
 `team init` lists `.agents/messages/` in `.git/info/exclude`, the same way it lists the team file.
 

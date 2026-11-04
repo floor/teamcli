@@ -58,7 +58,7 @@
           "from",
           "received",
           "path",
-          "sender_verified"
+          "sender_attribution"
         ],
         "properties": {
           "from": {
@@ -67,8 +67,13 @@
               "null"
             ]
           },
-          "sender_verified": {
-            "type": "boolean"
+          "sender_attribution": {
+            "type": "string",
+            "enum": [
+              "attributed",
+              "launch-brief",
+              "none"
+            ]
           },
           "received": {
             "type": "string",

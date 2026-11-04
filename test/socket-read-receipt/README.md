@@ -39,7 +39,7 @@ the team's roster with a nickname, or with none.
    pass types nothing before the window, nothing after it (the typed leg is refused), and
    nothing on a later pass. This row pins the behavior the frame acceptance leaves
    unchanged.
-5. An accepted frame opens with the claim banner `[unverified sender: claimed helper]`,
+5. An accepted frame opens with the claim banner `[attributed sender: helper]`,
    then one blank line, then exactly `Message from Bea (helper@acme)` alone on its line
    (a seat with nickname `Bea`), then one blank line, then the unchanged record body. The
    banner says the claim is unattested; the header is display only: the signed record keeps
@@ -65,7 +65,7 @@ The product branch's answers, at the strings level:
 - Unread pass: a socket-delivered record is due like any other. No pane messaging refuses
   the typed leg, so the pass spends no wake marker; at twice the window
   `reportUnreadDrops` writes the sender report, the lead report and the reported marker.
-- Frame claim banner: `[unverified sender: claimed <seat>]`, first in every frame. Nothing
+- Frame claim banner: `[attributed sender: <seat>]`, first in every frame. Nothing
   attests the caller yet, so the name the record claims is marked before any display text.
 - Frame header: `Message from <name> (<seat>@<team>)`, with no trailing colon, no summary,
   nothing else on the line and no admitted-by suffix; it follows the banner and its blank

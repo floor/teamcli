@@ -27,7 +27,8 @@ export type ConfigChange = {
   /** Who the event is from, as the writing process reports it: the owner, or the lead's seat when
    *  a lead wrote within its team. Absent on an event the reconcile pass appends for a signed
    *  record it found without one — the record verifies with the shared checkout approval key, so
-   *  the pass cannot claim an author, and the event says the author is unverified instead. */
+   *  the pass cannot claim an author, and the event names none; `reconciled` says the pass raised
+   *  it. */
   from?: string;
   /** The seat the setting belongs to, when the level is `seat`. */
   seat?: string;
@@ -63,7 +64,7 @@ export function appendConfigChanged(
     kind: 'config.changed',
     session: change.session,
     record_id: configChangedRecordId(change),
-    ...(change.from !== undefined ? { from: change.from } : { sender_verified: 'false' }),
+    ...(change.from !== undefined ? { from: change.from } : {}),
     subject: change.subject ?? change.target,
     config_key: change.key,
     config_level: change.level,

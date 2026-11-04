@@ -190,7 +190,7 @@ test('an accepted socket frame names a seat sender by nickname and seat address'
   // The frame opens with the unverified-claim banner; the display header follows it alone on its
   // line: no colon, no summary, no rule.
   const lines = frame.content.split('\n');
-  expect(lines[0]).toBe('[unverified sender: claimed helper]');
+  expect(lines[0]).toBe('[attributed sender: helper]');
   expect(lines[1]).toBe('');
   expect(lines[2]).toBe('Message from Bea (helper@acme)');
   expect(lines[3]).toBe('');

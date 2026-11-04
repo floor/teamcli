@@ -1,7 +1,8 @@
-// A socket frame carries a sender the daemon was asked to deliver for, and today nothing
-// attests the caller: the frame's content is prefixed with the claim, marked unverified, so a
-// seat reading its pane never takes the displayed name for proof. The receiving CLI is a fake;
-// no live pane and no real socket. Synthetic home and repository only.
+// A socket frame carries a sender the daemon was asked to deliver for, and nothing attests the
+// caller: the frame's content is prefixed with the attribution mark, so a seat reading its pane
+// never takes the displayed name for proof. Every sender is attributed, never verified, and the
+// mark is always present. The receiving CLI is a fake; no live pane and no real socket. Synthetic
+// home and repository only.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -46,7 +47,7 @@ function socketWorld(): World {
   return made;
 }
 
-test('a socket-delivered message opens with the sender claim marked unverified', async () => {
+test('a socket-delivered message opens with the sender attributed', async () => {
   const made = socketWorld();
   const frames: string[] = [];
   const host = fake(made, {
@@ -59,10 +60,10 @@ test('a socket-delivered message opens with the sender claim marked unverified',
   expect(code).toBe(0);
   expect(frames).toHaveLength(1);
   const frame = JSON.parse(frames[0] as string) as { message: { content: string } };
-  expect(frame.message.content.startsWith('[unverified sender: claimed owner]\n')).toBe(true);
+  expect(frame.message.content.startsWith('[attributed sender: owner]\n')).toBe(true);
   // The display header and the body follow the mark, in that order.
   expect(frame.message.content).toContain('a note');
   expect(frame.message.content.indexOf('a note')).toBeGreaterThan(
-    frame.message.content.indexOf('[unverified sender: claimed owner]'),
+    frame.message.content.indexOf('[attributed sender: owner]'),
   );
 });

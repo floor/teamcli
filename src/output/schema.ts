@@ -1942,7 +1942,7 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status', 'sender_verified', 'sender_trust'],
+        required: ['id', 'from', 'to', 'sent', 'sent_display', 'status', 'sender_attribution'],
         properties: {
           id: { type: 'string', minLength: 1 },
           from: { type: ['string', 'null'] },
@@ -1953,10 +1953,9 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           // published for it; `body` rides along only in the owner's reading, and a record that
           // does not verify carries none.
           status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
-          // Whether the sender claim verifies: only the launch's own seat brief, bound to the
-          // seat's current claim, does. Everything else was signed with the shared checkout key.
-          sender_verified: { type: 'boolean' },
-          sender_trust: { type: 'string', enum: ['launch-brief', 'shared-key-only'] },
+          // What the sender rests on: the shared checkout key every seat can read, the launch's
+          // own seat brief bound to the seat's current claim, or nothing at all.
+          sender_attribution: { type: 'string', enum: ['attributed', 'launch-brief', 'none'] },
           body: { type: 'string' },
         },
       },
@@ -2054,14 +2053,14 @@ export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['from', 'received', 'path', 'sender_verified'],
+        required: ['from', 'received', 'path', 'sender_attribution'],
         properties: {
           // The sender the record's payload names — or, in a raw file an earlier build wrote, its
           // first line; null when neither names one.
           from: { type: ['string', 'null'] },
-          // True only for the seat's current general seat brief; every other record was signed
-          // with the shared checkout key, which any seat can read.
-          sender_verified: { type: 'boolean' },
+          // What the sender rests on: the shared checkout key, the seat's current general seat
+          // brief, or nothing at all.
+          sender_attribution: { type: 'string', enum: ['attributed', 'launch-brief', 'none'] },
           received: { type: 'string', minLength: 1 },
           path: { type: 'string', minLength: 1 },
         },

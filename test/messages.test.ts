@@ -55,11 +55,11 @@ const WORKER: Caller = { kind: 'seat', name: 'worker', pane: 'pane-messages-work
 
 /** The one waiting record of the fixture, at the pinned instant, as the reading prints it. */
 const SHOWN = `team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m1  harness [unverified sender]  lead  0s ago  shown
+  ID  FROM                  TO    SENT    STATUS
+  m1  harness (attributed)  lead  0s ago  shown
 
 lead/m1:
-[unverified sender: claimed harness]
+[attributed sender: harness]
 
 ${BODY}
 
@@ -191,8 +191,8 @@ describe('team messages', () => {
     const result = await run();
     expect(result.code).toBe(1);
     expect(result.out).toBe(`team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m1  harness [unverified sender]  lead  0s ago  refused
+  ID  FROM                    TO    SENT    STATUS
+  m1  harness (unattributed)  lead  0s ago  refused
 
 difference: lead/m1 does not verify: the signature is not the message key's
   repair: remove .agents/messages/lead/m1.json, or have the sender re-send it
@@ -239,8 +239,8 @@ difference: lead/m1 does not verify: the signature is not the message key's
     const result = await run();
     expect(result.code).toBe(1);
     expect(result.out).toBe(`team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m2  harness [unverified sender]  lead  0s ago  refused
+  ID  FROM                    TO    SENT    STATUS
+  m2  harness (unattributed)  lead  0s ago  refused
 
 difference: lead/m2 does not verify: its id is m1, and the filename is the id
   repair: move .agents/messages/lead/m2.json to .agents/messages/lead/m1.json, or remove it
@@ -261,8 +261,8 @@ difference: lead/m2 does not verify: its id is m1, and the filename is the id
     const result = await run([], WORKER);
     expect(result.code).toBe(1);
     expect(result.out).toBe(`team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m1  harness [unverified sender]  lead  0s ago  refused
+  ID  FROM                    TO    SENT    STATUS
+  m1  harness (unattributed)  lead  0s ago  refused
 
 difference: worker/m1 does not verify: it is addressed to lead
   repair: move .agents/messages/worker/m1.json to .agents/messages/lead/m1.json, or remove it
@@ -281,8 +281,8 @@ difference: worker/m1 does not verify: it is addressed to lead
     plantMessage(home, found, 'lead', 'm1', payload({ root: '/tmp/elsewhere' }));
     const rootRefusal = await run();
     expect(rootRefusal.out).toBe(`team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m1  harness [unverified sender]  lead  0s ago  refused
+  ID  FROM                    TO    SENT    STATUS
+  m1  harness (unattributed)  lead  0s ago  refused
 
 difference: lead/m1 does not verify: it is bound to another checkout
   repair: remove .agents/messages/lead/m1.json: it is bound to another checkout
@@ -296,8 +296,8 @@ difference: lead/m1 does not verify: it is bound to another checkout
     plantMessage(home, found, 'lead', 'm1', payload({ session: 'other' }));
     const sessionRefusal = await run();
     expect(sessionRefusal.out).toBe(`team acme, session "acme"
-  ID  FROM                         TO    SENT    STATUS
-  m1  harness [unverified sender]  lead  0s ago  refused
+  ID  FROM                    TO    SENT    STATUS
+  m1  harness (unattributed)  lead  0s ago  refused
 
 difference: lead/m1 does not verify: it is bound to session "other"
   repair: remove .agents/messages/lead/m1.json: it is bound to another session
@@ -372,10 +372,10 @@ difference: lead/m1 does not verify: the record is not a message
     expect(result.err).toBe('');
     const seats = ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'];
     const rows = seats
-      .map((seat) => `  m1  harness [unverified sender]  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
+      .map((seat) => `  m1  harness (attributed)  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
       .join('\n');
     expect(result.out).toBe(
-      `team acme, session "acme"\n  ID  FROM                         TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\n[unverified sender: claimed harness]\n\nbody from builder\n\n` +
+      `team acme, session "acme"\n  ID  FROM                  TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\n[attributed sender: harness]\n\nbody from builder\n\n` +
         'note: 4 messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.\n\n' +
         '5 messages\n',
     );
@@ -409,7 +409,7 @@ difference: lead/m1 does not verify: the record is not a message
     format: number;
     project: string;
     session: string;
-    rows: { id: string; from: string | null; to: string | null; sent: string | null; sent_display: string; status: string; sender_verified: boolean; sender_trust: string; body?: string }[];
+    rows: { id: string; from: string | null; to: string | null; sent: string | null; sent_display: string; status: string; sender_attribution: string; body?: string }[];
     notes: string[];
     differences: { what: string; repair: string; who: string }[];
     summary: { differences: number; owner_differences: number };
@@ -450,9 +450,8 @@ difference: lead/m1 does not verify: the record is not a message
       sent: '2026-10-04T09:00:00.000Z',
       sent_display: '0s ago',
       status: 'shown',
-      // The JSON body stays the signed bytes; the mark rides on the row's own fields.
-      sender_verified: false,
-      sender_trust: 'shared-key-only',
+      // The JSON body stays the signed bytes; the attribution rides on the row's own field.
+      sender_attribution: 'attributed',
       body: BODY,
     }]);
     expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
@@ -475,8 +474,7 @@ difference: lead/m1 does not verify: the record is not a message
       sent: '2026-10-04T09:00:00.000Z',
       sent_display: '0s ago',
       status: 'refused',
-      sender_verified: false,
-      sender_trust: 'shared-key-only',
+      sender_attribution: 'none',
     }]);
     expect(doc.differences).toEqual([{
       what: "lead/m1 does not verify: the signature is not the message key's",
@@ -561,7 +559,7 @@ difference: lead/m1 does not verify: the record is not a message
     const key = messageKey();
 
     const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
-    expect(read).toEqual({ ok: true, body: `[unverified sender: claimed lead]\n\n${BODY}` });
+    expect(read).toEqual({ ok: true, body: `[attributed sender: lead]\n\n${BODY}` });
     const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
     const receipt = readFileSync(receiptPath, 'utf8');
     expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
@@ -851,9 +849,9 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
 
     // The gate first, the exits last: an earlier run exited 1 with no body and the evidence was
     // lost with the child's stdout. Counted, never inferred: exactly one side returns the body.
-    // The automatic reader's copy opens with the unverified mark; the manual reader's output is
+    // The automatic reader's copy opens with the attributed mark; the manual reader's output is
     // text, so the body's own bytes are what it carries.
-    const markedBody = `[unverified sender: claimed lead]\n\n${BODY}`;
+    const markedBody = `[attributed sender: lead]\n\n${BODY}`;
     const exposed = (manualResult.out.includes(BODY) ? 1 : 0) + (automaticResult.body === markedBody ? 1 : 0);
     expect({ exposed, detail }).toEqual({ exposed: 1, detail });
     if (automaticResult.ok) {
@@ -925,7 +923,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     const result = await run([], WORKER);
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
-    expect(result.out).toContain(`worker/m1:\n[unverified sender: claimed harness]\n\n${BODY}`);
+    expect(result.out).toContain(`worker/m1:\n[attributed sender: harness]\n\n${BODY}`);
     expect(result.out).toContain(
       "note: worker: the general seat brief is not shown here; the seat's own turn-start reader serves it.",
     );

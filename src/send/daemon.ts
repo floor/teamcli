@@ -53,7 +53,7 @@ import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliv
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { unverifiedBanner } from './sender-claim.ts';
+import { attributionBanner } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { frameFor, readerLine } from './frame.ts';
 import {
@@ -1614,11 +1614,11 @@ async function executeSocketSend(
   // act (ADR D3). It addresses the record, so no sending team is needed for it. A person-pane
   // seat has no reader line at all: a person answers in their own client.
   // No caller attestation exists yet: the frame names the claim the daemon was asked to deliver
-  // for and marks it unverified, so the receiving seat never reads the displayed name as proof.
+  // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
   const content = header === ''
-    ? `${unverifiedBanner(from)}\n\n${body}`
-    : `${unverifiedBanner(from)}\n\n${header}\n\n${body}`;
+    ? `${attributionBanner(from)}\n\n${body}`
+    : `${attributionBanner(from)}\n\n${header}\n\n${body}`;
   const frame = frameFor(content, msgId, personPane ? null : readerLine(msgId));
   if (frame.length > FRAME_LIMIT) {
     return {
