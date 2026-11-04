@@ -38,10 +38,11 @@ unverified or self-contradicting record is skipped and counted, never repaired i
 ## What it reads and writes
 
 Reads the team's configuration (its registry record; `.agents/team.yaml` on the legacy `file`
-source) to resolve the project name, session and checkout root, then reads the state folder's
-retained event-log segments with `O_NOFOLLOW`, verifying each record's signature through the bus log. If a
-symbolic link or FIFO stands at the log or in the state folder ladder, the run refuses and does
-not follow it. Writes nothing.
+source) to resolve the project name, session and checkout root, then reads the event log with
+`O_NOFOLLOW`. A sealed segment is searched through its signed index, which names each record's
+kind and id: only the selected records' own lines are read and verified, and the open segment
+is read whole and verified line by line. If a symbolic link or FIFO stands at the log or in the
+state folder ladder, the run refuses and does not follow it. Writes nothing.
 
 ## Who may run it
 

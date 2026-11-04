@@ -43,7 +43,10 @@ within, one that adds a leg the policy does not is refused.
 
 The change is signed, appended to the team log, and raised as `config.changed` with the setting's
 generation; a failed event append leaves the written record in place and the reconcile pass adds
-the missing event. A dry run prints the same summary with `would set`/`would unset` and stops
+the missing event. An event the reconcile pass adds names no author — the signed record proves
+the value, not who wrote it — so it carries `sender_verified: "false"` instead of a `from`, and
+the owner's line for it reads `<key> changed on disk [unverified author]`; an event raised as
+the change is written keeps its `from` and no mark. A dry run prints the same summary with `would set`/`would unset` and stops
 before any record, setting, generation or event is written.
 
 A seat the team file declares that has never launched has no agent record yet. The first

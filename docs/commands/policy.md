@@ -24,7 +24,8 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `daemon.chores`, `daemon.chores-slice-ms`, `daemon.chores-missed-beats`,
 `daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`,
 `workspace.sidebar.rows`, `workspace.sidebar.manage`, `workspace.sidebar.status_indicators`,
-`daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`).
+`daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`, `seat.dialog.answer`,
+`seat-health.watchdog.after`, `seat-health.watchdog.auto-restart`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -190,6 +191,19 @@ a word above the cap is clamped to it when read rather than refused, and a short
 tighter word. `daemon.sidebar-refresh-ms` is how often the sidebar line is re-reported to stay
 inside that ttl: whole milliseconds from one minute to seven days, six hours (21600000) when
 nothing declares it; a shorter interval is the tighter word.
+
+Three words govern the seat-health watchdog (its behaviour is under
+[`team daemon`](daemon.md#seat-health)). `seat.dialog.answer` is the closed list of dialogs the
+watchdog may answer itself: comma-separated `trust:<folder>` tokens (trust exactly that folder)
+and `permission:<command>` tokens (allow always for a command named token for token, as the
+command guard parses it — no `*`, no `..`, no backslash). Nothing is answered when it is unset,
+a lower level may only drop tokens, and widening it — at `set` or at load — needs a fresh owner
+proof, at most 30 seconds old, naming exactly the resulting list. A login dialog is never on
+the list and never answered. `seat-health.watchdog.after` is how long the full stall proof must
+hold before the watchdog acts, in whole seconds from 60 to 7200 — 900 by default; a lower level
+may only lengthen the wait. `seat-health.watchdog.auto-restart` is whether a proven stall is
+restarted at all: `1`, the release default, restarts once; `0` only tells the lead. A lower
+level may only turn it down.
 
 Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
 power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,
