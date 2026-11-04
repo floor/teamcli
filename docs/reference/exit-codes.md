@@ -590,6 +590,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `register.grant-flag` | `register` | 1 | --session is the owner's for a granted seat | `team register worker --session other` |
 | `register.handle-held` | `register` | 1 | the id its record holds is another seat's handle | `team register worker` |
 | `register.herdr` | `register` | 1 | herdr doesn't answer | `team register worker` |
+| `register.launch-only` | `register` | 1 | a caller other than the owner would record the pane root | `team register worker` |
 | `register.many-agents` | `register` | 1 | the session has more than one agent with that name | `team register worker` |
 | `register.no-agent` | `register` | 1 | no agent of that name is running in the session | `team register worker` |
 | `register.no-cli` | `register` | 1 | the pane holds no CLI in front of its shell | `team register worker` |

@@ -2,15 +2,18 @@
 // run continues — the shape `up` and `down` keep — while everything else stays enforced; a dry
 // run is never a bare refusal, and a registration dev mode admitted says so in its record.
 //
-// (a) TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate said once as a
-//     warning on stderr, the folded gate written to the audit log, and the run writes its own
-//     record line;
+// (a) TEAMCLI_DEV_MODE=1: an unplaced caller refreshes a record whose launch identity the live
+//     pane still holds — the caller gate said once as a warning on stderr, the folded gate
+//     written to the audit log, and the run writes its own record line;
 // (b) unset: the same call is refused with the bare sentence, and nothing is written;
 // (c) TEAMCLI_DEV_MODE=1: a pane herdr does not place as the seat — none of the name in the
 //     session, or one whose foreground is not the file-cli's program — is still refused;
 // (d) --dry-run: the refusal is never bare — it is said as `! register would refuse:` with the
 //     owner's own command beside it (`! to unblock:`) — and under dev mode the gate is the
-//     warning instead: the run reports the record it would write, and writes nothing either way.
+//     warning instead: the run reports the record it would write, and writes nothing either way;
+// (e) the fold reaches the caller gate only: a run whose pane root is not one the record holds is
+//     refused by `register.launch-only` in every mode, dry run included — that record is the
+//     launch's own write, or the owner's walk's.
 // Fake herdr throughout, a temporary home and a pinned caller: no live session is read.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -23,7 +26,7 @@ import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readAgents } from '../src/registry/agents.ts';
-import { LOG_FILE, readState, STATE_FILE } from '../src/state.ts';
+import { emptySession, LOG_FILE, mintSeatId, readState, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T09:00:00Z');
@@ -88,6 +91,17 @@ seats:
   return { base, home, root, dir: join(root, '.agents') };
 }
 
+/** The session's record for the seat: ready on herdr's pane, holding the process identity the
+ *  launch that put it there wrote. The live pane's own reading (400 in front of 401) matches it,
+ *  so a run may repeat the identity; dev mode's fold is about the caller, not this record. */
+function seedLead(w: World): void {
+  updateState(w.dir, (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      id: mintSeatId(), stage: 'ready', pane: PANE, cli: 'claude-code', launched: { shell: 400, cli: [401] },
+    };
+  });
+}
+
 /** The agent herdr reports for the seat: a pane running a program in front of its own shell. */
 function agent(name: string): HerdrAgent {
   return { name, agent: 'claude', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: null, session: 'claude-session-1' };
@@ -146,6 +160,9 @@ const DELEGATE = { kind: 'seat' as const, name: 'lead', pane: 'w2:p1', session: 
 test('TEAMCLI_DEV_MODE=1: the delegate approval precondition folds exactly as add and remove fold it', async () => {
   const w = world();
   withDelegate(w);
+  // The record the delegate run refreshes: the launch's identity, which the live pane still
+  // matches. A delegate may repeat it; it records no root of its own (the launch-only gate).
+  seedLead(w);
   // Herdr answers with no agents: the delegate evidence passes, and the caller is the file's
   // delegate pane, so the only gate in the way is the approval precondition.
   setHerdrRun(() => ({ agents: [] }));
@@ -170,17 +187,20 @@ test('without dev mode the same delegate file is still refused by the approval g
   expect(written(w)).toEqual(NOTHING);
 });
 
-test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a warning', async () => {
+test('TEAMCLI_DEV_MODE=1: an unplaced caller refreshes the record with the caller gate as a warning', async () => {
   const w = world();
+  seedLead(w);
   const r = await register(w, ['lead'], { caller: UNPLACED, dev: true });
   expect(r.code).toBe(0);
   expect(r.err).toContain(`team register: warning: ${CALLER_GATE}; dev mode continues\n`);
   expect(r.err).not.toContain(`team register: ${CALLER_GATE}`);
-  expect(written(w)).toEqual({ state: true, agents: 1, log: true, panes: true });
+  // The refresh writes the record and its audit line; the pane pointers are a launch's own write
+  // and this run makes none.
+  expect(written(w)).toEqual({ state: true, agents: 1, log: true, panes: false });
   // Two audit lines: the folded gate, written where the gate is used, and the record's own.
   const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
   expect(log).toContain(`warning: ${CALLER_GATE}; dev mode continues\n`);
-  expect(log).toContain('lead: registered seat_');
+  expect(log).toContain('lead: refreshed seat_');
   expect(log).toContain(PANE);
   expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
   // The record says so: the provenance carries the mark, and the caller the run kept beside it.
@@ -193,6 +213,7 @@ test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a
 
 test('a run in force writes the record again and the mark comes off', async () => {
   const w = world();
+  seedLead(w);
   const dev = await register(w, ['lead'], { caller: UNPLACED, dev: true });
   expect(dev.code).toBe(0);
   expect(readAgents(w.home)[0]?.provenance.dev_mode).toBe(true);
@@ -270,13 +291,29 @@ test('--dry-run says the refusal and the owner\'s own command, and under dev mod
   expect(written(w)).toEqual(NOTHING);
 
   // The live complaint: with dev mode the same dry run says the warning instead of the refusal,
-  // reports the record it would write, and exits 0 — nothing refused, nothing written.
+  // reports the record it would write, and exits 0 — nothing refused, nothing written. The
+  // record holds the identity its launch wrote, which is the only write this run would repeat.
   const mounted = world();
+  seedLead(mounted);
   const dev = await register(mounted, ['lead', '--dry-run'], { caller: UNPLACED, dev: true });
   expect(dev.code).toBe(0);
   expect(dev.out).toContain(`! warning: ${CALLER_GATE}; dev mode continues\n`);
   expect(dev.out).not.toContain('! register would refuse:');
   expect(dev.out).not.toContain('! to unblock:');
-  expect(dev.out).toContain('lead: would register — pane w1:p1; nothing would be launched');
-  expect(written(mounted)).toEqual(NOTHING);
+  expect(dev.out).toContain(`lead: already registered — pane ${PANE}`);
+  // `written` reads the files as they stand: the state file is the seed above, and the dry run
+  // added no agent record, log line or pane pointer to it.
+  expect(written(mounted)).toEqual({ ...NOTHING, state: true });
+
+  // The record's own evidence is not the caller gate's to fold: on a pane whose process the
+  // record does not hold, the same dev-mode dry run is refused by the launch-only gate.
+  const fresh = world();
+  const rootOnly = await register(fresh, ['lead', '--dry-run'], { caller: UNPLACED, dev: true });
+  expect(rootOnly.code).toBe(1);
+  expect(rootOnly.err).toBe('');
+  expect(rootOnly.out).toContain(
+    `! register would refuse: lead: pane ${PANE} is not a process identity this record's launch wrote; only the owner records a pane root`,
+  );
+  expect(rootOnly.out).not.toContain('would register');
+  expect(written(fresh)).toEqual(NOTHING);
 });
