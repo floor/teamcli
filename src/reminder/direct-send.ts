@@ -49,6 +49,11 @@ export type DaemonDirectResult = {
   text: string;
 };
 
+/** Where the run's own words go. The daemon's process writes them to its standard streams, which
+ *  its log collects; the machine chores child writes them into its protocol instead, because its
+ *  standard output carries frames and nothing else. */
+export type DaemonDirectSink = { stdout: (text: string) => void; stderr: (text: string) => void };
+
 /**
  * Sends one reminder to one recipient through the ordinary send command's admission, delivery
  * order and route rules. `host` is the transport/test seam and carries no identity of its own;
@@ -58,6 +63,7 @@ export async function sendDaemonDirect(
   context: DaemonDirectContext,
   request: DaemonDirectRequest,
   host: SendHost = realHost,
+  sink?: DaemonDirectSink,
 ): Promise<DaemonDirectResult> {
   const first = verify(host);
   if (!first.ok) return { ok: false, code: 1, id: null, staged: false, text: first.why };
@@ -79,7 +85,7 @@ export async function sendDaemonDirect(
   // No guard is handed in: the send composes the principal's own recheck itself, from the
   // principal it carries, before every transport. This entry never relies on a caller
   // remembering to wire the check — it hands over the principal and lets the seam do it.
-  const code = await runSend([request.seat, request.body], daemonDirectIo(request.root, said), {
+  const code = await runSend([request.seat, request.body], daemonDirectIo(request.root, said, sink), {
     ...host,
     sendId: () => id,
     daemon: principal,
@@ -103,16 +109,19 @@ function verify(host: SendHost, captured?: DaemonIdentity): ReturnType<typeof ve
 
 /** The run's io: the recipient's checkout as its working directory, so the team file the run
  *  loads is the one the daemon hosted, and no caller of the process's own: the daemon principal
- *  is established by `sendDaemonDirect` alone. */
-function daemonDirectIo(root: string, said: string[]): Io {
+ *  is established by `sendDaemonDirect` alone. The words always land in `said`; without a sink
+ *  they also reach this process's standard streams, which is where the daemon's log reads them. */
+function daemonDirectIo(root: string, said: string[], sink?: DaemonDirectSink): Io {
   return {
     stdout: (text) => {
       said.push(text);
-      void process.stdout.write(text);
+      if (sink !== undefined) sink.stdout(text);
+      else void process.stdout.write(text);
     },
     stderr: (text) => {
       said.push(text);
-      void process.stderr.write(text);
+      if (sink !== undefined) sink.stderr(text);
+      else void process.stderr.write(text);
     },
     cwd: root,
     env: process.env,

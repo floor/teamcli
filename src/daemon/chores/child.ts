@@ -17,6 +17,8 @@
 // The child leaves when its host asks it to and when its input ends — a daemon that died closes
 // the pipe, so a child never outlives the daemon that started it.
 import { markerCacheStats } from '../../send/fallback-events.ts';
+import type { ReminderProvider } from '../../reminder/provider.ts';
+import type { ReminderSend, ReminderSpec } from '../../reminder/run.ts';
 import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
@@ -61,6 +63,11 @@ export type ServeChoresChildInput = {
   pass?: ChoresPass;
   /** The presence steps (activity, reconcile, publisher). A test injects its own. */
   presence?: ChoresPresencePass;
+  /** The machine reminder's own seams: the list reader and the transport. A test injects its
+   *  own so a scene drives the beat without a machine folder or a socket; production builds the
+   *  reader from the token's hosted checkouts and the transport from the verified daemon
+   *  sender, which proves the daemon this child runs under before every leg. */
+  reminder?: { provider?: ReminderProvider; send?: ReminderSend };
   /** Builds the hosted watches a token's routes name. The default loads the production module
    *  only when a route carries a watch; a test injects its own to observe the frames. */
   watchFactory?: (input: ChoresWatchInput) => ChoresWatch;
@@ -95,7 +102,20 @@ export function choresConfigProblem(raw: unknown): string | null {
   if (readMillis(config.beatMs) === null) return 'the token names no heartbeat interval';
   if (readMillis(config.sliceMs) === null) return 'the token names no slice budget';
   if (typeof config.since !== 'string' || config.since === '') return 'the token names no start instant';
-  if (!Array.isArray(config.routes) || config.routes.length === 0) return 'the token names no roots';
+  const machine = config.machine;
+  if (machine !== undefined) {
+    if (!machine || typeof machine !== 'object' || Array.isArray(machine)) return 'the token names a malformed machine chore';
+    const reminders = (machine as Record<string, unknown>).reminders;
+    if (!reminders || typeof reminders !== 'object' || Array.isArray(reminders)) return 'the token names a machine chore without its reminders';
+    const hosted = (reminders as Record<string, unknown>).hosted;
+    if (!Array.isArray(hosted) || hosted.some((root) => typeof root !== 'string' || root === '')) {
+      return 'the token names reminders without their hosted checkouts';
+    }
+  }
+  // A child may serve no routes when it carries the machine chores: the reminder's recipients
+  // span roots, so its worker is the machine's, not one root's.
+  if (!Array.isArray(config.routes)) return 'the token names no roots';
+  if (config.routes.length === 0 && machine === undefined) return 'the token names no roots';
   for (const item of config.routes) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return 'the token names a malformed root';
     const route = item as Record<string, unknown>;
@@ -173,6 +193,50 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       setImmediate(() => resolve(!stopping));
     }),
   };
+
+  /** The machine reminder beat this token carries, or null. Its list read — the entity record,
+   *  the registry and every addressed team file — and each send walk run on this child's loop,
+   *  never the daemon's; the beat is driven by the host's ticks, exactly as the daemon's own
+   *  beat drove it. One tick at a time is not enforced here: the tick module skips a reminder
+   *  whose earlier walk is still running, so a tick that lands mid-walk leaves it and the next
+   *  tick notices whatever is still due. */
+  let reminderBeat: (() => void) | null = null;
+  if (config.machine !== undefined) {
+    // The reminder modules load only for a token that carries machine work: a per-root child's
+    // cold start is unchanged, and the send command's own module is not paid for by children
+    // that never send.
+    const [{ realHost }, { sendDaemonDirect }, { createReminderProvider }, { reminderTick }] = await Promise.all([
+      import('../../commands/send.ts'),
+      import('../../reminder/direct-send.ts'),
+      import('../../reminder/provider.ts'),
+      import('../../reminder/run.ts'),
+    ]);
+    const hosted = config.machine.reminders.hosted;
+    const provider = input.reminder?.provider ?? createReminderProvider({ home: config.home, hosted });
+    // Every line the beat writes crosses as its own frame: stdout carries frames only, so the
+    // run's words take the protocol, and the daemon logs each as the line it is.
+    const note = (line: string): void => {
+      for (const one of line.split('\n')) {
+        const text = one.trimEnd();
+        if (text !== '') write({ type: 'reminder-note', text });
+      }
+    };
+    const send: ReminderSend = input.reminder?.send ?? ((context, request) =>
+      sendDaemonDirect(context, request, { ...realHost, home: config.home }, { stdout: note, stderr: note }));
+    reminderBeat = (): void => {
+      let specs: readonly ReminderSpec[];
+      try {
+        specs = provider(note);
+      } catch (error) {
+        note(`reminders: the configured list could not be read — ${error instanceof Error ? error.message : String(error)}; nothing fires this beat`);
+        return;
+      }
+      if (specs.length === 0) return;
+      void reminderTick({ home: config.home, now: now(), specs, send, log: note }).catch((error: unknown) => {
+        note(`reminders: the beat failed — ${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+  }
 
   /** The next root whose pass may start: its own turn in round-robin order, with a pass
    *  requested and none in flight. */
@@ -378,6 +442,9 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       }
       if (message.type === 'tick') {
         enqueue();
+        // The machine chores ride the same nudge: through a whole daemon stall the child was
+        // never asked, and the tick after it is where the reminder notices what is still due.
+        if (!stopping) reminderBeat?.();
       } else if (message.type === 'presence') {
         runPresence(message);
       } else if (message.type === 'watch-beat') {

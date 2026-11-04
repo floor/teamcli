@@ -65,6 +65,18 @@ export type ChoresPresenceProof =
   | { seat: string; id: string; binding: string }
   | { seat: string; miss: string };
 
+/** The machine-scoped chores one child runs beside its roots: work whose subjects span roots, so
+ *  no route's word speaks for it. The reminder beat is the one such chore: it reads the entity
+ *  record, resolves every address and sends, all on this child's loop. A child started for it
+ *  alone names no routes. */
+export type ChoresMachineConfig = {
+  reminders: {
+    /** The canonical checkouts the daemon hosts: a reminder target outside them is refused when
+     *  the list is read, exactly as the daemon's own inline reader refuses it. */
+    hosted: string[];
+  };
+};
+
 export type ChoresChildConfig = {
   version: 1;
   /** The home the daemon resolved; also the child's `HOME`, so both processes read one machine
@@ -78,8 +90,11 @@ export type ChoresChildConfig = {
   /** The daemon's own start instant, so a reader can compare the two records. */
   since: string;
   /** Every root this child serves. A per-root child names one; a shared child names the idle
-   *  roots its policy grouped. */
+   *  roots its policy grouped; a child that runs only the machine chores names none. */
   routes: ChoresChildRoute[];
+  /** The machine-scoped chores this child runs beside its routes. Absent, the child carries the
+   *  root work alone, exactly as before the machine chores moved here. */
+  machine?: ChoresMachineConfig;
 };
 
 /** Host to child. A `tick` is a liveness nudge and the daemon's own beat instant; a due pass is
@@ -128,6 +143,10 @@ export type ChoresMarkerCache = { read: number; reused: number; cached: number }
  *  child had no run to end (`refused`). */
 export type ChoresChildMessage =
   | { type: 'ready'; pid: number; at: string }
+  /** One line the machine reminder beat wrote — the list's refusals, a fire's count, a send's
+   *  own words. The host logs it as written: the line already names its subject, and a prefix
+   *  naming the child would read as if the root work had said it. */
+  | { type: 'reminder-note'; text: string }
   | {
       type: 'heartbeat';
       at: string;
@@ -430,6 +449,8 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
       return { type: 'watch-fault-result', root: raw.root, outcome: raw.outcome, why: raw.why };
     case 'note':
       return typeof raw.text === 'string' ? { type: 'note', text: raw.text } : null;
+    case 'reminder-note':
+      return typeof raw.text === 'string' && raw.text !== '' ? { type: 'reminder-note', text: raw.text } : null;
     case 'stopped':
       return typeof raw.why === 'string' ? { type: 'stopped', why: raw.why } : null;
     default:

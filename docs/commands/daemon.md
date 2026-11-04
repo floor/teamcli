@@ -150,8 +150,9 @@ another daemon run, is not a private 0600 file, or matches no required live watc
 the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault` document.
 
 `run` also beats the machine's reminder list on the same heartbeat: the list is read from the
-owner's entity record and sent under the daemon's own identity, with no opt-in flag, and the
-next section is the whole of it.
+owner's entity record and sent under the daemon's identity, with no opt-in flag, and the next
+section is the whole of it. The read and the sends run in a supervised child of the daemon, not on
+the daemon's own loop.
 
 ## Reminders
 
@@ -214,12 +215,17 @@ a daemon that stops mid-walk loses results, never an instant; a transport that f
 on later beats under the message id it already staged, until the window closes, while a refused
 send stands as it is.
 
-A reminder is machine-scoped: one list, run by the one daemon. Each send proves the daemon's own
-authority and admits its target by the same rules a direct send does. A reminder that names a
-checkout this daemon does not host is refused when the list is read — the whole reminder, named
-with the checkout, since a partial instruction would carry no sign that it was partial — so
-nothing of it fires. The chore runs whenever the daemon runs — there is no opt-in flag, and an
-entity that writes no reminder fires nothing.
+A reminder is machine-scoped: one list, run by the one daemon in a supervised child of its own.
+The child reads the list and walks each send, so neither the registry reads nor a delivery walk
+run on the daemon's own loop; the daemon starts the child, nudges it on every beat and logs every
+line it writes. Each send proves the authority of the daemon that started the child — the state
+record, the single-instance lock and the heartbeat — and the child's own parentage is what proves
+it is that daemon's sender, since only the daemon can start a process under it. The send then
+admits its target by the same rules a direct send does. A reminder that names a checkout this
+daemon does not host is refused when the list is read — the whole reminder, named with the
+checkout, since a partial instruction would carry no sign that it was partial — so nothing of it
+fires. The chore runs whenever the daemon runs — there is no opt-in flag, and an entity that
+writes no reminder fires nothing.
 
 The chore keeps `reminders.state.json` beside the daemon's own state record: mode 0600 in the
 0700 machine folder, written atomically. For every reminder name it holds the wall-clock key

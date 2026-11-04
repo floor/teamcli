@@ -281,6 +281,28 @@ export type StartMachineDaemonInput = {
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
   /**
+   * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
+   * picked up without a restart. Absent, no reminder runs; reading the configured list into
+   * these specs is the caller's business, and the reader gets the beat's log so a refused entry
+   * is named. A reader that throws is logged and fires nothing on that beat, and a reminder is
+   * machine-scoped: the one list serves every hosted root. This is the inline path a daemon
+   * without a chores fleet runs; a daemon with one hands the read to a child.
+   */
+  reminders?: (log: (line: string) => void) => readonly ReminderSpec[];
+  /**
+   * The canonical checkouts this daemon hosts, handed to the machine chores child so its list
+   * read refuses a target outside them exactly as this daemon's own read does. Absent, the
+   * fleet's hosted list falls back to the accepted routes' roots.
+   */
+  reminderHosted?: readonly string[];
+  /**
+   * The transport a reminder uses. The default is the verified daemon sender, which proves the
+   * daemon's state record, lock and heartbeat before every leg; a test injects its own so a
+   * synthetic scene reaches no socket. An injected transport is a function that cannot cross a
+   * pipe, so a daemon given one delivers inline even when its chores fleet is hosted.
+   */
+  reminderSend?: ReminderSend;
+  /**
    * Whether the daemon isolates the heavy per-root chores in supervised children. Off by
    * default, like the other hosting seams: a daemon started without it runs exactly the inline
    * path, and a test harness that never opted in behaves as it always did. The mode per route is
@@ -291,20 +313,7 @@ export type StartMachineDaemonInput = {
   /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
-  /**
-   * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
-   * picked up without a restart. Absent, no reminder runs; reading the configured list into
-   * these specs is the caller's business, and the reader gets the beat's log so a refused entry
-   * is named. A reader that throws is logged and fires nothing on that beat, and a reminder is
-   * machine-scoped: the one list serves every hosted root.
-   */
-  reminders?: (log: (line: string) => void) => readonly ReminderSpec[];
-  /**
-   * The transport a reminder uses. The default is the verified daemon sender, which proves this
-   * process's own state record, lock and heartbeat before every leg; a test injects its own so a
-   * synthetic scene reaches no socket.
-   */
-  reminderSend?: ReminderSend;
+
 };
 
 export type StartMachineDaemonResult =
@@ -1307,7 +1316,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // that cannot be read keeps the release defaults and says so in the daemon log. A root that
   // failed to load has no route and no team, so it gets no chores entry: there is no work to
   // isolate and no policy to read.
-  if (input.choresHosting === true && routes.length > 0) {
+  //
+  // The reminder rides this fleet in a group of its own: its list read touches the registry and
+  // every addressed team file, and its send is a whole delivery walk, so both are the main-loop
+  // work this isolation exists to remove. An injected transport is a function seam that cannot
+  // cross a pipe, so a daemon given one keeps the inline path and this process still delivers.
+  const remindersInFleet = input.choresHosting === true && input.reminders !== undefined && input.reminderSend === undefined;
+  if (input.choresHosting === true && (routes.length > 0 || remindersInFleet)) {
     choresFleet = createChoresFleet({
       home,
       beatMs: heartbeatMs,
@@ -1340,6 +1355,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 : {}),
             }];
       }),
+      ...(remindersInFleet
+        ? { machine: { reminders: { hosted: [...(input.reminderHosted ?? routes.map((route) => route.root))] } } }
+        : {}),
       log: (text) => logLine(text),
       ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
       // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
@@ -2116,32 +2134,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
   // due instant never advances into a store pass.
   let lastStorePassAt = now().getTime();
-  // Reminders ride this same beat and are machine-scoped: one list for every hosted root,
-  // re-read each beat so an edited config runs without a restart. The tick is never awaited — a
-  // send that walks does not hold the beat — and a closed daemon starts none; a walk already
-  // under way has each later leg refused by the sender's own authority recheck. The module keeps
-  // its own per-reminder guard, so a beat that lands mid-walk skips that reminder and runs the
-  // others.
-  const reminderBeat = (): void => {
-    if (closed || input.reminders === undefined) return;
-    let specs: readonly ReminderSpec[];
-    try {
-      specs = input.reminders((line) => logLine(line));
-    } catch (error) {
-      logLine(`reminders: the configured list could not be read — ${messageOf(error)}; nothing fires this beat`);
-      return;
-    }
-    if (specs.length === 0) return;
-    void reminderTick({
-      home,
-      now: now(),
-      specs,
-      ...(input.reminderSend === undefined ? {} : { send: input.reminderSend }),
-      log: (line) => logLine(line),
-    }).catch((error: unknown) => {
-      logLine(`reminders: the beat failed — ${messageOf(error)}`);
-    });
-  };
   /** The fallback pass in flight, if any: one walk at a time, so two beats never read the same
    *  store side by side. A pass reads the durable markers itself, so the beat after it settles
    *  starts the next pass and nothing a skipped beat would have escalated is lost. */
@@ -2177,6 +2169,35 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         `fallback store ${entry.root}: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
       );
     }
+  };
+  // Reminders ride this same beat and are machine-scoped: one list for every hosted root,
+  // re-read each beat so an edited config runs without a restart. The tick is never awaited — a
+  // send that walks does not hold the beat — and a closed daemon starts none; a walk already
+  // under way has each later leg refused by the sender's own authority recheck. The module keeps
+  // its own per-reminder guard, so a beat that lands mid-walk skips that reminder and runs the
+  // others. This is the path a daemon without a fleet runs; with one, the machine child owns it.
+  const reminderBeat = (): void => {
+    // A daemon whose fleet carries the machine child starts no beat of its own: the child reads
+    // the list and walks the sends on its own loop, and this beat only nudges it. Two readers
+    // would be two clocks for one machine-scoped list.
+    if (closed || input.reminders === undefined || remindersInFleet) return;
+    let specs: readonly ReminderSpec[];
+    try {
+      specs = input.reminders((line) => logLine(line));
+    } catch (error) {
+      logLine(`reminders: the configured list could not be read — ${messageOf(error)}; nothing fires this beat`);
+      return;
+    }
+    if (specs.length === 0) return;
+    void reminderTick({
+      home,
+      now: now(),
+      specs,
+      ...(input.reminderSend === undefined ? {} : { send: input.reminderSend }),
+      log: (line) => logLine(line),
+    }).catch((error: unknown) => {
+      logLine(`reminders: the beat failed — ${messageOf(error)}`);
+    });
   };
   beat = () => {
     try {

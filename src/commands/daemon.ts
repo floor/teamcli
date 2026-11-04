@@ -1128,6 +1128,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       roots,
       startedBy,
       reminders: reminderReader,
+      // The same hosted list the reader above was built with, handed to the machine chores
+      // child: the reminder runs there when the fleet is hosted, and its read must refuse a
+      // target outside these checkouts exactly as this process's reader does.
+      reminderHosted: hosted,
       version: sources.version ?? installedVersion(),
       gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
       onFatal: (why: string) => {
