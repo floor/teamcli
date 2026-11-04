@@ -40,6 +40,7 @@ import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
+import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -3029,6 +3030,10 @@ async function stageSendRecord(dropDir: string, payload: RecordPayload, home: st
     return { ok: true, path: held.path, existing: true, record, signed };
   }
   stagedStep(fields(payload.at));
+  // The recipient's unread index names this record as its sender's newest. It is a hint the
+  // receiver's sweep verifies against the record itself, never a second source of truth, and a
+  // hint that cannot be written never changes what this send did.
+  noteUnread(dropDir, payload.from, payload.id, payload.at);
   return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
 }
 
