@@ -141,7 +141,7 @@ relays from the owner is quoted, cited, and acted on without asking again; it is
 entity turns it on, because a relayed decision carries the owner's authority and a sender's
 claim to relay one does not yet verify. `owner.reserved-scope` is the list the owner's reserved
 scope line names — public releases, spending, credentials, and the owner's machine (its system
-settings, accounts and logins, keychain and hardware) unless a level names its own list — and
+settings, accounts and logins, credential store and hardware) unless a level names its own list — and
 that line always prints, with its second sentence: checkouts, seats and team config belong to
 the teams. A chain that cannot be read leaves the defaults in force.
 
