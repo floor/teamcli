@@ -4,7 +4,7 @@
 // watch's own line, `src/labels/observe.ts`), so only a line the file and the pane both fail to
 // explain is drift. Both repairs are `team register <seat>`, which re-applies the file's two lines
 // without a relaunch.
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +44,20 @@ const TITLE = workspaceLabel(seat);
 /** Line 2 as the file writes it: `Claude Opus 5.5 default`, the seat sets no effort. */
 const DISPLAY = displayAgent(seat);
 
+let savedXdg: string | undefined;
+
+beforeEach(() => {
+  savedXdg = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+});
+
+afterEach(() => {
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
+});
+
 function place(): { base: string; root: string; home: string } {
+  delete process.env.XDG_CONFIG_HOME;
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-drift-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');

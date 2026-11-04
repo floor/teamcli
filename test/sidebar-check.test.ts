@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,9 +60,18 @@ const DEFAULT_ROWS_WORD = sidebarRowsWord(DEFAULT_SIDEBAR_ROWS);
 const DEFAULT_TOML_BLOCK = renderSidebarTomlBlock(DEFAULT_SIDEBAR_ROWS, 'symbols');
 
 const tempDirs: string[] = [];
+let savedXdg: string | undefined;
+
+beforeEach(() => {
+  savedXdg = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+});
+
 afterEach(() => {
   setCaptureExec(null);
   setHerdrRun(null);
+  if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedXdg;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -72,6 +81,7 @@ function setupWorld(options?: { writeValidConfig?: boolean; recordCurrentReload?
   root: string;
   home: string;
 } {
+  delete process.env.XDG_CONFIG_HOME;
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-sidebar-check-')));
   tempDirs.push(base);
   const root = join(base, 'acme-app');
