@@ -128,7 +128,7 @@ function makeSandbox(teamYaml: string = BASE_TEAM_YAML): {
 
   const teamId = teamIdOf(root);
   const agent = registerAgent(home, {
-    name: 'Cassandra',
+    name: 'Alex',
     signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
     lab: 'anthropic',
     cli: 'claude-code',
