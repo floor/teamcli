@@ -17,6 +17,7 @@ import { msg } from '../client/grant-messages.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-link.ts';
+import { noteDeferral } from '../client/owner-later-notice.ts';
 import { addOwnerSigner, answerDeadline, deferralUntil, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, signOwnerLater, type AnswerWindow, type OwnerSeatKeyStore, type OwnerSeatLater } from '../client/owner-seat.ts';
 import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCreateDetails } from '../client/approval-card.ts';
 import { actionRequestsFolder, approveTeamCreate, TEAM_CREATE_TTL_MS, type TeamCreateParams } from '../client/team-create.ts';
@@ -206,7 +207,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     word: string,
     at: Date,
     via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
-  ): { ok: true; choice: 'later'; until: string } | { ok: false; why: string } => {
+  ): { ok: true; choice: 'later'; until: string; notice: string } | { ok: false; why: string } => {
     const resolved = recordWindow(id);
     if (resolved === null) return { ok: false, why: `request ${id} has no readable record to defer` };
     if (!(answerDeadline(home, resolved.folder, id, resolved.window, store, at, ttlOf(id), resolved.entity) > at.getTime())) {
@@ -227,7 +228,15 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     const signed = signOwnerLater(home, later, resolved.window.created, via.signer, store, `Defer ${id} until ${later.until}`, via.assertion, at);
     if (!signed.ok) return signed;
     writeFileSync(join(resolved.folder, `${id}.later.json`), `${JSON.stringify(signed.signed, null, 2)}\n`);
-    return { ok: true, choice: 'later', until: later.until };
+    // The deferral is written first and stands on its own; telling the team's lead is the one
+    // other effect, and a note that cannot be written is reported rather than undone.
+    let notice: string;
+    try {
+      notice = noteDeferral(home, { team: resolved.team, requestId: id, until: later.until, word: later.word, now: at }).notice;
+    } catch {
+      notice = 'The deferral was saved, but no lead was told: the note could not be written.';
+    }
+    return { ok: true, choice: 'later', until: later.until, notice };
   };
   // The words that approve and deny go to the approval route; every other word is offered to the
   // later table, which answers a word it does not know by naming the words it does.
@@ -327,7 +336,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       pendingAnswers.delete(`${a.id}:${a.word}:${signer.name}`);
       const answered = answerOrDefer(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a) });
       return answered.ok
-        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until } : {}) } }
+        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until, notice: answered.notice } : {}) } }
         : { status: 400, body: { error: answered.why } };
     },
   };
@@ -365,7 +374,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       if (signer === undefined) return { status: 400, body: { error: 'no Touch ID signer on the owner seat' } };
       const answered = answerOrDefer(id, word, now(), { signer: signer.name });
       return answered.ok
-        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until } : {}) } }
+        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until, notice: answered.notice } : {}) } }
         : { status: 400, body: { error: answered.why } };
     }
     return { status: 404, body: { error: 'not found' } };
