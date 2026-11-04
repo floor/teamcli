@@ -63,7 +63,7 @@ seats:
   }
   function io() {
     let out = '', err = '';
-    const value: Io = { cwd: root, env: {}, stdinIsTTY: false, caller: { kind: 'owner' }, stdout: (s) => { out += s; }, stderr: (s) => { err += s; } };
+    const value: Io = { cwd: root, env: {}, stdinIsTTY: false, caller: { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' }, stdout: (s) => { out += s; }, stderr: (s) => { err += s; } };
     return { value, out: () => out, err: () => err };
   }
   const publication = { dropDir, id: ID, to: 'lead', root, session: 'acme', home, key, at: '2026-10-27T08:32:00.000Z' };
