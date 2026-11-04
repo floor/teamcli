@@ -234,14 +234,18 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
       if (typeof team !== 'string' || !team) throw new ProjectsError('a team ID in "teams" must be text');
     }
     // The word the reader takes: a non-empty list of distinct leg names, so what this writer
-    // stores is what `recordOf` reads back.
+    // stores is what `recordOf` reads back. This is a write: a record an older build wrote may
+    // still carry the retired `mcp-inbox` alias and `recordOf` reads it, but no upsert names it
+    // — the name is no longer a leg, and storing it would only wait for its removal.
     if (record.deliveryOrder !== undefined) {
       if (!Array.isArray(record.deliveryOrder)) throw new ProjectsError('"delivery_order" must be a list of legs');
       if (record.deliveryOrder.length === 0) throw new ProjectsError('"delivery_order" must name at least one leg');
       if (new Set(record.deliveryOrder).size !== record.deliveryOrder.length) throw new ProjectsError('"delivery_order" names a leg twice');
       for (const leg of record.deliveryOrder) {
-        // The retired `mcp-inbox` reads as an alias a stored record may still carry.
-        if (typeof leg !== 'string' || !([...DELIVERY_LEGS, ...LEGACY_ORDER_WORDS] as readonly string[]).includes(leg)) {
+        if (typeof leg === 'string' && (LEGACY_ORDER_WORDS as readonly string[]).includes(leg)) {
+          throw new ProjectsError('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+        }
+        if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
           throw new ProjectsError(`a "delivery_order" leg must be one of: ${DELIVERY_LEGS.join(', ')}`);
         }
       }
