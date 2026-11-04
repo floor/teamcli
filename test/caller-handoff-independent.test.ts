@@ -370,11 +370,12 @@ describe('live handoff caller placement (independent verification)', () => {
       { session: undefined, op: 'agents' },
     ]);
 
-    // 3. walkCaller never queries paneRootPid or agents, even when HERDR_PANE_ID is set after handoff.
+    // 3. walkCaller queries paneRootPid once for the hinted pane (session: undefined) to prove live
+    // handoff under herdr, and never queries agents.
     sessionsQueried.length = 0;
     const walked = walkCaller(io);
-    expect(walked.kind).toBe('unplaced');
-    expect(sessionsQueried).toEqual([]);
+    expect(walked).toEqual({ kind: 'unplaced', reason: 'it runs under herdr' });
+    expect(sessionsQueried).toEqual([{ session: undefined, op: 'paneRootPid:pane2' }]);
 
     // 4. End-to-end `runStatus` admits the handoff seat on its recorded pane pane2.
     const statusSrc: StatusSources = {
