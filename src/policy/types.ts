@@ -2260,7 +2260,10 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   },
   // Whether the entity's main orchestrator relays the owner's word: a relayed decision quotes
   // the owner and cites its owner-decisions entry, and seats act on it without asking again.
-  // Off by default until sender claims are verified; an entity may turn it on.
+  // Relay never carries an owner-reserved decision (major releases, spending and accounts,
+  // credentials, machine settings); those need the owner's device. Senders are attributed,
+  // not verified, within one OS user. On by default where the entity sets a main orchestrator;
+  // `off` turns the rule line off.
   'entity.main-orchestrator.relays-owner': {
     name: 'entity.main-orchestrator.relays-owner',
     kind: 'advised',
@@ -2297,7 +2300,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   // What the owner keeps, in four words, printed in every seat's generated rules below the
   // line that says what belongs to the teams (OD-20261103-03(4)). A list, `;`- or
   // `,`-separated on the command line; set it to change the words, never to make the rule
-  // disappear.
+  // disappear. The four default words are also the floor: a set value may add words, and the
+  // scope in force puts any floor word it left out back in, so no level narrows what the
+  // owner reserves below them.
   'owner.reserved-scope': {
     name: 'owner.reserved-scope',
     kind: 'advised',

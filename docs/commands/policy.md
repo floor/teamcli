@@ -205,19 +205,16 @@ may only lengthen the wait. `seat-health.watchdog.auto-restart` is whether a pro
 restarted at all: `1`, the release default, restarts once; `0` only tells the lead. A lower
 level may only turn it down.
 
-Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
-power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,
-project and team levels) print, for a lead seat, the lines that a lead may type or choose in a
-seat's pane when a send cannot reach it or a dialog blocks it, and that a lead in development
-mode may bring back a stopped seat; `off` drops the line. `entity.main-orchestrator.relays-owner`
-(entity level alone) prints, inside an entity, the line that a decision the main orchestrator
-relays from the owner is quoted, cited, and acted on without asking again; it is `off` until an
-entity turns it on, because a relayed decision carries the owner's authority and a sender's
-claim to relay one does not yet verify. `owner.reserved-scope` is the list the owner's reserved
-scope line names — public releases, spending, credentials, and the owner's machine (its system
-settings, accounts and logins, credential store and hardware) unless a level names its own list — and
-that line always prints, with its second sentence: checkouts, seats and team config belong to
-the teams. A chain that cannot be read leaves the defaults in force.
+Two advised words print the relay and reserved-scope lines in every seat's generated rules.
+`entity.main-orchestrator.relays-owner`, on at the entity level by default, says a decision the
+entity's main orchestrator relays from the owner — quoting the owner and citing its
+owner-decisions entry — is acted on without asking again; `off` drops the line. A relay never
+carries an owner-reserved decision: senders are attributed, not verified, within one OS user,
+so a reserved decision needs the owner's own device, whatever any message says.
+`owner.reserved-scope` is the list that rule keys to — `public releases`, `spending`,
+`credentials`, and `the owner's machine` (OS and system settings, accounts and logins, the
+credential store, hardware) by default; set it at entity, project or team to add words. The
+four default words are the floor and stay in force even when a set value leaves one out.
 
 ## Who may run it
 

@@ -588,7 +588,7 @@ describe("the read sentences follow the seat's CLI", () => {
     '- Your signature in a pull request body, as its last line: **Agent:** GPT-6 Sol · implementer',
     '- Protected checkouts, relative to the project root: .',
     '- Work on the code in the worktree your brief names, never in the checkout you started in. Branches are named {kind}/{task}.',
-    "- The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams.",
+    "- The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     'These are standing rules, not a task: reply ready and wait for your brief.',
   ].join('\n');
 
