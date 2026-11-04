@@ -743,6 +743,9 @@ describe('the chores fleet', () => {
     tickAt(60_000);
     expect(made2[0]!.kills).toHaveLength(1);
     expect(made2[0]!.kills[0]).toContain('did not beat twice within 60000 ms');
+    // The row says the child is being ended, and carries the deadline as its own reason.
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'late' });
+    expect(fleet.stateFor(made.root)?.why).toContain('did not beat twice within 60000 ms');
     tickAt(61_000);
     expect(made2[0]!.kills).toHaveLength(1);
     made2[0]!.leave(null, 'SIGTERM');

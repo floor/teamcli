@@ -516,7 +516,9 @@ function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonCh
     : group.child === null
       ? (group.startedOnce ? 'restarting' : 'starting')
       : group.ready
-        ? (missed > 0 ? 'late' : 'ok')
+        // A child being ended is late whatever ended it: the deadline path has no missed count
+        // to show, and the row still says this child is about to be replaced.
+        ? ((missed > 0 || group.killing) ? 'late' : 'ok')
         : 'starting';
   const pass = group.lastPass.get(root);
   const why = group.stopping
@@ -525,7 +527,9 @@ function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonCh
       ? group.why
       : missed > 0
         ? `the child has missed ${String(missed)} heartbeat${missed === 1 ? '' : 's'}`
-        : null;
+        : group.killing
+          ? group.why
+          : null;
   return {
     mode: group.mode,
     state,
