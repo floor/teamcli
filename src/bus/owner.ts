@@ -242,9 +242,9 @@ export function isOwnerAddressed(
 export function ownerDeliveryText(event: EventPayload): string {
   if (event.to === 'owner' && event.reason !== undefined) return clip(event.reason);
   // A settings change the reconcile pass found on disk: the signed record proves the value, not
-  // who wrote it, so the line names the key and says the author is unverified.
+  // who wrote it, so the line names the key and says the author is unattributed.
   if (event.kind === 'config.changed' && event.from === undefined) {
-    return clip(`${event.config_key ?? 'config'} changed on disk [unverified author]`);
+    return clip(`${event.config_key ?? 'config'} changed on disk [unattributed author]`);
   }
   if (event.kind === 'record.invalid' || event.kind === 'security.refused') {
     // A refusal names its rule and the object it names — the record id and where it stands, or

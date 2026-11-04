@@ -42,7 +42,7 @@ import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
 import { noteUnread } from '../send/unread-hint.ts';
 import { ensureRecord, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
-import { unverifiedBanner } from '../send/sender-claim.ts';
+import { attributionBanner } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
 import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
@@ -5882,9 +5882,10 @@ async function deliverSocketFrame(
   // The frame opens with the sender's display line, then the signed record's own body: the
   // header is display, and the body it precedes still carries the attribution line a reader
   // judges. One blank line separates them, so no body line can pass for the header.
-  // Nothing attests the caller yet, so the frame opens with the claim marked unverified first:
-  // the receiving seat never reads the displayed name as proof of who sent it.
-  const content = `${unverifiedBanner(from)}\n\n${header === '' ? body : `${header}\n\n${body}`}`;
+  // Nothing attests the caller yet, so the frame opens with the attribution mark first: the
+  // receiving seat never reads the displayed name as proof of who sent it, and the mark is always
+  // present so its absence never reads as verification.
+  const content = `${attributionBanner(from)}\n\n${header === '' ? body : `${header}\n\n${body}`}`;
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
   // writes. Under `none` they ride inside the frame — the frame is the only copy — and under

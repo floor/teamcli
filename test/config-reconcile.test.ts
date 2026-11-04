@@ -108,10 +108,10 @@ describe('reconcile: a signed settings record with no config.changed event', () 
     expect(payload.subject).toBe(SEAT);
     // The signed generation verifies with the checkout's approval key, which every seat can read:
     // the pass cannot claim the owner wrote it. No from key is stamped, and the event says the
-    // author is unverified. The owner's one line says a change was found on disk.
+    // author is unattributed. The owner's one line says a change was found on disk.
     expect(payload.from).toBeUndefined();
-    expect(payload.sender_verified).toBe('false');
-    expect(ownerDeliveryText(payload)).toBe('model changed on disk [unverified author]');
+    expect('sender_verified' in payload).toBe(false);
+    expect(ownerDeliveryText(payload)).toBe('model changed on disk [unattributed author]');
     expect(payload.ts).toBe(record.date);
   });
 
@@ -148,7 +148,7 @@ describe('reconcile: a signed settings record with no config.changed event', () 
     expect(events[0]!.payload.reconciled).toBeUndefined();
     // A report the writing process raised itself keeps its own author and carries no mark.
     expect(events[0]!.payload.from).toBe('owner');
-    expect(events[0]!.payload.sender_verified).toBeUndefined();
+    expect('sender_verified' in events[0]!.payload).toBe(false);
   });
 
   test('an event appended by another session stands: reconcile appends none', () => {

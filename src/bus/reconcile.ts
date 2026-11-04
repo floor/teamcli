@@ -1117,8 +1117,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             // The record keeps the value, not the value it replaced. No author is stamped: the
             // signed settings record verifies with the checkout's shared approval key, which
             // every seat can read, so the pass that found it cannot say who wrote it. The event
-            // carries `sender_verified: "false"` instead, and the owner reads that a change was
-            // found on disk.
+            // names no `from` and sets `reconciled`, and the owner reads that a change was found
+            // on disk.
             old: null,
             value: setting.value,
             generation: setting.generation,

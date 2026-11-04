@@ -71,7 +71,7 @@ import {
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { noteUnread } from '../send/unread-hint.ts';
-import { unverifiedBody, verifySenderClaim, type SenderTrust } from '../send/sender-claim.ts';
+import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -666,11 +666,10 @@ type MailboxRow = {
    *  the body and publishes no receipt — and a seat's reading never carries another mailbox's
    *  body at all. A record that does not verify carries none, whatever the caller. */
   body?: string;
-  /** Whether the sender claim verifies (the launch's own seat brief, bound to the seat's current
-   *  claim) or rests on the shared checkout key alone, which every seat can read. A refused row's
-   *  record did not verify, so its claim is never verified. */
-  sender_verified: boolean;
-  sender_trust: SenderTrust;
+  /** How the sender is attributed: on the shared checkout key every seat can read, on the
+   *  launch's own seat brief bound to the seat's current claim, or not at all. A refused row's
+   *  record was not vouched for, so it is never attributed. */
+  sender_attribution: SenderAttribution;
   renderedBody?: string;
 };
 
@@ -724,9 +723,8 @@ function waitingRow(
     sent: fields?.at ?? null,
     sent_display: formatRelativeTime(fields?.at, now),
     status: 'waiting',
-    sender_verified: false,
-    sender_trust: 'shared-key-only',
-    ...(withBody && fields !== null ? { body: fields.body } : {}),
+    sender_attribution: fields === null ? 'none' : 'attributed',
+    ...(withBody && fields !== null ? { body: fields.body, renderedBody: attributedBody(fields.body, fields.from ?? candidate.seat) } : {}),
   };
 }
 
@@ -970,8 +968,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         sent: parsedLike?.at ?? null,
         sent_display: formatRelativeTime(parsedLike?.at, now),
         status: 'refused',
-        sender_verified: false,
-        sender_trust: 'shared-key-only',
+        sender_attribution: 'none',
       });
       differences.push({ what: result.text, repair: repairOf(candidate, result, parsedLike), who: 'any seat' });
       // The refusal is raised to the owner as its rule and object — the record's id, its seat
@@ -1009,19 +1006,19 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
           sent: result.at,
           sent_display: formatRelativeTime(result.at, now),
           status: 'refused',
-          sender_verified: false,
-          sender_trust: 'shared-key-only',
+          sender_attribution: 'none',
         });
         differences.push({ what: gate.what, repair: gate.repair, who: 'any seat' });
         continue;
       }
     }
-    // The claim is judged against the recipient seat's own current brief claim: only the launch's
-    // delivery the seat holds verifies. An older store's message has no claim fields, so its
-    // sender rests on the shared key like every other record.
-    const sender = recordPayload === null
-      ? { verified: false, trust: 'shared-key-only' as const }
-      : verifySenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
+    // The sender is attributed against the recipient seat's own current brief claim: the launch's
+    // delivery the seat holds is the one record bound to something beyond the shared key. An older
+    // store's message has no claim fields, so its sender rests on the shared key like every other
+    // record.
+    const senderAttribution = recordPayload === null
+      ? 'attributed' as const
+      : attributeSenderClaim(recordPayload, { briefClaim: claimOf(candidate.seat, candidate.session ?? session) });
     const row: MailboxRow = {
       id: candidate.id,
       seat: candidate.seat,
@@ -1032,9 +1029,8 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       sent_display: formatRelativeTime(result.at, now),
       status: 'shown',
       body: result.body,
-      sender_verified: sender.verified,
-      sender_trust: sender.trust,
-      renderedBody: sender.verified ? result.body : unverifiedBody(result.body, result.from ?? candidate.seat),
+      sender_attribution: senderAttribution,
+      renderedBody: attributedBody(result.body, result.from ?? candidate.seat),
     };
     rows.push(row);
     shownCount += 1;
@@ -1056,8 +1052,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         sent: row.sent,
         sent_display: row.sent_display,
         status: row.status,
-        sender_verified: row.sender_verified,
-        sender_trust: row.sender_trust,
+        sender_attribution: row.sender_attribution,
         ...(row.body !== undefined ? { body: row.body } : {}),
       })),
       notes,
@@ -1111,7 +1106,7 @@ function renderMailbox(
   const readableFrom = (row: MailboxRow): string | null => {
     if (row.from === null) return null;
     const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
-    return row.sender_verified ? name : `${name} [unverified sender]`;
+    return row.sender_attribution === 'none' ? `${name} (unattributed)` : `${name} (attributed)`;
   };
   lines.push(
     ...renderTable({

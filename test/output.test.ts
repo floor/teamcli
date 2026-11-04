@@ -858,7 +858,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           project: 'beacon',
           session: 'beacon',
           seat: 'worker',
-          drops: [{ from: 'the owner', sender_verified: false, received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
+          drops: [{ from: 'the owner', sender_attribution: 'none', received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
           counts: { drops: 1 },
         }),
       ],

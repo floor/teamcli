@@ -52,7 +52,7 @@ test('an accepted frame reads the written label name when no nickname stands', a
   const record = recordOf(drops);
   const lines = frame.content.split('\n');
   // Nothing attests the caller: the claim is marked first, then the display line follows.
-  expect(lines[0]).toBe('[unverified sender: claimed helper]');
+  expect(lines[0]).toBe('[attributed sender: helper]');
   expect(lines[1]).toBe('');
   // The label's name precedes the middle dot; the address stays the record's own seat.
   expect(lines[2]).toBe('Message from Bea (helper@acme)');

@@ -167,7 +167,7 @@ test('a replayed delivery is served once by the real gate and takes its task onc
   expect(served.ok).toBe(true);
   if (!served.ok) return;
   // The record's claim is marked: nothing attests the sender yet.
-  expect(served.body).toBe('[unverified sender: claimed lead]\n\nrun team next');
+  expect(served.body).toBe('[attributed sender: lead]\n\nrun team next');
   const first = testIo(root, lead);
   expect(await runNext([], first, { home, now: () => at })).toBe(0);
   expect(first.out).toBe(claim);
