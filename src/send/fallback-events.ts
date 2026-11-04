@@ -1629,26 +1629,33 @@ function publicationOf(
   // it can only turn `none` into the published record. It reads, never writes, and one release
   // after the key became canonical no new episode can leave a publication behind in a sibling.
   if (direct.kind !== 'none') return direct;
-  const legacy = legacyPublicationPath(recipient, messageId, path);
-  if (legacy === null) return direct;
-  const bridged = publicationAt(legacy, recordId, ctx.home);
-  return bridged.kind === 'ok' ? bridged : direct;
+  // Every sibling is consulted in folder order until one holds a record that verifies for
+  // this recordId: an earlier sibling holding junk, an unrelated ledger or a foreign-signed
+  // record must not shadow the store that holds the real publication, or the replay would
+  // publish the escalation a second time. A sibling that does not verify is passed over,
+  // never a refusal — the bridge keeps its word either way.
+  for (const legacy of legacyPublicationCandidates(recipient, messageId, path)) {
+    const bridged = publicationAt(legacy, recordId, ctx.home);
+    if (bridged.kind === 'ok') return bridged;
+  }
+  return direct;
 }
 
-/** The one-release bridge's candidate: the episode's publication ledger under a sibling store
- *  folder of the same receiving root (a pre-fix, sender-keyed one), when such a store holds the
- *  file. Null when none does. */
-function legacyPublicationPath(recipient: CanonicalRecipient, messageId: string, canonicalPath: string): string | null {
+/** The one-release bridge's candidates, in stable folder order: the episode's publication
+ *  ledger under each sibling store folder of the same receiving root (the pre-fix,
+ *  sender-keyed ones) that holds the file. */
+function legacyPublicationCandidates(recipient: CanonicalRecipient, messageId: string, canonicalPath: string): string[] {
   const canonicalDir = dirname(canonicalPath);
   const suffix = basename(canonicalDir).match(/[0-9a-f]{12}$/);
-  if (suffix === null) return null;
+  if (suffix === null) return [];
   const fileName = publicationLedgerFileName(recipient, messageId);
+  const candidates: string[] = [];
   for (const name of folderNames(dirname(canonicalDir))) {
     if (!name.endsWith(`-${suffix[0]}`) || name === basename(canonicalDir)) continue;
     const candidate = join(dirname(canonicalDir), name, fileName);
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) candidates.push(candidate);
   }
-  return null;
+  return candidates;
 }
 
 function publicationAt(path: string, recordId: string, home: string): PublicationRead {
