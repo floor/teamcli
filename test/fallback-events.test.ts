@@ -1199,6 +1199,179 @@ seats:
     expect(verifySignedEvent(fired.escalated[0]!.event, world.home)).toBe(true);
     expect(existsSync(join(receiverStore(world), ledgerName))).toBe(true);
   });
+
+  test('sibling candidate ordering is stable, skips directory and file symlinks, ignores foreign-signed records, and never writes to any sibling', () => {
+    const world = makeCrossWorld();
+    const first = noteTransport(world.ctx, crossFact(world, { messageId: 'm-order-probe' }));
+    if (!first.ok) throw new Error(first.reason);
+    const due = Date.parse(first.dueAt!);
+    const fired = escalateDue(world.receiver(), { at: new Date(due) });
+    expect(fired.escalated).toHaveLength(1);
+    const recordAlpha = fired.escalated[0]!.event;
+
+    // Mint a second valid our-home-signed event (`recordBeta`) for the same `escalatedRecordId`
+    // with a distinct reason/timestamp so its signature differs from `recordAlpha`, then remove
+    // the event log so only the sibling ledgers witness either record.
+    const recId = escalatedRecordId(world.cross, 'm-order-probe');
+    const ledgerName = publicationLedgerFileName(world.cross, 'm-order-probe');
+    const canonicalLedger = join(receiverStore(world), ledgerName);
+    const alphaLedgerBytes = readFileSync(canonicalLedger, 'utf8');
+    unlinkSync(canonicalLedger);
+    unlinkSync(eventLogPath(world.cross.team, world.cross.root, world.home));
+
+    const betaAppended = appendEvent(world.cross.team, world.cross.root, world.home, {
+      ts: new Date(due + 5_000).toISOString(),
+      kind: 'message.held',
+      session: world.cross.session,
+      record_id: recId,
+      from: 'worker-1',
+      to: world.cross.seat,
+      seat: world.cross.seat,
+      thread: 'm-order-probe',
+      via: 'fallback',
+      reason: 'second distinct valid signature for ordering probe',
+    });
+    if (!betaAppended.ok) throw new Error(betaAppended.reason);
+    const recordBeta = betaAppended.record;
+    expect(recordBeta.signature).not.toBe(recordAlpha.signature);
+    expect(verifySignedEvent(recordBeta, world.home)).toBe(true);
+    const betaLedgerBytes = `${JSON.stringify({
+      ts: new Date(due + 5_000).toISOString(),
+      recordId: recId,
+      kind: 'escalated',
+      record: recordBeta,
+    })}\n`;
+    unlinkSync(eventLogPath(world.cross.team, world.cross.root, world.home));
+
+    // Mint a foreign-signed record for the same `recId`.
+    const foreignHome = realpathSync(mkdtempSync(join(tmpdir(), 'team-fallback-foreign-order-')));
+    dirs.push(foreignHome);
+    mkdirSync(join(foreignHome, '.config', 'team'), { recursive: true });
+    const foreignAppended = appendEvent('foreign', world.cross.root, foreignHome, {
+      ts: new Date(due).toISOString(),
+      kind: 'message.held',
+      session: world.cross.session,
+      record_id: recId,
+      from: 'worker-1',
+      to: world.cross.seat,
+      seat: world.cross.seat,
+      thread: 'm-order-probe',
+      via: 'fallback',
+      reason: 'foreign-signed escalation',
+    });
+    if (!foreignAppended.ok) throw new Error(foreignAppended.reason);
+    const foreignLedgerBytes = `${JSON.stringify({
+      ts: new Date(due).toISOString(),
+      recordId: recId,
+      kind: 'escalated',
+      record: foreignAppended.record,
+    })}\n`;
+
+    // External target holding `alphaLedgerBytes` so we can point both a directory symlink sibling
+    // and a file symlink sibling at a valid our-home-signed ledger that would win if symlinks were followed.
+    const symlinkTargetDir = realpathSync(mkdtempSync(join(tmpdir(), 'team-fallback-link-target-')));
+    dirs.push(symlinkTargetDir);
+    const symlinkTargetLedger = join(symlinkTargetDir, ledgerName);
+    writeFileSync(symlinkTargetLedger, betaLedgerBytes);
+
+    // Plant same-root-hash siblings in lexicographical order ahead of `mmm-valid-first` and `zzz-valid-second`:
+    // 1. `000-unrelated`: valid JSON line for a different recordId (`other-record-id`)
+    const dirUnrelated = dirname(historyPath('000-unrelated', world.cross.root, world.home));
+    mkdirSync(dirUnrelated, { recursive: true });
+    const unrelatedBytes = `${JSON.stringify({
+      ts: new Date(due).toISOString(),
+      recordId: 'other-record-id',
+      kind: 'all-failed',
+      record: recordAlpha,
+    })}\n`;
+    writeFileSync(join(dirUnrelated, ledgerName), unrelatedBytes);
+
+    // 2. `aaa-dir-symlink`: directory symlink pointing to `symlinkTargetDir` (which holds `recordBeta`)
+    const dirLinkSibling = dirname(historyPath('aaa-dir-symlink', world.cross.root, world.home));
+    symlinkSync(symlinkTargetDir, dirLinkSibling);
+
+    // 3. `aab-file-symlink`: real directory whose ledger file is a symlink to `symlinkTargetLedger` (`recordBeta`)
+    const dirFileLinkSibling = dirname(historyPath('aab-file-symlink', world.cross.root, world.home));
+    mkdirSync(dirFileLinkSibling, { recursive: true });
+    symlinkSync(symlinkTargetLedger, join(dirFileLinkSibling, ledgerName));
+
+    // 4. `aac-foreign`: real directory holding `foreignLedgerBytes`
+    const dirForeign = dirname(historyPath('aac-foreign', world.cross.root, world.home));
+    mkdirSync(dirForeign, { recursive: true });
+    writeFileSync(join(dirForeign, ledgerName), foreignLedgerBytes);
+
+    // 5. `aad-corrupt`: real directory holding malformed JSON
+    const dirCorrupt = dirname(historyPath('aad-corrupt', world.cross.root, world.home));
+    mkdirSync(dirCorrupt, { recursive: true });
+    const corruptBytes = '{corrupt-json\n';
+    writeFileSync(join(dirCorrupt, ledgerName), corruptBytes);
+
+    // 6. `mmm-valid-first`: real directory holding `alphaLedgerBytes` (`recordAlpha`)
+    const dirValidFirst = dirname(historyPath('mmm-valid-first', world.cross.root, world.home));
+    mkdirSync(dirValidFirst, { recursive: true });
+    writeFileSync(join(dirValidFirst, ledgerName), alphaLedgerBytes);
+
+    // 7. `zzz-valid-second`: real directory holding `betaLedgerBytes` (`recordBeta`)
+    const dirValidSecond = dirname(historyPath('zzz-valid-second', world.cross.root, world.home));
+    mkdirSync(dirValidSecond, { recursive: true });
+    writeFileSync(join(dirValidSecond, ledgerName), betaLedgerBytes);
+
+    const resetMarkerForReplay = (): void => {
+      const marker = readCrossMarker(world, 'm-order-probe');
+      delete marker.escalatedAt;
+      writeFileSync(markerPathOf(world.cross, 'm-order-probe'), `${JSON.stringify(marker)}\n`);
+    };
+
+    // Replay 1: skips unrelated, dir-symlink, file-symlink, foreign, and corrupt; selects `mmm-valid-first` (`recordAlpha`) deterministically before `zzz-valid-second` (`recordBeta`).
+    resetMarkerForReplay();
+    const replay1 = escalateDue(world.receiver(), { at: new Date(due + 60_000) });
+    expect(replay1.refused).toHaveLength(0);
+    expect(replay1.escalated).toHaveLength(1);
+    expect(replay1.escalated[0]!.duplicate).toBe(true);
+    expect(replay1.escalated[0]!.event.signature).toBe(recordAlpha.signature);
+
+    // Replay 2: remove `mmm-valid-first`'s ledger -> now `zzz-valid-second` (`recordBeta`) is the first verifying sibling in sorted folder order.
+    unlinkSync(join(dirValidFirst, ledgerName));
+    resetMarkerForReplay();
+    const replay2 = escalateDue(world.receiver(), { at: new Date(due + 120_000) });
+    expect(replay2.refused).toHaveLength(0);
+    expect(replay2.escalated).toHaveLength(1);
+    expect(replay2.escalated[0]!.duplicate).toBe(true);
+    expect(replay2.escalated[0]!.event.signature).toBe(recordBeta.signature);
+
+    // Verify the bridge never wrote to the event log, the canonical ledger, or any sibling directory.
+    const logAfterBridge = readEvents(world.cross.team, world.cross.root, world.home);
+    if (!logAfterBridge.ok) throw new Error(logAfterBridge.reason);
+    expect(logAfterBridge.events).toHaveLength(0);
+    expect(existsSync(canonicalLedger)).toBe(false);
+    expect(readdirSync(dirUnrelated)).toEqual([ledgerName]);
+    expect(readFileSync(join(dirUnrelated, ledgerName), 'utf8')).toBe(unrelatedBytes);
+    expect(readdirSync(dirFileLinkSibling)).toEqual([ledgerName]);
+    expect(readdirSync(dirForeign)).toEqual([ledgerName]);
+    expect(readFileSync(join(dirForeign, ledgerName), 'utf8')).toBe(foreignLedgerBytes);
+    expect(readdirSync(dirCorrupt)).toEqual([ledgerName]);
+    expect(readFileSync(join(dirCorrupt, ledgerName), 'utf8')).toBe(corruptBytes);
+    expect(readdirSync(dirValidFirst)).toEqual([]);
+    expect(readdirSync(dirValidSecond)).toEqual([ledgerName]);
+    expect(readFileSync(join(dirValidSecond, ledgerName), 'utf8')).toBe(betaLedgerBytes);
+
+    // Replay 3: remove `zzz-valid-second`'s ledger so ONLY `000-unrelated`, `aaa-dir-symlink` (pointing to valid `betaLedgerBytes`),
+    // `aab-file-symlink` (pointing to valid `betaLedgerBytes`), `aac-foreign`, and `aad-corrupt` remain.
+    // Neither symlink sibling nor the foreign sibling counts: `publicationOf` returns `none` and `escalateDue`
+    // publishes a fresh escalation (`duplicate: false`) into the canonical receiver store without touching any sibling.
+    unlinkSync(join(dirValidSecond, ledgerName));
+    resetMarkerForReplay();
+    const replay3 = escalateDue(world.receiver(), { at: new Date(due + 180_000) });
+    expect(replay3.refused).toHaveLength(0);
+    expect(replay3.escalated).toHaveLength(1);
+    expect(replay3.escalated[0]!.duplicate).toBe(false);
+    expect(replay3.escalated[0]!.event.signature).not.toBe(recordAlpha.signature);
+    expect(replay3.escalated[0]!.event.signature).not.toBe(recordBeta.signature);
+    expect(replay3.escalated[0]!.event.signature).not.toBe(foreignAppended.record.signature);
+    expect(existsSync(canonicalLedger)).toBe(true);
+    expect(readFileSync(join(dirForeign, ledgerName), 'utf8')).toBe(foreignLedgerBytes);
+    expect(readFileSync(symlinkTargetLedger, 'utf8')).toBe(betaLedgerBytes);
+  });
 });
 
 describe('the escalation delay resolver', () => {
