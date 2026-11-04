@@ -157,6 +157,58 @@ describe('the caller is placed by its parent processes', () => {
   });
 });
 
+describe('a live handoff re-parents the pane root, and the server still vouches for it', () => {
+  // After a live handoff every pane's root process is re-parented to the system's first process,
+  // so the herdr server is no longer among a seat's ancestors while the pane's own root still is.
+  // The current server's record for the pane the environment names is the other way to the same
+  // proof: the hint names the pane, the root pid it reports decides.
+  const handed: Process[] = [{ pid: 901, name: 'claude' }, { pid: 900, name: 'zsh' }, { pid: 1, name: 'launchd' }];
+  const handoff = (over: Partial<CallerSources> = {}): CallerSources => sources(handed, {
+    agents: () => [agent('codex-acme', 'pane2')],
+    paneRootPid: (pane) => (pane === 'pane2' ? 900 : null),
+    env: { HERDR_PANE_ID: 'pane2' },
+    stdinIsTTY: false,
+    ...over,
+  });
+
+  test('(a) the server vouches for the hinted pane root: the caller is that seat', () => {
+    expect(placeCaller(handoff(), 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
+    expect(placeCaller(handoff())).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2' });
+  });
+
+  test('(a) an agentless pane the server vouches for is that pane', () => {
+    expect(placeCaller(handoff({ agents: () => [] }), 'main')).toEqual({ kind: 'pane', pane: 'pane2', session: 'main' });
+  });
+
+  test('(b) a pane id the server does not know is still the detached refusal', () => {
+    const unknown = handoff({ agents: () => [], paneRootPid: () => null });
+    expect(placeCaller(unknown, 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+  });
+
+  test('(c) a root pid that is not an ancestor is still the detached refusal', () => {
+    const elsewhere = handoff({ paneRootPid: () => 4242 });
+    expect(placeCaller(elsewhere, 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+  });
+
+  test('(d) a server read that fails is still the detached refusal', () => {
+    const silent = handoff({ agents: () => null, paneRootPid: () => null });
+    expect(placeCaller(silent, 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+  });
+
+  test('(e) the classic path with a herdr ancestor is unchanged, and reads the hint only to order the agents', () => {
+    const reads: string[] = [];
+    const classic = sources(seat, {
+      paneRootPid: (pane) => {
+        reads.push(pane);
+        return ({ pane1: 100, pane2: 200, pane3: 300 } as Record<string, number>)[pane] ?? null;
+      },
+      env: { HERDR_PANE_ID: 'pane2' },
+    });
+    expect(placeCaller(classic, 'main')).toEqual({ kind: 'seat', name: 'codex-acme', pane: 'pane2', session: 'main' });
+    expect(reads).toEqual(['pane2']);
+  });
+});
+
 describe('the classes read apart', () => {
   test('isOwner and mayLaunchSeats are the owner at a terminal', () => {
     expect(isOwner({ kind: 'owner' })).toBe(true);
