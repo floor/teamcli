@@ -980,6 +980,46 @@ seats:
     expect(readFileSync(legacy, 'utf8').trim().split('\n')).toHaveLength(2);
   });
 
+  test('the bridge consults every sibling store until one verifies, not only the first that holds a file', () => {
+    const world = makeCrossWorld();
+    const first = noteTransport(world.ctx, crossFact(world, { messageId: 'm-siblings' }));
+    if (!first.ok) throw new Error(first.reason);
+    const due = Date.parse(first.dueAt!);
+    const fired = escalateDue(world.receiver(), { at: new Date(due) });
+    expect(fired.escalated).toHaveLength(1);
+
+    // Two pre-fix siblings over the same root hash: the first in folder order holds junk under
+    // the episode's ledger name, the second holds the real signed publication. Consulting only
+    // the first that holds a file never reaches the record, and the replay publishes a second
+    // escalation beside the first.
+    const ledgerName = publicationLedgerFileName(world.cross, 'm-siblings');
+    const canonical = join(receiverStore(world), ledgerName);
+    const junkDir = dirname(historyPath('aaa-junk', world.cross.root, world.home));
+    const legacyDir = senderStoreOverReceiverRoot(world);
+    const legacyBytes = readFileSync(canonical, 'utf8');
+    mkdirSync(junkDir, { recursive: true });
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(junkDir, ledgerName), 'not a publication ledger\n');
+    writeFileSync(join(legacyDir, ledgerName), legacyBytes);
+    unlinkSync(canonical);
+    unlinkSync(eventLogPath(world.cross.team, world.cross.root, world.home));
+    const marker = readCrossMarker(world, 'm-siblings');
+    delete marker.escalatedAt;
+    writeFileSync(markerPathOf(world.cross, 'm-siblings'), `${JSON.stringify(marker)}\n`);
+
+    const replay = escalateDue(world.receiver(), { at: new Date(due + 120_000) });
+    expect(replay.refused).toHaveLength(0);
+    expect(replay.escalated).toHaveLength(1);
+    expect(replay.escalated[0]!.duplicate).toBe(true);
+    expect(replay.escalated[0]!.event.payload.record_id).toBe(escalatedRecordId(world.cross, 'm-siblings'));
+    const log = readEvents(world.cross.team, world.cross.root, world.home);
+    if (!log.ok) throw new Error(log.reason);
+    expect(log.events).toHaveLength(0);
+    // Read-only, both of them: the junk and the real ledger are byte for byte as planted.
+    expect(readFileSync(join(junkDir, ledgerName), 'utf8')).toBe('not a publication ledger\n');
+    expect(readFileSync(join(legacyDir, ledgerName), 'utf8')).toBe(legacyBytes);
+  });
+
   test('escalates a cross-root episode once by the receiver sweep after sender lock contention and never duplicates across retries', () => {
     const world = makeCrossWorld();
     const firstLeg = noteTransport(
