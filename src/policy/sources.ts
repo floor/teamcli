@@ -786,6 +786,13 @@ export function planPolicySet(
           : `invalid value "${formatRawValue(request.value)}" for policy "${name}"`,
       };
     }
+    // A word whose every name is retired parses to no live leg (`delivery-order` naming only
+    // `mcp-inbox`): a new policy write naming it is refused with its own reason, since a stored
+    // empty word would not read back. A record an older build wrote still reads — the resolver
+    // reads that word as declaring nothing (`src/policy/resolve.ts`).
+    if (spec.emptyWordDeclaresNothing === true && Array.isArray(parsed) && parsed.length === 0) {
+      return { ok: false, why: `policy "${name}" names mcp-inbox, which is no longer a leg; remove it` };
+    }
     normalizedValue = parsed;
   } else {
     if ((request.kind ?? 'enforced') === 'enforced') {
