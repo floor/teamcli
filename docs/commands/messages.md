@@ -16,9 +16,11 @@ in `.agents/messages/<seat>/` is read the same way and keeps its own print-then-
 A run serves one mailbox: the owner's, or the seat its caller is placed as in the team's session,
 by the same placement `team send` and `team ack` judge. The record stores are shared, so records
 addressed to other seats are still listed — one `waiting` row each, carrying the fields a key can
-verify and no body — but they are never shown and never receipted: the receipt is the read that
-spends an id, and only the addressed mailbox's own reader may spend it. A caller the placement
-cannot resolve reads nothing and publishes nothing. The owner's mailbox, `.agents/messages/owner/`,
+verify — but they are never receipted: the receipt is the read that spends an id, and only the
+addressed mailbox's own reader may spend it. A seat's run carries no body for them. The owner's
+run is the whole session's read-only view, so its waiting rows carry the verified body too and
+still write no receipt for another mailbox. A caller the placement cannot resolve reads nothing
+and publishes nothing. The owner's mailbox, `.agents/messages/owner/`,
 is the owner's own: the Runtime
 writes a signed record there for each event it delivers to the owner (see [the event log and the
 bus](../internal/events.md)), its `FROM` is `runtime`, and the owner's run shows it and writes its
@@ -75,15 +77,17 @@ its own `<seat>/<id>:` heading, then the notes and the differences print, and on
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
 [`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
-and the signed record keeps the sender's registry id apart from it. A `waiting` row has no body
-and no receipt: it says the record is there for its own mailbox's reader. `--json` counts the rows
-as `messages`, the bodies shown as `shown`, the differences as `refused`, and the other mailboxes'
-rows as `waiting`.
+and the signed record keeps the sender's registry id apart from it. A `waiting` row writes no
+receipt: it says the record is there for its own mailbox's reader, and a seat's run carries no
+body for it. The owner's run is read-only over the whole session and does carry the verified body
+on a `waiting` row; a record that does not verify carries none, whichever the caller. `--json`
+counts the rows as `messages`, the bodies served as `shown`, the differences as `refused`, and the
+other mailboxes' rows as `waiting`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | every waiting record of the caller's mailbox was shown and receipted | the reading above, each verified row `shown`, its read receipt published and durable before its body is printed; a record another reader already served is skipped | 0 |
-| a record for another mailbox was waiting | one `waiting` row for it, no body and no receipt, and the note `1 message addressed to another mailbox is waiting; it is listed without its body, and no receipt is written for it.` (`2 messages … are waiting; they are listed without their bodies, and no receipts are written for them.` for more) | 0 |
+| a record for another mailbox was waiting | one `waiting` row for it and no receipt; a seat's run carries no body, and the note `1 message addressed to another mailbox is waiting; it is listed without its body, and no receipt is written for it.` (`2 messages … are waiting; they are listed without their bodies, and no receipts are written for them.` for more); the owner's run carries the verified body and the note `1 message … ; it is shown read-only, and no receipt is written for it.` (`2 messages … are waiting; they are shown read-only, and no receipts are written for them.` for more) | 0 |
 | a general seat brief of the caller's own mailbox was waiting | no row and no body for it, no receipt; a note names the seat: `<seat>: the general seat brief is not shown here; the seat's own turn-start reader serves it.` | 0 |
 | nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 messages` | 0 |
 | the caller is not the owner or a seat of the team's session | `team messages: only the owner or a seat of this session reads a mailbox; this call is <caller>` (under `--json`, the `messages.caller` envelope); nothing is listed and nothing is receipted | 1 |
