@@ -10,8 +10,9 @@
 // printed `p<pid>`, `fcwd`, then one line naming the folder, `n<path>`. The same query takes many
 // pids at once, which is how the orphan reading asks about every process it may name.
 //
-// The table is the time column's query widened: `ps -axo pid=,comm=,lstart=`. Its shapes are
-// measured in the parser's own comment; a row the query did not print whole is skipped.
+// The table is the time column's query widened and scoped to this user: `ps -U <uid>
+// -o pid=,comm=,lstart=`. Its shapes are measured in the parser's own comment; a row the query did
+// not print whole is skipped.
 //
 // CPU time comes from the process table's time column, asked for the pid alone: `ps -o time=
 // -p <pid>` printed `  0:00.01` for a process a moment old and ` 53:45.87` for one an hour in,
@@ -181,10 +182,17 @@ export function parseProcessTable(text: string): ProcessEntry[] {
   return rows;
 }
 
-/** Every process the caller can see, or null when the table cannot be read. */
+/** Every process this user runs, or null when the table cannot be read — or when the system
+ *  cannot say who this user is. The read is scoped to this user on purpose: the orphan reading
+ *  names processes a person may then stop, and it must never name or probe a process another user
+ *  owns. Measured here on 2026-11-04, `ps -axo pid=,comm=,lstart=` printed 1283 rows including
+ *  uid 0's `/sbin/launchd`, while `ps -U 501 -o pid=,comm=,lstart=` printed 1060 rows starting at
+ *  pid 643 — this user's own, in the same line shape the parser reads. */
 export const processTable = (): ProcessEntry[] | null => {
+  const uid = process.getuid?.();
+  if (uid === undefined) return null;
   try {
-    const text = execFileSync('ps', ['-axo', 'pid=,comm=,lstart='], {
+    const text = execFileSync('ps', ['-U', String(uid), '-o', 'pid=,comm=,lstart='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,

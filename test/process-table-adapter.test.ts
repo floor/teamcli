@@ -1,6 +1,7 @@
 // The process table's own reader: every platform word stays in the adapter, and the shapes are
 // the ones this machine's query printed — measured on 2026-11-04 with
-// `ps -axo pid=,comm=,lstart=` (1270 lines in 98 ms):
+// `ps -U 501 -o pid=,comm=,lstart=` (1060 rows; `ps -axo pid=,comm=,lstart=` printed 1283 and
+// began at uid 0's pid 1, so the scoped query is the one the reader runs):
 //
 //        1 /sbin/launchd    Mon Nov  2 05:06:00 2026
 //      346 /usr/libexec/log Mon Nov  2 05:07:26 2026
@@ -64,6 +65,17 @@ describe('the process table adapter', () => {
     // the instant can sit a zone away from `Date.now()` here. The scene still catches a parse
     // that lands anywhere but the process's own recent start.
     expect(Math.abs(Date.now() - (start as number))).toBeLessThan(24 * 60 * 60_000);
+  });
+
+  test('the table is scoped to this user, never to every process the machine runs', () => {
+    const table = processTable();
+    expect(table).not.toBeNull();
+    expect(table?.some((row) => row.pid === process.pid)).toBe(true);
+    // The machine's first process belongs to the system's own user, not this one: where this
+    // user is not that user, it must not appear. (A root-only environment is the one case the
+    // scene cannot tell apart, so it asks for the scoping only when it can.)
+    const uid = process.getuid?.();
+    if (uid !== undefined && uid !== 0) expect(table?.some((row) => row.pid === 1)).toBe(false);
   });
 
   test('a dead pid reads as no name and no start instant', () => {
