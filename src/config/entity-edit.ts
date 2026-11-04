@@ -276,9 +276,13 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     return 0;
   }
   const edited = editedRecordText(text, recordPath, value, changed.root);
-  // A reminder list is held to the daemon's own parser on the text that would be written: a
-  // problem the file did not already carry (a bad field, a name written twice, a name another
-  // entity already holds) refuses the write with the parser's reason, and nothing is written.
+  // A reminder list is held to the daemon's own parser on the text that would be written. A
+  // problem on this entity refuses the write with the parser's reason, whatever the file carried
+  // before the edit — the text stored must be one the daemon reads whole, and a list that already
+  // held a bad entry would otherwise keep it as if the edit had cured it. A problem on another
+  // entity refuses only when this edit introduced it: renaming a reminder can make a later
+  // entity's entry the duplicate, and the parser names that entity. A problem another entity
+  // already carried is not this call's subject and never blocks the write.
   if (key === REMINDERS_KEY) {
     let candidate: YamlNode;
     try {
@@ -287,8 +291,10 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       return unreadable(io, json, `${file}: the edited text cannot be read: ${unreadableReason(error)}`);
     }
     const before = new Set(readReminders(root, { defaultZone: machineZone() }).problems.map(problemKey));
-    const introduced = readReminders(candidate, { defaultZone: machineZone() }).problems.find((problem) => !before.has(problemKey(problem)));
-    if (introduced !== undefined) return remindersProblem(io, json, introduced.why);
+    const refused = readReminders(candidate, { defaultZone: machineZone() }).problems.find(
+      (problem) => problem.entity === null || problem.entity === entityName || !before.has(problemKey(problem)),
+    );
+    if (refused !== undefined) return remindersProblem(io, json, refused.why);
   }
   writeOwnerFile(file, edited.text);
   if (json) {
@@ -303,6 +309,11 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   return 0;
 }
 
+/** One problem as a value, so the same complaint before and after an edit compares equal. */
+function problemKey(problem: { entity: string | null; name: string | null; why: string }): string {
+  return `${problem.entity ?? ''}\u0000${problem.name ?? ''}\u0000${problem.why}`;
+}
+
 /** The key a `team config get|set <entity>.<key>` path names, stripped from the path's last
  *  segment; null when the last segment is neither key. */
 function entityKeyOf(path: string | undefined): EntityKey | null {
@@ -312,7 +323,3 @@ function entityKeyOf(path: string | undefined): EntityKey | null {
   return null;
 }
 
-/** One problem as a value, so the same complaint before and after an edit compares equal. */
-function problemKey(problem: { entity: string | null; name: string | null; why: string }): string {
-  return `${problem.entity ?? ''}\u0000${problem.name ?? ''}\u0000${problem.why}`;
-}

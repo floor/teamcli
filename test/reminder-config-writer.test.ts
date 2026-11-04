@@ -2,7 +2,8 @@
 // `team config get <entity>.reminders`, the same owner/general-grant door and comment-keeping
 // write as an entity's `names.unique` word. The list is held to the daemon's own parser
 // (src/reminder/config.ts) on the exact text that would be written, so a list `team daemon` would
-// refuse is never stored — and a problem the file already carried elsewhere never blocks a write.
+// refuse is never stored: a problem on the entity being written refuses it whatever the file
+// carried before, and a problem on another entity refuses only when the edit introduced it.
 // Every scene is a synthetic home: the entities file, the grant and the checkouts are the scene's
 // own, and no live registry or daemon is read.
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -127,9 +128,25 @@ describe('a list the daemon would refuse is never written', () => {
     expect(readFileSync(world.file, 'utf8')).toBe(before);
   });
 
+  test('a problem the file already carried on this entity still refuses the write', async () => {
+    // `floor` already holds a reminder the parser refuses (an unknown key). The new list keeps
+    // that same problem while changing the list: a comparison that excuses a pre-existing problem
+    // would store a list the daemon still refuses, so the problem is read on this entity, not
+    // against what the file carried before.
+    const world = place(
+      `floor:\n  roots:\n    - ~\n  reminders:\n    - name: old\n      at: ["09:00"]\n      text: hi\n      to: [lead@acme]\n      when: never\nmaterial:\n  roots:\n    - ~\n`,
+    );
+    const before = readFileSync(world.file, 'utf8');
+    const io = testIo(world.root, { kind: 'owner' });
+    const value = '[{name: old, at: ["10:00"], text: hi, to: [lead@acme], when: never}]';
+    expect(await runConfig(['set', 'floor.reminders', value], io, sourcesOf(world))).toBe(1);
+    expect(io.err).toContain('"when" is not a reminder key');
+    expect(readFileSync(world.file, 'utf8')).toBe(before);
+  });
+
   test('a problem the file already carried elsewhere does not block a write', async () => {
     // `material` holds a reminder the parser refuses (an unknown key); writing floor's valid list
-    // introduces no new problem, so it is written and the old one is left as it was.
+    // introduces no problem on floor, so it is written and the old one is left as it was.
     const world = place(
       `floor:\n  roots:\n    - ~\nmaterial:\n  roots:\n    - ~\n  reminders:\n    - name: old\n      at: ["09:00"]\n      text: hi\n      to: [lead@acme]\n      when: never\n`,
     );
