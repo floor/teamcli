@@ -60,6 +60,7 @@ import {
   parseSignedEventLine,
   pruneEventLog,
   readEventsFromCursorSliced,
+  verifyEventLogSeals,
   type CursorReadResult,
   type EventAppendInput,
   type SignedEventRecord,
@@ -754,6 +755,21 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     maxTotalBytes: input.maxTotalLogBytes,
     retentionSeconds: input.retentionSeconds,
   });
+  // The sealed set is verified once at start, without reading a sealed segment: a sidecar that
+  // does not match its segment is reported in the team log, and the segment is read and verified
+  // in full by the ordinary path instead. A tampered sidecar never keeps the bus from serving.
+  try {
+    const seals = verifyEventLogSeals(input.team.project, input.root, home, {
+      kept: input.keptLogFiles,
+    });
+    if (seals.ok) {
+      for (const problem of seals.problems) {
+        logLine(join(input.root, '.agents'), 'bus', 'event-log', `seal ${problem}`, now());
+      }
+    }
+  } catch {
+    // Verification is a report at start; the read path verifies every byte it serves anyway.
+  }
 
   let confirmed: { dev: number; ino: number } | undefined;
   for (let walk = 0; walk < START_WALKS; walk++) {

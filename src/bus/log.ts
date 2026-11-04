@@ -63,6 +63,7 @@ import {
   sealPathOf,
   sealSegment,
   type SealFields,
+  type SegmentIndexEntry,
   type StoredSeal,
 } from './seal.ts';
 
@@ -1182,6 +1183,161 @@ async function driveSteps<T>(steps: Generator<void, T, void>): Promise<T> {
     await new Promise<void>((done) => setImmediate(done));
     since = performance.now();
   }
+}
+
+/** One retained sealed slot as start verification found it. `sealed` means the seal verified,
+ *  the segment's size matches the seal and the index matches the signed triple; anything else is
+ *  `unsealed` (with the reason) or `missing`, and an untrusted slot breaks the chain of every
+ *  newer seal. */
+export type SealCheck = {
+  name: string;
+  slot: number;
+  path: string;
+  state: 'sealed' | 'unsealed' | 'missing';
+  why?: 'no-seal' | 'bad-seal' | 'size' | 'index' | 'chain';
+  seal?: StoredSeal;
+  entries?: SegmentIndexEntry[];
+};
+
+export type SealCheckResult =
+  | {
+      ok: true;
+      /** The retained slots present, oldest first, up to the newest sealed one. */
+      segments: SealCheck[];
+      /** The open segment, stat'd but never read here: it is the one segment a start reads. */
+      open: { path: string; size: number } | null;
+      /** One line per untrusted segment, for the `.agents/team.log` report. */
+      problems: string[];
+    }
+  | { ok: false; reason: string };
+
+/** The companion index, read and checked against the seal's signed triple before any offset in
+ *  it is trusted. Null when the file is missing, changed, or holds a line this build cannot
+ *  spell — the segment is then unsealed for the read, exactly like a bad seal. */
+function verifiedIndexEntries(segmentPath: string, seal: StoredSeal): SegmentIndexEntry[] | null {
+  const text = readNoFollow(indexPathOf(segmentPath));
+  if (text === null) return null;
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length !== seal.index.bytes) return null;
+  if (createHash('sha256').update(bytes).digest('hex') !== seal.index.digest) return null;
+  const entries: SegmentIndexEntry[] = [];
+  let lastOffset = -1;
+  for (const line of text.split('\n')) {
+    if (line === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const row = parsed as Record<string, unknown>;
+    if (typeof row['seq'] !== 'number' || !Number.isInteger(row['seq']) || row['seq'] < 1) return null;
+    if (typeof row['offset'] !== 'number' || !Number.isInteger(row['offset']) || row['offset'] < 0) return null;
+    if (typeof row['kind'] !== 'string' || typeof row['record_id'] !== 'string' || typeof row['session'] !== 'string') {
+      return null;
+    }
+    const offset = row['offset'];
+    if (offset <= lastOffset || offset >= seal.bytes) return null;
+    lastOffset = offset;
+    entries.push(row as unknown as SegmentIndexEntry);
+  }
+  return entries.length === seal.index.lines ? entries : null;
+}
+
+/**
+ * Verifies the retained sealed set at start without reading one byte of a sealed segment: every
+ * seal is read, checked for format, key print, store, segment name and signature, then chained
+ * oldest to newest. A segment is trusted only when its seal verifies, its file is present at the
+ * sealed byte count and its index matches the signed triple. A missing, unreadable or mismatched
+ * seal or index, a changed size, or a predecessor that is not itself a trusted sealed segment
+ * marks the slot unsealed; the caller reads it in full through the ordinary verified path. The
+ * open segment is stat'd and named here, never read.
+ */
+export function verifyEventLogSeals(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): SealCheckResult {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const storeDir = storePath(project, root, home);
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+
+  const path = join(storeDir, EVENT_LOG_FILE);
+  for (let n = kept - 1; n >= 1; n--) {
+    const problem = fileProblem(`${path}.${String(n)}`);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  const openProblem = fileProblem(path);
+  if (openProblem !== null) return { ok: false, reason: openProblem };
+
+  const keyState = messageKeyState(home);
+  const key = keyState.kind === 'key' ? keyState.key : null;
+  const keyPrint = keyPrintOf(home);
+
+  // The oldest slot present is where the retained chain begins; slots above it were never
+  // reached, so their absence is not a hole. A gap below it is.
+  let oldestPresent = 0;
+  for (let n = kept - 1; n >= 1; n--) {
+    if (heldAt(`${path}.${String(n)}`).kind === 'file') {
+      oldestPresent = n;
+      break;
+    }
+  }
+
+  const segments: SealCheck[] = [];
+  const problems: string[] = [];
+  // The slot processed just before: its seal digest and whether that seal is trusted.
+  let predecessor: { digest: string; trusted: boolean } | null = null;
+  for (let n = oldestPresent; n >= 1; n--) {
+    const segmentPath = `${path}.${String(n)}`;
+    const name = `${EVENT_LOG_FILE}.${String(n)}`;
+    if (heldAt(segmentPath).kind !== 'file') {
+      segments.push({ name, slot: n, path: segmentPath, state: 'missing' });
+      problems.push(`${name}: segment file is missing`);
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    const seal = readSeal(segmentPath, name, storeDir, keyPrint, key);
+    if (seal === null) {
+      const why = existsSync(sealPathOf(segmentPath)) ? 'bad-seal' : 'no-seal';
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why });
+      problems.push(`${name}: ${why === 'no-seal' ? 'seal file is missing' : 'seal does not verify'}`);
+      predecessor = { digest: '', trusted: false };
+      continue;
+    }
+    const size = sizeOfFile(segmentPath);
+    if (size !== seal.bytes) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'size' });
+      problems.push(`${name}: size ${String(size)} differs from the sealed ${String(seal.bytes)}`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    const entries = verifiedIndexEntries(segmentPath, seal);
+    if (entries === null) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'index' });
+      problems.push(`${name}: index does not match its seal`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    if (predecessor !== null && (!predecessor.trusted || seal.previous !== predecessor.digest)) {
+      segments.push({ name, slot: n, path: segmentPath, state: 'unsealed', why: 'chain' });
+      problems.push(`${name}: predecessor is not a trusted sealed segment`);
+      predecessor = { digest: seal.sealDigest, trusted: false };
+      continue;
+    }
+    segments.push({ name, slot: n, path: segmentPath, state: 'sealed', seal, entries });
+    predecessor = { digest: seal.sealDigest, trusted: true };
+  }
+
+  const open = heldAt(path).kind === 'file' ? { path, size: sizeOfFile(path) } : null;
+  return { ok: true, segments, open, problems };
 }
 
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
