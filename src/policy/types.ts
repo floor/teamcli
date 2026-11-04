@@ -636,16 +636,20 @@ function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
   const items = rawDeliveryItems(raw);
   if (!items || items.length === 0) return null;
   const out: DeliveryLeg[] = [];
+  const seen: string[] = [];
   for (const item of items) {
     if (typeof item !== 'string') return null;
+    const known = (DELIVERY_LEGS as readonly string[]).includes(item)
+      || (LEGACY_ORDER_WORDS as readonly string[]).includes(item);
+    // A duplicate is judged before the retired name is dropped: [mcp-inbox, mcp-inbox] was
+    // invalid for every build that knew the word, and a duplicated alias is as invalid as a
+    // duplicated live leg. A word this build knows nothing else about refuses the same way.
+    if (!known || seen.includes(item)) return null;
+    seen.push(item);
     // A retired name is dropped, never refused: the chain reads it as an alias, and the level
-    // it came from keeps the legs it names. Only a word this build knows nothing else about,
-    // or a duplicate live leg, refuses.
+    // it came from keeps the legs it names.
     if ((LEGACY_ORDER_WORDS as readonly string[]).includes(item)) continue;
-    if (!(DELIVERY_LEGS as readonly string[]).includes(item)) return null;
-    const leg = item as DeliveryLeg;
-    if (out.includes(leg)) return null;
-    out.push(leg);
+    out.push(item as DeliveryLeg);
   }
   return out;
 }

@@ -452,6 +452,17 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     if (addsUnderTyped.ok) expect(addsUnderTyped.effective.value).toEqual(['headless-resume', 'typed']);
   });
 
+  test('a duplicated retired name is invalid, as it was for every build that knew the word', () => {
+    // The duplicate is judged before the alias is dropped: [mcp-inbox, mcp-inbox] reads as
+    // nothing the catalogue can parse — invalid, not a word that declares nothing — exactly as
+    // every build that still knew the leg refused a duplicated name.
+    const spec = POLICY_CATALOGUE['delivery-order'];
+    expect(spec.parseValue(['mcp-inbox', 'mcp-inbox'])).toBeNull();
+    expect(spec.parseValue(['mcp-inbox', 'mcp-inbox', 'typed'])).toBeNull();
+    expect(spec.parseValue(['mcp-inbox', 'typed'])).toEqual(['typed']);
+    expect(spec.parseValue(['mcp-inbox'])).toEqual([]);
+  });
+
   test('a signed level whose word holds only the retired mcp-inbox name declares nothing', () => {
     // A word an older build signed may name the retired alias alone: it parses to no live leg
     // and declares nothing at its level — skipped like an expired declaration, never refused
