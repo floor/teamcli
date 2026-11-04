@@ -2,6 +2,7 @@
 // heartbeat is fresh. A unit the seam cannot remove is named, and the child stays up. Nothing
 // here starts a shuttle again, and nothing here talks to a service manager: the caller
 // supplies the one call that stops and removes a unit.
+import { readDaemonState } from '../state.ts';
 
 /** The units this step retires. The desk unit is removed with the other two and nothing
  *  replaces it. */
@@ -38,4 +39,13 @@ export function retireShuttles(input: {
     else failed.push({ label, why: result.why });
   }
   return { child: 'up', retired, failed };
+}
+
+/** Whether the daemon's record shows a router heartbeat. A missing record, or a router that
+ *  has not answered yet, is not fresh, and the shuttle units stay. */
+export function mailboxHeartbeatFresh(home: string): boolean {
+  const reading = readDaemonState(home);
+  if (reading.kind !== 'ok') return false;
+  const at = reading.state.mailbox?.heartbeatAt;
+  return typeof at === 'string' && at !== '';
 }
