@@ -570,6 +570,34 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     expect(tokenFiles(home)).toEqual([]);
   }, 30_000);
 
+  test('an oversized frame from a child that never claimed its token ends the child and discards the token', async () => {
+    const { base, root, home } = scratch();
+    // No readRestoreInherit: only the spawner's own discard can remove the token, and only its
+    // end signal can stop this child. The child marks that signal, so "ended" is observed, not
+    // inferred from the rejection alone.
+    const endedMark = join(base, 'child-ended');
+    const entry = join(base, 'oversized-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(endedMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write('x'.repeat(70 * 1024));`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
+    expect(tokenFiles(home)).toEqual([]);
+    let ended = existsSync(endedMark);
+    for (let waited = 0; !ended && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      ended = existsSync(endedMark);
+    }
+    expect(ended).toBe(true);
+  }, 20_000);
+
   test.skipIf(offDarwin)('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
     const { base, root: rootA, home } = scratch();
     const rootB = join(base, 'repo-b');
