@@ -14,11 +14,13 @@
 //    pass before moving anything if any link, non-regular entry, foreign-owned entry or unexpected
 //    file name appears anywhere in the tree.
 // 3. Source and destination directories are opened step-by-step from `send-drops` with
-//    `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (`openat`/`mkdirat` under Bun) and held open across the
-//    pass; moves use `renameatx_np(..., RENAME_EXCL)` / `renameat` relative to the held directory
-//    descriptors (and the manifest is created with `openat(..., O_CREAT | O_EXCL | O_NOFOLLOW)`
-//    plus `fchmodSync(fd, 0o600)`), with parent-chain `(dev, ino)` re-verification and automatic
-//    rollback if any directory in the chain was swapped after the check.
+//    `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (`openat`/`mkdirat` via the host C library FFI in both
+//    supported JS runtimes) and held open across the pass; moves use `renameatx_np(..., RENAME_EXCL)`
+//    / `renameat2(..., RENAME_NOREPLACE)` relative to the held directory descriptors (and the
+//    manifest is created with `openat(..., O_CREAT | O_EXCL | O_NOFOLLOW)` plus `fchmodSync(fd, 0o600)`),
+//    with parent-chain `(dev, ino)` re-verification and automatic rollback if any directory in the
+//    chain was swapped after the check. When relative directory-descriptor moves are unavailable on
+//    the current runtime, the pass refuses before any folder creation or rename.
 // 4. Within each family, the record and non-receipt sidecars move first and the read/replied
 //    receipts move last. If the pass stops at a slice boundary or fails on a later family, every
 //    family that left the live folder is recorded in a signed manifest and named in the report.
@@ -26,18 +28,14 @@
 //    naming a drop that was just archived is pruned atomically.
 import { createHash, type KeyObject } from 'node:crypto';
 import {
-  chmodSync,
   closeSync,
   constants,
   fchmodSync,
   fstatSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  unlinkSync,
   writeSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -71,7 +69,6 @@ export const DROP_ARCHIVE_PASS_LIMIT = 256;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0x0100;
 const DIRECTORY = constants.O_DIRECTORY ?? 0x100000;
 const EEXIST = 17;
-const ENOENT = 2;
 const ENOTDIR = 20;
 const ELOOP = process.platform === 'linux' ? 40 : 62;
 const RENAME_EXCL = 0x00000004;
@@ -137,6 +134,18 @@ export type SignedDropArchive = {
   signature: string;
 };
 
+/**
+ * Relative directory-descriptor operations bound from the host C library via FFI (`bun:ffi` or
+ * `node:ffi`). When unavailable (`null`), the archive pass refuses before any rename.
+ */
+export type RelativeDirOps = {
+  openat: (dirfd: number, name: string, flags: number, mode?: number) => { fd: number; errno: number };
+  mkdirat: (dirfd: number, name: string, mode: number) => { ok: boolean; errno: number };
+  renameatExcl: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
+  renameatReplace: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
+  unlinkat: (dirfd: number, name: string) => { ok: boolean; errno: number };
+};
+
 export type DropRetirementInput = {
   root: string;
   home: string;
@@ -147,6 +156,8 @@ export type DropRetirementInput = {
   limit?: number;
   backlogAbove?: number;
   backlogLimit?: number;
+  /** Override or disable relative directory-descriptor operations (`null` forces the unavailable-FFI refusal). */
+  atFfi?: RelativeDirOps | null;
 };
 
 export type DropRetirementReport = {
@@ -158,7 +169,7 @@ export type DropRetirementReport = {
   refused: string | null;
 };
 
-/** Shape of `bun:ffi` used when running under Bun, so `tsc -p tsconfig.build.json` compiles under Node types. */
+/** Shape of `bun:ffi` used when running under Bun, so `tsc -p tsconfig.build.json` compiles without Bun types. */
 interface BunFfi {
   dlopen: (
     library: string,
@@ -179,107 +190,172 @@ interface BunFfi {
   FFIType: { i32: unknown; u32: unknown; cstring: unknown; ptr: unknown };
 }
 
-type PosixAtFfi = {
-  openat: (dirfd: number, name: string, flags: number, mode?: number) => { fd: number; errno: number };
-  mkdirat: (dirfd: number, name: string, mode: number) => { ok: boolean; errno: number };
-  renameatExcl: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
-  renameatReplace: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
-  unlinkat: (dirfd: number, name: string) => { ok: boolean; errno: number };
-};
+/** Shape of `node:ffi` used when the chores child runs under Node with `--experimental-ffi`. */
+interface NodeFfi {
+  dlopen: (
+    library: string,
+    definitions: Record<string, { arguments: string[]; return: string }>,
+  ) => {
+    functions: {
+      openat: (dirfd: number, path: string, flags: number, mode: number) => number;
+      mkdirat: (dirfd: number, path: string, mode: number) => number;
+      renameat: (fromfd: number, from: string, tofd: number, to: string) => number;
+      renameatx_np?: (fromfd: number, from: string, tofd: number, to: string, flags: number) => number;
+      renameat2?: (fromfd: number, from: string, tofd: number, to: string, flags: number) => number;
+      unlinkat: (dirfd: number, path: string, flags: number) => number;
+      __errno_location?: () => bigint;
+      __error?: () => bigint;
+    };
+  };
+  getInt32: (address: bigint, offset: number) => number;
+}
 
-let loadedAtFfi: PosixAtFfi | null | undefined;
+let cachedDirOps: RelativeDirOps | null | undefined;
 
 function cstr(name: string): Buffer {
   return Buffer.from(`${name}\0`, 'utf8');
 }
 
-function getPosixAtFfi(): PosixAtFfi | null {
-  if (loadedAtFfi !== undefined) return loadedAtFfi;
-  if (process.versions.bun === undefined) {
-    loadedAtFfi = null;
-    return null;
-  }
+function loadBunDirOps(req: NodeRequire): RelativeDirOps {
+  const ffi = req('bun:ffi') as BunFfi;
+  const hasErrnoLocation = process.platform === 'linux';
+  const lib = hasErrnoLocation
+    ? ffi.dlopen('libc.so.6', {
+        openat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        mkdirat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        renameat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
+          returns: ffi.FFIType.i32,
+        },
+        renameat2: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
+          returns: ffi.FFIType.i32,
+        },
+        unlinkat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        __errno_location: { args: [], returns: ffi.FFIType.ptr },
+      })
+    : ffi.dlopen('libSystem.B.dylib', {
+        openat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        mkdirat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        renameat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
+          returns: ffi.FFIType.i32,
+        },
+        renameatx_np: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
+          returns: ffi.FFIType.i32,
+        },
+        unlinkat: {
+          args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+          returns: ffi.FFIType.i32,
+        },
+        __error: { args: [], returns: ffi.FFIType.ptr },
+      });
+  const errnoFn = hasErrnoLocation ? lib.symbols.__errno_location! : lib.symbols.__error!;
+  const readErrno = (): number => ffi.read.i32(errnoFn(), 0);
+  return {
+    openat: (dirfd, name, flags, mode = 0) => {
+      const fd = lib.symbols.openat(dirfd, cstr(name), flags, mode);
+      return { fd, errno: fd < 0 ? readErrno() : 0 };
+    },
+    mkdirat: (dirfd, name, mode) => {
+      const rc = lib.symbols.mkdirat(dirfd, cstr(name), mode);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    renameatExcl: (fromfd, fromName, tofd, toName) => {
+      const rc = hasErrnoLocation
+        ? lib.symbols.renameat2!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_NOREPLACE)
+        : lib.symbols.renameatx_np!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_EXCL);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    renameatReplace: (fromfd, fromName, tofd, toName) => {
+      const rc = lib.symbols.renameat(fromfd, cstr(fromName), tofd, cstr(toName));
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    unlinkat: (dirfd, name) => {
+      const rc = lib.symbols.unlinkat(dirfd, cstr(name), 0);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+  };
+}
+
+function loadNodeDirOps(req: NodeRequire): RelativeDirOps {
+  const ffi = req('node:ffi') as NodeFfi;
+  const hasErrnoLocation = process.platform === 'linux';
+  const lib = hasErrnoLocation
+    ? ffi.dlopen('libc.so.6', {
+        openat: { arguments: ['int32', 'string', 'int32', 'int32'], return: 'int32' },
+        mkdirat: { arguments: ['int32', 'string', 'int32'], return: 'int32' },
+        renameat: { arguments: ['int32', 'string', 'int32', 'string'], return: 'int32' },
+        renameat2: { arguments: ['int32', 'string', 'int32', 'string', 'uint32'], return: 'int32' },
+        unlinkat: { arguments: ['int32', 'string', 'int32'], return: 'int32' },
+        __errno_location: { arguments: [], return: 'pointer' },
+      })
+    : ffi.dlopen('libSystem.B.dylib', {
+        openat: { arguments: ['int32', 'string', 'int32', 'int32'], return: 'int32' },
+        mkdirat: { arguments: ['int32', 'string', 'int32'], return: 'int32' },
+        renameat: { arguments: ['int32', 'string', 'int32', 'string'], return: 'int32' },
+        renameatx_np: { arguments: ['int32', 'string', 'int32', 'string', 'uint32'], return: 'int32' },
+        unlinkat: { arguments: ['int32', 'string', 'int32'], return: 'int32' },
+        __error: { arguments: [], return: 'pointer' },
+      });
+  const errnoFn = hasErrnoLocation ? lib.functions.__errno_location! : lib.functions.__error!;
+  const readErrno = (): number => ffi.getInt32(errnoFn(), 0);
+  return {
+    openat: (dirfd, name, flags, mode = 0) => {
+      const fd = lib.functions.openat(dirfd, name, flags, mode);
+      return { fd, errno: fd < 0 ? readErrno() : 0 };
+    },
+    mkdirat: (dirfd, name, mode) => {
+      const rc = lib.functions.mkdirat(dirfd, name, mode);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    renameatExcl: (fromfd, fromName, tofd, toName) => {
+      const rc = hasErrnoLocation
+        ? lib.functions.renameat2!(fromfd, fromName, tofd, toName, RENAME_NOREPLACE)
+        : lib.functions.renameatx_np!(fromfd, fromName, tofd, toName, RENAME_EXCL);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    renameatReplace: (fromfd, fromName, tofd, toName) => {
+      const rc = lib.functions.renameat(fromfd, fromName, tofd, toName);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    unlinkat: (dirfd, name) => {
+      const rc = lib.functions.unlinkat(dirfd, name, 0);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+  };
+}
+
+/**
+ * Returns the relative directory-descriptor operations for the current runtime (`bun:ffi` or
+ * `node:ffi`), or `null` when unavailable.
+ */
+export function getRelativeDirOps(): RelativeDirOps | null {
+  if (cachedDirOps !== undefined) return cachedDirOps;
+  const req = createRequire(import.meta.url);
   try {
-    const req = createRequire(import.meta.url);
-    const ffi = req('bun:ffi') as BunFfi;
-    const isLinux = process.platform === 'linux';
-    const lib = isLinux
-      ? ffi.dlopen('libc.so.6', {
-          openat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          mkdirat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          renameat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
-            returns: ffi.FFIType.i32,
-          },
-          renameat2: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
-            returns: ffi.FFIType.i32,
-          },
-          unlinkat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          __errno_location: { args: [], returns: ffi.FFIType.ptr },
-        })
-      : ffi.dlopen('libSystem.B.dylib', {
-          openat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          mkdirat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          renameat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
-            returns: ffi.FFIType.i32,
-          },
-          renameatx_np: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
-            returns: ffi.FFIType.i32,
-          },
-          unlinkat: {
-            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
-            returns: ffi.FFIType.i32,
-          },
-          __error: { args: [], returns: ffi.FFIType.ptr },
-        });
-    const errnoFn = isLinux ? lib.symbols.__errno_location! : lib.symbols.__error!;
-    const readErrno = (): number => ffi.read.i32(errnoFn(), 0);
-    loadedAtFfi = {
-      openat: (dirfd, name, flags, mode = 0) => {
-        const fd = lib.symbols.openat(dirfd, cstr(name), flags, mode);
-        return { fd, errno: fd < 0 ? readErrno() : 0 };
-      },
-      mkdirat: (dirfd, name, mode) => {
-        const rc = lib.symbols.mkdirat(dirfd, cstr(name), mode);
-        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
-      },
-      renameatExcl: (fromfd, fromName, tofd, toName) => {
-        const rc = isLinux
-          ? lib.symbols.renameat2!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_NOREPLACE)
-          : lib.symbols.renameatx_np!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_EXCL);
-        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
-      },
-      renameatReplace: (fromfd, fromName, tofd, toName) => {
-        const rc = lib.symbols.renameat(fromfd, cstr(fromName), tofd, cstr(toName));
-        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
-      },
-      unlinkat: (dirfd, name) => {
-        const rc = lib.symbols.unlinkat(dirfd, cstr(name), 0);
-        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
-      },
-    };
+    cachedDirOps =
+      process.versions.bun !== undefined ? loadBunDirOps(req) : loadNodeDirOps(req);
   } catch {
-    loadedAtFfi = null;
+    cachedDirOps = null;
   }
-  return loadedAtFfi;
+  return cachedDirOps;
 }
 
 type ChainStep = {
@@ -301,7 +377,52 @@ function validSegment(part: string): boolean {
   return part !== '' && part !== '.' && part !== '..' && !part.includes('/') && !part.includes('\0');
 }
 
+function openRootDirNoFollow(
+  dirPath: string,
+): { ok: true; fd: number; dev: number; ino: number } | { ok: false; reason: string } {
+  const held = heldAt(dirPath);
+  if (held.kind === 'link') return { ok: false, reason: `${dirPath}: a symbolic link was found and not followed` };
+  const problem = folderProblem(held);
+  if (problem !== null) return { ok: false, reason: `${dirPath}: ${problem}` };
+  if (held.kind !== 'folder') return { ok: false, reason: `${dirPath}: unexpected ${held.kind}` };
+
+  let fd = -1;
+  try {
+    fd = openSync(dirPath, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP' || code === 'ENOTDIR' || heldAt(dirPath).kind === 'link') {
+      return { ok: false, reason: `${dirPath}: a symbolic link was found and not followed` };
+    }
+    return { ok: false, reason: `${dirPath}: the state folder could not be opened` };
+  }
+
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isDirectory()) {
+      closeSync(fd);
+      return { ok: false, reason: `${dirPath}: the state folder path is not a directory` };
+    }
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) {
+      closeSync(fd);
+      return { ok: false, reason: `${dirPath}: another user's folder` };
+    }
+    const lstat = lstatSync(dirPath);
+    if (!lstat.isDirectory() || lstat.dev !== stat.dev || lstat.ino !== stat.ino) {
+      closeSync(fd);
+      return { ok: false, reason: `${dirPath}: a symbolic link was found and not followed` };
+    }
+    return { ok: true, fd, dev: stat.dev, ino: stat.ino };
+  } catch {
+    try {
+      closeSync(fd);
+    } catch {}
+    return { ok: false, reason: `${dirPath}: the state folder could not be verified` };
+  }
+}
+
 function openChildDirNoFollow(
+  atFfi: RelativeDirOps,
   parentFd: number,
   childPath: string,
   childName: string,
@@ -312,28 +433,14 @@ function openChildDirNoFollow(
   if (problem !== null) return { ok: false, reason: `${childPath}: ${problem}` };
   if (held.kind !== 'folder') return { ok: false, reason: `${childPath}: unexpected ${held.kind}` };
 
-  const atFfi = getPosixAtFfi();
-  let fd = -1;
-  if (atFfi !== null && parentFd >= 0) {
-    const opened = atFfi.openat(parentFd, childName, constants.O_RDONLY | DIRECTORY | NOFOLLOW, 0);
-    if (opened.fd < 0) {
-      if (opened.errno === ELOOP || opened.errno === ENOTDIR || heldAt(childPath).kind === 'link') {
-        return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
-      }
-      return { ok: false, reason: `${childPath}: the state folder could not be opened` };
+  const opened = atFfi.openat(parentFd, childName, constants.O_RDONLY | DIRECTORY | NOFOLLOW, 0);
+  if (opened.fd < 0) {
+    if (opened.errno === ELOOP || opened.errno === ENOTDIR || heldAt(childPath).kind === 'link') {
+      return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
     }
-    fd = opened.fd;
-  } else {
-    try {
-      fd = openSync(childPath, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ELOOP' || code === 'ENOTDIR' || heldAt(childPath).kind === 'link') {
-        return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
-      }
-      return { ok: false, reason: `${childPath}: the state folder could not be opened` };
-    }
+    return { ok: false, reason: `${childPath}: the state folder could not be opened` };
   }
+  const fd = opened.fd;
 
   try {
     const stat = fstatSync(fd);
@@ -361,16 +468,17 @@ function openChildDirNoFollow(
 
 /**
  * Opens or creates a chain of subdirectories below `baseHeld` (`send-drops`), one component at a
- * time, without ever following a symbolic link. Every opened descriptor is registered in `pool`
- * so the caller closes all held descriptors in `finally`.
+ * time via `mkdirat` and `openat(..., O_RDONLY | O_DIRECTORY | O_NOFOLLOW)`, without ever
+ * following a symbolic link. Every opened descriptor is registered in `pool` so the caller closes
+ * all held descriptors in `finally`.
  */
 function openSubdirChain(
+  atFfi: RelativeDirOps,
   baseHeld: HeldDir,
   parts: readonly string[],
   createMissing: boolean,
   pool: number[],
 ): { ok: true; dir: HeldDir } | { ok: false; reason: string } {
-  const atFfi = getPosixAtFfi();
   let curFd = baseHeld.fd;
   let curPath = baseHeld.path;
   const chain: ChainStep[] = [...baseHeld.chain];
@@ -391,30 +499,16 @@ function openSubdirChain(
         if (!createMissing) {
           return { ok: false, reason: `${nextPath}: missing folder` };
         }
-        if (atFfi !== null && curFd >= 0) {
-          const mk = atFfi.mkdirat(curFd, part, 0o700);
-          if (!mk.ok && mk.errno !== EEXIST) {
-            return { ok: false, reason: `${nextPath}: the state folder could not be created` };
-          }
-        } else {
-          try {
-            mkdirSync(nextPath, { mode: 0o700 });
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-              return { ok: false, reason: `${nextPath}: the state folder could not be created` };
-            }
-          }
+        const mk = atFfi.mkdirat(curFd, part, 0o700);
+        if (!mk.ok && mk.errno !== EEXIST) {
+          return { ok: false, reason: `${nextPath}: the state folder could not be created` };
         }
       }
-      const step = openChildDirNoFollow(curFd, nextPath, part);
+      const step = openChildDirNoFollow(atFfi, curFd, nextPath, part);
       if (!step.ok) return step;
       if (createMissing) {
         try {
-          if (atFfi !== null) {
-            fchmodSync(step.fd, 0o700);
-          } else {
-            chmodSync(nextPath, 0o700);
-          }
+          fchmodSync(step.fd, 0o700);
         } catch {
           closeSync(step.fd);
           return { ok: false, reason: `${nextPath}: the state folder permissions could not be set to 0700` };
@@ -453,7 +547,7 @@ function openSubdirChain(
  * Re-verifies that `baseHeld` (`send-drops`) and every component in `target.chain` still resolve
  * without symlinks to the exact same `(dev, ino)` as when `target` was opened.
  */
-function verifyHeldDirChain(baseHeld: HeldDir, target: HeldDir): string | null {
+function verifyHeldDirChain(atFfi: RelativeDirOps, baseHeld: HeldDir, target: HeldDir): string | null {
   try {
     const baseStat = fstatSync(baseHeld.fd);
     const baseLstat = lstatSync(baseHeld.path);
@@ -475,7 +569,7 @@ function verifyHeldDirChain(baseHeld: HeldDir, target: HeldDir): string | null {
   const opened: number[] = [];
   try {
     for (const step of target.chain) {
-      const checked = openChildDirNoFollow(curFd, step.path, step.name);
+      const checked = openChildDirNoFollow(atFfi, curFd, step.path, step.name);
       if (!checked.ok) return checked.reason;
       opened.push(checked.fd);
       if (checked.dev !== step.dev || checked.ino !== step.ino) {
@@ -500,6 +594,7 @@ function verifyHeldDirChain(baseHeld: HeldDir, target: HeldDir): string | null {
 }
 
 function moveFileBetweenHeldDirs(
+  atFfi: RelativeDirOps,
   baseHeld: HeldDir,
   srcHeld: HeldDir,
   destHeld: HeldDir,
@@ -509,9 +604,9 @@ function moveFileBetweenHeldDirs(
   const srcPath = join(srcHeld.path, fileName);
   const destPath = join(destHeld.path, fileName);
 
-  const srcChainProblem = verifyHeldDirChain(baseHeld, srcHeld);
+  const srcChainProblem = verifyHeldDirChain(atFfi, baseHeld, srcHeld);
   if (srcChainProblem !== null) return { ok: false, reason: srcChainProblem };
-  const destChainProblem = verifyHeldDirChain(baseHeld, destHeld);
+  const destChainProblem = verifyHeldDirChain(atFfi, baseHeld, destHeld);
   if (destChainProblem !== null) return { ok: false, reason: destChainProblem };
 
   const existingDest = heldAt(destPath);
@@ -522,38 +617,26 @@ function moveFileBetweenHeldDirs(
     return { ok: false, reason: `${destPath}: destination already holds ${fileName}` };
   }
 
-  const atFfi = getPosixAtFfi();
-  if (atFfi !== null) {
-    const moved = atFfi.renameatExcl(srcHeld.fd, fileName, destHeld.fd, fileName);
-    if (!moved.ok) {
-      if (heldAt(destPath).kind === 'link') {
-        return { ok: false, reason: `${destPath}: a symbolic link was found and not followed` };
-      }
-      if (moved.errno === EEXIST) {
-        return { ok: false, reason: `${destPath}: destination already holds ${fileName}` };
-      }
-      return {
-        ok: false,
-        reason: `cannot move ${relative(root, srcPath)}: errno ${String(moved.errno)}`,
-      };
+  const moved = atFfi.renameatExcl(srcHeld.fd, fileName, destHeld.fd, fileName);
+  if (!moved.ok) {
+    if (heldAt(destPath).kind === 'link') {
+      return { ok: false, reason: `${destPath}: a symbolic link was found and not followed` };
     }
-  } else {
-    try {
-      renameSync(srcPath, destPath);
-    } catch (error) {
-      return {
-        ok: false,
-        reason: `cannot move ${relative(root, srcPath)}: ${error instanceof Error ? error.message : String(error)}`,
-      };
+    if (moved.errno === EEXIST) {
+      return { ok: false, reason: `${destPath}: destination already holds ${fileName}` };
     }
+    return {
+      ok: false,
+      reason: `cannot move ${relative(root, srcPath)}: errno ${String(moved.errno)}`,
+    };
   }
 
-  // Re-verify the destination parent chain after the rename; if any parent was swapped, undo
-  // the move immediately using the held directory descriptors.
-  const postChainProblem = verifyHeldDirChain(baseHeld, destHeld);
+  // Re-verify the destination parent chain after the rename; if any parent was swapped between
+  // the pre-check and the rename, undo the move immediately using the held directory descriptors.
+  const postChainProblem = verifyHeldDirChain(atFfi, baseHeld, destHeld);
   const postHeld = heldAt(destPath);
   if (postChainProblem !== null || postHeld.kind !== 'file') {
-    undoMovedFile(destHeld, srcHeld, fileName);
+    undoMovedFile(atFfi, destHeld, srcHeld, fileName);
     return {
       ok: false,
       reason: postChainProblem ?? `${destPath}: a symbolic link was found and not followed`,
@@ -562,41 +645,28 @@ function moveFileBetweenHeldDirs(
   return { ok: true };
 }
 
-function undoMovedFile(destHeld: HeldDir, srcHeld: HeldDir, fileName: string): void {
-  const atFfi = getPosixAtFfi();
-  if (atFfi !== null) {
-    atFfi.renameatReplace(destHeld.fd, fileName, srcHeld.fd, fileName);
-    return;
-  }
-  try {
-    renameSync(join(destHeld.path, fileName), join(srcHeld.path, fileName));
-  } catch {}
+function undoMovedFile(atFfi: RelativeDirOps, destHeld: HeldDir, srcHeld: HeldDir, fileName: string): void {
+  atFfi.renameatReplace(destHeld.fd, fileName, srcHeld.fd, fileName);
 }
 
-function unlinkInHeldDir(dirHeld: HeldDir, fileName: string): void {
-  const atFfi = getPosixAtFfi();
-  if (atFfi !== null) {
-    atFfi.unlinkat(dirHeld.fd, fileName);
-    return;
-  }
-  try {
-    unlinkSync(join(dirHeld.path, fileName));
-  } catch {}
+function unlinkInHeldDir(atFfi: RelativeDirOps, dirHeld: HeldDir, fileName: string): void {
+  atFfi.unlinkat(dirHeld.fd, fileName);
 }
 
 /**
  * Creates a new file with `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW` relative to `dirHeld.fd`,
- * sets mode `0600` on the descriptor before writing (`openat`'s 4th parameter is variadic on
- * Darwin ARM64), writes `bytes`, and re-verifies the parent directory chain.
+ * sets mode `0600` on the descriptor before writing (`openat`'s 4th parameter is variadic in the
+ * host C library ABI), writes `bytes`, and re-verifies the parent directory chain.
  */
 function writeNewFileInHeldDir(
+  atFfi: RelativeDirOps,
   baseHeld: HeldDir,
   dirHeld: HeldDir,
   fileName: string,
   bytes: Buffer,
 ): { ok: true; path: string } | { ok: false; code: 'eexist' | 'error'; reason: string } {
   const fullPath = join(dirHeld.path, fileName);
-  const preProblem = verifyHeldDirChain(baseHeld, dirHeld);
+  const preProblem = verifyHeldDirChain(atFfi, baseHeld, dirHeld);
   if (preProblem !== null) return { ok: false, code: 'error', reason: preProblem };
 
   const held = heldAt(fullPath);
@@ -608,38 +678,17 @@ function writeNewFileInHeldDir(
   }
 
   const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW;
-  const atFfi = getPosixAtFfi();
-  let fd = -1;
-  if (atFfi !== null) {
-    const opened = atFfi.openat(dirHeld.fd, fileName, flags, 0o600);
-    if (opened.fd < 0) {
-      if (opened.errno === EEXIST) {
-        return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
-      }
-      if (opened.errno === ELOOP || heldAt(fullPath).kind === 'link') {
-        return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
-      }
-      return { ok: false, code: 'error', reason: `${fullPath}: errno ${String(opened.errno)}` };
+  const opened = atFfi.openat(dirHeld.fd, fileName, flags, 0o600);
+  if (opened.fd < 0) {
+    if (opened.errno === EEXIST) {
+      return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
     }
-    fd = opened.fd;
-  } else {
-    try {
-      fd = openSync(fullPath, flags, 0o600);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'EEXIST') {
-        return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
-      }
-      if (code === 'ELOOP' || heldAt(fullPath).kind === 'link') {
-        return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
-      }
-      return {
-        ok: false,
-        code: 'error',
-        reason: `${fullPath}: ${error instanceof Error ? error.message : String(error)}`,
-      };
+    if (opened.errno === ELOOP || heldAt(fullPath).kind === 'link') {
+      return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
     }
+    return { ok: false, code: 'error', reason: `${fullPath}: errno ${String(opened.errno)}` };
   }
+  const fd = opened.fd;
 
   try {
     const stat = fstatSync(fd);
@@ -654,7 +703,7 @@ function writeNewFileInHeldDir(
     try {
       closeSync(fd);
     } catch {}
-    unlinkInHeldDir(dirHeld, fileName);
+    unlinkInHeldDir(atFfi, dirHeld, fileName);
     return {
       ok: false,
       code: 'error',
@@ -663,9 +712,9 @@ function writeNewFileInHeldDir(
   }
   closeSync(fd);
 
-  const postProblem = verifyHeldDirChain(baseHeld, dirHeld);
+  const postProblem = verifyHeldDirChain(atFfi, baseHeld, dirHeld);
   if (postProblem !== null || heldAt(fullPath).kind !== 'file') {
-    unlinkInHeldDir(dirHeld, fileName);
+    unlinkInHeldDir(atFfi, dirHeld, fileName);
     return {
       ok: false,
       code: 'error',
@@ -731,8 +780,8 @@ function isExpectedSeatDropFile(name: string): boolean {
   return false;
 }
 
-/** Reads a regular file with `O_NOFOLLOW` relative to `dirHeld` when available and returns its bytes, or throws. */
-function readRegularNoFollowInDir(dirHeld: HeldDir, name: string): Buffer {
+/** Reads a regular file with `O_NOFOLLOW` relative to `dirHeld.fd` and returns its bytes, or throws. */
+function readRegularNoFollowInDir(atFfi: RelativeDirOps, dirHeld: HeldDir, name: string): Buffer {
   const path = join(dirHeld.path, name);
   const held = heldAt(path);
   if (held.kind === 'link') throw new Error(`${path}: a symbolic link was found and not followed`);
@@ -740,21 +789,15 @@ function readRegularNoFollowInDir(dirHeld: HeldDir, name: string): Buffer {
   if (process.getuid !== undefined && held.uid !== process.getuid()) {
     throw new Error(`${path}: another user's file`);
   }
-  const atFfi = getPosixAtFfi();
-  let fd = -1;
-  if (atFfi !== null && dirHeld.fd >= 0) {
-    const opened = atFfi.openat(dirHeld.fd, name, constants.O_RDONLY | NOFOLLOW, 0);
-    if (opened.fd < 0) {
-      throw new Error(
-        opened.errno === ELOOP
-          ? `${path}: a symbolic link was found and not followed`
-          : `${path}: cannot open file`,
-      );
-    }
-    fd = opened.fd;
-  } else {
-    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  const opened = atFfi.openat(dirHeld.fd, name, constants.O_RDONLY | NOFOLLOW, 0);
+  if (opened.fd < 0) {
+    throw new Error(
+      opened.errno === ELOOP
+        ? `${path}: a symbolic link was found and not followed`
+        : `${path}: cannot open file`,
+    );
   }
+  const fd = opened.fd;
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error(`${path}: not a regular file`);
@@ -817,6 +860,7 @@ function isClientRecord(payload: RecordPayload): boolean {
  * signed `at` timestamp in ms, or null when missing, unverified, or carrying a non-finite `at`.
  */
 function verifiedReceiptAtMs(
+  atFfi: RelativeDirOps,
   seatHeld: HeldDir,
   id: string,
   status: ReceiptStatus,
@@ -825,7 +869,7 @@ function verifiedReceiptAtMs(
 ): number | null {
   let data: Buffer;
   try {
-    data = readRegularNoFollowInDir(seatHeld, `${id}.${status}.json`);
+    data = readRegularNoFollowInDir(atFfi, seatHeld, `${id}.${status}.json`);
   } catch {
     return null;
   }
@@ -850,6 +894,7 @@ function verifiedReceiptAtMs(
  * `at` timestamp in ms, or null when missing, unverified, or carrying a non-finite `at`.
  */
 function verifiedCloseAtMs(
+  atFfi: RelativeDirOps,
   seatHeld: HeldDir,
   id: string,
   context: { root: string; session: string },
@@ -857,7 +902,7 @@ function verifiedCloseAtMs(
 ): number | null {
   let data: Buffer;
   try {
-    data = readRegularNoFollowInDir(seatHeld, `${id}.closed.json`);
+    data = readRegularNoFollowInDir(atFfi, seatHeld, `${id}.closed.json`);
   } catch {
     return null;
   }
@@ -887,12 +932,13 @@ type CandidateFamily = {
 
 /** Removes archived message ids from `.unread.json` in `seatHeld` while keeping all unread ids intact. */
 function pruneArchivedFromUnreadHint(
+  atFfi: RelativeDirOps,
   baseHeld: HeldDir,
   seatHeld: HeldDir,
   archivedIds: ReadonlySet<string>,
 ): string | null {
   if (archivedIds.size === 0) return null;
-  const chainProblem = verifyHeldDirChain(baseHeld, seatHeld);
+  const chainProblem = verifyHeldDirChain(atFfi, baseHeld, seatHeld);
   if (chainProblem !== null) return chainProblem;
   const hintPath = join(seatHeld.path, '.unread.json');
   const held = heldAt(hintPath);
@@ -904,7 +950,7 @@ function pruneArchivedFromUnreadHint(
   }
   let parsed: unknown;
   try {
-    const data = readRegularNoFollowInDir(seatHeld, '.unread.json');
+    const data = readRegularNoFollowInDir(atFfi, seatHeld, '.unread.json');
     parsed = JSON.parse(data.toString('utf8')) as unknown;
   } catch {
     // An unreadable hint is left untouched as it stands.
@@ -930,24 +976,18 @@ function pruneArchivedFromUnreadHint(
   if (!changed) return null;
   const tmpName = `.unread.json.${String(process.pid)}.tmp`;
   const bytes = Buffer.from(`${JSON.stringify({ v: 1, unread: nextUnread }, null, 2)}\n`, 'utf8');
-  const wrote = writeNewFileInHeldDir(baseHeld, seatHeld, tmpName, bytes);
+  const wrote = writeNewFileInHeldDir(atFfi, baseHeld, seatHeld, tmpName, bytes);
   if (!wrote.ok) return null;
-  try {
-    const atFfi = getPosixAtFfi();
-    if (atFfi !== null) {
-      const moved = atFfi.renameatReplace(seatHeld.fd, tmpName, seatHeld.fd, '.unread.json');
-      if (!moved.ok) throw new Error(`renameat failed: errno ${String(moved.errno)}`);
-    } else {
-      renameSync(wrote.path, hintPath);
-    }
-  } catch {
+  const moved = atFfi.renameatReplace(seatHeld.fd, tmpName, seatHeld.fd, '.unread.json');
+  if (!moved.ok) {
     // Clean up the temporary file and leave the existing hint intact if the atomic swap failed.
-    unlinkInHeldDir(seatHeld, tmpName);
+    unlinkInHeldDir(atFfi, seatHeld, tmpName);
   }
   return null;
 }
 
 function writeArchiveManifestInHeldDir(
+  atFfi: RelativeDirOps,
   baseHeld: HeldDir,
   archiveDateHeld: HeldDir,
   root: string,
@@ -980,7 +1020,7 @@ function writeArchiveManifestInHeldDir(
     if (!insideSendDrops(baseHeld.path, candidatePath) || dirname(candidatePath) !== archiveDateHeld.path) {
       return { ok: false, reason: 'manifest path escapes send-drops archive' };
     }
-    const wrote = writeNewFileInHeldDir(baseHeld, archiveDateHeld, fileName, bytes);
+    const wrote = writeNewFileInHeldDir(atFfi, baseHeld, archiveDateHeld, fileName, bytes);
     if (wrote.ok) return { ok: true, manifestPath: wrote.path };
     if (wrote.code === 'eexist') continue;
     return { ok: false, reason: `${candidatePath}: the archive manifest could not be written: ${wrote.reason}` };
@@ -1017,6 +1057,8 @@ export function* dropRetirementSteps(
   let key: KeyObject | null = null;
   let finalized = false;
 
+  const atFfi = input.atFfi !== undefined ? input.atFfi : getRelativeDirOps();
+
   const snapshot = (): DropRetirementReport => {
     const report: DropRetirementReport = {
       at: atIso,
@@ -1036,10 +1078,11 @@ export function* dropRetirementSteps(
   };
 
   const rollbackAllMoved = (): void => {
+    if (atFfi === null) return;
     for (let i = movedRecords.length - 1; i >= 0; i -= 1) {
       const rec = movedRecords[i]!;
       for (let j = rec.files.length - 1; j >= 0; j -= 1) {
-        undoMovedFile(rec.destHeld, rec.srcHeld, rec.files[j]!);
+        undoMovedFile(atFfi, rec.destHeld, rec.srcHeld, rec.files[j]!);
       }
     }
     movedRecords.length = 0;
@@ -1050,7 +1093,13 @@ export function* dropRetirementSteps(
   const finalizeMoved = (): void => {
     if (finalized) return;
     finalized = true;
-    if (archived.length === 0 || sendDropsHeld === null || archiveDateHeld === null || key === null) {
+    if (
+      atFfi === null ||
+      archived.length === 0 ||
+      sendDropsHeld === null ||
+      archiveDateHeld === null ||
+      key === null
+    ) {
       snapshot();
       return;
     }
@@ -1059,7 +1108,7 @@ export function* dropRetirementSteps(
     // and every moved family's destination folder still resolve inside `send-drops` without any
     // symbolic link. If any archive parent was swapped for a link, roll back all moved files so no
     // family escapes or sits without a manifest.
-    const dateChainProblem = verifyHeldDirChain(sendDropsHeld, archiveDateHeld);
+    const dateChainProblem = verifyHeldDirChain(atFfi, sendDropsHeld, archiveDateHeld);
     if (dateChainProblem !== null) {
       rollbackAllMoved();
       if (refused === null) refused = dateChainProblem;
@@ -1067,7 +1116,7 @@ export function* dropRetirementSteps(
       return;
     }
     for (const rec of movedRecords) {
-      const destProblem = verifyHeldDirChain(sendDropsHeld, rec.destHeld);
+      const destProblem = verifyHeldDirChain(atFfi, sendDropsHeld, rec.destHeld);
       if (destProblem !== null) {
         rollbackAllMoved();
         if (refused === null) refused = destProblem;
@@ -1077,11 +1126,12 @@ export function* dropRetirementSteps(
     }
 
     for (const { seatHeld, ids } of archivedBySeatDir.values()) {
-      const problem = pruneArchivedFromUnreadHint(sendDropsHeld, seatHeld, ids);
+      const problem = pruneArchivedFromUnreadHint(atFfi, sendDropsHeld, seatHeld, ids);
       if (problem !== null && refused === null) refused = problem;
     }
 
     const wrote = writeArchiveManifestInHeldDir(
+      atFfi,
       sendDropsHeld,
       archiveDateHeld,
       root,
@@ -1114,10 +1164,14 @@ export function* dropRetirementSteps(
     const sendDropsProblem = folderProblemAt(sendDropsDir);
     if (sendDropsProblem !== null) return fail(`${sendDropsDir}: ${sendDropsProblem}`);
 
-    const agentsStep = openChildDirNoFollow(-1, agentsDir, '.agents');
+    if (atFfi === null) {
+      return fail('relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
+    }
+
+    const agentsStep = openRootDirNoFollow(agentsDir);
     if (!agentsStep.ok) return fail(agentsStep.reason);
     openedFds.push(agentsStep.fd);
-    const sendDropsStep = openChildDirNoFollow(agentsStep.fd, sendDropsDir, 'send-drops');
+    const sendDropsStep = openChildDirNoFollow(atFfi, agentsStep.fd, sendDropsDir, 'send-drops');
     if (!sendDropsStep.ok) return fail(sendDropsStep.reason);
     openedFds.push(sendDropsStep.fd);
     sendDropsHeld = {
@@ -1196,7 +1250,7 @@ export function* dropRetirementSteps(
         const seatProblem = folderProblemAt(seatDir);
         if (seatProblem !== null) return fail(`${seatDir}: ${seatProblem}`);
 
-        const openedSeat = openSubdirChain(sendDropsHeld, [session, seat], false, openedFds);
+        const openedSeat = openSubdirChain(atFfi, sendDropsHeld, [session, seat], false, openedFds);
         if (!openedSeat.ok) return fail(openedSeat.reason);
         const seatHeld = openedSeat.dir;
 
@@ -1243,7 +1297,7 @@ export function* dropRetirementSteps(
           scanned += 1;
           let recordData: Buffer;
           try {
-            recordData = readRegularNoFollowInDir(seatHeld, name);
+            recordData = readRegularNoFollowInDir(atFfi, seatHeld, name);
           } catch (error) {
             return fail(error instanceof Error ? error.message : String(error));
           }
@@ -1300,10 +1354,10 @@ export function* dropRetirementSteps(
           }
           const context = { to: seat, root, session };
           const readMs = fileSet.has(`${name}.read.json`)
-            ? verifiedReceiptAtMs(seatHeld, name, 'read', context, key)
+            ? verifiedReceiptAtMs(atFfi, seatHeld, name, 'read', context, key)
             : null;
           const repliedMs = fileSet.has(`${name}.replied.json`)
-            ? verifiedReceiptAtMs(seatHeld, name, 'replied', context, key)
+            ? verifiedReceiptAtMs(atFfi, seatHeld, name, 'replied', context, key)
             : null;
           if (readMs === null && repliedMs === null) {
             stayed += 1;
@@ -1313,11 +1367,11 @@ export function* dropRetirementSteps(
           if (repliedMs !== null && repliedMs > newestMs) newestMs = repliedMs;
           for (const extraStatus of ['held', 'delivered'] as const) {
             if (!fileSet.has(`${name}.${extraStatus}.json`)) continue;
-            const extraMs = verifiedReceiptAtMs(seatHeld, name, extraStatus, context, key);
+            const extraMs = verifiedReceiptAtMs(atFfi, seatHeld, name, extraStatus, context, key);
             if (extraMs !== null && extraMs > newestMs) newestMs = extraMs;
           }
           if (fileSet.has(`${name}.closed.json`)) {
-            const closeMs = verifiedCloseAtMs(seatHeld, name, context, key);
+            const closeMs = verifiedCloseAtMs(atFfi, seatHeld, name, context, key);
             if (closeMs !== null && closeMs > newestMs) newestMs = closeMs;
           }
           if (newestMs > cutoff) {
@@ -1352,7 +1406,7 @@ export function* dropRetirementSteps(
 
     // Phase 2: Open and hold destination archive directories (`O_RDONLY | O_DIRECTORY | O_NOFOLLOW`)
     // and hash every source file before moving anything.
-    const openedDateDir = openSubdirChain(sendDropsHeld, [DROP_ARCHIVE_DIR, date], true, openedFds);
+    const openedDateDir = openSubdirChain(atFfi, sendDropsHeld, [DROP_ARCHIVE_DIR, date], true, openedFds);
     if (!openedDateDir.ok) return fail(openedDateDir.reason);
     archiveDateHeld = openedDateDir.dir;
 
@@ -1365,6 +1419,7 @@ export function* dropRetirementSteps(
         return fail(`${absDest}: destination escapes send-drops`);
       }
       const openedDest = openSubdirChain(
+        atFfi,
         sendDropsHeld,
         [DROP_ARCHIVE_DIR, date, item.session, item.seat],
         true,
@@ -1397,7 +1452,7 @@ export function* dropRetirementSteps(
       const hashed: { name: string; digest: string; bytes: number }[] = [];
       for (const file of item.files) {
         try {
-          const data = readRegularNoFollowInDir(item.seatHeld, file);
+          const data = readRegularNoFollowInDir(atFfi, item.seatHeld, file);
           hashed.push({
             name: file,
             digest: createHash('sha256').update(data).digest('hex'),
@@ -1428,6 +1483,7 @@ export function* dropRetirementSteps(
           break;
         }
         const moveRes = moveFileBetweenHeldDirs(
+          atFfi,
           sendDropsHeld,
           candidate.seatHeld,
           destHeld,
@@ -1448,7 +1504,7 @@ export function* dropRetirementSteps(
       }
       if (familyFailed !== null) {
         for (let i = movedNames.length - 1; i >= 0; i -= 1) {
-          undoMovedFile(destHeld, candidate.seatHeld, movedNames[i]!);
+          undoMovedFile(atFfi, destHeld, candidate.seatHeld, movedNames[i]!);
         }
         refused = familyFailed;
         break;

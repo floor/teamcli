@@ -15,6 +15,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -36,6 +37,7 @@ import { listUnread } from '../src/mcp/inbox.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   DROP_ARCHIVE_DIR,
+  getRelativeDirOps,
   retireDropsSliced,
   verifyDropArchive,
 } from '../src/send/drop-retention.ts';
@@ -618,6 +620,111 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(raceReport2.refused).toContain('symbolic link');
     expect(raceReport2.archived).toEqual([]);
     expect(raceReport2.manifestPath).toBeNull();
+    expect(readdirSync(outsideDir)).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+  });
+
+  test('refuses the pass before any rename or folder creation when relative directory-descriptor moves are unavailable', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const report = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      atFfi: null,
+      slices: defaultSlices(),
+    });
+
+    expect(report.refused).toContain('relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
+    expect(report.archived).toEqual([]);
+    expect(report.manifestPath).toBeNull();
+    expect(existsSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR))).toBe(false);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+  });
+
+  test('detects and undoes a parent directory swap between the pre-check and the renameat / openat syscall', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const realOps = getRelativeDirOps();
+    expect(realOps).not.toBeNull();
+    if (!realOps) return;
+
+    const outsideDir = join(root, 'outside-syscall-race-target');
+    mkdirSync(outsideDir, { recursive: true });
+    const destSeatDir = archiveSeatDir('worker');
+    const movedAsideSeatDir = join(root, 'moved-aside-seat-dir');
+
+    // Sub-test A: swap `destSeatDir` for a symlink to `outsideDir` inside `renameatExcl`,
+    // i.e. AFTER `moveFileBetweenHeldDirs`'s pre-check (`verifyHeldDirChain` and `heldAt`) has passed
+    // and right before the `renameat` syscall runs.
+    let swappedBeforeRename = false;
+    const reportA = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      atFfi: {
+        ...realOps,
+        renameatExcl: (fromfd, fromName, tofd, toName) => {
+          if (!swappedBeforeRename && fromName === READ_ID_1) {
+            swappedBeforeRename = true;
+            renameSync(destSeatDir, movedAsideSeatDir);
+            symlinkSync(outsideDir, destSeatDir);
+          }
+          return realOps.renameatExcl(fromfd, fromName, tofd, toName);
+        },
+      },
+      slices: defaultSlices(),
+    });
+
+    expect(swappedBeforeRename).toBe(true);
+    expect(reportA.refused).toContain('symbolic link');
+    expect(reportA.archived).toEqual([]);
+    expect(reportA.manifestPath).toBeNull();
+    // Held fd move never wrote to `outsideDir`, and post-rename chain verification undid the move back to the live folder.
+    expect(readdirSync(outsideDir)).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+
+    // Clean up and run Sub-test B: swap `.archive/<DATE>` for a symlink to `outsideDir` inside `openat`
+    // when creating `manifest-<passId>.json`, i.e. AFTER `writeNewFileInHeldDir`'s pre-check has passed
+    // and right before the `openat` syscall runs.
+    rmSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR), { recursive: true, force: true });
+    rmSync(movedAsideSeatDir, { recursive: true, force: true });
+    const archiveDateDir = join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR, DATE);
+    const movedAsideDateDir = join(root, 'moved-aside-date-dir');
+
+    let swappedBeforeManifestOpen = false;
+    const reportB = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      atFfi: {
+        ...realOps,
+        openat: (dirfd, name, flags, mode) => {
+          if (!swappedBeforeManifestOpen && name.startsWith('manifest-')) {
+            swappedBeforeManifestOpen = true;
+            renameSync(archiveDateDir, movedAsideDateDir);
+            symlinkSync(outsideDir, archiveDateDir);
+          }
+          return realOps.openat(dirfd, name, flags, mode);
+        },
+      },
+      slices: defaultSlices(),
+    });
+
+    expect(swappedBeforeManifestOpen).toBe(true);
+    expect(reportB.refused).toContain('symbolic link');
+    expect(reportB.archived).toEqual([]);
+    expect(reportB.manifestPath).toBeNull();
     expect(readdirSync(outsideDir)).toEqual([]);
     expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
     expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
