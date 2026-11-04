@@ -49,7 +49,7 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
+import { fileStatStamp, isRead, keyPrintForCache, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -259,6 +259,18 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * earlier brief is not waiting mail. A receipt at the current claim's own id counts only when it
  * binds that claim, so a read of another delivery never hides the delivery the claim names.
  */
+const DROP_INSPECT_CACHE_LIMIT = 4096;
+const dropInspectCache = new Map<
+  string,
+  {
+    stamp: string;
+    keyPrint: string;
+    from: string | null;
+    fromId: string | null;
+    launch: { sha256: string | undefined; incarnation: string | undefined } | null;
+  }
+>();
+
 export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
   try {
@@ -268,11 +280,13 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'ok', rows: [] };
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
+  const nameSet = new Set(names);
   const rows: DropRow[] = [];
   // The claim this listing serves under. Without a context there is none, and every drop is
   // listed — the same "nothing can be proven" rule the receipt read follows above.
   const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
+  const keyPrint = key === undefined ? 'none' : keyPrintForCache(key);
   for (const name of names) {
     if (name.includes('.')) continue;
     if (superseded.has(name)) continue;
@@ -290,29 +304,42 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // At the current claim's id the receipt must bind that claim too: a read of an earlier
     // delivery does not count for this one.
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key, binding)) continue;
+    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+    if (key !== undefined && context !== undefined && hasReceiptFile && isRead(dropDir, name, context, key, binding)) continue;
+    const stamp = fileStatStamp(path);
     let from: string | null = null;
     let fromId: string | null = null;
     let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
-    try {
-      const text = readFileSync(path, 'utf8');
-      const record = signedRecordOf(parsedJson(text));
-      if (record !== null) {
-        // The record names its sender in the payload. The key that verified it is the message
-        // key; when the folder is read with no key at all, the payload is still what is shown —
-        // a record that fails the key it was checked with leaves the sender unknown.
-        if (key === undefined || verifyRecord(record, key)) {
-          from = record.payload.from;
-          fromId = record.payload.from_id;
-          if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-            launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+    const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
+    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
+      from = cached.from;
+      fromId = cached.fromId;
+      launch = cached.launch;
+    } else {
+      try {
+        const text = readFileSync(path, 'utf8');
+        const record = signedRecordOf(parsedJson(text));
+        if (record !== null) {
+          // The record names its sender in the payload. The key that verified it is the message
+          // key; when the folder is read with no key at all, the payload is still what is shown —
+          // a record that fails the key it was checked with leaves the sender unknown.
+          if (key === undefined || verifyRecord(record, key)) {
+            from = record.payload.from;
+            fromId = record.payload.from_id;
+            if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+              launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+            }
           }
+        } else {
+          from = senderOf(text.split('\n', 1)[0] ?? '');
         }
-      } else {
-        from = senderOf(text.split('\n', 1)[0] ?? '');
+        if (stamp !== null && keyPrint !== '') {
+          if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
+          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch });
+        }
+      } catch {
+        // The file is still a drop; its sender is unknown.
       }
-    } catch {
-      // The file is still a drop; its sender is unknown.
     }
     // A launch record the current claim does not name cannot be served: it is an earlier
     // delivery, or an old build's record carrying none of the fields a claim binds.

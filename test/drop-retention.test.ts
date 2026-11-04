@@ -5,8 +5,9 @@
 //    pass on any unexpected file type or name before moving anything.
 // 3. Runs only in the chores child, sliced, never on the daemon loop.
 // 4. Keeps `.unread.json` consistent and proves an unread drop is never moved.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import {
   existsSync,
   mkdirSync,
@@ -21,7 +22,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { plantRecord, recordDir } from '../src/commands/messages.ts';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
+import { listDrops, runDrops } from '../src/commands/drops.ts';
+import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
 import { createFallbackPass } from '../src/daemon/chores/fallback.ts';
 import type { ChoresSlices } from '../src/daemon/chores/child.ts';
 import type { ChoresChildConfig, ChoresChildRoute } from '../src/daemon/chores/protocol.ts';
@@ -29,12 +32,14 @@ import { FALLBACK_STORE_PASS_MS, sweepFallbackEscalationsSliced } from '../src/d
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../src/launch/general-brief.ts';
+import { listUnread } from '../src/mcp/inbox.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   DROP_ARCHIVE_DIR,
   retireDropsSliced,
   verifyDropArchive,
 } from '../src/send/drop-retention.ts';
+import { markPending } from '../src/send/pending.ts';
 import { receiptFile, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 
@@ -479,5 +484,195 @@ describe('condition 3: runs only in the chores child, sliced, never on the daemo
     });
     expect(yields).toBeGreaterThan(0);
     expect(report.archived.length).toBe(2);
+  });
+});
+
+/** Counts file content reads (`readFileSync` and `openSync` with O_RDONLY) under `send-drops` using a fake/wrapped fs. */
+function withCountedDropReads<T>(rootDir: string, fn: () => T): { result: T; reads: string[]; bodyReads: string[]; receiptReads: string[]; pendingReads: string[] } {
+  const sendDropsPrefix = join(rootDir, '.agents', 'send-drops');
+  const reads: string[] = [];
+  const realReadFileSync = fs.readFileSync;
+  const realOpenSync = fs.openSync;
+  const recordRead = (target: unknown): void => {
+    if (typeof target !== 'string') return;
+    if (!target.startsWith(sendDropsPrefix)) return;
+    reads.push(target);
+  };
+  const spyRead = spyOn(fs, 'readFileSync').mockImplementation(((path: unknown, ...rest: unknown[]) => {
+    recordRead(path);
+    return Reflect.apply(realReadFileSync, fs, [path, ...rest]);
+  }) as typeof fs.readFileSync);
+  const spyOpen = spyOn(fs, 'openSync').mockImplementation(((path: unknown, flags: unknown, ...rest: unknown[]) => {
+    if (typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) === 0) {
+      recordRead(path);
+    }
+    return Reflect.apply(realOpenSync, fs, [path, flags, ...rest]);
+  }) as typeof fs.openSync);
+  try {
+    const result = fn();
+    const bodyReads = reads.filter((p) => !p.endsWith('.json') && !p.endsWith('.pending') && !p.endsWith('.taken') && !p.endsWith('.wake') && !p.endsWith('.reported'));
+    const receiptReads = reads.filter((p) => p.endsWith('.read.json') || p.endsWith('.replied.json') || p.endsWith('.delivered.json') || p.endsWith('.held.json'));
+    const pendingReads = reads.filter((p) => p.endsWith('.pending'));
+    return { result, reads, bodyReads, receiptReads, pendingReads };
+  } finally {
+    spyRead.mockRestore();
+    spyOpen.mockRestore();
+  }
+}
+
+describe('slice 2: hot read paths skip read bodies and cache verified stamps inside the retention window', () => {
+  test('listUnread (inbox_check) returns identical unread rows, never reads read message bodies, and caches stamps on repeat calls', () => {
+    const recentIso = '2026-11-03T12:00:00.000Z';
+    for (let i = 1; i <= 20; i += 1) {
+      const id = `019a4f10-1000-7000-8000-${String(i).padStart(12, '0')}`;
+      plant('worker', id, recentIso);
+      markRead('worker', id, recentIso);
+    }
+    const unreadA = '019a4f10-2000-7000-8000-000000000001';
+    const unreadB = '019a4f10-2000-7000-8000-000000000002';
+    plant('worker', unreadA, '2026-11-03T13:00:00.000Z');
+    plant('worker', unreadB, '2026-11-03T14:00:00.000Z');
+
+    const dropDir = recordDir(root, 'acme', 'worker');
+    const context = { to: 'worker', root, session: 'acme' };
+
+    const pass1 = withCountedDropReads(root, () => listUnread(dropDir, context, home));
+    expect(pass1.result.map((m) => m.id)).toEqual([unreadA, unreadB]);
+    // Pass 1 must never read the 20 already-read message body files, and reads each unread body at most once.
+    expect(pass1.bodyReads.length).toBeLessThanOrEqual(2);
+
+    const pass2 = withCountedDropReads(root, () => listUnread(dropDir, context, home));
+    expect(pass2.result).toEqual(pass1.result);
+    // Pass 2 reuses cached receipt stamps and cached unread record stamps: 0 file reads under send-drops.
+    expect(pass2.reads.length).toBe(0);
+  });
+
+  test('recordCandidates and listUnackedMessages (team messages) return identical unacked rows without reading read message bodies', async () => {
+    const recentIso = '2026-11-03T12:00:00.000Z';
+    for (let i = 1; i <= 20; i += 1) {
+      const id = `019a4f20-1000-7000-8000-${String(i).padStart(12, '0')}`;
+      plant('worker', id, recentIso);
+      markRead('worker', id, recentIso);
+    }
+    const unackedId = '019a4f20-2000-7000-8000-000000000001';
+    plant('worker', unackedId, '2026-11-03T15:00:00.000Z');
+    // Plain-text legacy drop stays ignored by listUnackedMessages and runMessages.
+    writeFileSync(livePath('worker', '019a4f20-3000-7000-8000-000000000001'), 'from lead — plain text drop\nhello\n');
+
+    const pass1 = withCountedDropReads(root, () => listUnackedMessages(root, 'acme', home));
+    expect(pass1.result.map((m) => m.id)).toEqual([unackedId]);
+    // Only the 1 unread record + 1 plain-text drop are read; none of the 20 read record bodies are read.
+    expect(pass1.bodyReads.length).toBeLessThanOrEqual(2);
+
+    const pass2 = withCountedDropReads(root, () => listUnackedMessages(root, 'acme', home));
+    expect(pass2.result).toEqual(pass1.result);
+    expect(pass2.reads.length).toBe(0);
+
+    // runMessages --json serves the 1 unacked message and marks it read.
+    let stdout = '';
+    const exitCode = await runMessages(
+      ['--json'],
+      {
+        cwd: root,
+        env: {},
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        stdout: (s) => { stdout += s; },
+        stderr: () => {},
+      },
+      { home, now: () => NOW },
+    );
+    expect(exitCode).toBe(0);
+    const doc = JSON.parse(stdout) as { counts: { messages: number; shown: number; refused: number } };
+    expect(doc.counts).toEqual({ messages: 1, shown: 1, refused: 0 });
+  });
+
+  test('reconcile drop, .pending, and receipt scan caches .pending markers and skips re-reading unchanged files', () => {
+    const recentIso = '2026-11-03T12:00:00.000Z';
+    const dropDir = recordDir(root, 'acme', 'worker');
+    for (let i = 1; i <= 15; i += 1) {
+      const id = `019a4f30-1000-7000-8000-${String(i).padStart(12, '0')}`;
+      plant('worker', id, recentIso);
+      markRead('worker', id, recentIso);
+      markPending(dropDir, {
+        id,
+        from: 'lead',
+        to: 'worker',
+        body: `message ${String(i)}`,
+        ts: recentIso,
+        leg: 'drop',
+      });
+    }
+
+    const state = createReconcileState();
+    const pass1 = withCountedDropReads(root, () =>
+      reconcilePass({ project: 'acme', root, session: 'acme', home, state, now: NOW }),
+    );
+    expect(pass1.result.ok).toBe(true);
+    expect(state.stats.filesRead).toBe(15);
+    expect(pass1.pendingReads.length).toBe(15);
+
+    // Second pass with unchanged directory: 0 file reads under send-drops (including .pending files).
+    const pass2 = withCountedDropReads(root, () =>
+      reconcilePass({ project: 'acme', root, session: 'acme', home, state, now: NOW }),
+    );
+    expect(pass2.result.ok).toBe(true);
+    expect(state.stats.filesRead).toBe(0);
+    expect(pass2.reads.length).toBe(0);
+
+    // Add 1 new drop to worker's folder (changing directory mtime): only the 1 new drop is read;
+    // the 15 existing drops and 15 .pending files are reused from cache without reading from disk.
+    const newId = '019a4f30-2000-7000-8000-000000000001';
+    plant('worker', newId, '2026-11-03T16:00:00.000Z');
+    const pass3 = withCountedDropReads(root, () =>
+      reconcilePass({ project: 'acme', root, session: 'acme', home, state, now: NOW }),
+    );
+    expect(pass3.result.ok).toBe(true);
+    expect(state.stats.filesRead).toBe(1);
+    expect(pass3.pendingReads.length).toBe(0);
+    expect(pass3.receiptReads.length).toBe(0);
+  });
+
+  test('listDrops and runDrops return identical rows, never read read drop bodies, and reuse cached stamps on repeat calls', async () => {
+    const recentIso = '2026-11-03T12:00:00.000Z';
+    for (let i = 1; i <= 20; i += 1) {
+      const id = `019a4f40-1000-7000-8000-${String(i).padStart(12, '0')}`;
+      plant('worker', id, recentIso);
+      markRead('worker', id, recentIso);
+    }
+    const unreadId = '019a4f40-2000-7000-8000-000000000001';
+    plant('worker', unreadId, '2026-11-03T16:00:00.000Z');
+
+    const dropDir = recordDir(root, 'acme', 'worker');
+    const key = messageKeyOf(home);
+    const context = { to: 'worker', root, session: 'acme' };
+
+    const pass1 = withCountedDropReads(root, () => listDrops(dropDir, key, context));
+    expect(pass1.result.kind).toBe('ok');
+    if (pass1.result.kind === 'ok') {
+      expect(pass1.result.rows.map((r) => r.id)).toEqual([unreadId]);
+    }
+    expect(pass1.bodyReads.length).toBe(1);
+
+    const pass2 = withCountedDropReads(root, () => listDrops(dropDir, key, context));
+    expect(pass2.result).toEqual(pass1.result);
+    expect(pass2.reads.length).toBe(0);
+
+    // Also verify runDrops --read --seat worker serves the unread message and writes its read receipt.
+    let stdout = '';
+    const exitCode = await runDrops(
+      ['--read', '--seat', 'worker'],
+      {
+        cwd: root,
+        env: {},
+        stdinIsTTY: false,
+        stdoutIsTTY: false,
+        stdout: (s) => { stdout += s; },
+        stderr: () => {},
+      },
+      { home },
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain(`body for ${unreadId}`);
   });
 });

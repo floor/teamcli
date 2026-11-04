@@ -56,7 +56,9 @@ import {
   type Json,
 } from '../store/keys.ts';
 import {
+  fileStatStamp,
   isRead,
+  keyPrintForCache,
   recordAuthOfSealed,
   recordFile,
   sealedRecordOf,
@@ -307,6 +309,9 @@ function recordReadHeld(candidate: Candidate, root: string, session: string, key
   return isRead(recordDir(root, context.session, candidate.seat), candidate.id, context, key);
 }
 
+const UNACKED_STAMP_CACHE_LIMIT = 4096;
+const unackedStampCache = new Map<string, { stamp: string; scope: string; value: UnackedMessage | null }>();
+
 /**
  * The payload of a record another user owns, read the way this list read every record before the
  * pass's shared reader existed: the file as JSON, then its envelope and the signature over its
@@ -344,35 +349,73 @@ export function listUnackedMessages(
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
   const readRecordAt: RecordReader = records ?? ((path, id) => verifiedRecordAt(path, id, state.key));
+  const keyPrint = keyPrintForCache(state.key);
+  let realRoot = root;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
   const out: UnackedMessage[] = [];
   for (const candidate of [...recordNames(root, session), ...legacyCandidates(root)]) {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
+      const stamp = fileStatStamp(candidate.path);
+      const scope = `legacy\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${session}\0${realRoot}`;
+      if (stamp !== null && keyPrint !== '') {
+        const cached = unackedStampCache.get(candidate.path);
+        if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+          if (cached.value !== null) out.push(cached.value);
+          continue;
+        }
+      }
       const parsed = readJson(candidate.path);
       const payload = messagePayload(parsed);
-      if (!payload || !isRecord(parsed) || !text(parsed.signature)) continue;
-      if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
-      if (payload.session !== session || !samePath(payload.root, root)) continue;
-      if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)) continue;
-      // A legacy message carries no agent id and no subject: its sender is its signed `from`.
-      out.push({ id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from, from_id: null, body: payload.body });
+      let entry: UnackedMessage | null = null;
+      if (
+        payload &&
+        isRecord(parsed) &&
+        text(parsed.signature) &&
+        payload.id === candidate.id &&
+        payload.to === candidate.seat &&
+        payload.session === session &&
+        samePath(payload.root, root) &&
+        verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)
+      ) {
+        // A legacy message carries no agent id and no subject: its sender is its signed `from`.
+        entry = { id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from, from_id: null, body: payload.body };
+      }
+      if (stamp !== null && keyPrint !== '') {
+        if (unackedStampCache.size >= UNACKED_STAMP_CACHE_LIMIT) unackedStampCache.clear();
+        unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
+      }
+      if (entry !== null) out.push(entry);
       continue;
     }
     if (recordReadHeld(candidate, root, session, state.key)) continue;
+    const targetSession = candidate.session ?? session;
+    const stamp = fileStatStamp(candidate.path);
+    const scope = `record\0${keyPrint}\0${candidate.id}\0${candidate.seat}\0${targetSession}\0${realRoot}`;
+    if (stamp !== null && keyPrint !== '') {
+      const cached = unackedStampCache.get(candidate.path);
+      if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+        if (cached.value !== null) out.push(cached.value);
+        continue;
+      }
+    }
     const payload = readRecordAt(candidate.path, candidate.id) ?? foreignRecordPayload(candidate.path, state.key);
-    if (payload === null) continue;
-    // The complete raw payload authenticates before any field this list would report is read.
-    if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
-    if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
-    out.push({
-      id: candidate.id,
-      to: candidate.seat,
-      at: payload.at,
-      from: payload.from,
-      from_id: payload.from_id,
-      body: payload.body,
-      ...(payload.subject === undefined ? {} : { subject: payload.subject }),
-    });
+    let entry: UnackedMessage | null = null;
+    if (payload !== null && payload.id === candidate.id && payload.to === candidate.seat &&
+        payload.session === targetSession && samePath(payload.root, root)) {
+      entry = { id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from,
+        from_id: payload.from_id, body: payload.body,
+        ...(payload.subject === undefined ? {} : { subject: payload.subject }) };
+    }
+    if (stamp !== null && keyPrint !== '') {
+      if (unackedStampCache.size >= UNACKED_STAMP_CACHE_LIMIT) unackedStampCache.clear();
+      unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
+    }
+    if (entry !== null) out.push(entry);
   }
   return out;
 }
@@ -825,9 +868,19 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
   const state = messageKeyState(sources.home);
   const waiting = candidates(root, session).filter((candidate) => {
-    if (state.kind !== 'key') return true;
-    if (candidate.store === 'record') return !recordReadHeld(candidate, root, session, state.key);
-    return !legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
+    if (state.kind === 'key') {
+      const readHeld =
+        candidate.store === 'record'
+          ? recordReadHeld(candidate, root, session, state.key)
+          : legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key);
+      if (readHeld) return false;
+    }
+    // A body file written before the record spine is plain text. It stays in the folder for
+    // its seat to read, but it names no message: the inbox neither shows nor refuses it. A
+    // JSON file is held to the record's shape. Checked only after the read receipt gate so
+    // already-read records are never opened.
+    if (candidate.store === 'record' && readJson(candidate.path) === undefined) return false;
+    return true;
   });
   if (waiting.length === 0) {
     // An empty inbox is a reading, not a refusal: the table has its headers and no rows, the note

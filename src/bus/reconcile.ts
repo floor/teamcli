@@ -19,7 +19,7 @@
 // unchanged, and so is the parsed history. Correctness does not move: every record is still
 // raised on every pass (the dedupe set decides), read-once receipts keep their sender, and a
 // receipt that arrives in a later pass than its record still carries that record's sender.
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   configChangedRecordId,
@@ -36,7 +36,7 @@ import {
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { markOrphanedSeats } from '../registry/sync.ts';
 import { HISTORY_KEPT, readHistory, type HistoryEntry } from '../send/history.ts';
-import { readPending } from '../send/pending.ts';
+import type { PendingDrop } from '../send/pending.ts';
 import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
@@ -133,6 +133,7 @@ type DropEntry =
   | { kind: 'drop'; verified: true; event: EventAppendInput }
   | { kind: 'drop'; verified: false };
 type ReceiptEntry = { kind: 'receipt'; receipt: 'delivered' | 'read' | 'replied'; id: string; at: string };
+type PendingEntry = { kind: 'pending'; drop: PendingDrop | null };
 type MessageEntry = {
   kind: 'message';
   keyPrint: string;
@@ -142,7 +143,7 @@ type MessageEntry = {
   ownerDigest: boolean;
 };
 type SignedReceiptEntry = { kind: 'signed-receipt'; keyPrint: string; verified: boolean; id: string; at: string };
-type CachedEntry = DropEntry | ReceiptEntry | MessageEntry | SignedReceiptEntry;
+type CachedEntry = DropEntry | ReceiptEntry | PendingEntry | MessageEntry | SignedReceiptEntry;
 
 type FileCache = { stamp: string; entry: CachedEntry };
 type DirCache = { stamp: string; names: string[]; files: Map<string, FileCache> };
@@ -376,6 +377,59 @@ function storeEntry(state: ReconcileState, dir: string, name: string, stamp: str
   state.dirs.get(dir)?.files.set(name, { stamp, entry });
 }
 
+function parsePendingDropFile(seatDir: string, name: string): PendingDrop | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(seatDir, name), 'utf8')) as Partial<PendingDrop>;
+    if (
+      typeof parsed.id !== 'string' ||
+      typeof parsed.from !== 'string' ||
+      typeof parsed.to !== 'string' ||
+      typeof parsed.body !== 'string' ||
+      typeof parsed.ts !== 'string'
+    ) {
+      return null;
+    }
+    if (name !== `${parsed.id}.pending`) return null;
+    if (parsed.leg !== undefined && parsed.leg !== 'mcp-inbox' && parsed.leg !== 'drop' && parsed.leg !== 'channel') {
+      return null;
+    }
+    return {
+      id: parsed.id,
+      from: parsed.from,
+      to: parsed.to,
+      body: parsed.body,
+      ts: parsed.ts,
+      tries: typeof parsed.tries === 'number' && Number.isInteger(parsed.tries) && parsed.tries >= 0 ? parsed.tries : 0,
+      ...(parsed.leg === 'mcp-inbox' || parsed.leg === 'drop' || parsed.leg === 'channel' ? { leg: parsed.leg } : {}),
+      ...(typeof parsed.redelivered === 'string' && parsed.redelivered !== '' ? { redelivered: parsed.redelivered } : {}),
+      ...(typeof parsed.thread === 'string' && parsed.thread !== '' ? { thread: parsed.thread } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Reads `.pending` markers from the already-listed `files` in `seatDir`, reusing cached parsed
+ *  markers when their stat stamp is unchanged so unchanged markers are not re-read on every pass. */
+function readPendingCached(state: ReconcileState, seatDir: string, files: readonly string[]): PendingDrop[] {
+  const drops: PendingDrop[] = [];
+  for (const name of files) {
+    if (!name.endsWith('.pending')) continue;
+    const fullPath = join(seatDir, name);
+    const fresh = fileStampOf(fullPath);
+    if (fresh === null) continue;
+    let entry = cachedEntry(state, seatDir, name, fresh.stamp);
+    if (entry === null || entry.kind !== 'pending') {
+      entry = { kind: 'pending', drop: parsePendingDropFile(seatDir, name) };
+      storeEntry(state, seatDir, name, fresh.stamp, entry);
+    } else {
+      state.stats.filesReused += 1;
+    }
+    if (entry.drop !== null) drops.push(entry.drop);
+  }
+  return drops.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+}
+
 /** The key's public half as a stable print: a re-verified record stays verified only against the
  *  key that verified it. */
 function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
@@ -581,7 +635,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       // never the message: the arrival it asks for names a record, and is raised only once that
       // record is on disk and verifies. A marker whose record is gone, or refused, raises
       // nothing — a held event included, since its sender would come from the same marker.
-      for (const pending of readPending(seatDir)) {
+      for (const pending of readPendingCached(state, seatDir, files)) {
         let arrival: EventAppendInput | null = null;
         let refusal: string | null = null;
         if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
