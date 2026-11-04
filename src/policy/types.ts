@@ -13,6 +13,7 @@ import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
   DELIVERY_ORDER,
+  LEGACY_ORDER_WORDS,
   parseSeatNumberingValue,
   SEAT_NUMBERING_DEFAULT_VALUE,
   SEATS_CROSS_TEAMS,
@@ -323,6 +324,14 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   /** Optional custom refusal reason when `parseValue(raw)` returns null. */
   valueProblem?: (raw: unknown) => string | null;
   /**
+   * True when a `parseValue` result that is an empty array means the declaration names nothing:
+   * the resolver skips it like an expired one — never refused, never set aside — and the word in
+   * force stands. Only `delivery-order` sets it: a word whose every name is retired (`mcp-inbox`,
+   * read as an alias and dropped by `parseDeliveryOrder`) declares nothing, and a signed record
+   * an older build wrote still reads.
+   */
+  emptyWordDeclaresNothing?: boolean;
+  /**
    * Optional: merges a lower declaration into the value in force above it before the chain moves
    * on. A sparse value names only some fields, and the fields it leaves out inherit the value in
    * force (the release default for the first declaration) instead of being reset. When absent,
@@ -627,13 +636,30 @@ function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
   const items = rawDeliveryItems(raw);
   if (!items || items.length === 0) return null;
   const out: DeliveryLeg[] = [];
+  const seen: string[] = [];
   for (const item of items) {
-    if (typeof item !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(item)) return null;
-    const leg = item as DeliveryLeg;
-    if (out.includes(leg)) return null;
-    out.push(leg);
+    if (typeof item !== 'string') return null;
+    const known = (DELIVERY_LEGS as readonly string[]).includes(item)
+      || (LEGACY_ORDER_WORDS as readonly string[]).includes(item);
+    // A duplicate is judged before the retired name is dropped: [mcp-inbox, mcp-inbox] was
+    // invalid for every build that knew the word, and a duplicated alias is as invalid as a
+    // duplicated live leg. A word this build knows nothing else about refuses the same way.
+    if (!known || seen.includes(item)) return null;
+    seen.push(item);
+    // A retired name is dropped, never refused: the chain reads it as an alias, and the level
+    // it came from keeps the legs it names.
+    if ((LEGACY_ORDER_WORDS as readonly string[]).includes(item)) continue;
+    out.push(item as DeliveryLeg);
   }
   return out;
+}
+
+/** True when a raw delivery-order word names a retired alias word anywhere — alone or beside
+ *  live legs. New writes refuse such a word with the leg's own reason (`src/policy/sources.ts`);
+ *  a stored record still reads, and `parseDeliveryOrder` drops the name. */
+export function namesRetiredOrderWord(raw: unknown): boolean {
+  const items = rawDeliveryItems(raw);
+  return items !== null && items.some((item) => typeof item === 'string' && (LEGACY_ORDER_WORDS as readonly string[]).includes(item));
 }
 
 function deliveryOrderProblem(raw: unknown): string | null {
@@ -958,17 +984,19 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
+    emptyWordDeclaresNothing: true,
     // Dropping or reordering channels present in `higher` is within. `native`, `socket`,
     // `headless-resume` and `session` are the legs a word may add: none is in the fallback order,
     // and a level that names one is the sender choosing that channel — its own SendMessage, this
     // build's frame on the receiver's socket, a headless runtime's own turn, or the receiving
-    // CLI's own session call, which no default order ever inserts. `mcp-inbox` is a name this
-    // build still reads: the word is kept rather than refused, and the walk reports it as
-    // unavailable (`src/send/walk-cascade.ts`). Every other leg absent from `higher` is still an
+    // CLI's own session call, which no default order ever inserts. The retired `mcp-inbox` name
+    // never reaches this test: it is dropped from the word before the word is judged
+    // (`parseDeliveryOrder` above), so it can neither add a leg nor widen a level's order.
+    // Every other leg absent from `higher` is still an
     // addition, and the whole word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || leg === 'mcp-inbox' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || higher.includes(leg)) && lower.indexOf(leg) === idx),
   },
   // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
   // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the

@@ -11,7 +11,16 @@
 
 import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DELIVERY_LEGS, isLivenessSeconds, isSenderNameMode, SENDER_NAME_MODES, type DeliveryLeg, type LivenessThresholds, type SenderNameMode } from '../settings/inherit.ts';
+import {
+  DELIVERY_LEGS,
+  isLivenessSeconds,
+  isSenderNameMode,
+  LEGACY_ORDER_WORDS,
+  SENDER_NAME_MODES,
+  type LivenessThresholds,
+  type OrderWord,
+  type SenderNameMode,
+} from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
@@ -32,8 +41,10 @@ export type ProjectRecord = {
    * The project's word on the delivery order — the legs a send walks before the team file's own
    * words are read — or absent when the project declares none. Written under `delivery_order`;
    * no command writes it in this build, but a hand-written one reads, and an upsert keeps it.
+   * A word an older build wrote may still name the retired `mcp-inbox`: it reads, and the walk
+   * drops it at resolution (`src/settings/resolve.ts`).
    */
-  deliveryOrder?: DeliveryLeg[];
+  deliveryOrder?: OrderWord[];
   /**
    * The project's word on the liveness defaults — the idle-to-lead, idle-to-owner and blind
    * windows, in seconds — or absent when the project declares none. Written under `liveness`.
@@ -223,12 +234,17 @@ export function upsertProject(home: string, id: string, patch: ProjectPatch): Pr
       if (typeof team !== 'string' || !team) throw new ProjectsError('a team ID in "teams" must be text');
     }
     // The word the reader takes: a non-empty list of distinct leg names, so what this writer
-    // stores is what `recordOf` reads back.
+    // stores is what `recordOf` reads back. This is a write: a record an older build wrote may
+    // still carry the retired `mcp-inbox` alias and `recordOf` reads it, but no upsert names it
+    // — the name is no longer a leg, and storing it would only wait for its removal.
     if (record.deliveryOrder !== undefined) {
       if (!Array.isArray(record.deliveryOrder)) throw new ProjectsError('"delivery_order" must be a list of legs');
       if (record.deliveryOrder.length === 0) throw new ProjectsError('"delivery_order" must name at least one leg');
       if (new Set(record.deliveryOrder).size !== record.deliveryOrder.length) throw new ProjectsError('"delivery_order" names a leg twice');
       for (const leg of record.deliveryOrder) {
+        if (typeof leg === 'string' && (LEGACY_ORDER_WORDS as readonly string[]).includes(leg)) {
+          throw new ProjectsError('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+        }
         if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
           throw new ProjectsError(`a "delivery_order" leg must be one of: ${DELIVERY_LEGS.join(', ')}`);
         }
@@ -429,7 +445,8 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     const legs = order as YamlValue[];
     if (legs.length === 0) bad('"delivery_order" must name at least one leg');
     for (const [i, leg] of legs.entries()) {
-      if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
+      // The retired `mcp-inbox` reads as an alias an older record may still carry.
+      if (typeof leg !== 'string' || !([...DELIVERY_LEGS, ...LEGACY_ORDER_WORDS] as readonly string[]).includes(leg)) {
         bad(`delivery_order line ${i + 1} must be one of: ${DELIVERY_LEGS.join(', ')}`);
       }
     }
@@ -458,7 +475,7 @@ function recordOf(id: string, raw: YamlValue, path: string): ProjectRecord {
     entity: entity as string | null,
     lead: lead as string | null,
     teams: teams as string[],
-    ...(order !== undefined ? { deliveryOrder: order as DeliveryLeg[] } : {}),
+    ...(order !== undefined ? { deliveryOrder: order as OrderWord[] } : {}),
     ...(liveness !== undefined ? { liveness } : {}),
     ...(senderNameWord !== undefined ? { senderName: senderNameWord as SenderNameMode } : {}),
     ...(policies !== undefined ? { policies } : {}),

@@ -13,7 +13,7 @@
 // The composition writes nothing and decides nothing. `team settings` and `team seat` print these
 // rows; a change is a separate, guarded write.
 
-import type { DeliveryLeg } from '../settings/inherit.ts';
+import type { OrderWord } from '../settings/inherit.ts';
 import { DELIVERY_ORDER } from '../settings/inherit.ts';
 import type { Seat } from '../file/types.ts';
 import { CONFIG_KEYS, CONFIG_REGISTRY, type ConfigKey, type ConfigLevel, type ConfigValue } from './registry.ts';
@@ -114,7 +114,7 @@ function fileOrRecord(
  */
 export function composeSeatConfig(
   seat: ConfigSeatInput,
-  teamDeliveryOrder: readonly DeliveryLeg[] | null,
+  teamDeliveryOrder: readonly OrderWord[] | null,
   records: ConfigRecordValues = {},
 ): ConfigRow[] {
   // Every order is copied: the seat's word, the team's and the release default stay the

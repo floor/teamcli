@@ -10,9 +10,10 @@
 // tries or a fixed age, and says the drop's path so the message can be sent again.
 //
 // The marker is a convenience, never the message: the drop file is the message, and a marker that
-// cannot be written or read costs a retry, not a byte of the body. The mcp-inbox leg writes the
-// same record with `leg: 'mcp-inbox'`: its message waits in the seat's own inbox, and the record
-// says which leg left it so a retry pass never mistakes it for a held typed send. The drop leg
+// cannot be written or read costs a retry, not a byte of the body. A record an older build
+// wrote on the retired mcp-inbox name carries `leg: 'mcp-inbox'`: its message waits in the
+// seat's own inbox, and the record says which leg left it so a retry pass never mistakes it
+// for a held typed send. The drop leg
 // writes `leg: 'drop'`: its reader is the seat's own watcher, whose receipt promotes the record
 // once the message is read, and the drop is never typed into a pane. The channel leg writes
 // `leg: 'channel'`: the seat's own server pushed the message, and a marker with no receipt after

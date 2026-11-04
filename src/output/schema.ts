@@ -3,7 +3,13 @@ import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
 import { PRESENCE_EVENTS, PRESENCE_STATES, PRESENCE_WRITER_SOURCES } from '../daemon/presence/contract.ts';
-import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, LEGACY_ORDER_WORDS, SENDER_NAME_MODES } from '../settings/inherit.ts';
+
+/** The words a stored or file-held order may still carry in a read-back: the live legs, and the
+ *  retired `mcp-inbox` alias, which records and files written before the name left the vocabulary
+ *  still hold. The walk's own report enum carries only the live legs (`DELIVERY_LEGS`): no walk
+ *  this build makes ever attempts or skips the retired name. */
+const ORDER_WORDS_READBACK: readonly string[] = [...DELIVERY_LEGS, ...LEGACY_ORDER_WORDS];
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
 /** The `source` words a settings row prints: a signed record's level, the team file's entry,
@@ -518,7 +524,7 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           },
           deliveryOrder: {
             type: 'array',
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           senderName: { type: 'string', enum: [...SENDER_NAME_MODES] },
           provenance: {
@@ -2776,7 +2782,7 @@ export const SETTINGS_OUTPUT_SCHEMA: CommandSchemaSpec = {
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
@@ -2809,11 +2815,11 @@ export const SETTINGS_CHANGE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchem
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           old: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },
         },
@@ -2877,7 +2883,7 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
           key: { type: 'string', enum: [...CONFIG_KEYS] },
           value: {
             type: ['string', 'boolean', 'array', 'null'],
-            items: { type: 'string', enum: [...DELIVERY_LEGS] },
+            items: { type: 'string', enum: [...ORDER_WORDS_READBACK] },
           },
           source: { type: 'string', enum: CONFIG_SOURCE_WORDS },
           applies: { type: 'string', enum: ['restart-resume', 'at-once'] },

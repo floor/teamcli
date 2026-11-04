@@ -46,7 +46,7 @@ import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
 import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
-import type { DeliveryLeg } from '../src/settings/inherit.ts';
+import type { OrderWord } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
 
@@ -997,7 +997,7 @@ type WalkHost = SendHost & {
 function walkHost(
   w: WalkWorld,
   options: {
-    delivery?: Partial<Record<'seat' | 'team', readonly DeliveryLeg[]>>;
+    delivery?: Partial<Record<'seat' | 'team', readonly OrderWord[]>>;
     dial?: (socketPath: string, frame: string) => Promise<SendOutcome>;
     onDial?: () => void;
   } = {},

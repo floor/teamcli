@@ -11,7 +11,7 @@
 // routing and identity keys (`nickname`, `delivery_order`, `human`) apply at once, because the
 // record the next send or the next admission reads is the one that changes.
 
-import { DELIVERY_ORDER, type DeliveryLeg } from '../settings/inherit.ts';
+import { DELIVERY_ORDER, type DeliveryLeg, type OrderWord } from '../settings/inherit.ts';
 
 /** The levels a setting may be set at. The approved minimum sets the seat's own settings; the
  *  table keeps the vocabulary of `src/policy/types.ts` so a wider surface later needs no new
@@ -23,8 +23,10 @@ export type ConfigLevel = (typeof CONFIG_LEVELS)[number];
 export const CONFIG_KEYS = ['model', 'effort', 'nickname', 'delivery_order', 'human'] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
-/** A setting's value: the words a launch takes, a delivery order's legs, or a boolean. */
-export type ConfigValue = string | boolean | readonly DeliveryLeg[];
+/** A setting's value: the words a launch takes, a delivery order's words, or a boolean. An
+ *  order a file still writes may carry the retired `mcp-inbox` alias: a read shows the word the
+ *  file holds, and the write path is what refuses it. */
+export type ConfigValue = string | boolean | readonly OrderWord[];
 
 /**
  * How a change reaches the running seat. A runtime key is read at launch, so it applies to the

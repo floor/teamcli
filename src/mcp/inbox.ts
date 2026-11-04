@@ -74,7 +74,7 @@ export function messageNameOk(name: string): boolean {
 /** How long a send waits for the read receipt before it reports `sent (unconfirmed)`: long
  *  enough for a seat that checks its inbox at a turn boundary, short enough not to block a
  *  sender. The native queue's receipt wait uses it, as does any record an older build wrote on
- *  the mcp-inbox leg (that name is no delivery leg in this build). Nothing waits longer than this. */
+ *  the mcp-inbox leg (that name is retired — no longer a leg). Nothing waits longer than this. */
 export const INBOX_GRACE_MS = 2_000;
 
 /** How often that wait looks for the receipt. */

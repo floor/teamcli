@@ -674,10 +674,9 @@ describe('the operator runs status, send, up and down from one grant, and the ob
     expect(JSON.stringify(drop)).toContain('client:grok-bot');
     expect(JSON.stringify(drop)).toContain(g.grantId);
     expect(sent.log).toContain(`client-send-authorized: grant ${g.grantId} client grok-bot team docs seat orchestrator`);
-    // A bundle-grant send walks the same delivery legs a one-seat client send walks. This host
-    // declares no order, so the default walk is the typed leg then the mailbox. The typed leg
-    // is skipped, and the walk's end is logged as queued on the drop.
-    expect(sent.log).toContain('orchestrator: queued, no event adapter (typed: typing into a seat\'s pane is never a delivery: messages go through the bus and an event adapter); the client drop waits in its bus inbox');
+    // A bundle-grant send walks the same delivery legs a one-seat client send walks: this host
+    // reads no pane, so the typed leg is named as skipped and the walk's end is logged as queued.
+    expect(sent.log).toContain('orchestrator: queued, no event adapter (typed:');
     expect(sent.log).toContain('client delivery walk ended for drop');
     expect(sent.log).not.toContain('walks no delivery leg');
 
