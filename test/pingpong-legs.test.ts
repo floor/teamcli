@@ -77,6 +77,19 @@ test('a document that is not the result cannot be read, and a missing file draws
   ]);
 });
 
+test('a lost count that is not a whole number draws the unreadable finding, in the check\'s own words', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-legs-')));
+  made.push(base);
+  writeFileSync(join(base, PINGPONG_LEGS_FILE), `${JSON.stringify(legs({}, 1.5))}\n`, 'utf8');
+  expect(pingpongLegDifferences(base, NOW)).toEqual([
+    {
+      what: 'the nightly run result cannot be read',
+      repair: 'the next nightly rewrites the result',
+      who: "the team's lead",
+    },
+  ]);
+});
+
 function world(): { root: string; text: string } {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-legs-check-')));
   made.push(base);
