@@ -59,8 +59,7 @@
           "sent",
           "sent_display",
           "status",
-          "sender_verified",
-          "sender_trust"
+          "sender_attribution"
         ],
         "properties": {
           "id": {
@@ -97,14 +96,12 @@
               "waiting"
             ]
           },
-          "sender_verified": {
-            "type": "boolean"
-          },
-          "sender_trust": {
+          "sender_attribution": {
             "type": "string",
             "enum": [
+              "attributed",
               "launch-brief",
-              "shared-key-only"
+              "none"
             ]
           },
           "body": {
