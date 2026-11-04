@@ -1,5 +1,5 @@
 // The mailbox router's three policy words: `router.aliases`, `router.fallback` and
-// `router.reply-bound` (the mailbox-router design note, with Atlas's answers of 2026-11-03). The
+// `router.reply-bound` (the mailbox-router design note, with the owner's answers of 2026-11-03). The
 // words live in the catalogue; `src/policy/router.ts` reads them back into the shape the router
 // child consumes, refusing at load with a named error rather than routing a word that broke its
 // rules. The bridge's synchronous 120 s cap and the definite-miss fallback rule are the router's
@@ -57,14 +57,14 @@ const TEAM = parsedTeam.team;
 const QUIET_LIVE: Live = {
   running: true,
   agents: [
-    { name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
-    { name: 'worker', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null },
+    { name: 'lead', agent: 'claude', pane: 'fixture-pane-1', workspace: 'w1', status: 'idle', cwd: null },
+    { name: 'worker', agent: 'claude', pane: 'fixture-pane-2', workspace: 'w2', status: 'idle', cwd: null },
   ],
   workspaces: [
     { id: 'w1', label: workspaceLabel(TEAM.seats[0]!) },
     { id: 'w2', label: workspaceLabel(TEAM.seats[1]!) },
   ],
-  screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
+  screens: { 'fixture-pane-1': CLAUDE_IDLE, 'fixture-pane-2': CLAUDE_IDLE },
 };
 
 
@@ -91,7 +91,7 @@ function makeFixture(): {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude --model claude-opus-5-5',
-    reach: { team: teamId, seat: 'lead', session: 'beacon', pane: 'w1:p1', address: null },
+    reach: { team: teamId, seat: 'lead', session: 'beacon', pane: 'fixture-pane-1', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -104,7 +104,7 @@ function makeFixture(): {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude --model claude-opus-5-5',
-    reach: { team: teamId, seat: 'worker', session: 'beacon', pane: 'w2:p1', address: null },
+    reach: { team: teamId, seat: 'worker', session: 'beacon', pane: 'fixture-pane-2', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -129,8 +129,8 @@ function makeFixture(): {
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions[TEAM.session] ??= emptySession());
     session.watch = { pid: 1, heartbeat: NOW.toISOString() };
-    session.seats.lead = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
-    session.seats.worker = { stage: 'ready', pane: 'w2:p1', workspace: 'w2' };
+    session.seats.lead = { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' };
+    session.seats.worker = { stage: 'ready', pane: 'fixture-pane-2', workspace: 'w2' };
   });
   deliverBriefs({
     dir: join(root, '.agents'),
