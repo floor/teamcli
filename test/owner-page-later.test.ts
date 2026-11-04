@@ -178,6 +178,11 @@ async function listed(s: Page): Promise<string[]> {
   return (state.body.requests as Array<{ id: string }>).map((r) => r.id);
 }
 
+/** Two cards created at the same instant have no order of their own. */
+async function sameCards(s: Page, ids: string[]): Promise<void> {
+  expect([...(await listed(s))].sort()).toEqual([...ids].sort());
+}
+
 function tcRequest(s: Page, label = 'docs'): { root: string; id: string; params_sha256: string } {
   const root = join(s.base, 'code', label);
   mkdirSync(root, { recursive: true });
@@ -403,23 +408,23 @@ describe('owner list: the later answer', () => {
 
     // Not a record at all.
     writeFileSync(laterPath(s, a.id), 'not a record\n');
-    expect(await listed(s)).toEqual([a.id, b.id]);
+    await sameCards(s, [a.id, b.id]);
 
     // A record-shaped file with no signature.
     plant(s, a.id, { owner_seat_later: laterOf(a.id, a.params_sha256, until, null, s.now()), signer: 'iphone', signature: '' });
-    expect(await listed(s)).toEqual([a.id, b.id]);
+    await sameCards(s, [a.id, b.id]);
 
     // A genuine signature, but bound to another request.
     plant(s, a.id, await handSign(s, p, laterOf(b.id, b.params_sha256, until, null, s.now())));
-    expect(await listed(s)).toEqual([a.id, b.id]);
+    await sameCards(s, [a.id, b.id]);
 
     // A genuine signature over another parameters hash.
     plant(s, a.id, await handSign(s, p, laterOf(a.id, 'f'.repeat(64), until, null, s.now())));
-    expect(await listed(s)).toEqual([a.id, b.id]);
+    await sameCards(s, [a.id, b.id]);
 
     // A genuine signature whose return instant is already past: it hides nothing and extends nothing.
     plant(s, a.id, await handSign(s, p, laterOf(a.id, a.params_sha256, new Date(T0.getTime() - HOUR), null, s.now())));
-    expect(await listed(s)).toEqual([a.id, b.id]);
+    await sameCards(s, [a.id, b.id]);
   });
 
   test('an expired item cannot be deferred, an unknown word names the words, and the cap refuses at sign time', async () => {
