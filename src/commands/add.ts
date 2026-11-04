@@ -185,7 +185,7 @@ type Until = { kind: 'result'; path: string } | { kind: 'merged'; branch: string
 /** What a builder hands the run: the seat to start and the file its entry is written into.
  *  `copiedFrom` names the source of a declared copy; `temporary` the end a temporary seat runs to. */
 type Built = { name: string; seat: Seat; edited: string; temporary?: SeatState['temporary']; copiedFrom?: string };
-type BuildRefusal = { error: string; id: string };
+type BuildRefusal = { error: string; id: string; repair?: string };
 
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
@@ -570,16 +570,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
   const original = readTeamText(path, { home: sources.home ?? homedir() });
+  // The place the refusals below name: the file this run read, or the registry's record when that
+  // is the team's source — a seat the team does not declare is absent from that, not from a file
+  // a registry team need not have.
+  const place = teamPlace(path, { home: sources.home ?? homedir() }, 'the file');
   const asked = args.rest[0] ?? '';
   const built = temporary
-    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
+    ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now(), place)
     : args.values.like !== undefined
-      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs)
-      : declaredSeat(asked, original, team, sources.home, sources.fs);
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs, place)
+      : declaredSeat(asked, original, team, sources.home, sources.fs, place);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
-    // …); the plain line is the sentence it always printed.
-    refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
+    // …); the plain line is the sentence it always printed, and the repair, when the builder has
+    // one, is the form that declares the seat the refusal is about.
+    refuse(io, json, 'add', { id: built.id, message: built.error, repair: built.repair ?? null });
     // exit: add.no-seat
     // exit: add.human
     // exit: add.not-restored
@@ -1283,11 +1288,17 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 }
 
+/** The repair for a seat the team does not declare: declare it by copying one the team does
+ *  hold. Which seat to copy is the owner's to choose, so that word stays a placeholder. */
+function declaringForm(name: string): string {
+  return `team add ${name === '' ? '<name>' : name} --like <seat>`;
+}
+
 function declaredSeat(
-  name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+  name: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
 ): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
-  if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
+  if (!seat) return { id: 'add.no-seat', error: `${place} has no seat ${JSON.stringify(name)}`, repair: declaringForm(name) };
   // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
   // with the reason rather than walk a plan that would skip the only seat it was asked to add.
   if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
@@ -1295,7 +1306,7 @@ function declaredSeat(
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
-  if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into the file` };
+  if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into ${place}` };
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
@@ -1306,17 +1317,17 @@ function declaredSeat(
  * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
  */
 function copiedSeat(
-  name: string, like: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+  name: string, like: string, current: string, team: TeamFile, home: string, fs: FsReader | undefined, place: string,
 ): Built | BuildRefusal {
   const source = team.seats.find((item) => item.name === like);
-  if (!source) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(like)}` };
+  if (!source) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(like)}`, repair: declaringForm(name) };
   if (team.seats.some((item) => item.name === name)) {
-    return { id: 'add.like-exists', error: `the file already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
+    return { id: 'add.like-exists', error: `${place} already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
   }
   if (source.human) return { id: 'add.human', error: `${like} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   const edited = copySeat(current, like, name);
   if (edited === current || !hasSeat(edited, name)) {
-    return { id: 'add.not-restored', error: `couldn't copy ${like} into the file as ${name}` };
+    return { id: 'add.not-restored', error: `couldn't copy ${like} into ${place} as ${name}` };
   }
   // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
   // seat carries what the file would say; the validation before the write then refuses it by
@@ -1334,10 +1345,10 @@ function copiedSeat(
 
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
-  root: string, base: string | null, home: string, now: Date,
+  root: string, base: string | null, home: string, now: Date, place: string,
 ): Built | BuildRefusal {
   const like = approved.seats.find((item) => item.name === values.like);
-  if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
+  if (!like) return { id: 'add.no-like', error: `${place} has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
   if (!until) return { id: 'add.until', error: '--until is result:<path> or merged:<branch>' };
   let own: boolean | undefined;

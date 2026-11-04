@@ -278,7 +278,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-like",
-      "meaning": "the file has no seat to copy",
+      "meaning": "the team has no seat to copy",
       "trigger": "team add --temporary --like missing --until result:out.md"
     },
     {
@@ -292,7 +292,7 @@
       "code": 1,
       "command": "add",
       "id": "add.no-seat",
-      "meaning": "the file has no such seat",
+      "meaning": "the team has no such seat",
       "trigger": "team add missing"
     },
     {

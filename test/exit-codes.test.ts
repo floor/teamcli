@@ -803,7 +803,23 @@ scene('add.ceilings', async (place) => {
 });
 scene('add.no-seat', async (place) => {
   approve(place, TWO);
-  return show(await added(place, ['missing', '--file', place.file], owner, addSources(place)), 'no seat "missing"');
+  // A team the caller names by file says so: the file it reads has no such seat.
+  show(await added(place, ['missing', '--file', place.file], owner, addSources(place)), 'the file has no seat "missing"');
+  // The same root migrated into the registry: the file is still on disk, but the registry's record
+  // is what add reads now, so the refusal names the record and offers the declaring repair.
+  return underRegistry(async () => {
+    intoRegistry(place.root, place.home);
+    const refused = await added(place, ['missing', '--json'], owner, addSources(place));
+    if (!compareDry) {
+      const error = JSON.parse(refused.out).error;
+      expect(refused.code).not.toBe(0);
+      expect(error.id).toBe('add.no-seat');
+      expect(error.message).toBe(`the registry's record has no seat "missing"`);
+      expect(error.repair).toBe('team add missing --like <seat>');
+    }
+    // The plain line names the same place, the JSON document's quotes read as written.
+    return show(await added(place, ['missing'], owner, addSources(place)), `the registry's record has no seat "missing"`);
+  });
 });
 scene('add.human', async (place) => {
   approve(place, TWO.replace('    stopped: true\n', '    stopped: true\n    human: true\n'));
