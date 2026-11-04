@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import type { Io } from '../src/io.ts';
 import { CHECKPOINT_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { gitEnv } from './helpers.ts';
@@ -105,6 +106,89 @@ function makeIo(
     out: () => stdout.join(''),
     err: () => stderr.join(''),
   };
+}
+
+function seedEntityHeadTeam(): void {
+  writeFileSync(
+    join(agentsDir, 'team.yaml'),
+    TEAM_YAML(root)
+      .replace('project: alpha\n', 'project: alpha\nentity: corp\n')
+      .replace('  - ~/.config/team/lobby\n', '  - ~/.config/team/lobby\n  - ~/.config/team/lobbies/corp\n'),
+  );
+  const headRoot = join(base, 'corp');
+  const headAgents = join(headRoot, '.agents');
+  mkdirSync(headAgents, { recursive: true });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'init', '-q', '-b', 'main'], {
+    cwd: headRoot,
+    env: gitEnv(),
+  });
+  writeFileSync(
+    join(headAgents, 'team.yaml'),
+    `format: 1
+project: corp
+entity: corp
+coordinator: orchestrator
+operator: orchestrator
+trust:
+  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/corp
+  - ${headRoot}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: orchestrator
+    label: orchestrator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+
+  - role: implementer
+    name: helper
+    label: helper
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`,
+  );
+  updateState(headAgents, (state) => {
+    state.sessions.corp = {
+      ...emptySession(),
+      seats: {
+        orchestrator: {
+          stage: 'ready',
+          pane: 'pane-corp-orch',
+          workspace: 'ws-corp-orch',
+          cli: 'claude-code',
+        },
+        helper: {
+          stage: 'ready',
+          pane: 'pane-corp-helper',
+          workspace: 'ws-corp-helper',
+          cli: 'claude-code',
+        },
+      },
+    };
+  });
+  upsertTeam(home, teamIdOf(root), {
+    project: 'alpha',
+    entity: 'corp',
+    session: 'alpha',
+    root,
+    at: NOW.toISOString(),
+  });
+  upsertTeam(home, teamIdOf(headRoot), {
+    project: 'corp',
+    entity: 'corp',
+    session: 'corp',
+    root: headRoot,
+    at: NOW.toISOString(),
+  });
 }
 
 describe('team checkpoint (R2)', () => {
@@ -321,5 +405,69 @@ describe('team checkpoint (R2)', () => {
       id: 'checkpoint.io',
       messageContains: 'the state cannot be written',
     });
+  });
+
+  test('entity main orchestrator, placed in its own team session, may ask for a checkpoint', async () => {
+    seedEntityHeadTeam();
+    const { io, out, err } = makeIo(root, {
+      kind: 'seat',
+      session: 'corp',
+      name: 'orchestrator',
+      pane: 'pane-corp-orch',
+    });
+
+    const code = await runCheckpoint(['worker', '--json'], io, { home, now: () => NOW });
+
+    expect(code).toBe(0);
+    expect(err()).toBe('');
+    const doc = assertMatchesOutputSchema(out(), CHECKPOINT_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({
+      status: 'recorded',
+      seat: 'worker',
+      by: 'orchestrator',
+    });
+    expect(readState(agentsDir).checkpoints?.worker?.by).toBe('orchestrator');
+  });
+
+  test('a seat of the entity head team that is not its orchestrator is refused', async () => {
+    seedEntityHeadTeam();
+    const { io, out, err } = makeIo(root, {
+      kind: 'seat',
+      session: 'corp',
+      name: 'helper',
+      pane: 'pane-corp-helper',
+    });
+
+    const code = await runCheckpoint(['worker', '--json'], io, { home, now: () => NOW });
+
+    expect(code).toBe(1);
+    expect(err()).toBe('');
+    const errDoc = assertJsonErrorShape(out(), {
+      id: 'checkpoint.caller',
+      messageContains: 'only the owner or `leads` records a checkpoint ask; this call is helper',
+    });
+    expect(errDoc.error.rule).toBe('owner-or-leads');
+    expect(readState(agentsDir).checkpoints?.worker).toBeUndefined();
+  });
+
+  test('entity main orchestrator failing the pane check is refused with owner-or-leads standing', async () => {
+    seedEntityHeadTeam();
+    const { io, out, err } = makeIo(root, {
+      kind: 'seat',
+      session: 'corp',
+      name: 'orchestrator',
+      pane: 'pane-wrong',
+    });
+
+    const code = await runCheckpoint(['worker', '--json'], io, { home, now: () => NOW });
+
+    expect(code).toBe(1);
+    expect(err()).toBe('');
+    const errDoc = assertJsonErrorShape(out(), {
+      id: 'checkpoint.caller',
+      messageContains: 'only the owner or `leads` records a checkpoint ask; this call is orchestrator',
+    });
+    expect(errDoc.error.rule).toBe('owner-or-leads');
+    expect(readState(agentsDir).checkpoints?.worker).toBeUndefined();
   });
 });
