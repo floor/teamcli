@@ -22,6 +22,7 @@ import { readLaunchedTeam } from '../file/team-text.ts';
 import type { Problem } from '../file/types.ts';
 import { agentList, sessionState, workspaceList, type HerdrAgent } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { sidebarTail } from '../launch/auto-order.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
 import { gateVerdict } from '../permissions/who.ts';
@@ -182,49 +183,25 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
   }
   const recorded = state.sessions[session];
 
-  // The roster order this run aims at: the orchestrator's seat first, then the remaining declared
-  // seats in the file's order. A human seat's pane is the owner's and is never relaunched over,
-  // so it stands where it stands; a seat with no recorded workspace is not in the sidebar and
-  // nothing here launches it.
-  const orchestrator = team.orchestrator;
-  const orderable = team.seats.filter((seat) => seat.name !== orchestrator && seat.human !== true).map((seat) => seat.name);
-  const roster = [orchestrator, ...orderable].filter((name): name is string => name !== undefined && name !== '');
-  // A seat's workspace is its state's own record; a team whose state predates that field is read
-  // through the live agent list instead — the agent on the seat's recorded pane carries the
-  // workspace it runs in. Never a guess: a seat neither names is not in the sidebar.
-  const workspaceOf = (name: string): string | undefined => {
-    const held = recorded?.seats[name]?.workspace;
-    if (held !== undefined) return held;
-    const pane = recorded?.seats[name]?.pane;
-    const agent = pane === undefined ? undefined : agents.find((one) => one.pane === pane);
-    return agent?.workspace;
-  };
-  const seatOfWorkspace = new Map<string, string>();
-  for (const name of roster) {
-    const workspace = workspaceOf(name);
-    if (workspace !== undefined) seatOfWorkspace.set(workspace, name);
-  }
-  const inSidebar = workspaces.flatMap((workspace) => {
-    const name = seatOfWorkspace.get(workspace.id);
-    return name === undefined ? [] : [name];
-  });
-  const aimed = roster.filter((name) => workspaceOf(name) !== undefined);
+  // The roster order this run aims at and the tail that would move: the one computation
+  // shared with the automatic pass after add/restart, so the two can never disagree
+  // about what is out of order.
+  const { roster, inSidebar, aimed, tail } = sidebarTail(team, recorded, workspaces, agents);
 
   out.stdout(`team order: sidebar: ${inSidebar.join(', ')}\n`);
   out.stdout(`team order: roster: ${aimed.join(', ')}\n`);
 
-  const diverge = inSidebar.findIndex((name, index) => name !== aimed[index]);
-  if (diverge === -1) {
+  if (tail.length === 0) {
     out.stdout('team order: the sidebar already reads in roster order; nothing was closed\n');
     logLine(dir, 'order', logTag(walked), `sidebar already in roster order (session ${plainLine(session)})`, at);
     // exit: order.match
     return 0;
   }
-  // The moving tail: the seats the sidebar holds from the divergence on, re-created in roster
-  // order. Both lists hold the same seats — they are two orders of one tail — so the set is the
-  // membership and the roster slice is the sequence.
-  const set = inSidebar.slice(diverge);
-  const sequence = aimed.slice(diverge);
+  // The moving tail: the seats from the first divergence on, re-created in roster order.
+  // The sidebar's own slice holds the same seats in its current order, so the tail is
+  // both the membership and the sequence.
+  const set = tail;
+  const sequence = tail;
 
   // A run may not close the pane it runs in: the loop below would kill this command mid-pass.
   if (caller.kind === 'seat') {

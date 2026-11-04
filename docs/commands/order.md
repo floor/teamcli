@@ -26,6 +26,15 @@ nothing here launches it.
 and touches nothing. A pass that ends verifies its own claim: the sidebar is read again, and a
 session that still does not name the seats in roster order is reported, never assumed.
 
+Most passes start themselves: after a [`team add`](add.md) or [`team restart`](restart.md) lands
+a seat ready, the sidebar's out-of-order tail is read once, and when no seat in it is working or
+blocked at a prompt this command starts on its own, detached, with the placing command's session
+(and file, when named). When the tail cannot be shown idle, the placing command's answer carries
+one hint line naming `team order` instead. The automatic pass is this command whole — same gate,
+same refusals, same log — and a caller it would refuse simply starts a pass that refuses. The
+sidebar policy word `workspace.sidebar.manage` switched off silences the whole hook: no pass, no
+hint.
+
 ## Synopsis
 
     team order [--dry-run] [--session <name>] [--file <path>]

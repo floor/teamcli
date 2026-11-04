@@ -15,11 +15,13 @@ import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
 import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
@@ -97,6 +99,8 @@ export type AddSources = {
   // The delegate gate, overridable so a test can hand a delegated run its verdict. Absent: the
   // real gate (`src/delegate.ts`).
   delegateGate?: typeof delegateGate;
+  /** The automatic order pass after a ready launch. Absent: the real one. */
+  autoOrder?: typeof maybeAutoOrder;
 };
 
 const realLaunch: Launch = {
@@ -1255,6 +1259,23 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
     if (launched && built.temporary) {
       recordLedger(storePath(team.project, root, sources.home), [built.seat]);
+    }
+    // The new seat sits at the sidebar's end: the automatic order pass runs detached when
+    // the tail is idle, or the answer carries its one hint line. Off under the sidebar
+    // policy's manage word. The launch is already earned; this never bends its answer.
+    const orderNote = launched && !report.serverFailed && !outcome.swallowed
+      ? (sources.autoOrder ?? maybeAutoOrder)(
+        {
+          root, dir, team: prepared.team, session,
+          ...(args.values.file !== undefined ? { file: args.values.file } : {}),
+          manage: sidebarPolicy({ home: sources.home, root, team: prepared.team, now: sources.now() }).manage,
+        },
+        { ...realAutoOrderSources, workspaces: sources.workspaces, agents: sources.agents },
+      )
+      : null;
+    if (orderNote !== null) {
+      if (json) jsonNotes.push(`team add: ${orderNote}`);
+      else out.stdout(`team add: ${plainText(orderNote)}\n`);
     }
     if (json) {
       if (outcome.swallowed) {
