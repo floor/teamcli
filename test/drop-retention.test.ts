@@ -35,6 +35,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../src/launch/general-brief.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import {
   DROP_ARCHIVE_DIR,
@@ -1044,3 +1045,295 @@ describe('slice 2: hot read paths skip read bodies and cache verified stamps ins
     expect(stdout).toContain(`body for ${unreadId}`);
   });
 });
+
+describe('slice 3: deletes archived drops past the long window while keeping the signed manifest', () => {
+  const LONG_FUTURE = new Date(NOW.getTime() + 95 * 24 * 60 * 60 * 1000);
+  const MID_FUTURE = new Date(NOW.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  test('reclaims archived drop families past the long window, removes empty session/seat folders, and retains the signed manifest', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    writeFileSync(livePath('worker', `${READ_ID_1}.wake`), '{"at":"2026-09-20T00:00:00.000Z","state":"read"}\n');
+    writeFileSync(livePath('worker', `${READ_ID_1}.reported`), '{"at":"2026-09-20T00:00:00.000Z"}\n');
+    ageFamily('worker', READ_ID_1, OLD);
+
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, OLD);
+
+    // Step 1: Slice 1 archives both families into .archive/<DATE>/acme/worker/ with a signed manifest.
+    const archivedReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+    expect(archivedReport.refused).toBeNull();
+    expect(archivedReport.archived.map((f) => f.id)).toEqual([READ_ID_1, READ_ID_2]);
+    expect(archivedReport.reclaimed).toEqual([]);
+    const manifestPath = archivedReport.manifestPath!;
+    expect(manifestPath).not.toBeNull();
+
+    // Step 2: Inside the long window (30 days after archiving), nothing in .archive is deleted.
+    const midReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: MID_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(midReport.refused).toBeNull();
+    expect(midReport.reclaimed).toEqual([]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_2))).toBe(true);
+
+    // Step 3: Past the long window (95 days after archiving), the archived files and empty
+    // <session>/<seat> directories are unlinked while the signed manifest stays intact.
+    const reclaimReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(reclaimReport.refused).toBeNull();
+    expect(reclaimReport.reclaimed.map((f) => f.id)).toEqual([READ_ID_1, READ_ID_2]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.wake`))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.reported`))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_2))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_2}.read.json`))).toBe(false);
+    // Empty <seat> and <session> folders under .archive/<DATE>/ are removed.
+    expect(existsSync(archiveSeatDir('worker'))).toBe(false);
+    expect(existsSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR, DATE, 'acme'))).toBe(false);
+    // The signed manifest stays in .archive/<DATE>/ and still verifies with the checkout message key.
+    expect(existsSync(manifestPath)).toBe(true);
+    const verified = verifyDropArchive(JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown, messageKeyOf(home));
+    expect(verified).not.toBeNull();
+    expect(verified?.families.map((f) => f.id)).toEqual([READ_ID_1, READ_ID_2]);
+
+    // Step 4: Re-running after reclamation is an idempotent no-op.
+    const repeatReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: new Date(LONG_FUTURE.getTime() + 86_400_000),
+      slices: defaultSlices(),
+    });
+    expect(repeatReport.refused).toBeNull();
+    expect(repeatReport.reclaimed).toEqual([]);
+    expect(existsSync(manifestPath)).toBe(true);
+  });
+
+  test('keep-all (event-retention-days = 0) is a complete no-op for both archiving and archive deletion', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const archivedReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+    expect(archivedReport.archived.map((f) => f.id)).toEqual([READ_ID_1]);
+
+    // Plant another old read drop in the live folder and set entity policy event-retention-days = 0 (keep-all).
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, OLD);
+
+    const setKeepAll = writePolicySet(
+      home,
+      { level: 'entity', target: 'floor', name: 'event-retention-days', value: 0 },
+      { now: NOW },
+    );
+    expect(setKeepAll.ok).toBe(true);
+
+    const keepAllReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(keepAllReport.refused).toBeNull();
+    expect(keepAllReport.archived).toEqual([]);
+    expect(keepAllReport.reclaimed).toEqual([]);
+    // Both the live drop and the archived drop stay untouched under keep-all.
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+  });
+
+  test('refuses to delete archived drops when the manifest does not verify or a file digest does not match', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const archivedReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+    const manifestPath = archivedReport.manifestPath!;
+    const originalManifestText = readFileSync(manifestPath, 'utf8');
+    const archivedRecordPath = join(archiveSeatDir('worker'), READ_ID_1);
+    const originalRecordBytes = readFileSync(archivedRecordPath);
+
+    // 1. Tamper with the archived record bytes so its SHA-256 digest mismatches the signed manifest.
+    writeFileSync(archivedRecordPath, Buffer.concat([originalRecordBytes, Buffer.from('\n')]));
+    const digestMismatch = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(digestMismatch.refused).toContain('digest');
+    expect(digestMismatch.reclaimed).toEqual([]);
+    expect(existsSync(archivedRecordPath)).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(true);
+    writeFileSync(archivedRecordPath, originalRecordBytes);
+
+    // 2. Corrupt the manifest signature: nothing is unlinked.
+    const parsedManifest = JSON.parse(originalManifestText) as { payload: unknown; signature: string };
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ payload: parsedManifest.payload, signature: '0'.repeat(parsedManifest.signature.length) }, null, 2)}\n`,
+    );
+    const badSig = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(badSig.refused).toContain('manifest');
+    expect(badSig.reclaimed).toEqual([]);
+    expect(existsSync(archivedRecordPath)).toBe(true);
+    writeFileSync(manifestPath, originalManifestText);
+
+    // 3. Remove the manifest while archived files remain in .archive/<DATE>/acme/worker: refuses without deleting.
+    rmSync(manifestPath);
+    const missingManifest = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(missingManifest.refused).toContain('manifest');
+    expect(missingManifest.reclaimed).toEqual([]);
+    expect(existsSync(archivedRecordPath)).toBe(true);
+    writeFileSync(manifestPath, originalManifestText, { mode: 0o600 });
+
+    // 4. Plant an unlisted extra file inside .archive/<DATE>/acme/worker: refuses without deleting.
+    const unlistedPath = join(archiveSeatDir('worker'), READ_ID_2);
+    writeFileSync(unlistedPath, originalRecordBytes, { mode: 0o600 });
+    const unlistedReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(unlistedReport.refused).toContain('manifest');
+    expect(unlistedReport.reclaimed).toEqual([]);
+    expect(existsSync(archivedRecordPath)).toBe(true);
+    rmSync(unlistedPath);
+  });
+
+  test('refuses symlink swaps inside .archive before or during descriptor-held unlinks and never unlinks outside send-drops', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+
+    const realOps = getRelativeDirOps();
+    expect(realOps).not.toBeNull();
+    if (!realOps) return;
+
+    const outsideDir = join(base, 'outside-archive-reclaim');
+    mkdirSync(outsideDir, { recursive: true });
+    const outsideVictim = join(outsideDir, READ_ID_1);
+    writeFileSync(outsideVictim, 'do not delete\n');
+
+    const destSeatDir = archiveSeatDir('worker');
+    const movedAsideSeatDir = join(base, 'moved-aside-archive-seat');
+
+    // Swap `.archive/<DATE>/acme/worker` for a symlink to `outsideDir` right inside `unlinkat`.
+    let swapped = false;
+    const raced = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      atFfi: {
+        ...realOps,
+        unlinkat: (dirfd, name) => {
+          if (!swapped && name === READ_ID_1) {
+            swapped = true;
+            renameSync(destSeatDir, movedAsideSeatDir);
+            symlinkSync(outsideDir, destSeatDir);
+          }
+          return realOps.unlinkat(dirfd, name);
+        },
+      },
+      slices: defaultSlices(),
+    });
+
+    expect(swapped).toBe(true);
+    expect(raced.refused).toContain('symbolic link');
+    expect(raced.reclaimed).toEqual([]);
+    // The outside victim file is completely untouched because unlinks use the held fd and verify the parent chain.
+    expect(existsSync(outsideVictim)).toBe(true);
+  });
+
+  test('chores child housekeeping logs reclaimed count and slices across archive reclamation', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const config: ChoresChildConfig = {
+      version: 1,
+      home,
+      beatMs: 5_000,
+      sliceMs: 1,
+      since: OLD_ISO,
+      routes: [{ root, team: 'acme', session: 'acme', teamFile: team }],
+    };
+    const pass = createFallbackPass(config);
+    const route: ChoresChildRoute = config.routes[0]!;
+    const childSlices: ChoresSlices = {
+      sliceMs: 1,
+      stopping: () => false,
+      yield: async () => true,
+    };
+
+    // Pass 1: initial escalation-only beat.
+    await pass({ route, at: new Date(NOW.getTime() - FALLBACK_STORE_PASS_MS), slices: childSlices });
+    // Pass 2 at NOW: archives READ_ID_1.
+    const notesArchive = await pass({ route, at: NOW, slices: childSlices });
+    expect(notesArchive.some((line) => line.includes('drop store: archived 1'))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+
+    // Pass 3 at LONG_FUTURE: reclaims READ_ID_1 from .archive and logs reclaimed count.
+    const notesReclaim = await pass({ route, at: LONG_FUTURE, slices: childSlices });
+    expect(notesReclaim.some((line) => line.includes('drop store: archived 0, reclaimed 1'))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(false);
+  });
+});
+
