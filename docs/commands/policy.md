@@ -15,7 +15,7 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `state-trace-window-seconds`, `state-blind-after-seconds`, `state-hook-working-seconds`,
 `liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
 `brief-transport`,
-`event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
+`event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`, `event-segment-mb`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
 `swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `webhook-sender-deadline-ms`,
@@ -100,6 +100,16 @@ a value above the release default is refused, and so is a level's word that leng
 above it. The shorter field spellings (`held_threshold_seconds`, `thread-ttl`, …) are accepted
 and written back under the canonical name. `team bus` reads the held, retention and reconcile
 numbers when it starts, and `team reply` reads the thread life and cap from the caller's chain.
+
+The log itself is kept in segments. `event-segment-mb` is the size of the open segment in whole
+megabytes — 8 by default, 1 to 50 — after which an append seals it and opens the next; it is a
+mechanical number, so the nearest level's word wins and no word tightens another's. What is kept
+in all is bounded two ways: `event-retention-days` drops a sealed segment once it is wholly older
+than the window (`0` and `all` are the explicit keep-everything words, and keep-all is looser
+than every positive count, so no lower level may restore it against a level that dropped it),
+and a fixed retained-size cap of 100 MB drops the oldest sealed segments first, each drop
+declared in the log itself. The log stays writable when the chain cannot be read: the release
+defaults stand in and the append path keeps writing.
 
 `model-rule` is the entity's rule for which models may run on which seats, held as one line of
 `;`-separated entries, `<seat|role|*>=<lab>+<lab>`. A seat name beats a role word, a role beats
