@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PRIVILEGED_SELF_SUBSCRIPTION_RULE } from '../src/bus/kinds.ts';
-import { createSequenceTracker, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
+import { appendEvent, createSequenceTracker, readEvents, type SignedEventRecord } from '../src/bus/log.ts';
 import { reconcilePass } from '../src/bus/reconcile.ts';
 import {
   busSocket,
@@ -251,7 +251,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     if (started.kind !== 'serving') return;
     handles.push(started.handle);
 
-    const published = await publishToBus(root, {
+    const published = appendEvent(parsed.team.project, root, home, {
       ts: '2026-10-18T12:00:00.000Z',
       kind: 'message.delivered',
       session: 'acme',
@@ -259,7 +259,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       from: 'clerk',
       to: 'worker-1',
     });
-    expect(published.kind).toBe('published');
+    expect(published.ok).toBe(true);
 
     // Subscribing by the agent id, with the pane the registry holds, reaches the agent's seat.
     const byId = await subscribeBusOnce(root, { seat: agent.id, pane: 's1:p3', cursor: 0 });
@@ -380,14 +380,14 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       ['record.invalid', 'r-1'],
       ['security.refused', 's-1'],
     ] as const) {
-      const published = await publishToBus(root, {
+      const published = appendEvent(parsed.team.project, root, home, {
         ts: '2026-10-18T12:02:00.000Z',
         kind,
         session: 'acme',
         record_id: id,
         rule: 'signature',
       });
-      expect(published.kind).toBe('published');
+      expect(published.ok).toBe(true);
     }
 
     const ownerSub = await subscribeBusOnce(root, { seat: 'owner', cursor: 0 });
@@ -427,14 +427,14 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
     handles.push(started.handle);
 
     // An event the policy routes to the lead, the subject and the owner.
-    const grant = await publishToBus(root, {
+    const grant = appendEvent(parsed.team.project, root, home, {
       ts: '2026-10-18T12:00:00.000Z',
       kind: 'team.grant-issued',
       session: 'acme',
       record_id: 'grant-1',
       subject: 'worker-1',
     });
-    expect(grant.kind).toBe('published');
+    expect(grant.ok).toBe(true);
 
     // The name alone receives nothing: the seat is a plain recipient like any other.
     const plain = await subscribeBusOnce(root, { seat: 'watch', cursor: 0 });

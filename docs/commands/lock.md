@@ -6,8 +6,12 @@ directory is already there, which is the whole of the take: a second caller is r
 nothing. The holder is a file named `who`, written only after the `mkdir` succeeds.
 
 `<name>` is a name — lowercase letters, digits and hyphens — never a path. `--for` is a one-line
-note of what the run is. `--wait` is how many seconds to wait for the holder to release the lock.
-The wait does not break it. When it ends, the same refusal is printed.
+note of what the run is. `--wait` is how many seconds to wait for a turn. Waiters queue in
+arrival order — one ticket each in `<home>/.config/team/locks/<name>.queue` — and only the
+oldest live ticket takes the lock when it frees; a take without `--wait` is refused while a
+queue stands, so nobody jumps it. The wait does not break the lock. When it ends, the same
+refusal is printed, and the waiter's ticket goes with it. A ticket whose waiter process is gone
+is pruned by the next waiter to look.
 
 The caller is the project in the current folder and who is running: the owner at a terminal, or
 the seat's name. Unlocking (`team unlock`) removes the lock only when that same pair is in `who`.
@@ -25,6 +29,12 @@ under the home's `.config/team/locks/`, and one `who` file inside it:
     run: release CI
     by: owner
     at: 2026-10-04T09:00:00Z
+    pid: 4242
+
+`pid` is the long-lived shell the run lives in — the process that ran `team lock` and goes on
+to run the work — recorded when the take can name it. It is never the `team lock` process's
+own pid, which is dead as soon as the take prints. A waiting take also writes its ticket in
+the queue directory while it waits and removes it when it ends.
 
 A lock that is already held is only read. A failed take writes nothing: no `who`, and no
 replacement of the one already there.
@@ -40,7 +50,7 @@ file is refused before the lock is touched: the holder has to name a project.
 | --- | --- |
 | `<name>` | the lock's name: lowercase letters, digits and hyphens, at most 64 characters |
 | `--for <text>` | the note stored as `run`; a line break in it becomes a space |
-| `--wait <seconds>` | wait this many seconds, a second at a time, for the holder to release the lock; at most 86400 |
+| `--wait <seconds>` | queue for a turn for up to this many seconds, a second at a time; at most 86400 |
 | `--json` | emit a `team.lock` v1 JSON document (`schema/lock.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -58,23 +68,33 @@ file is refused before the lock is touched: the holder has to name a project.
 | `<name>: held; its holder file is not there yet` | 1 |
 | `<name>: held; its holder file cannot be read` | 1 |
 | `<name>: held; its lock is not a directory` | 1 |
+| the held lines above, with `; <n> waiting` while a queue stands for the lock | 1 |
+| `<name>: held; its queue is being served; <n> waiting` (the lock stands free between turns) | 1 |
 
-A held lock is never removed by this command. A holder file that is missing or unreadable is
-still a held lock: nothing is cleared and nobody is guessed.
+A held lock is removed by this command only when its holder is proven stale, below. A holder
+file that is missing or unreadable is still a held lock: nothing is cleared and nobody is
+guessed.
 
 ## When the holder is gone
 
-A run that finished the take and never unlocked leaves a holder file. `team lock` refuses, with
-or without `--wait`:
+A run that finished the take and never unlocked leaves a holder file. What happens next depends
+on the `pid` it recorded — the shell the run lived in:
 
-    heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 3h
+- **That shell is dead.** The holder is stale, and the next take reclaims the lock: it re-reads
+  `who`, requires the file byte for byte as it was before the liveness check and the pid still
+  dead, then clears the directory and takes the lock itself. A shell that was replaced between
+  the reads, or one still alive, is never cleared.
+- **That shell still lives, or no pid was recorded.** `team lock` refuses, with or without
+  `--wait`:
 
-`team unlock` from that caller releases it: the same project, and the same `by` (the owner at a
-terminal, or the seat's name). Anyone else is refused. When that caller is not coming back, no
-`team` command clears the lock. The owner checks that nothing is still running under that holder,
-then removes the directory by hand:
+      heavy-run: held since 2026-10-04T09:00:00Z by owner (beacon) — release CI, for 3h
 
-    ~/.config/team/locks/<name>.lock
+  `team unlock` from that caller releases it: the same project, and the same `by` (the owner at
+  a terminal, or the seat's name). Anyone else is refused. When that caller is not coming back
+  and its shell is somehow still alive, no `team` command clears the lock. The owner checks
+  that nothing is still running under that holder, then removes the directory by hand:
+
+      ~/.config/team/locks/<name>.lock
 
 A take that died after the directory was created and before `who` was written, and a holder that
 cannot be read, refuse every caller. `team lock` says one of:
@@ -84,8 +104,8 @@ cannot be read, refuse every caller. `team lock` says one of:
     heavy-run: held; its lock is not a directory
 
 `team unlock` refuses these too, and leaves the path in place. No `team` command clears them, by
-design. The owner checks that nothing is still creating the lock, then removes that same directory
-by hand.
+design: nothing in them proves the holder gone. The owner checks that nothing is still creating
+the lock, then removes that same directory by hand.
 
 A seat does not remove a lock it did not take.
 

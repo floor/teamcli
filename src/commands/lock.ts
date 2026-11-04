@@ -60,6 +60,9 @@ export async function runLock(argv: string[], io: Io, sources: LockSources = rea
     now: sources.now,
     sleep: sources.sleep,
     waitSeconds: wait.seconds,
+    ...(sources.pid === undefined ? {} : { pid: sources.pid }),
+    ...(sources.waiterPid === undefined ? {} : { waiterPid: sources.waiterPid }),
+    ...(sources.alive === undefined ? {} : { alive: sources.alive }),
   });
   if (outcome.kind === 'bad-name') return invocation(out, nameProblem(name), json);
   if (outcome.kind === 'taken') {
