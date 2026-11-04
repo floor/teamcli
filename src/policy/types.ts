@@ -650,6 +650,14 @@ function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
   return out;
 }
 
+/** True when a raw delivery-order word names a retired alias word anywhere — alone or beside
+ *  live legs. New writes refuse such a word with the leg's own reason (`src/policy/sources.ts`);
+ *  a stored record still reads, and `parseDeliveryOrder` drops the name. */
+export function namesRetiredOrderWord(raw: unknown): boolean {
+  const items = rawDeliveryItems(raw);
+  return items !== null && items.some((item) => typeof item === 'string' && (LEGACY_ORDER_WORDS as readonly string[]).includes(item));
+}
+
 function deliveryOrderProblem(raw: unknown): string | null {
   const items = rawDeliveryItems(raw);
   if (items && items.some((item) => item === 'socket-accepted')) {

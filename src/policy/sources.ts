@@ -26,16 +26,7 @@ import {
   type PolicySourceRead,
   type ResolvePolicyOptions,
 } from './resolve.ts';
-import {
-  getPolicySpec,
-  normalizePolicyName,
-  POLICY_DOMAIN,
-  POLICY_LEVELS,
-  type Policy,
-  type PolicyKind,
-  type PolicyLevel,
-  type PolicyValue,
-} from './types.ts';
+import { POLICY_DOMAIN, POLICY_LEVELS, getPolicySpec, namesRetiredOrderWord, normalizePolicyName, type Policy, type PolicyKind, type PolicyLevel, type PolicyValue } from './types.ts';
 import { readTeamText, readTeamTextTarget, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 
 /** True only for the error that says a policy file is not there. A file that cannot be read is
@@ -786,11 +777,11 @@ export function planPolicySet(
           : `invalid value "${formatRawValue(request.value)}" for policy "${name}"`,
       };
     }
-    // A word whose every name is retired parses to no live leg (`delivery-order` naming only
-    // `mcp-inbox`): a new policy write naming it is refused with its own reason, since a stored
-    // empty word would not read back. A record an older build wrote still reads — the resolver
-    // reads that word as declaring nothing (`src/policy/resolve.ts`).
-    if (spec.emptyWordDeclaresNothing === true && Array.isArray(parsed) && parsed.length === 0) {
+    // A word naming the retired `mcp-inbox` anywhere is refused with its own reason: an
+    // alias-only word would store an empty word that cannot read back, and a mixed one would
+    // silently drop the name the writer wrote. A record an older build wrote still reads — the
+    // resolver reads the alias as declaring nothing (`src/policy/resolve.ts`).
+    if (spec.emptyWordDeclaresNothing === true && namesRetiredOrderWord(request.value)) {
       return { ok: false, why: `policy "${name}" names mcp-inbox, which is no longer a leg; remove it` };
     }
     normalizedValue = parsed;

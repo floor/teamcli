@@ -502,6 +502,17 @@ describe('the write verbs', () => {
     if (refused.ok) return;
     expect(refused.why).toBe('policy "delivery-order" names mcp-inbox, which is no longer a leg; remove it');
 
+    // A mixed word is refused with the same reason: storing it would silently drop the name
+    // the writer wrote, so no new write names the retired alias anywhere.
+    const refusedMixed = writePolicySet(
+      home,
+      { level: 'entity', target: 'lab', name: 'delivery-order', value: ['mcp-inbox', 'typed'] },
+      { now: new Date('2026-10-01T00:00:00Z') },
+    );
+    expect(refusedMixed.ok).toBe(false);
+    if (refusedMixed.ok) return;
+    expect(refusedMixed.why).toBe('policy "delivery-order" names mcp-inbox, which is no longer a leg; remove it');
+
     // The record the older build wrote: a live `typed` entry, re-valued to the retired word and
     // re-signed over it, the way that build's own writer would have signed `mcp-inbox`.
     const written = writePolicySet(
