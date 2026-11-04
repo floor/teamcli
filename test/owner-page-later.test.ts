@@ -442,7 +442,7 @@ describe('owner list: the later answer', () => {
     // A future word whose value would pass the cap is refused before any signature is made.
     const seat = await seatModule();
     const over = laterOf(second.id, second.params_sha256, new Date(T0.getTime() + CAP_MS + MINUTE), null, s.now());
-    const refused = seat.signOwnerLater(s.home, over, new Date(T0.getTime() + MINUTE).toISOString(), 'iphone', s.store, 'later');
+    const refused = seat.signOwnerLater(s.home, over, T0.toISOString(), 'iphone', s.store, 'later');
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.why).toContain('7-day cap');
     expect(existsSync(laterPath(s, second.id))).toBe(false);

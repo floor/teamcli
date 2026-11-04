@@ -27,7 +27,7 @@ import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { answerCard, cardPrompt, ownerActionCard } from './approval-card.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
-import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { answerDeadline, deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type AnswerWindow, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
 export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget', 'team-config', 'team-general-grant', 'development-mode'] as const;
@@ -105,8 +105,9 @@ function askedBy(params: OwnerActionParams): readonly string[] {
   return params.requesters ?? [params.requested_by];
 }
 
-function requestExpired(expires: string | null, now: Date): boolean {
-  return expires !== null && Date.parse(expires) <= now.getTime();
+/** The binding a deferral must name and the window an extension counts from. */
+function windowOf(record: OwnerActionRecord): AnswerWindow {
+  return { params_sha256: record.params_sha256, created: record.created, expires_at: record.expires_at };
 }
 
 export function canonicalRoot(root: string): string {
@@ -454,7 +455,8 @@ export function approveOwnerAction(
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
-  if (requestExpired(record.expires_at, now)) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
   if (seat === null) return { ok: false, why: 'no owner seat is registered' };
   if (via.signer !== undefined && askedBy(record.params).includes(via.signer)) return { ok: false, why: `signer "${via.signer}" asked for request ${id}; no principal approves its own request` };
@@ -557,7 +559,8 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
   if (p.team !== ask.team) return { ok: false, why: `request ${id} is for team "${p.team}", not "${ask.team}"` };
   if (p.head !== null && p.head !== ask.head) return { ok: false, why: `request ${id} was approved at HEAD ${p.head.slice(0, 12)}; HEAD is now ${ask.head?.slice(0, 12) ?? 'unknown'}` };
   if (p.args[ask.action] !== actionArgsHash(ask.action, ask.words)) return { ok: false, why: `request ${id} was approved for other ${ask.action} arguments` };
-  if (requestExpired(record.expires_at, now)) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  const deadline = answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS);
+  if (deadline <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   let answerText: string | null = null;
   try {
     answerText = readFileSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`), 'utf8');
@@ -572,7 +575,7 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
     }
     const bound = boundAnswer(home, signed, record, store, now);
     if (!bound.ok) return bound;
-    if (record.expires_at !== null && !(Date.parse(bound.answer.at) <= Date.parse(record.expires_at))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
+    if (!(Date.parse(bound.answer.at) <= answerDeadline(home, actionRequestsFolder(home), id, windowOf(record), store, now, OWNER_ACTION_TTL_MS))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
     if (bound.answer.choice === 'deny') return { ok: false, why: `the owner seat denied request ${id}` };
     admitted = { ok: true, via: 'owner-seat', requestId: id, signer: bound.signer };
   } else {
