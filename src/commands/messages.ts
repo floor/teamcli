@@ -59,6 +59,7 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { noteUnread } from '../send/unread-hint.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -161,7 +162,8 @@ function isDir(path: string): boolean {
   }
 }
 
-function samePath(a: string, b: string): boolean {
+/** Two spellings of one folder: the real paths where both can be read, the strings otherwise. */
+export function samePath(a: string, b: string): boolean {
   try {
     return realpathSync(a) === realpathSync(b);
   } catch {
@@ -381,6 +383,9 @@ export function plantRecord(
   mkdirSync(dir, { recursive: true });
   const path = recordFile(dir, id);
   writeAtomic(path, `${JSON.stringify(record, null, 2)}\n`);
+  // The helper writes what a send writes: the record and the recipient's unread index entry
+  // naming it, so a fixture reads exactly as a landed drop does.
+  noteUnread(dir, payload.from, id, at);
   return path;
 }
 

@@ -9,10 +9,20 @@
 // a sender that sent three messages and is answered once keeps the other two unread, each with its
 // own wake, so one answer never silently swallows unread work. The receipt is the seat's, never the
 // original sender's.
-import { listUnackedMessages, recordDir } from '../commands/messages.ts';
+//
+// The newest message is found through the recipient folder's unread index (`src/send/unread-hint.ts`),
+// never by walking the session's transport tree: one small file names the sender's newest few
+// staged records, and this sweep reads and verifies them newest first until one is a delivery the
+// rule counts. The index is a hint — an entry that does not verify, is not this seat's from this
+// sender, is already read or was delivered after the send settles nothing, the next entry is
+// tried, and when none holds nothing is marked. None of it falls back to a scan.
+import { join } from 'node:path';
+import { recordDir, samePath } from '../commands/messages.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readHistory, type HistoryEntry } from './history.ts';
 import { publishRecordRead } from './read-receipt.ts';
+import { recordAuthOfSealed, isRead, readRecord, sealedOfRecord } from './record.ts';
+import { readUnreadHint } from './unread-hint.ts';
 
 /** The legs whose delivery is evidence enough to answer: a frame the receiver's session took, a
  *  push its channel carried, or its own native handoff. A typed wake is that leg's own act and a
@@ -64,41 +74,56 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
   const { seat, sender, senderId, root, session, project, home, at } = input;
   const state = messageKeyState(home);
   if (state.kind !== 'key') return { kind: 'unavailable', reason: 'key' };
+  const dropDir = recordDir(root, session, seat);
+  // The one index read: the sender's newest staged records, or nothing. No tree is listed.
+  const hints = readUnreadHint(dropDir, sender);
+  if (hints.length === 0) return { kind: 'none' };
   const lines = firstLinesOf(project, root, home);
   if (lines === null) return { kind: 'unavailable', reason: 'history' };
   const sentAt = Date.parse(at);
   if (Number.isNaN(sentAt)) return { kind: 'none' };
-  let newest: { id: string; at: number } | null = null;
-  for (const message of listUnackedMessages(root, session, home)) {
-    if (message.to !== seat) continue;
-    if (message.from !== sender) continue;
+  // Each entry the index names, newest first, read and authenticated as `team messages` reads it.
+  // The first that holds is the newest delivered-unread message this send answers; anything that
+  // does not hold is passed over, and when nothing holds the send settles nothing rather than
+  // searching the tree.
+  for (const hint of hints) {
+    const read = readRecord(join(dropDir, hint.id), hint.id);
+    if (!read.ok || read.record === null) continue;
+    const sealed = sealedOfRecord(read.record);
+    const auth = recordAuthOfSealed(sealed, state.key);
+    if (auth.kind !== 'ok') continue;
+    const payload = auth.value.payload;
+    if (payload.id !== hint.id || payload.to !== seat || payload.session !== session) continue;
+    if (!samePath(payload.root, root)) continue;
+    if (payload.from !== sender) continue;
     // A registry id that disagrees names another agent under the same seat name; without one on
     // either side the name is all the evidence there is.
-    if (senderId !== null && message.from_id !== null && message.from_id !== senderId) continue;
-    const line = lines.get(message.id);
+    if (senderId !== null && payload.from_id !== null && payload.from_id !== senderId) continue;
+    const line = lines.get(payload.id);
     if (line === undefined || line.via === undefined || !DELIVERED_VIAS.includes(line.via)) continue;
     // The delivery is the first history line's instant: a message delivered after this send is
     // not answered by it. An equal instant is not later — the frame was already there.
     const deliveredAt = Date.parse(line.ts);
     if (Number.isNaN(deliveredAt) || deliveredAt > sentAt) continue;
-    const messageAt = Date.parse(message.at);
-    if (Number.isNaN(messageAt)) continue;
-    // The newest message this sender delivered, not merely the last one the scan met.
-    if (newest === null || messageAt > newest.at || (messageAt === newest.at && message.id > newest.id)) {
-      newest = { id: message.id, at: messageAt };
-    }
+    if (Number.isNaN(Date.parse(payload.at))) continue;
+    // The index may still name a message that is already read — a clear that was lost, or another
+    // reader that won after this hint was written. It is not this send's to settle.
+    if (isRead(dropDir, payload.id, { to: seat, root, session }, state.key)) continue;
+    const outcome = publishRecordRead({
+      dropDir,
+      id: payload.id,
+      to: seat,
+      root,
+      session,
+      home,
+      key: state.key,
+      at,
+      readBy: 'answered-by-send',
+    });
+    if (outcome.kind === 'published' || outcome.kind === 'served') return { kind: 'marked', id: payload.id };
+    // A receipt this run could not write is not a hint to try an older message: that message is
+    // not the newest the rule names, and settling it instead would swallow a newer unread one.
+    return { kind: 'none' };
   }
-  if (newest === null) return { kind: 'none' };
-  const outcome = publishRecordRead({
-    dropDir: recordDir(root, session, seat),
-    id: newest.id,
-    to: seat,
-    root,
-    session,
-    home,
-    key: state.key,
-    at,
-    readBy: 'answered-by-send',
-  });
-  return outcome.kind === 'published' || outcome.kind === 'served' ? { kind: 'marked', id: newest.id } : { kind: 'none' };
+  return { kind: 'none' };
 }

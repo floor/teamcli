@@ -37,7 +37,7 @@
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
@@ -81,6 +81,7 @@ import {
 } from '../send/record.ts';
 import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
 import { admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
 
@@ -186,28 +187,32 @@ function isMarkerName(name: string): boolean {
  * and a close's `<id>.closed.json` — and the watch's `work-<uuid>` nudges are not candidates, and
  * neither is a name a record's id cannot take. The file at a candidate's path may still be
  * anything; `readRecord` decides what it is.
+ *
+ * `seats` limits the folders read to those the thread can live in — a reply reads its own seat's
+ * folder and the answered record's sender's, never every seat's tree. Omitted, every folder is
+ * read, which is what a caller that does not know the pair asks for.
  */
-function candidatesOf(root: string, session: string): { seat: string; path: string }[] {
+function candidatesOf(root: string, session: string, seats?: readonly string[]): { seat: string; path: string }[] {
   const dir = join(root, '.agents', 'send-drops', session);
   if (!isDir(dir)) return [];
-  let seats: string[];
+  let names: string[];
   try {
-    seats = readdirSync(dir).sort();
+    names = seats === undefined ? readdirSync(dir).sort() : [...new Set(seats)].filter((seat) => NAME.test(seat)).sort();
   } catch {
     return [];
   }
   const out: { seat: string; path: string }[] = [];
-  for (const seat of seats) {
+  for (const seat of names) {
     if (!NAME.test(seat)) continue;
     const seatDir = join(dir, seat);
     if (!isDir(seatDir)) continue;
-    let names: string[];
+    let entries: string[];
     try {
-      names = readdirSync(seatDir).sort();
+      entries = readdirSync(seatDir).sort();
     } catch {
       continue;
     }
-    for (const name of names) {
+    for (const name of entries) {
       if (!NAME.test(name) || isMarkerName(name) || name.startsWith('work-')) continue;
       const path = join(seatDir, name);
       if (isFile(path)) out.push({ seat, path });
@@ -229,10 +234,30 @@ export function legacyHolds(root: string, id: string): boolean {
   return seats.some((seat) => NAME.test(seat) && isFile(join(dir, seat, `${id}.json`)));
 }
 
+/** The seat folders this session names: a listing of the session's own folder, one entry per
+ *  seat, never a listing of the records in them. */
+function seatNamesOf(root: string, session: string): string[] {
+  const dir = join(root, '.agents', 'send-drops', session);
+  if (!isDir(dir)) return [];
+  try {
+    return readdirSync(dir).filter((seat) => NAME.test(seat) && isDir(join(dir, seat))).sort();
+  } catch {
+    return [];
+  }
+}
+
 /** The candidate files named exactly `id` in this session's tree: what a lookup has to weigh,
- *  before any key is read. A name no record can take is not one of them. */
+ *  before any key is read. A name no record can take is not one of them. The lookup is one
+ *  `stat` per seat folder — the session's folder lists its seats, not its records — so an id
+ *  costs a couple of dozen file tests whatever the tree holds, never a walk of it. */
 export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
-  return candidatesOf(root, session).filter((candidate) => basename(candidate.path) === id);
+  if (!NAME.test(id) || isMarkerName(id) || id.startsWith('work-')) return [];
+  const hits: { seat: string; path: string }[] = [];
+  for (const seat of seatNamesOf(root, session)) {
+    const path = join(root, '.agents', 'send-drops', session, seat, id);
+    if (isFile(path)) hits.push({ seat, path });
+  }
+  return hits;
 }
 
 /**
@@ -279,6 +304,10 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
  * `thread-cap` records on it. A close outranks the clock, and the clock outranks the cap, so the
  * reason is the first fact that ended the thread. A record or close that does not verify changes
  * nothing, exactly as it changes no status.
+ *
+ * `seats` are the folders the thread's records can live in — the reply's own seat and the sender
+ * it answers. A thread is a pairwise exchange, so reading those two folders is the whole thread,
+ * and a reply on a large tree no longer reads every seat's records to find it.
  */
 function threadStateOf(
   root: string,
@@ -290,11 +319,13 @@ function threadStateOf(
   /** Records on the thread that live outside the seat folders — the verified replies in a
    *  client's inbox. The seat path passes none and reads exactly as before. */
   extra: readonly { at: string }[] = [],
+  /** The seat folders the thread's records live in; omitted, every folder of the session. */
+  seats?: readonly string[],
 ): ThreadState {
   let count = 0;
   let latest = 0;
   let closed = false;
-  for (const candidate of candidatesOf(root, session)) {
+  for (const candidate of candidatesOf(root, session, seats)) {
     const read = readRecord(candidate.path);
     if (!read.ok || read.record === null) continue;
     const payload = read.record.payload;
@@ -509,7 +540,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     );
   }
 
-  const state = threadStateOf(root, session, answered.thread, key, host.now(), thresholds.thresholds);
+  const state = threadStateOf(root, session, answered.thread, key, host.now(), thresholds.thresholds, [], [me, answered.from]);
   const at = host.now().toISOString();
   const startedAt = host.now().getTime();
 
@@ -642,7 +673,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const scanned = scanClientInbox({ home: host.home, root, session, clientId: grant.clientId, key });
     if (!scanned.ok) return clientRefused(io, json, `${scanned.why}; nothing was written`);
     const onThread = scanned.scan.shown.filter((reply) => reply.thread === answered.id).map((reply) => ({ at: reply.at }));
-    const threadNow = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, onThread);
+    const threadNow = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, onThread, [me]);
     if (!threadNow.open) {
       return clientRefused(io, json, `${closedWords(answered.id, threadNow.reason ?? 'close', thresholds.thresholds)}; a client thread is answered only while it is open, never reopened; nothing was written`);
     }
@@ -687,7 +718,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
           const freshOnThread = freshScan.scan.shown
             .filter((reply) => reply.thread === answered.id)
             .map((reply) => ({ at: reply.at }));
-          const freshState = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, freshOnThread);
+          const freshState = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, freshOnThread, [me]);
           if (!freshState.open) {
             return {
               ok: false,
@@ -971,6 +1002,9 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const folder = recordDir(toRoot, toSession, targetSeat);
     const written = writeRecord(folder, signed);
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
+    // The recipient's unread index names this record as its sender's newest: the thread lock is
+    // already held here, so the hint is written inside it and never waits on it.
+    noteUnread(folder, me, replyId, at, { held: true });
     // The word the report will use is decided here, by the reader's own checks: the record at the
     // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
     // root and session, addressed to that seat, its signature verifying. Only a record that passes
