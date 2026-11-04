@@ -32,7 +32,10 @@ import { createHostServer } from '../../packages/relay/host/server.js';
 import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
+import {
+  agentListAsync, agentStatus, agentStatusAsync, paneProcessesAsync, paneRead, paneReadAsync,
+  type PaneProcesses,
+} from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -70,12 +73,23 @@ const NOFOLLOW = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW
 /** The screen kinds a send never types into: the box is the dialog's, and a message waits. */
 const DIALOG = new Set(['question', 'plan approval', 'confirmation', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
 
+/** A host read: awaited when the host returns a promise, read in place when it returns a value.
+ *  The endpoint awaits every read, so a host whose reader answers off the loop never holds it. */
+type Maybe<T> = T | Promise<T>;
+
 export type DaemonHost = {
-  agents(session: string): { name: string; pane: string }[] | null;
-  processInfo(session: string, pane: string): PaneProcesses | null;
+  agents(session: string): Maybe<{ name: string; pane: string }[] | null>;
+  processInfo(session: string, pane: string): Maybe<PaneProcesses | null>;
   socketsDir: string;
   deliver(socketPath: string, frame: string): Promise<SendOutcome>;
   native: NativePane;
+  /** The pane reads awaited, when the host has them: the endpoint prefers these, so a host whose
+   *  reader is asynchronous (the real one) never blocks the loop while the terminal host answers.
+   *  Absent, the synchronous `native` members are read where the endpoint reads them today. */
+  nativeAsync?: {
+    status(session: string, pane: string): Promise<string | null>;
+    paneText?(session: string, pane: string): Promise<string | null>;
+  };
   now(): Date;
   home: string;
   /** Optional override for the bounded wait window when a seat is `working` or locked. */
@@ -84,9 +98,15 @@ export type DaemonHost = {
   pollReadyMs?: number;
 };
 
+/** The bound on one awaited host read: the same ten seconds the synchronous runner gives its
+ *  child, enforced by the child's own kill instead of by holding the loop for the answer. */
+const HOST_READ_TIMEOUT_MS = 10_000;
+const HOST_READ = { timeoutMs: HOST_READ_TIMEOUT_MS };
+
 export const realDaemonHost: DaemonHost = {
-  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null,
-  processInfo: (session, pane) => paneProcesses(pane, session),
+  agents: async (session) =>
+    (await agentListAsync(session, HOST_READ))?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null,
+  processInfo: (session, pane) => paneProcessesAsync(pane, session, HOST_READ),
   socketsDir: join(tmpdir(), 'cc-socks'),
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
@@ -99,6 +119,10 @@ export const realDaemonHost: DaemonHost = {
     // The queue's typed leg is the same delivery `team send` makes: a box holding its owner's
     // unsent text is cleared with the profile's measured keys and the text pasted back.
     sendKey: refuseTyping,
+  },
+  nativeAsync: {
+    status: (session, pane) => agentStatusAsync(pane, session, HOST_READ),
+    paneText: (session, pane) => paneReadAsync(pane, 40, session, HOST_READ),
   },
   now: () => new Date(),
   home: homedir(),
@@ -567,7 +591,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
   /** Why this seat is busy right now, or null. A held seat lock, a running turn, or a worker
    *  already draining this seat's queue all mean the sender is answered `queued` at once: the
    *  message takes its place in the queue and the delivery follows when the seat is free. */
-  const receiverBusyOf = (seatName: string, cli: string): string | null => {
+  const receiverBusyOf = async (seatName: string, cli: string): Promise<string | null> => {
     if (activeWorkers.has(seatName)) return 'a send to this seat is already being delivered';
     const lock = acquireSeatLock(input.dir, input.team.session, seatName);
     if ('release' in lock) {
@@ -577,11 +601,11 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     } else {
       return `another command holds the seat (pid ${String(lock.held)})`;
     }
-    const found = findSeatAgent(host, input.team.session, seatName);
+    const found = await findSeatAgent(host, input.team.session, seatName);
     if (!found.ok) return null; // the worker names the reason; a missing pane is not the queue's to judge
-    const status = host.native.status(input.team.session, found.pane);
+    const status = await hostStatus(host, input.team.session, found.pane);
     if (status === 'working') return 'the seat is working';
-    const rawScreen = host.native.paneText?.(input.team.session, found.pane) ?? null;
+    const rawScreen = await hostPaneText(host, input.team.session, found.pane);
     if (rawScreen !== null && readScreen(cli, rawScreen).kind === 'working') return 'the seat is working';
     return null;
   };
@@ -627,7 +651,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     activeWorkers.delete(seatName);
   };
 
-  const enqueueSend = (request: DaemonSendRequest): Promise<DaemonSendResponse> => {
+  const enqueueSend = async (request: DaemonSendRequest): Promise<DaemonSendResponse> => {
     const seatName = typeof request.to === 'string' ? request.to : '';
     if (request.session !== undefined && request.session !== input.team.session) {
       return Promise.resolve({
@@ -722,7 +746,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     }
     // A waited send asks the daemon for a reply, which a queued acceptance could not carry:
     // it keeps the worker's own path and its bounded wait.
-    const busy = request.wait === true ? null : receiverBusyOf(seatName, configured.cli);
+    const busy = request.wait === true ? null : await receiverBusyOf(seatName, configured.cli);
     if (busy === null) {
       return new Promise<DaemonSendResponse>((resolve) => {
         queue.push({ request, resolve });
@@ -876,12 +900,26 @@ function dialogKind(cli: string, screen: string | null): string | null {
   return DIALOG.has(kind) ? kind : null;
 }
 
-function findSeatAgent(
+/** The pane's agent status, awaited: a host that reads asynchronously names its own reader;
+ *  otherwise the synchronous `native` member is read where the endpoint read it before. */
+async function hostStatus(host: DaemonHost, session: string, pane: string): Promise<string | null> {
+  if (host.nativeAsync !== undefined) return host.nativeAsync.status(session, pane);
+  return host.native.status(session, pane);
+}
+
+/** The pane's text, awaited, with the same fallback. An absent reader stays null, as the
+ *  optional `native.paneText` did. */
+async function hostPaneText(host: DaemonHost, session: string, pane: string): Promise<string | null> {
+  if (host.nativeAsync?.paneText !== undefined) return host.nativeAsync.paneText(session, pane);
+  return host.native.paneText?.(session, pane) ?? null;
+}
+
+async function findSeatAgent(
   host: DaemonHost,
   session: string,
   seatName: string,
-): { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 'refused'; reason: string } {
-  const agents = host.agents(session);
+): Promise<{ ok: true; pane: string } | { ok: false; kind: 'unreachable' | 'refused'; reason: string }> {
+  const agents = await host.agents(session);
   if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
   const named = agents.filter((agent) => agent.name === seatName);
   if (named.length === 0) return { ok: false, kind: 'unreachable', reason: 'no live agent carries that name in the session' };
@@ -1075,7 +1113,7 @@ async function executeQueuedSend(
     return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.header, configured.human === true);
   }
 
-  const found = findSeatAgent(host, team.session, seatName);
+  const found = await findSeatAgent(host, team.session, seatName);
   if (!found.ok) {
     if (found.kind === 'refused') {
       return { v: 1, ok: false, id: null, seat: seatName, outcome: 'refused', detail: found.reason };
@@ -1101,7 +1139,7 @@ async function executeQueuedSend(
   }
 
   const pane = found.pane;
-  const initialProcs = host.processInfo(team.session, pane);
+  const initialProcs = await host.processInfo(team.session, pane);
   if (isBareShellPane(dir, team.session, seatName, initialProcs)) {
     const detail = 'the seat is back at its shell; nothing was typed';
     appendHistory(team.project, root, host.home, {
@@ -1123,7 +1161,7 @@ async function executeQueuedSend(
   // refuses — an unreadable pane keeps the delivery-time caution below — and the host's
   // `working` word does not cancel a wall the screen proves. Nothing is written: no history
   // line, no pending record; the sender's refusal is the caller's to make.
-  const wallText = host.native.paneText?.(team.session, pane) ?? null;
+  const wallText = await hostPaneText(host, team.session, pane);
   const wall = quotaOutOf(configured.cli, wallText);
   if (wall !== null) {
     return {
@@ -1285,16 +1323,16 @@ async function executeQueuedSend(
       }
       lock = acquired;
 
-      if (isBareShellPane(dir, team.session, seatName, host.processInfo(team.session, pane))) {
+      if (isBareShellPane(dir, team.session, seatName, await host.processInfo(team.session, pane))) {
         return recordUnreachable('the seat is back at its shell; nothing was typed');
       }
 
-      const status = host.native.status(team.session, pane);
+      const status = await hostStatus(host, team.session, pane);
       if (status === null) {
         return recordUnreachable(`the seat's status could not be read; the drop file is at ${dropPath}`);
       }
 
-      const rawScreen = host.native.paneText?.(team.session, pane) ?? null;
+      const rawScreen = await hostPaneText(host, team.session, pane);
       if (rawScreen !== null) {
         const dialog = dialogKind(configured.cli, rawScreen);
         if (dialog !== null) {
@@ -1587,7 +1625,7 @@ async function executeSocketSend(
     };
   }
 
-  const found = findSeatAgent(host, team.session, seatName);
+  const found = await findSeatAgent(host, team.session, seatName);
   if (!found.ok) {
     if (found.kind === 'refused') {
       return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: found.reason };
@@ -1605,7 +1643,7 @@ async function executeSocketSend(
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: found.reason };
   }
 
-  const processes = host.processInfo(team.session, found.pane);
+  const processes = await host.processInfo(team.session, found.pane);
   if (processes === null) {
     appendHistory(team.project, root, host.home, {
       ts: host.now().toISOString(),

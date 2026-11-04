@@ -818,6 +818,15 @@ export function agentStatus(pane: string, session?: string): string | null {
   return agentList(session)?.find((agent) => agent.pane === pane)?.status ?? null;
 }
 
+/** The same read, awaited: the child is killed at `timeoutMs` or at the loop's stop. */
+export async function agentStatusAsync(
+  pane: string,
+  session: string | undefined,
+  options: HerdrReadOptions = {},
+): Promise<string | null> {
+  return (await agentListAsync(session, options))?.find((agent) => agent.pane === pane)?.status ?? null;
+}
+
 export type HerdrAgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
 export const HERDR_AGENT_STATUSES: readonly HerdrAgentStatus[] = [
