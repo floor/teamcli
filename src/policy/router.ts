@@ -8,6 +8,7 @@
 // synchronous 120 s cap) are constants of the child, not values here.
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { readEntityPolicySource, readTeamPolicySource } from './sources.ts';
 import {
   normalizePolicyName,
@@ -170,7 +171,10 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
 
   if (team !== null) {
     const seatNames = new Set(team.seats.map((seat) => seat.name));
-    const session = team.session;
+    // The team's real address forms: the registry id, its own name and its session — an
+    // entity-scoped team's session is `<entity>-<project>` while its addresses still name the
+    // project, so all three spellings reach its own seats, the same forms a send accepts.
+    const ownScopes = new Set([teamIdOf(root), team.session, team.project]);
     const source = readTeamPolicySource(home, root, team);
     if (!source.ok) {
       return {
@@ -209,7 +213,7 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
             continue;
           }
           const parsed = parseSeatTeamAddress(address);
-          if (parsed === null || parsed.seat === 'desk' || !seatNames.has(parsed.seat) || parsed.team !== session) {
+          if (parsed === null || parsed.seat === 'desk' || !seatNames.has(parsed.seat) || !ownScopes.has(parsed.team)) {
             problems.push({
               why: `router alias "${alias}" names "${address}", which is not a seat of this team`,
               level: 'team',
@@ -240,6 +244,20 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
               kind: 'rule',
             });
             continue;
+          }
+          // A team's fallback routes a miss, so it may only name a seat of this same team —
+          // never one outside the team, the way its own aliases may not.
+          if (fallback !== null) {
+            const parsed = parseSeatTeamAddress(fallback);
+            if (parsed === null || parsed.seat === 'desk' || !seatNames.has(parsed.seat) || !ownScopes.has(parsed.team)) {
+              problems.push({
+                why: `router fallback for "${alias}" names "${fallback}", which is not a seat of this team`,
+                level: 'team',
+                name: 'router.fallback',
+                kind: 'rule',
+              });
+              continue;
+            }
           }
           teamFallback.set(alias, fallback);
           fallbackLevel.set(alias, 'team');

@@ -68,20 +68,27 @@ const QUIET_LIVE: Live = {
 };
 
 
-function makeFixture(): {
+function makeFixture(session: string = 'beacon'): {
   base: string;
   home: string;
   root: string;
   teamId: string;
   cleanup: () => void;
 } {
+  // An entity-scoped team spells its session `<entity>-<project>` while its addresses still name
+  // the project, so the fixture can be built in either shape.
+  const yaml = session === TEAM.session ? TEAM_YAML : TEAM_YAML.replace('session: beacon', `session: ${session}`);
+  const parsed = validateTeamFile(yaml);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  const team = parsed.team;
+
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-router-policy-')));
   const home = join(base, 'home');
   const root = join(base, 'beacon');
   mkdirSync(home, { recursive: true });
   mkdirSync(join(root, '.agents'), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
+  writeFileSync(join(root, '.agents', 'team.yaml'), yaml);
 
   const teamId = teamIdOf(root);
   const leadAgent = registerAgent(home, {
@@ -91,7 +98,7 @@ function makeFixture(): {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude --model claude-opus-5-5',
-    reach: { team: teamId, seat: 'lead', session: 'beacon', pane: 'fixture-pane-1', address: null },
+    reach: { team: teamId, seat: 'lead', session: team.session, pane: 'fixture-pane-1', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -104,15 +111,15 @@ function makeFixture(): {
     cli: 'claude-code',
     launcher: null,
     launch: 'claude --model claude-opus-5-5',
-    reach: { team: teamId, seat: 'worker', session: 'beacon', pane: 'fixture-pane-2', address: null },
+    reach: { team: teamId, seat: 'worker', session: team.session, pane: 'fixture-pane-2', address: null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
     by: 'owner',
   });
   upsertTeam(home, teamId, {
-    project: TEAM.project,
-    session: TEAM.session,
+    project: team.project,
+    session: team.session,
     root,
     roster: [
       { seat: 'lead', agent: leadAgent.id, role: 'coordinator', leads: true },
@@ -122,21 +129,21 @@ function makeFixture(): {
   });
   upsertProject(home, 'beacon', {
     name: 'beacon',
-    entity: TEAM.entity,
+    entity: team.entity,
     teams: [teamId],
     at: NOW.toISOString(),
   });
   updateState(join(root, '.agents'), (state) => {
-    const session = (state.sessions[TEAM.session] ??= emptySession());
-    session.watch = { pid: 1, heartbeat: NOW.toISOString() };
-    session.seats.lead = { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' };
-    session.seats.worker = { stage: 'ready', pane: 'fixture-pane-2', workspace: 'w2' };
+    const stateSession = (state.sessions[team.session] ??= emptySession());
+    stateSession.watch = { pid: 1, heartbeat: NOW.toISOString() };
+    stateSession.seats.lead = { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' };
+    stateSession.seats.worker = { stage: 'ready', pane: 'fixture-pane-2', workspace: 'w2' };
   });
   deliverBriefs({
     dir: join(root, '.agents'),
     root,
-    session: TEAM.session,
-    seats: TEAM.seats.map((seat) => seat.name),
+    session: team.session,
+    seats: team.seats.map((seat) => seat.name),
     home,
     at: NOW.toISOString(),
   });
@@ -241,6 +248,30 @@ describe('the mailbox router policy words', () => {
         { alias: 'zeus', address: 'architect@floor', fallback: null },
         { alias: 'mirror', address: 'lead@beacon', fallback: null },
       ]);
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('a team alias may spell its team by its id, its name or its session', () => {
+    // An entity-scoped team's session is `<entity>-<project>` while its addresses still name the
+    // project, so the project spelling must reach the team's own seats the way a send's does.
+    const fx = makeFixture('floor-beacon');
+    try {
+      setWord(
+        fx,
+        'team',
+        'router.aliases',
+        `by-name=worker@beacon,by-session=worker@floor-beacon,by-id=worker@${fx.teamId}`,
+      );
+      const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
+      expect(read.ok).toBe(true);
+      if (!read.ok) return;
+      const addresses = read.policy.routes
+        .filter((route) => route.alias.startsWith('by-'))
+        .map((route) => route.address)
+        .sort();
+      expect(addresses).toEqual([`worker@${fx.teamId}`, 'worker@beacon', 'worker@floor-beacon'].sort());
     } finally {
       fx.cleanup();
     }
@@ -456,6 +487,20 @@ describe('the mailbox router policy words', () => {
         address: 'lead@beacon',
         fallback: 'worker@beacon',
       });
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  test('a team fallback for its own alias names a seat of the same team', () => {
+    const fx = makeFixture();
+    try {
+      setWord(fx, 'team', 'router.aliases', 'mirror=lead@beacon');
+      setWord(fx, 'team', 'router.fallback', 'mirror=outside@other');
+      const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
+      expect(read.ok).toBe(false);
+      if (read.ok) return;
+      expect(read.why).toBe('router fallback for "mirror" names "outside@other", which is not a seat of this team');
     } finally {
       fx.cleanup();
     }
