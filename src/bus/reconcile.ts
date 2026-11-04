@@ -53,6 +53,7 @@ import {
   appendEvent,
   EVENT_LOG_KEPT,
   hydrateEventLogSteps,
+  sealUnsealedSegmentsSteps,
   type EventAppendInput,
   type EventIndexReadResult,
   type SignedEventRecord,
@@ -193,6 +194,10 @@ export type ReconcileState = {
   /** The refusals this state has already reported, by the path that was refused. A refusal is
    *  reported once, not on every pass that meets the unchanged record again. */
   refused: Set<string>;
+  /** Whether this process has already attempted the one-time seal migration of a store written
+   *  before seals. One attempt per process: a segment that cannot be sealed keeps the ordinary
+   *  verified read, and a retry would re-verify it on every pass. */
+  sealAttempted: boolean;
   stats: ReconcileStats;
 };
 
@@ -205,6 +210,7 @@ export function createReconcileState(): ReconcileState {
     history: null,
     deferred: [],
     refused: new Set(),
+    sealAttempted: false,
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
@@ -478,6 +484,13 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       }
     }
     state.log = cachedLog;
+    if (existing.unsealed > 0 && !state.sealAttempted) {
+      // The one-time migration of a store written before seals: each segment is verified in
+      // slices and the append lock is held only for the seal write itself, so the bus keeps
+      // serving while an old log is sealed.
+      state.sealAttempted = true;
+      yield* sealUnsealedSegmentsSteps(project, root, home, { kept, signal: options.signal });
+    }
   }
 
   // A seat whose declaration is gone keeps its record and every signed setting: the bootstrap

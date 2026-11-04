@@ -1382,14 +1382,30 @@ export function verifyEventLogSeals(
 }
 
 /** Whether every line of one closed segment parses as a signed event and verifies under the
- *  message key. A segment that is empty, has no trailing newline, or carries one line the key
- *  does not hold for is never sealed. */
-function segmentLinesVerify(path: string, key: KeyObject): boolean {
+ *  message key, sliced so a large segment never holds the event loop: the parse and signature
+ *  check give a turn every `sliceLines` lines. A segment that is empty, has no trailing newline,
+ *  or carries one line the key does not hold for is never sealed. */
+function* segmentLinesVerifySteps(
+  path: string,
+  key: KeyObject,
+  sliceLines: number,
+  signal?: AbortSignal,
+): Generator<void, boolean, void> {
   const text = readNoFollow(path);
   if (text === null || text.length === 0 || !text.endsWith('\n')) return false;
+  const slice = Math.max(1, Math.floor(sliceLines));
   let lines = 0;
-  for (const raw of text.split('\n')) {
+  let seen = 0;
+  let position = 0;
+  while (position < text.length) {
+    const newline = text.indexOf('\n', position);
+    const end = newline < 0 ? text.length : newline;
+    const raw = text.slice(position, end);
+    position = newline < 0 ? text.length : newline + 1;
     if (raw.trim() === '') continue;
+    seen += 1;
+    if (seen % slice === 0) yield;
+    if (signal?.aborted === true) return false;
     const parsed = parseSignedEventLine(raw);
     if (parsed === null) return false;
     if (!verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, key)) {
@@ -1401,67 +1417,86 @@ function segmentLinesVerify(path: string, key: KeyObject): boolean {
 }
 
 /**
- * Seals the segments a store written before seals existed left behind. Every candidate segment is
- * read and verified in full first; only a segment whose every line verifies is sealed, oldest
- * first, each seal naming the digest of the one before it. A segment that cannot be sealed — an
- * unverifiable line, a file that moved while it was read — stops the pass, so nothing newer is
- * sealed onto a broken chain. A segment whose seal exists but does not hold is never re-sealed,
- * because signing it again would launder exactly what the failed check refuses. Sealing is
- * idempotent: a sealed segment is skipped and its sidecars are never rewritten. Best effort: a
- * store that cannot be sealed keeps working through the ordinary verified read.
+ * Seals the segments a store written before seals existed left behind, one segment at a time and
+ * sliced: every candidate is read and verified in full first, with a turn to the event loop every
+ * `sliceLines` lines, and the append lock is taken only for the seal write itself. Each seal names
+ * the digest of the seal before it, so the chain is complete oldest first. A segment that cannot
+ * be sealed — an unverifiable line, a file that moved while it was read — stops the pass, so
+ * nothing newer is sealed onto a broken chain. A segment whose seal exists but does not hold is
+ * never re-sealed, because signing it again would launder exactly what the failed check refuses.
+ * Sealing is idempotent: a sealed segment is skipped and its sidecars are never rewritten.
  */
-export function sealUnsealedSegments(
+export function* sealUnsealedSegmentsSteps(
   project: string,
   root: string,
   home: string,
-  options: { kept?: number } = {},
-): string[] {
+  options: { kept?: number; signal?: AbortSignal; sliceLines?: number } = {},
+): Generator<void, string[], void> {
   const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
   const storeDir = storePath(project, root, home);
+  const sliceLines = options.sliceLines ?? READ_EVENTS_SLICE_LINES;
   const keyState = messageKeyState(home);
   if (keyState.kind !== 'key') return [];
   const keyPrint = keyPrintOf(home);
   const sealed: string[] = [];
-  try {
-    // The pass reads and signs retained files a rotation moves; holding the append lock keeps a
-    // writer from rotating between a segment's verification and its seal.
-    withEventLock(storeDir, () => {
-      const checked = verifyEventLogSeals(project, root, home, { kept });
-      if (!checked.ok) return;
-      let previous: string | null = null;
-      let chainOpen = true;
-      for (const segment of checked.segments) {
-        if (!chainOpen) break;
-        if (segment.state === 'sealed') {
-          if (segment.seal === undefined) {
-            chainOpen = false;
-            continue;
-          }
-          previous = segment.seal.sealDigest;
-          continue;
-        }
-        if (segment.state !== 'unsealed' || segment.why !== 'no-seal') {
-          chainOpen = false;
-          continue;
-        }
-        if (!segmentLinesVerify(segment.path, keyState.key)) {
-          chainOpen = false;
-          continue;
-        }
-        const stored = sealSegment(segment.path, segment.name, storeDir, keyPrint, keyState.key, previous);
-        if (stored === null) {
-          chainOpen = false;
-          continue;
-        }
-        previous = stored.sealDigest;
-        sealed.push(segment.name);
-        logLine(join(root, '.agents'), 'bus', 'event-log', `sealed ${segment.name}`);
+  const checked = verifyEventLogSeals(project, root, home, { kept });
+  if (!checked.ok) return [];
+  let previous: string | null = null;
+  let chainOpen = true;
+  for (const segment of checked.segments) {
+    if (!chainOpen || options.signal?.aborted === true) break;
+    if (segment.state === 'sealed') {
+      if (segment.seal === undefined) {
+        chainOpen = false;
+        continue;
       }
-    });
-  } catch {
-    // Left for a later start; an unsealed segment is still read and verified in full.
+      previous = segment.seal.sealDigest;
+      continue;
+    }
+    if (segment.state !== 'unsealed' || segment.why !== 'no-seal') {
+      chainOpen = false;
+      continue;
+    }
+    // The verification runs without the lock; the lock below covers only the seal write, and a
+    // segment whose bytes moved since it was verified is refused by the stamp check.
+    const stamp = fileStamp(segment.path);
+    if (stamp === null || !(yield* segmentLinesVerifySteps(segment.path, keyState.key, sliceLines, options.signal))) {
+      chainOpen = false;
+      continue;
+    }
+    const written: { seal: StoredSeal | null } = { seal: null };
+    try {
+      withEventLock(storeDir, () => {
+        if (!sameStamp(stamp, fileStamp(segment.path))) return;
+        written.seal = sealSegment(segment.path, segment.name, storeDir, keyPrint, keyState.key, previous);
+      });
+    } catch {
+      chainOpen = false;
+      continue;
+    }
+    if (written.seal === null) {
+      // A file that moved since its verification keeps its slot unsealed and stops the chain; a
+      // later pass reads and seals what then sits there.
+      chainOpen = false;
+      continue;
+    }
+    previous = written.seal.sealDigest;
+    sealed.push(segment.name);
+    logLine(join(root, '.agents'), 'bus', 'event-log', `sealed ${segment.name}`);
+    yield;
   }
   return sealed;
+}
+
+/** The blocking form of `sealUnsealedSegmentsSteps`: for a caller that can wait out the whole
+ *  pass. The bus's own first read drives the sliced form so its loop keeps serving. */
+export function sealUnsealedSegments(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number; signal?: AbortSignal } = {},
+): string[] {
+  return drainSteps(sealUnsealedSegmentsSteps(project, root, home, options));
 }
 
 /** What a hydrated record contributes to the reconcile and presence sets: the fields those passes
@@ -1489,6 +1524,9 @@ export type EventIndexReadResult =
       oldestSeq: number | null;
       newestSeq: number | null;
       unverified: number;
+      /** Present retained segments this read could not trust a seal for. The caller seals them
+       *  once its verified read is done; zero on a fully sealed store. */
+      unsealed: number;
     }
   | { ok: false; reason: string };
 
@@ -1581,7 +1619,8 @@ export function* hydrateEventLogSteps(
   // With no sealed segment there is nothing to hydrate, and a present segment without a trusted
   // seal carries records this index cannot vouch for: read the retained log the ordinary way,
   // which verifies every record it returns and keeps the checkpoint rules it always had.
-  if (checked.segments.length === 0 || checked.segments.some((segment) => segment.state === 'unsealed')) {
+  const unsealed = checked.segments.filter((segment) => segment.state === 'unsealed').length;
+  if (checked.segments.length === 0 || unsealed > 0) {
     const read = yield* readEventsSteps(project, root, home, { kept });
     if (!read.ok) return read;
     return {
@@ -1593,6 +1632,7 @@ export function* hydrateEventLogSteps(
       oldestSeq: read.oldestSeq,
       newestSeq: read.newestSeq,
       unverified: read.unverified,
+      unsealed,
     };
   }
 
@@ -1641,6 +1681,7 @@ export function* hydrateEventLogSteps(
     oldestSeq: entries.length > 0 ? entries[0]!.seq : null,
     newestSeq: entries.length > 0 ? entries[entries.length - 1]!.seq : null,
     unverified,
+    unsealed: 0,
   };
   if (keyState.kind === 'key' && unverified === 0) {
     hydratedStores.set(cacheKey, { keyPrint, kept, seals: sealKey, openStamp, result });

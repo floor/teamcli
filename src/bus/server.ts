@@ -60,7 +60,6 @@ import {
   parseSignedEventLine,
   pruneEventLog,
   readEventsFromCursorSliced,
-  sealUnsealedSegments,
   verifyEventLogSeals,
   type CursorReadResult,
   type EventAppendInput,
@@ -756,13 +755,8 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     maxTotalBytes: input.maxTotalLogBytes,
     retentionSeconds: input.retentionSeconds,
   });
-  // A store written before seals existed is verified in full once and then sealed, oldest first;
-  // the pass is idempotent and leaves a segment it cannot verify unsealed for the ordinary read.
-  try {
-    sealUnsealedSegments(input.team.project, input.root, home, { kept: input.keptLogFiles });
-  } catch {
-    // Migration is best effort at start; nothing about a failed seal keeps the bus from serving.
-  }
+  // A store written before seals existed is sealed by the reconcile pass's first read, sliced, so
+  // no segment verification runs on the start path before the bus can serve.
   // The sealed set is verified once at start, without reading a sealed segment: a sidecar that
   // does not match its segment is reported in the team log, and the segment is read and verified
   // in full by the ordinary path instead. A tampered sidecar never keeps the bus from serving.

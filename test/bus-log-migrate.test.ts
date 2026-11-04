@@ -6,7 +6,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { appendEvent, eventLogPath, sealUnsealedSegments, verifyEventLogSeals } from '../src/bus/log.ts';
+import {
+  appendEvent,
+  eventLogPath,
+  sealUnsealedSegments,
+  sealUnsealedSegmentsSteps,
+  verifyEventLogSeals,
+} from '../src/bus/log.ts';
+import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { indexPathOf, sealPathOf } from '../src/bus/seal.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
@@ -170,5 +177,62 @@ describe('migration of an older store', () => {
     if (!checked.ok) throw new Error(checked.reason);
     expect(checked.segments[0]!.state).toBe('unsealed');
     expect(checked.segments[0]!.why).toBe('size');
+  });
+
+  test('the pass gives the event loop a turn while it verifies a segment', () => {
+    const world = makeWorld('sliced');
+    appendUntilSealed(world, 2, 'r');
+    stripSidecars(world, 2);
+
+    const steps = sealUnsealedSegmentsSteps(PROJECT, world.root, world.home, {
+      kept: KEPT,
+      sliceLines: 2,
+    });
+    let turns = 0;
+    const sealed = (() => {
+      for (;;) {
+        const next = steps.next();
+        if (next.done) return next.value;
+        turns += 1;
+      }
+    })();
+    expect(sealed).toEqual(['events.jsonl.2', 'events.jsonl.1']);
+    expect(turns).toBeGreaterThan(0);
+  });
+
+  test('the reconcile pass runs the migration after its first verified read, once', () => {
+    const world = makeWorld('reconcile');
+    appendUntilSealed(world, 2, 'r');
+    stripSidecars(world, 2);
+    const state = createReconcileState();
+
+    const first = reconcilePass({
+      project: PROJECT,
+      root: world.root,
+      session: 'acme',
+      home: world.home,
+      now: NOW,
+      state,
+    });
+    expect(first.ok).toBe(true);
+    expect(state.sealAttempted).toBe(true);
+    for (const slot of [2, 1]) {
+      expect(existsSync(sealPathOf(`${livePath(world)}.${String(slot)}`))).toBe(true);
+    }
+    const before = statSync(sealPathOf(`${livePath(world)}.1`)).mtimeMs;
+
+    const second = reconcilePass({
+      project: PROJECT,
+      root: world.root,
+      session: 'acme',
+      home: world.home,
+      now: NOW,
+      state,
+    });
+    expect(second.ok).toBe(true);
+    expect(statSync(sealPathOf(`${livePath(world)}.1`)).mtimeMs).toBe(before);
+    const checked = verifyEventLogSeals(PROJECT, world.root, world.home, { kept: KEPT });
+    if (!checked.ok) throw new Error(checked.reason);
+    expect(checked.segments.map((segment) => segment.state)).toEqual(['sealed', 'sealed']);
   });
 });
