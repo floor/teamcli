@@ -572,14 +572,13 @@
               "enum": [
                 "socket",
                 "native",
-                "mcp-inbox",
                 "typed",
                 "drop",
                 "headless-resume",
                 "session"
               ]
             },
-            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame"
+            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
           },
           "sender_name": {
             "enum": [
@@ -761,14 +760,13 @@
         "enum": [
           "socket",
           "native",
-          "mcp-inbox",
           "typed",
           "drop",
           "headless-resume",
           "session"
         ]
       },
-      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is read but not walked in this build — the inbox is the store's reader"
+      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is a retired name this schema no longer accepts for new words — a file that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
     },
     "sender_name": {
       "enum": [
