@@ -22,6 +22,11 @@ import { recordedSeatSession } from '../registry/resume.ts';
 import { readState } from '../state.ts';
 import { reconcileStatusWithScreen } from '../watch/status-events.ts';
 import { readScreen } from '../watch/screen.ts';
+import { readPolicyChain } from '../policy/sources.ts';
+import { resolvePolicy } from '../policy/resolve.ts';
+import type { Policy } from '../policy/types.ts';
+import type { PolicyChainSources } from '../policy/resolve.ts';
+import { WATCHDOG_AFTER_MS, WATCHDOG_AUTO_RESTART } from './proof.ts';
 import type { SeatHealthPorts } from '../daemon/chores/child.ts';
 import type { WatchdogSeat } from './pass.ts';
 import type { ProcessRow } from './proof.ts';
@@ -141,6 +146,15 @@ function healthRoute(route: ChoresChildRoute, home: string): HealthRoute {
   };
 }
 
+function chainDeclarations(sources: PolicyChainSources): Policy[] | null {
+  const all: Policy[] = [];
+  for (const source of Object.values(sources)) {
+    if (source === undefined || !source.ok) return null;
+    all.push(...source.policies);
+  }
+  return all;
+}
+
 function runTeam(cwd: string, args: readonly string[]): Promise<{ code: number | null; stdout: string }> {
   return new Promise((resolve) => {
     const child = spawn('team', [...args], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -167,6 +181,21 @@ export function liveSeatHealth(config: ChoresChildConfig): SeatHealthPorts {
   };
   return {
     seats: (route) => observeRoute(healthRoute(route, config.home), host),
+    limits(route) {
+      try {
+        const chain = readPolicyChain({ home: config.home, teamRoot: route.root, team: route.teamFile });
+        const declarations = chainDeclarations(chain);
+        if (declarations === null) return { afterMs: WATCHDOG_AFTER_MS, autoRestart: WATCHDOG_AUTO_RESTART };
+        const after = resolvePolicy('seat-health.watchdog.after', declarations);
+        const auto = resolvePolicy('seat-health.watchdog.auto-restart', declarations);
+        if (!after.ok || !auto.ok || typeof after.effective.value !== 'number' || typeof auto.effective.value !== 'number') {
+          return { afterMs: WATCHDOG_AFTER_MS, autoRestart: WATCHDOG_AUTO_RESTART };
+        }
+        return { afterMs: after.effective.value * 1000, autoRestart: auto.effective.value };
+      } catch {
+        return { afterMs: WATCHDOG_AFTER_MS, autoRestart: WATCHDOG_AUTO_RESTART };
+      }
+    },
     async restart(route, _seat, args) {
       const run = await runTeam(route.root, args);
       const ready = readRestartReady(run.stdout);

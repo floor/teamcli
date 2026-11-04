@@ -7,6 +7,7 @@
 // catalogue or a project's own text.
 
 import { bundlePolicyWithin, formatBundlePolicy, parseBundlePolicy } from '../client/bundle-ops.ts';
+import { OWNER_PROOF_MAX_AGE_MS } from '../signing/owner-statement.ts';
 import { durationPolicyWithin, formatDurationPolicy, inheritDurationPolicy, parseDurationPolicy } from '../client/duration-policy.ts';
 import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
@@ -72,6 +73,9 @@ export type Policy<V extends PolicyValue = PolicyValue> = {
   generation?: number;
   /** Optional Ed25519 signature under `POLICY_DOMAIN`. */
   signature?: string;
+  /** When the owner's device proof for a loosening was made, as an ISO instant. Absent, a
+   *  loosening is refused. A proof older than the statement's window is not fresh. */
+  proofAt?: string;
 };
 
 /** Domain tag for owner-signed policy records (amendment 02 §2.6, §2.12). */
@@ -146,6 +150,9 @@ export const ENFORCED_POLICY_NAMES = [
   'client-bundles',
   'client-grant-max-duration',
   'actions-commands',
+  'seat.dialog.answer',
+  'seat-health.watchdog.after',
+  'seat-health.watchdog.auto-restart',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -309,6 +316,9 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   client_bundles: 'client-bundles',
   client_grant_max_duration: 'client-grant-max-duration',
   actions_commands: 'actions-commands',
+  'seat-dialog-answer': 'seat.dialog.answer',
+  seat_dialog_answer: 'seat.dialog.answer',
+  'seat-health.watchdog.auto_restart': 'seat-health.watchdog.auto-restart',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -363,6 +373,9 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
     lowerExpiry?: string | null,
     higherExpiry?: string | null,
   ) => boolean;
+  /** A fresh owner proof on this declaration may loosen what the level above set. Absent,
+   *  a loosening is refused at load. */
+  proofAllowsLoosening?: (declaration: Policy, now: Date) => boolean;
 };
 
 function parseOnOff(raw: unknown): 'on' | 'off' | null {
@@ -1098,6 +1111,62 @@ export const OWNER_RESERVED_SCOPE_DEFAULT = [
 /** How durable a `messaging.store` word is: the lower the rank, the more the send keeps. A word
  *  is within another when it is at least as durable, so tightening runs toward `first`. */
 const STORE_DURABILITY: Readonly<Record<MessagingStore, number>> = { first: 0, parallel: 1, none: 2 };
+
+/** Release default: answer none of trust, permission, and login. Login is never a value. */
+export const DIALOG_ANSWER_DEFAULT: readonly string[] = [];
+
+/** How long a still screen waits before one restart. Fifteen minutes, in seconds. */
+export const WATCHDOG_AFTER_SECONDS = 900;
+
+/** One automatic restart. Zero tells the lead and starts nothing. */
+export const WATCHDOG_AUTO_RESTART_MAX = 1;
+
+const DIALOG_TRUST = /^trust:(.+)$/;
+const DIALOG_PERMISSION = /^permission:(.+)$/;
+
+/** `seat.dialog.answer`: trust folders and allowlisted commands. Login is never named. */
+export function parseDialogAnswer(raw: unknown): readonly string[] | null {
+  if (!Array.isArray(raw) || raw.some((item) => typeof item !== 'string')) return null;
+  const tokens: string[] = [];
+  for (const item of raw) {
+    const trust = DIALOG_TRUST.exec(item);
+    const permission = DIALOG_PERMISSION.exec(item);
+    if (trust !== null) {
+      if (trust[1] === '') return null;
+      tokens.push(`trust:${trust[1]}`);
+      continue;
+    }
+    if (permission !== null) {
+      if (!(ACTIONS_COMMANDS as readonly string[]).includes(permission[1]!)) return null;
+      tokens.push(`permission:${permission[1]}`);
+      continue;
+    }
+    return null;
+  }
+  return [...new Set(tokens)];
+}
+
+export function dialogAnswerProblem(raw: unknown): string | null {
+  if (parseDialogAnswer(raw) !== null) return null;
+  return 'policy "seat.dialog.answer" lists trust:<folder> and permission:<command> from the command guard; login is never, and no other class is a value';
+}
+
+/** A declaration loosens only with a fresh owner proof. */
+export function dialogProofAllows(declaration: Policy, now: Date): boolean {
+  if (declaration.proofAt === undefined) return false;
+  const at = Date.parse(declaration.proofAt);
+  if (!Number.isFinite(at)) return false;
+  const age = now.getTime() - at;
+  return age >= 0 && age <= OWNER_PROOF_MAX_AGE_MS;
+}
+
+function parseWatchdogAfter(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null;
+}
+
+function parseWatchdogAuto(raw: unknown): number | null {
+  return raw === 0 || raw === 1 ? raw : null;
+}
 
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
@@ -2016,6 +2085,35 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseRouterReplyBound,
     valueProblem: () => 'policy "router.reply-bound" is a whole number of seconds from 1 to 86400, such as 600',
     isWithin: () => true,
+  },
+  'seat.dialog.answer': {
+    name: 'seat.dialog.answer',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: DIALOG_ANSWER_DEFAULT,
+    gateLifting: false,
+    parseValue: parseDialogAnswer,
+    valueProblem: dialogAnswerProblem,
+    isWithin: (lower: readonly string[], higher: readonly string[]) => lower.every((token) => higher.includes(token)),
+    proofAllowsLoosening: dialogProofAllows,
+  },
+  'seat-health.watchdog.after': {
+    name: 'seat-health.watchdog.after',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: WATCHDOG_AFTER_SECONDS,
+    gateLifting: false,
+    parseValue: parseWatchdogAfter,
+    isWithin: (lower: number, higher: number) => lower >= higher,
+  },
+  'seat-health.watchdog.auto-restart': {
+    name: 'seat-health.watchdog.auto-restart',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    defaultValue: WATCHDOG_AUTO_RESTART_MAX,
+    gateLifting: false,
+    parseValue: parseWatchdogAuto,
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
 };
 

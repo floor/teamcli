@@ -95,6 +95,8 @@ export type SeatHealthPorts = {
   seats(route: ChoresChildRoute): Promise<readonly WatchdogSeat[]>;
   restart(route: ChoresChildRoute, seat: string, args: readonly string[]): Promise<RestartReady | { kind: 'failed' }>;
   lead(route: ChoresChildRoute, text: string): void;
+  /** The wait and the restart count. Absent, the release defaults apply. */
+  limits?(route: ChoresChildRoute): { afterMs: number; autoRestart: number };
 };
 
 /** The chore the child's pass runs. The one implementation is the fallback sweep (`fallback.ts`);
@@ -454,6 +456,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         await runWatchdogSlice(state, {
           seats,
           now: now().getTime(),
+          ...(ports.limits === undefined ? {} : { limits: ports.limits(route) }),
           restart: (seat, args) => ports.restart(route, seat, args),
           lead: (text) => ports.lead(route, text),
         });

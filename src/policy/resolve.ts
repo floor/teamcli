@@ -228,7 +228,7 @@ export function resolvePolicy<V extends PolicyValue = PolicyValue>(
             normalizedDecl.expiry ?? null,
             activeDeclaration.expiry ?? null,
           );
-          if (!within) {
+          if (!within && spec.proofAllowsLoosening?.(normalizedDecl, now) !== true) {
             refusals.push({
               kind: 'loosening',
               policy: name,
