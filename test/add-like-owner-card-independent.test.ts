@@ -1,4 +1,4 @@
-// Independent coverage of FLO-1249 parts 1-2 on feat/add-config-policy at 8ab900806.
+// Independent coverage of copying a declared seat with --like, and of the owner card a refused caller reaches.
 // A registry-backed team whose seats are written on a bare dash is copied by --like, and the
 // copy takes no nickname. A caller the ordinary verdict refuses writes nothing until the owner
 // card, and a failing validation never reaches that card. Fakes only: a throwaway home, a fake
@@ -26,7 +26,7 @@ import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 const NOW = new Date('2026-10-19T06:10:00Z');
 const owner = { kind: 'owner' } as const;
 // A seat the ordinary add verdict refuses: add is the owner's, and this caller is not a delegate.
-const stranger = { kind: 'seat' as const, name: 'stranger', pane: 'w9:p1', session: 'acme' };
+const stranger = { kind: 'seat' as const, name: 'stranger', pane: 'pane-stranger', session: 'acme' };
 
 let base: string;
 let project: string;
