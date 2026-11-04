@@ -18,8 +18,11 @@ prints no body and writes nothing. The older `.agents/messages` store keeps its 
 and its original print-then-write order.
 
 The record stores are shared, so a run still sees records addressed to other seats. It lists one
-`waiting` row for each — the fields a key can verify, no body — and writes no receipt for it: the
-receipt is the read that spends an id, and only the addressed mailbox's own reader may spend it.
+`waiting` row for each — the fields a key can verify — and writes no receipt for it: the receipt
+is the read that spends an id, and only the addressed mailbox's own reader may spend it. A seat's
+run carries no body on those rows. The owner's run is the whole session's read-only view: its
+waiting rows carry the verified body, and they still write no receipt, because the record is not
+the owner mailbox's to spend. A record that does not verify carries no body in either reading.
 A caller the placement cannot resolve reads nothing at all: no row, no body, no receipt, exit 1.
 
 `team send` writes the record: one signed message per send, into the recipient's folder
@@ -98,8 +101,9 @@ table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
 `format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
-— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row that verified, the
-status `shown`, `refused` or `waiting` — then
+— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row whose record
+verified (a `shown` row, or a `waiting` row in the owner's reading), the status `shown`, `refused`
+or `waiting` — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no
@@ -116,8 +120,9 @@ null `repair` — and stderr stays empty. The exit code is the same as without `
 The owner, or a seat of the team's session, placed by the caller rules `team send` and `team ack`
 use. The watch asks the recipient's pane to run it, so a seat reads only its own mailbox. There is
 no checkout-wide view that spends mail: a caller the placement cannot resolve reads nothing — no
-row, no body, no receipt — and records for other mailboxes list as `waiting` rows without bodies
-or receipts.
+row, no body, no receipt — and records for other mailboxes list as `waiting` rows without
+receipts; a seat's reading carries no body for them, and the owner's reading carries the verified
+body read-only.
 
 ## Refusals
 
