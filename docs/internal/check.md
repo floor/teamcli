@@ -86,7 +86,20 @@ back to "<line>"` — and the live session is read again after the writes, so th
 the sidebar the repair left. A herdr that will not take a line says `<seat>: its title was not
 reported` (or `its display was not reported`), as `team register` does, and that difference
 stands. Only the line that drifted is written: a correct display line is not re-reported because
-its workspace label moved.
+its workspace label moved. For a running seat with a recorded pane, `display_agent` is read off
+`pane list --workspace <id>` (one call per workspace): a row with no `display_agent` is named as
+`<seat>: its sidebar display line is missing or expired; the file's line is "<line>"` (replacing
+the earlier no-display carve-out; stopped seats are never named), and `--repair` re-reports
+`displayAgent(seat)` with `--ttl-ms` `daemon.sidebar-ttl-ms`. The terminal host's sidebar config
+(`ui.sidebar.agents.rows` and `[ui] status_indicators`) and per-session reload records
+(`~/.config/team/sidebar-reloads.yaml`) are checked beside it (`src/check/sidebar.ts`): a config
+without `agent` in any row (`line 2 has nowhere to live`), a mismatched `status_indicators`, and
+any running session of the entity's teams lacking a reload record at the current pair are named as
+owner differences (`no TeamCLI reload recorded at the current layout`, noting the presumption
+because the live sidebar layout cannot be read back). Under `workspace.sidebar.manage: off`, `team
+check` prints the exact TOML block without writing the config; `--repair` applies the config,
+reloads running sessions, and records applied reloads under both `on` and `off` on the owner's
+explicit request, leaving any host-refused difference standing.
 
 Nothing else is repaired. A model drift keeps its relaunch, a blind seat its look at the pane, a
 roster gap its `team register` — those are decisions the run names, and `--repair` never starts,

@@ -344,12 +344,12 @@ function sessionsOf(out: string): HerdrSession[] | null {
 
 export function sessionList(): HerdrSession[] | null {
   try {
-    const out = execFileSync('herdr', ['session', 'list', '--json'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    });
-    return sessionsOf(out);
+    if (customRun !== null) {
+      const res = customRun(['session', 'list', '--json']);
+      if (typeof res === 'string') return sessionsOf(res);
+      if (res !== null && typeof res === 'object') return sessionsOf(JSON.stringify(res));
+    }
+    return sessionsOf(captureExec(['session', 'list', '--json']));
   } catch {
     return null;
   }
@@ -911,6 +911,190 @@ export function spliceSidebarRows(
   return { ok: true, text: next, changed: next !== text };
 }
 
+/** The exact marked TOML block that sets both sidebar keys in the terminal host's config,
+ *  printed by `team check` when `workspace.sidebar.manage` is false. */
+export function renderSidebarTomlBlock(
+  rows: readonly (readonly string[])[],
+  indicators: string,
+): string {
+  const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
+  return [
+    `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`,
+    `rows = ${rowsValue}`,
+    '',
+    `[${UI_TABLE}]`,
+    `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`,
+  ].join('\n');
+}
+
+function stripTomlComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote !== null) {
+      if (quote === '"' && ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '#') return line.slice(0, i);
+  }
+  return line;
+}
+
+function parseTomlQuotedString(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length < 2) return null;
+  const quote = trimmed[0];
+  if ((quote !== '"' && quote !== "'") || trimmed[trimmed.length - 1] !== quote) return null;
+  const inner = trimmed.slice(1, -1);
+  if (quote === "'") return inner.includes("'") ? null : inner;
+  let out = '';
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '"') return null;
+    if (ch === '\\') {
+      i++;
+      if (i >= inner.length) return null;
+      const esc = inner[i];
+      if (esc === '"' || esc === '\\') out += esc;
+      else if (esc === 'n') out += '\n';
+      else if (esc === 't') out += '\t';
+      else if (esc === 'r') out += '\r';
+      else out += esc;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function parseSidebarRowsLiteral(raw: string): string[][] | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return null;
+  const rows: string[][] = [];
+  let current: string[] | null = null;
+  let depth = 0;
+  let i = 0;
+  while (i < trimmed.length) {
+    const ch = trimmed[i]!;
+    if (/\s|,/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (ch === '[') {
+      depth++;
+      if (depth === 2) {
+        current = [];
+      } else if (depth > 2) {
+        return null;
+      }
+      i++;
+      continue;
+    }
+    if (ch === ']') {
+      if (depth === 2) {
+        if (current === null) return null;
+        rows.push(current);
+        current = null;
+        depth = 1;
+        i++;
+        continue;
+      }
+      if (depth === 1) {
+        depth = 0;
+        i++;
+        while (i < trimmed.length && /\s/.test(trimmed[i]!)) i++;
+        return i === trimmed.length ? rows : null;
+      }
+      return null;
+    }
+    if (depth === 2 && (ch === '"' || ch === "'")) {
+      const quote = ch;
+      let end = i + 1;
+      while (end < trimmed.length) {
+        if (quote === '"' && trimmed[end] === '\\') {
+          end += 2;
+          continue;
+        }
+        if (trimmed[end] === quote) break;
+        end++;
+      }
+      if (end >= trimmed.length) return null;
+      const token = parseTomlQuotedString(trimmed.slice(i, end + 1));
+      if (token === null || current === null) return null;
+      current.push(token);
+      i = end + 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+export type SidebarConfigReading = {
+  rows: string[][] | null;
+  indicators: string | null;
+  /** True when `rows` has at least one row containing the `'agent'` token. */
+  hasAgentToken: boolean;
+};
+
+/** Reads the sidebar rows template and status-indicator word back from the terminal host's
+ *  config text. Commented headers and commented assignments are ignored, matching `spliceSidebarRows`. */
+export function readSidebarConfig(text: string): SidebarConfigReading {
+  const lines = text === '' ? [] : text.split('\n');
+  let rows: string[][] | null = null;
+  const tableAt = lines.findIndex((line) => headerOf(line)?.name === SIDEBAR_TABLE);
+  let rowsAt = -1;
+  let rowsUntil = lines.length;
+  if (tableAt >= 0) {
+    const span = tableSpan(lines, tableAt);
+    rowsUntil = span.end + 1;
+    rowsAt = assignmentAt(lines, span.start + 1, rowsUntil, 'rows');
+  } else {
+    rowsAt = dottedKeyAt(lines, 'ui.sidebar.agents.rows');
+  }
+  if (rowsAt >= 0) {
+    const spanned = valueSpan(lines, rowsAt, rowsUntil);
+    if (spanned !== null) {
+      const chunks: string[] = [];
+      for (let index = spanned.start; index <= spanned.end; index++) {
+        const stripped = stripTomlComment(lines[index] ?? '');
+        if (index === spanned.start) {
+          const eq = stripped.indexOf('=');
+          chunks.push(eq >= 0 ? stripped.slice(eq + 1) : stripped);
+        } else {
+          chunks.push(stripped);
+        }
+      }
+      rows = parseSidebarRowsLiteral(chunks.join('\n'));
+    }
+  }
+
+  let indicators: string | null = null;
+  const uiAt = lines.findIndex((line) => headerOf(line)?.name === UI_TABLE);
+  const indAt =
+    uiAt >= 0
+      ? assignmentAt(lines, uiAt + 1, tableSpan(lines, uiAt).end + 1, 'status_indicators')
+      : dottedKeyAt(lines, 'ui.status_indicators');
+  if (indAt >= 0) {
+    const stripped = stripTomlComment(lines[indAt] ?? '');
+    const eq = stripped.indexOf('=');
+    if (eq >= 0) {
+      indicators = parseTomlQuotedString(stripped.slice(eq + 1));
+    }
+  }
+
+  const hasAgentToken = rows !== null && rows.some((row) => row.includes('agent'));
+  return { rows, indicators, hasAgentToken };
+}
+
 /** `herdr config check` (probed 2026-11-04): exit 0 with `config: ok` on a file the host
  *  accepts, exit 1 with `config: issues found` and the diagnostics in the text otherwise. A
  *  timeout, or an answer with no text at all, is a failure too. */
@@ -1432,7 +1616,7 @@ export async function waitAgentStatus(
 }
 
 // The herdr versions this version of `team` was run with.
-export const HERDR_TESTED = { from: '0.7.1', to: '0.7.1' };
+export const HERDR_TESTED = { from: '0.7.1', to: '0.9.5' };
 
 // What `herdr --version` prints, without the name, or null when herdr can't be run.
 export function herdrVersion(): string | null {

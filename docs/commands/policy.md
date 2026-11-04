@@ -190,7 +190,12 @@ whole milliseconds from 1000, one day (86400000, the host's own cap) when nothin
 a word above the cap is clamped to it when read rather than refused, and a shorter ttl is the
 tighter word. `daemon.sidebar-refresh-ms` is how often the sidebar line is re-reported to stay
 inside that ttl: whole milliseconds from one minute to seven days, six hours (21600000) when
-nothing declares it; a shorter interval is the tighter word.
+nothing declares it; a shorter interval is the tighter word. Under `workspace.sidebar.manage: off`,
+`team up` plans no sidebar config step and `team check` prints the exact TOML block without writing
+the config (applying it only on the owner's explicit `team check --repair`). The supervised chores
+child refreshes each seat's `display_agent` at `daemon.sidebar-refresh-ms` with `--ttl-ms`
+`daemon.sidebar-ttl-ms` under a read-back guard, and skips roots whose `daemon.chores` policy is
+`inline` with a note.
 
 Three words govern the seat-health watchdog (its behaviour is under
 [`team daemon`](daemon.md#seat-health)). `seat.dialog.answer` is the closed list of dialogs the

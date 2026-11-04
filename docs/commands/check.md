@@ -26,7 +26,26 @@ too is one as well — `the project <name> has <n> lead teams: <names>`, repaire
 `take "project_lead: true" off all but one of them`. The two herdr sidebar lines each file seat
 carries are compared on the same pass: a workspace label or display line that reads as neither the
 file's own text nor a line the watch may paint is a difference repaired with
-`team register <seat>`, which re-applies both lines from the file without a relaunch. A live seat
+`team register <seat>`, which re-applies both lines from the file without a relaunch. For a running
+seat with a recorded pane, `display_agent` is read off `pane list --workspace <id>` (one call per
+workspace): a row with no `display_agent` field is `<seat>: its sidebar display line is missing or
+expired; the file's line is "<line>"`, repaired by `team register <seat>` (or the owner's
+`--repair`, which re-reports `displayAgent(seat)` with `--ttl-ms` `daemon.sidebar-ttl-ms`). A
+stopped seat is never named for a missing display line. The terminal host's sidebar layout config
+(`ui.sidebar.agents.rows` and `[ui] status_indicators`) and the per-session reload store
+(`~/.config/team/sidebar-reloads.yaml`) are checked on the same pass: a layout without the `agent`
+token in any row is a difference (`line 2 has nowhere to live`) naming the resolved
+`workspace.sidebar.rows` template, a `status_indicators` value other than the resolved
+`workspace.sidebar.status_indicators` word (`symbols` or `dots`) is a difference naming the
+resolved value, and each running session of the entity's teams with no reload record or an older
+`rows` or `status_indicators` record is named (`no TeamCLI reload recorded at the current layout`,
+noting that the terminal host's live sidebar layout cannot be read back so a running session is
+presumed to hold an older layout until TeamCLI records a reload, even if reloaded by hand; a
+session that is not running is never named). Under `workspace.sidebar.manage: on` (the default),
+`--repair` re-applies the marked sidebar block and `status_indicators` key (backing up, splicing,
+validating, and rolling back on failure), reloads every running session, and records each applied
+reload; under `workspace.sidebar.manage: off`, `team check` prints the exact TOML block without
+writing the config, and `--repair` applies it on the owner's explicit request. A live seat
 the state holds ready that the team registry's record does not list in its roster is a difference
 too, repaired with the same `team register <seat>`: where the registry holds a record of the team,
 its roster is the record of who its seats are for the permission bridge, and a seat the roster does
@@ -296,7 +315,12 @@ is on, is recorded again with the caller gate in force: the same write the owner
 line that drifted is set back from the file through the same rename and display report
 `team register <seat>` makes. Each repair is named in one `repaired:` line and written to the log;
 a herdr that will not take a sidebar line says so as `team register` does, and its difference
-stands. Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
+stands. On the same `--repair`, the terminal host's sidebar layout (`ui.sidebar.agents.rows` and
+`[ui] status_indicators`) is re-applied when out of date (under `workspace.sidebar.manage: on`, or
+on the owner's explicit `--repair` under `off`), every running session needing a reload is reloaded
+and recorded in `~/.config/team/sidebar-reloads.yaml`, and any running seat whose `display_agent`
+was missing, expired, or drifted is re-reported with `--ttl-ms` `daemon.sidebar-ttl-ms` (a host
+refusal is named and leaves its difference standing). Everything else keeps its advice — a model drift's relaunch, a blind seat's look at the
 pane — because those are decisions, not writes the file settles, and `--repair` never starts,
 stops or relaunches a seat.
 
