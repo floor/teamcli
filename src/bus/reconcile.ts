@@ -41,9 +41,9 @@ import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { compareSeatNames } from '../seat-names.ts';
 import {
-  checkedDropRecord,
-  checkedMailboxReceipt,
-  checkedMailboxRecord,
+  checkedDropRelative,
+  checkedMailboxReceiptRelative,
+  checkedMailboxRelative,
   dropFolderIsReal,
   mailboxFolderIsReal,
   RECORD_NAME,
@@ -187,8 +187,11 @@ export type ReconcileState = {
    *  or gives up, and reset at the start of every pass. */
   deferred: DeferredAppend[];
   /** The refusals this state has already reported, by the path that was refused. A refusal is
-   *  reported once, not on every pass that meets the unchanged record again. */
+   *  reported once, not on every pass that meets the unchanged record again. Paths this pass
+   *  did not meet are dropped at the end of the pass, with the other caches. */
   refused: Set<string>;
+  /** The refusal paths this pass met. Cleared at the start of the pass and used to prune. */
+  refusedNow: Set<string>;
   stats: ReconcileStats;
 };
 
@@ -201,6 +204,7 @@ export function createReconcileState(): ReconcileState {
     history: null,
     deferred: [],
     refused: new Set(),
+    refusedNow: new Set(),
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
@@ -239,6 +243,7 @@ function refuseRecord(
   where: string,
   reason: string,
 ): void {
+  state.refusedNow.add(path);
   if (state.refused.has(path)) return;
   state.refused.add(path);
   options.onRefused?.({ where, reason });
@@ -390,6 +395,7 @@ function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
 export function* reconcileSteps(options: ReconcileOptions): Generator<void, ReconcileResult, void> {
   const { project, root, session, home } = options;
   const state = options.state ?? createReconcileState();
+  state.refusedNow.clear();
   const stats = state.stats;
   stats.passes += 1;
   stats.filesRead = 0;
@@ -547,7 +553,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           // record is left for a pass that has one.
           let entry = cachedEntry(state, seatDir, file, fresh.stamp);
           if (entry === null || entry.kind !== 'drop') {
-            const checked = checkedDropRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+            const checked = checkedDropRelative(root, session, seat, file, { session, seat, record_id: id }, scope, keyState.key);
             stats.filesRead += 1;
             if (checked.ok) {
               entry = { kind: 'drop', verified: true, event: checked.event };
@@ -560,6 +566,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             storeEntry(state, seatDir, file, fresh.stamp, entry);
           } else {
             stats.filesReused += 1;
+            // Still here, still refused: the path stays in the cache and is not said again.
+            if (!entry.verified) state.refusedNow.add(`record\0${fullPath}`);
           }
           if (entry.kind === 'drop' && entry.verified) {
             if (entry.event.from !== undefined) sendersById.set(id, entry.event.from);
@@ -578,20 +586,55 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let refusal: string | null = null;
         if (RECORD_NAME.test(pending.id) && keyState.kind === 'key') {
           for (const name of [pending.id, `${pending.id}.json`]) {
-            const checked = checkedDropRecord(
-              join(seatDir, name),
-              { session, seat, record_id: pending.id },
-              scope,
-              keyState.key,
-            );
-            if (checked.ok) {
-              arrival = checked.event;
+            const fullPath = join(seatDir, name);
+            const fresh = fileStampOf(fullPath);
+            if (fresh === null) {
+              if (isLinkAt(fullPath)) {
+                // No stamp to reuse. The reader's own sentence is the marker's reason.
+                const checked = checkedDropRelative(
+                  root,
+                  session,
+                  seat,
+                  name,
+                  { session, seat, record_id: pending.id },
+                  scope,
+                  keyState.key,
+                );
+                if (checked.ok) arrival = checked.event;
+                else if (!checked.missing) refusal = checked.reason;
+                break;
+              }
+              continue;
+            }
+            // The drop scan cached this record under its stamp. An unchanged marker reuses that
+            // entry instead of verifying the file again.
+            let entry = cachedEntry(state, seatDir, name, fresh.stamp);
+            if (entry === null || entry.kind !== 'drop') {
+              const checked = checkedDropRelative(
+                root,
+                session,
+                seat,
+                name,
+                { session, seat, record_id: pending.id },
+                scope,
+                keyState.key,
+              );
+              stats.verifies += 1;
+              if (checked.ok) {
+                entry = { kind: 'drop', verified: true, event: checked.event };
+              } else {
+                entry = { kind: 'drop', verified: false };
+                if (!checked.missing) refusal = checked.reason;
+              }
+              storeEntry(state, seatDir, name, fresh.stamp, entry);
+            } else {
+              stats.verifiesReused += 1;
+            }
+            if (entry.kind === 'drop' && entry.verified) {
+              arrival = entry.event;
               break;
             }
-            if (!checked.missing) {
-              refusal = checked.reason;
-              break;
-            }
+            if (refusal !== null) break;
           }
         }
         if (arrival !== null) {
@@ -683,7 +726,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           // checked read keeps the envelope, signature and addressing rule those records answer
           // to, and refuses a linked file or a folder another checkout owns.
           let next: MessageEntry = { kind: 'message', keyPrint, verified: false, at: nowIso, ownerDigest: false };
-          const checked = checkedMailboxRecord(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          const checked = checkedMailboxRelative(root, seat, file, { session, seat, record_id: id }, scope, keyState.key);
           stats.verifies += 1;
           if (checked.ok) {
             const from = checked.from;
@@ -704,6 +747,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
+          if (!entry.verified) state.refusedNow.add(`mailbox-record\0${fullPath}`);
         }
         if (!entry.verified) continue;
         const from = entry.from;
@@ -732,7 +776,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         let entry = cachedEntry(state, seatDir, file, fresh.stamp);
         if (entry === null || entry.kind !== 'signed-receipt' || entry.keyPrint !== keyPrint) {
           let next: SignedReceiptEntry = { kind: 'signed-receipt', keyPrint, verified: false, id, at: nowIso };
-          const checked = checkedMailboxReceipt(fullPath, { session, seat, record_id: id }, scope, keyState.key);
+          const checked = checkedMailboxReceiptRelative(root, seat, file, { session, seat, record_id: id }, scope, keyState.key);
           stats.verifies += 1;
           if (checked.ok) {
             next = { kind: 'signed-receipt', keyPrint, verified: true, id, at: checked.at ?? nowIso };
@@ -745,6 +789,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
         } else {
           stats.filesReused += 1;
           stats.verifiesReused += 1;
+          if (!entry.verified) state.refusedNow.add(`mailbox-receipt\0${fullPath}`);
         }
         if (!entry.verified) continue;
         const from = messageSenders.get(id) ?? previousSenders?.get(id) ?? arrivedFrom.get(`${seat}\0${id}`);
@@ -814,10 +859,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       } else if (!dropFolderIsReal(root, session, entry.to)) {
         refusal = 'the history line names no drop folder of this checkout';
       } else {
-        const seatDir = join(root, '.agents', 'send-drops', session, entry.to);
         for (const name of [entry.id, `${entry.id}.json`]) {
-          const checked = checkedDropRecord(
-            join(seatDir, name),
+          const checked = checkedDropRelative(
+            root,
+            session,
+            entry.to,
+            name,
             { session, seat: entry.to, record_id: entry.id },
             scope,
             keyState.key,
@@ -1011,6 +1058,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   for (const key of state.signedSenders.keys()) {
     if (!visited.has(key)) state.signedSenders.delete(key);
   }
+  for (const key of state.refused) {
+    if (!state.refusedNow.has(key)) state.refused.delete(key);
+  }
+  state.refusedNow.clear();
 
   return { ok: true, raised, checked: cachedLog.checked, full: cachedLog.full };
 }

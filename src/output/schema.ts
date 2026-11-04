@@ -1161,6 +1161,7 @@ export const LOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
         run: { type: 'string' },
         by: { type: 'string', minLength: 1 },
         at: { type: 'string', minLength: 1 },
+        pid: { type: 'integer', minimum: 1 },
       },
     },
   },
