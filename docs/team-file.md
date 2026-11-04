@@ -208,6 +208,8 @@ The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
 
 The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
+Every launch also pins the profile's feature set, appended last as `-c features.<pair>` words, so
+every seat presents the same settings to the one background server they share.
 It adds `-a never -s danger-full-access`
 for unattended execution, plus `--no-daemon --no-alt-screen` for the captured pane mode,
 and checks login with `codex login status`. Rules go as a first message
@@ -243,6 +245,13 @@ from the screen, a pane herdr has not listed is named by its own process, and `d
 and `remove` treat the idle table as free where they would otherwise wait on a word herdr cannot
 give. Status, check and the watch read the seat's state from the same screen: its idle table is
 idle, a running turn is working, and only a screen the profile cannot read is unknown.
+
+The Grok profile is tested with CLI 1.0.50 to 1.0.52 (`grok`). It adds `--trust
+--permission-mode auto` and three `--allow` rules naming the commands an unattended seat runs,
+and checks login with `grok models`. Rules ride the launch line as `--rules`. Each launch also
+starts the seat inside a sandbox profile TeamCLI writes first: `--sandbox team-seat-<project>`,
+kept in the user-level `sandbox.toml` under Grok's own home, granting read-write on the team's
+state folder and the project's `.agents` while everything else stays the workspace's own grant.
 
 The Cursor profile is tested with CLI 2026.10.01 to 2026.10.22 (`cursor-agent`). The 2026.10.22
 captures are its ready, unsent and working screens; its dialog shapes are those captured at
