@@ -12,12 +12,15 @@ import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/la
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
+import { policySignaturePayload } from '../src/policy/sources.ts';
+import { POLICY_DOMAIN } from '../src/policy/types.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readerLine } from '../src/send/frame.ts';
 import { readHistory } from '../src/send/history.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
+import { keyOf, signDomain } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
@@ -82,6 +85,53 @@ function setOrder(made: World, level: 'entity' | 'project' | 'team', target: str
     { now: NOW },
   );
   if (!written.ok) throw new Error(written.why);
+}
+
+/** A signed team-level `delivery-order` word as an older build wrote it: a live word is written
+ *  first, then the stored record is re-valued to name the retired alias and re-signed over it,
+ *  the way that build's own writer would have signed it. A new write naming the alias anywhere is
+ *  refused today (`test/settings.test.ts`), so a record that still carries it is laid down as the
+ *  old build laid it. */
+function setOrderAsOldBuild(made: World, asOld: readonly string[]): void {
+  const written = writePolicySet(
+    made.home,
+    {
+      level: 'team',
+      target: made.root,
+      teamRoot: made.root,
+      name: 'delivery-order',
+      value: ['typed'],
+    },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+  const file = join(made.dir, 'team.yaml');
+  const text = readFileSync(file, 'utf8');
+  const valueLine = '    value: ["typed"]';
+  const signatureLine = `    signature: "${written.policy.signature}"`;
+  if (text.split(valueLine).length !== 2 || text.split(signatureLine).length !== 2) {
+    throw new Error(`${file}: the entry is not written the way this scene edits it`);
+  }
+  const signature = signDomain(
+    POLICY_DOMAIN,
+    policySignaturePayload({
+      name: 'delivery-order',
+      value: [...asOld],
+      level: 'team',
+      target: written.policy.target!,
+      setter: 'owner',
+      date: written.policy.date!,
+      expiry: null,
+      kind: 'enforced',
+      generation: written.policy.generation!,
+    }),
+    keyOf(made.home),
+  );
+  const quoted = `[${asOld.map((word) => `"${word}"`).join(', ')}]`;
+  writeFileSync(
+    file,
+    text.replace(valueLine, `    value: ${quoted}`).replace(signatureLine, `    signature: "${signature}"`),
+  );
 }
 
 test('an accepting Claude seat with no declared order walks the socket first, after the signed record', async () => {
@@ -933,11 +983,13 @@ test('a held socket is no wake the send reports either: the class it appends is 
 
 test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {
   // The order names typed for the wake; typing is retired, so the seat's own event adapter, the
-  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane.
+  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane. The word
+  // is a record an older build wrote — `mcp-inbox, typed` — and today's chain reads it as the
+  // `typed` word alone: declared, walked as written.
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');
-  setOrder(made, 'team', made.root, ['mcp-inbox', 'typed']);
+  setOrderAsOldBuild(made, ['mcp-inbox', 'typed']);
   declare(made, 'accept');
   const pane = scripted(['idle', 'working']);
   const host = fake(made, { native: pane });
