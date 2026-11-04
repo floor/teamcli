@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -236,6 +236,87 @@ describe('independent caller mailbox scope verification', () => {
     ]);
     expect(docB.differences).toHaveLength(1);
     expect(statusOf(dirB, 'b-clean', { to: 'worker-b', root: where, session: 'acme' }, messageKey())).toBe('read');
+  });
+
+  test('owner sees verified bodies of other mailboxes read-only without publishing receipts, seat sees no other body, and unverifiable record shows no body to anyone', async () => {
+    const where = found();
+    const idA = 'aaaa1111-1111-4111-8111-111111111111';
+    const idB = 'bbbb2222-2222-4222-8222-222222222222';
+    const idTampered = 'cccc3333-3333-4333-8333-333333333333';
+
+    plantRecord(home, where, 'acme', 'worker-a', idA, 'VERIFIED_BODY_WORKER_A', { from: 'orchestrator', at: AT });
+    plantMessage(home, where, 'worker-b', idB, payload({ id: idB, to: 'worker-b', body: 'VERIFIED_LEGACY_BODY_WORKER_B' }));
+    plantRecord(home, where, 'acme', 'worker-a', idTampered, 'TAMPERED_SECRET_BODY', { from: 'orchestrator', at: AT });
+
+    // Tamper with idTampered after signing so signature verification fails
+    const tamperedPath = join(recordDir(where, 'acme', 'worker-a'), idTampered);
+    writeFileSync(tamperedPath, readFileSync(tamperedPath, 'utf8').replace('TAMPERED_SECRET_BODY', 'TAMPERED_SECRET_BODY_ALTERED'));
+
+    // 1. Owner reads in JSON mode: sees verified bodies for worker-a and worker-b on waiting rows,
+    //    sees NO body for the tampered record, and publishes NO receipts.
+    const ownerJson = await run(['--json'], OWNER);
+    expect(ownerJson.code).toBe(0);
+    expect(ownerJson.err).toBe('');
+    const ownerDoc = assertMatchesOutputSchema<MessagesDoc>(ownerJson.out, MESSAGES_OUTPUT_SCHEMA);
+    expect(ownerDoc.counts).toEqual({ messages: 3, shown: 0, refused: 0, waiting: 3 });
+    expect(ownerDoc.differences).toEqual([]);
+    expect(ownerDoc.notes).toEqual([
+      '3 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.',
+    ]);
+    expect(ownerDoc.rows).toEqual([
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'VERIFIED_BODY_WORKER_A' },
+      { id: idTampered, from: null, to: 'worker-a', sent: null, sent_display: '-', status: 'waiting' },
+      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
+    ]);
+    expect(ownerJson.out).not.toContain('TAMPERED_SECRET_BODY');
+
+    // 2. Owner reads in text mode: prints verified waiting bodies under their headings, hides tampered body, writes no receipts
+    const ownerText = await run([], OWNER);
+    expect(ownerText.code).toBe(0);
+    expect(ownerText.out).toContain(`worker-a/${idA}:\nVERIFIED_BODY_WORKER_A`);
+    expect(ownerText.out).toContain(`worker-b/${idB}:\nVERIFIED_LEGACY_BODY_WORKER_B`);
+    expect(ownerText.out).not.toContain('TAMPERED_SECRET_BODY');
+    expect(ownerText.out).toContain(
+      'note: 3 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.',
+    );
+
+    // Neither owner read published any receipt, and worker-a's valid record remains unread in listUnread
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'worker-a'), idA, 'read'))).toBe(false);
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'worker-a'), idTampered, 'read'))).toBe(false);
+    expect(existsSync(receiptFile(where, 'worker-b', idB))).toBe(false);
+    expect(
+      listUnread(recordDir(where, 'acme', 'worker-a'), { to: 'worker-a', root: where, session: 'acme' }, home)
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual([idA, idTampered]);
+
+    // 3. Seat B reads: serves only worker-b's own body, sees NO body for worker-a (neither verified nor tampered)
+    const seatBJson = await run(['--json'], WORKER_B);
+    expect(seatBJson.code).toBe(0);
+    const seatBDoc = assertMatchesOutputSchema<MessagesDoc>(seatBJson.out, MESSAGES_OUTPUT_SCHEMA);
+    expect(seatBDoc.counts).toEqual({ messages: 3, shown: 1, refused: 0, waiting: 2 });
+    expect(seatBDoc.rows).toEqual([
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'waiting' },
+      { id: idTampered, from: null, to: 'worker-a', sent: null, sent_display: '-', status: 'waiting' },
+      { id: idB, from: 'orchestrator', to: 'worker-b', sent: AT, sent_display: '0s ago', status: 'shown', body: 'VERIFIED_LEGACY_BODY_WORKER_B' },
+    ]);
+    expect(seatBJson.out).not.toContain('VERIFIED_BODY_WORKER_A');
+    expect(seatBJson.out).not.toContain('TAMPERED_SECRET_BODY');
+    expect(existsSync(receiptFile(where, 'worker-b', idB))).toBe(true);
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'worker-a'), idA, 'read'))).toBe(false);
+
+    // 4. Seat A reads: serves worker-a's valid record (publishing its receipt) and refuses the tampered record with no body
+    const seatAJson = await run(['--json'], WORKER_A);
+    expect(seatAJson.code).toBe(1);
+    const seatADoc = assertMatchesOutputSchema<MessagesDoc>(seatAJson.out, MESSAGES_OUTPUT_SCHEMA);
+    expect(seatADoc.counts).toEqual({ messages: 2, shown: 1, refused: 1, waiting: 0 });
+    expect(seatADoc.rows).toEqual([
+      { id: idA, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'shown', body: 'VERIFIED_BODY_WORKER_A' },
+      { id: idTampered, from: 'orchestrator', to: 'worker-a', sent: AT, sent_display: '0s ago', status: 'refused' },
+    ]);
+    expect(seatAJson.out).not.toContain('TAMPERED_SECRET_BODY');
+    expect(statusOf(recordDir(where, 'acme', 'worker-a'), idA, { to: 'worker-a', root: where, session: 'acme' }, messageKey())).toBe('read');
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'worker-a'), idTampered, 'read'))).toBe(false);
   });
 
   test('unplaced, owner-no-tty, agentless pane, watch, and foreign-session callers read nothing and create no key', async () => {

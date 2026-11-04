@@ -1878,8 +1878,9 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           to: { type: ['string', 'null'] },
           sent: { type: ['string', 'null'] },
           sent_display: { type: 'string', minLength: 1 },
-          // `waiting`: a record addressed to another mailbox, listed read-only — no body, and
-          // no receipt published for it.
+          // `waiting`: a record addressed to another mailbox, listed read-only — no receipt
+          // published for it; `body` rides along only in the owner's reading, and a record that
+          // does not verify carries none.
           status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
           body: { type: 'string' },
         },

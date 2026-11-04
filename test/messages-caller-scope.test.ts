@@ -6,7 +6,7 @@
 // `waiting` with no body and no receipt, and a caller the placement cannot resolve reads nothing.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -67,6 +67,10 @@ const LEAD: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: '
 const WORKER: Caller = { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' };
 
 const OTHER_NOTE = '2 messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.';
+/** The owner's own reading: the whole session is plainly readable to the owner, so its rows carry
+ *  the verified bodies; what the owner's run never does is spend another mailbox's id. */
+const OWNER_OTHER_NOTE_ONE = '1 message addressed to another mailbox is waiting; it is shown read-only, and no receipt is written for it.';
+const OWNER_OTHER_NOTE_TWO = '2 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.';
 
 type MessagesDoc = {
   format: number;
@@ -195,14 +199,57 @@ describe('team messages reads only the caller\'s mailbox', () => {
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
     const doc = assertMatchesOutputSchema<MessagesDoc>(result.out, MESSAGES_OUTPUT_SCHEMA);
-    // Transport-tree records list before the older store's, as they always did.
+    // Transport-tree records list before the older store's, as they always did. The owner reads
+    // the whole session: the lead's record carries its verified body, and is still not served —
+    // a waiting row publishes no receipt, so the lead's own reader still finds it.
     expect(doc.rows).toEqual([
-      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'waiting' },
+      { id: 'a1', from: 'harness', to: 'lead', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the lead' },
       { id: 'e1', from: 'runtime', to: 'owner', sent: AT, sent_display: '0s ago', status: 'shown', body: 'for the owner' },
     ]);
     expect(doc.counts).toEqual({ messages: 2, shown: 1, refused: 0, waiting: 1 });
+    expect(doc.notes).toEqual([OWNER_OTHER_NOTE_ONE]);
     expect(existsSync(receiptFile(where, 'owner', 'e1'))).toBe(true);
     expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'lead'), 'a1', 'read'))).toBe(false);
+  });
+
+  test('the owner reads another mailbox\'s verified body read-only, and a record that does not verify stays body-less', async () => {
+    project();
+    const where = found();
+    const workerId = 'c2f1b3d4-5e6a-4b7c-9d0e-1f2a3b4c5d6e';
+    const tamperedId = 'd3a2c4e5-6f7b-4c8d-9e1f-2a3b4c5d6e7f';
+    plantRecord(home, where, 'acme', 'worker', workerId, 'for the worker', { from: 'harness', at: AT });
+    plantRecord(home, where, 'acme', 'lead', tamperedId, 'for the lead', { from: 'harness', at: AT });
+    // Altered after signing: its signature no longer holds, so not even the owner's reading
+    // carries a body for it, and no difference is raised — the record still belongs to the
+    // lead's own reader, which will report it when it reads.
+    const tampered = join(recordDir(where, 'acme', 'lead'), tamperedId);
+    writeFileSync(tampered, readFileSync(tampered, 'utf8').replace('for the lead', 'for the lead, altered'));
+
+    const result = await run(['--json'], { kind: 'owner' });
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    const doc = assertMatchesOutputSchema<MessagesDoc>(result.out, MESSAGES_OUTPUT_SCHEMA);
+    // Candidate order is the seats' own order: lead before worker.
+    expect(doc.rows).toEqual([
+      { id: tamperedId, from: null, to: 'lead', sent: null, sent_display: '-', status: 'waiting' },
+      { id: workerId, from: 'harness', to: 'worker', sent: AT, sent_display: '0s ago', status: 'waiting', body: 'for the worker' },
+    ]);
+    expect(doc.counts).toEqual({ messages: 2, shown: 0, refused: 0, waiting: 2 });
+    expect(doc.notes).toEqual([OWNER_OTHER_NOTE_TWO]);
+    expect(doc.differences).toEqual([]);
+
+    // The owner's reading spends neither record: both mailboxes still have their mail.
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'worker'), workerId, 'read'))).toBe(false);
+    expect(existsSync(recordReceiptFile(recordDir(where, 'acme', 'lead'), tamperedId, 'read'))).toBe(false);
+
+    // The text reading shows the same two rows, the verified body under its own heading, no
+    // body for the altered record, and the note that says no receipt was written.
+    const text = await run([], { kind: 'owner' });
+    expect(text.code).toBe(0);
+    expect(text.out).toContain(`worker/${workerId}:\nfor the worker`);
+    expect(text.out).not.toContain('for the lead, altered');
+    expect(text.out).toContain('note: 2 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.');
+    expect(text.out.endsWith('2 messages\n')).toBe(true);
   });
 
   test('a caller the placement cannot resolve reads nothing and publishes nothing', async () => {

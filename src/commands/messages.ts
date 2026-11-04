@@ -582,6 +582,11 @@ type MailboxRow = {
   sent: string | null;
   sent_display: string;
   status: 'shown' | 'refused' | 'waiting';
+  /** The verified body: a served record's on a `shown` row, and, in the owner's reading only, a
+   *  record of another mailbox on its `waiting` row. The owner reading is read-only — it carries
+   *  the body and publishes no receipt — and a seat's reading never carries another mailbox's
+   *  body at all. A record that does not verify carries none, whatever the caller. */
+  body?: string;
 };
 
 /** The record's path as the caller reads it in the refusal's repair. */
@@ -606,13 +611,23 @@ export function mailboxOf(caller: Caller): string | null {
 }
 
 /**
- * The row one record waits under when it is addressed to another mailbox. It is read-only: the
- * fields are the read-only verification's when a key is present and the record verifies, and null
- * otherwise; `to` is the folder the record waits in. There is no body, no receipt, no difference
- * and no event — the record belongs to the addressed mailbox's own reader, and this reading only
- * says it is there.
+ * The row one record waits under when it is addressed to another mailbox. The fields are the
+ * read-only verification's when a key is present and the record verifies, and null otherwise;
+ * `to` is the folder the record waits in. There is no receipt, no difference and no event — the
+ * record belongs to the addressed mailbox's own reader, and this reading only says it is there.
+ * `withBody` is the owner's reading, which carries the verified body as it does for any mailbox:
+ * the whole session is plainly readable to the owner, so hiding the bytes would only hide what
+ * the reader can already open. A seat's reading never asks for it, and a record that does not
+ * verify has no body to carry either way.
  */
-function waitingRow(candidate: Candidate, root: string, session: string, key: KeyObject | null, now: Date): MailboxRow {
+function waitingRow(
+  candidate: Candidate,
+  root: string,
+  session: string,
+  key: KeyObject | null,
+  now: Date,
+  withBody: boolean,
+): MailboxRow {
   const verified = key === null ? null : problemOf(candidate, root, session, key);
   const fields = verified !== null && !('text' in verified) ? verified : null;
   return {
@@ -624,11 +639,19 @@ function waitingRow(candidate: Candidate, root: string, session: string, key: Ke
     sent: fields?.at ?? null,
     sent_display: formatRelativeTime(fields?.at, now),
     status: 'waiting',
+    ...(withBody && fields !== null ? { body: fields.body } : {}),
   };
 }
 
-/** The note a reading carries when records for other mailboxes are listed beside its own. */
-function otherMailboxNote(count: number): string {
+/** The note a reading carries when records for other mailboxes are listed beside its own. A
+ *  seat's reading lists them without their bodies; the owner's reading shows the verified body
+ *  read-only. Both notes end on the same fact: no receipt is written for another mailbox. */
+function otherMailboxNote(count: number, withBodies: boolean): string {
+  if (withBodies) {
+    return count === 1
+      ? '1 message addressed to another mailbox is waiting; it is shown read-only, and no receipt is written for it.'
+      : `${count} messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.`;
+  }
   return count === 1
     ? '1 message addressed to another mailbox is waiting; it is listed without its body, and no receipt is written for it.'
     : `${count} messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.`;
@@ -682,7 +705,8 @@ function bodyLines(body: string): string[] {
  * An empty mailbox is a `0 messages` reading with the note that nothing is waiting, and creates
  * no key. The run serves one mailbox: the owner's, or the seat the caller is placed as, and the
  * receipt records that the addressed party's reader was shown the body. Records for other
- * mailboxes are listed as `waiting` rows with no body and no receipt, and a caller the placement
+ * mailboxes are listed as `waiting` rows with no receipt: a seat's reading carries no body for
+ * them, and the owner's reading carries the verified body read-only. A caller the placement
  * cannot resolve is refused before anything is listed.
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
@@ -759,6 +783,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.caller
     return 1;
   }
+  // The owner's reading is the whole session's: its waiting rows carry the verified body of
+  // another mailbox (read-only, with no receipt). A seat's reading carries only its own bodies.
+  const ownerView = placed.kind === 'owner';
   // The table's FROM cell is the readable name the project's `sender_name` asks for; the row's
   // `from` stays the record's own value, which is what `--json` carries.
   const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
@@ -784,7 +811,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
       });
     } else {
-      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io), naming));
+      io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], ['nothing is waiting'], ttyStyle(io), naming));
     }
     // exit: messages.none
     return 0;
@@ -807,11 +834,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const key = state.kind === 'key' ? state.key : null;
   const now = sources.now();
   const rows: MailboxRow[] = [];
-  /** The body each shown row carries, keyed by the row itself: a refused or served candidate
-   *  never shifts a body onto another row. */
-  const bodyOf = new Map<MailboxRow, string>();
-  /** The bodies in print order, for the text reading. */
-  const shownBodies: { candidate: Candidate; body: string }[] = [];
+  /** How many records this reading served: a waiting row, even one the owner reads the body of,
+   *  is not shown and never counts here. */
+  let shownCount = 0;
   /** Older-store messages, whose body prints first and whose receipt is written after stdout. */
   const legacyShown: Candidate[] = [];
   const differences: OutputDifference[] = [];
@@ -819,8 +844,9 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const briefSeats: string[] = [];
   for (const candidate of waiting) {
     if (candidate.seat !== mailbox) {
-      // Addressed to another mailbox: listed, never shown, never receipted.
-      rows.push(waitingRow(candidate, root, session, key, now));
+      // Addressed to another mailbox: listed, never shown, never receipted. The owner's reading
+      // carries the verified body; a seat's never does.
+      rows.push(waitingRow(candidate, root, session, key, now, ownerView));
       continue;
     }
     // Every record of this mailbox reaching here is the key's to verify: a keyless run with one
@@ -891,33 +917,30 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       sent: result.at,
       sent_display: formatRelativeTime(result.at, now),
       status: 'shown',
+      body: result.body,
     };
     rows.push(row);
-    bodyOf.set(row, result.body);
-    shownBodies.push({ candidate, body: result.body });
+    shownCount += 1;
     if (candidate.store === 'legacy') legacyShown.push(candidate);
   }
   const notes = briefSeats.map(
     (seat) => `${seat}: the general seat brief is not shown here; the seat's own turn-start reader serves it.`,
   );
-  if (otherCount > 0) notes.push(otherMailboxNote(otherCount));
+  if (otherCount > 0) notes.push(otherMailboxNote(otherCount, ownerView));
   if (json) {
     writeJson(io, 'team.messages', {
       format: 1 as const,
       project: loaded.team.project,
       session,
-      rows: rows.map((row) => {
-        const body = bodyOf.get(row);
-        return {
-          id: row.id,
-          from: row.from,
-          to: row.to,
-          sent: row.sent,
-          sent_display: row.sent_display,
-          status: row.status,
-          ...(body !== undefined ? { body } : {}),
-        };
-      }),
+      rows: rows.map((row) => ({
+        id: row.id,
+        from: row.from,
+        to: row.to,
+        sent: row.sent,
+        sent_display: row.sent_display,
+        status: row.status,
+        ...(row.body !== undefined ? { body: row.body } : {}),
+      })),
       notes,
       differences: differences.map(toJsonDifference),
       // The envelope's `summary` is the reading's difference counts, the stable key every reading
@@ -925,13 +948,13 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       summary: summaryCounts(differences),
       counts: {
         messages: rows.length,
-        shown: shownBodies.length,
+        shown: shownCount,
         refused: differences.length,
         waiting: otherCount,
       },
     });
   } else {
-    io.stdout(renderMailbox(loaded.team.project, session, rows, shownBodies, differences, notes, ttyStyle(io), naming));
+    io.stdout(renderMailbox(loaded.team.project, session, rows, differences, notes, ttyStyle(io), naming));
   }
   // The older store keeps its original order: its body printed first, so its receipt is written
   // after stdout returns. Transport-tree records published and flushed theirs before the body.
@@ -951,14 +974,15 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   return 0;
 }
 
-/** The reading's plain text: the context line, the `ID  FROM  TO  SENT  STATUS` table, each shown
- *  body under its own `<seat>/<id>:` heading, the notes and differences, and the closing
- *  `<n> message` / `<n> messages` line. */
+/** The reading's plain text: the context line, the `ID  FROM  TO  SENT  STATUS` table, each body
+ *  under its own `<seat>/<id>:` heading — in table order, which is the order the bodies were
+ *  always printed — the notes and differences, and the closing `<n> message` / `<n> messages`
+ *  line. A row carries a body when it was shown, and in the owner's reading a `waiting` row of
+ *  another mailbox carries its verified body too. */
 function renderMailbox(
   project: string,
   session: string,
   rows: readonly MailboxRow[],
-  bodies: readonly { candidate: Candidate; body: string }[],
   differences: readonly OutputDifference[],
   notes: readonly string[],
   style: ReturnType<typeof ttyStyle>,
@@ -975,8 +999,9 @@ function renderMailbox(
       style,
     }),
   );
-  for (const one of bodies) {
-    lines.push('', `${one.candidate.seat}/${one.candidate.id}:`, ...bodyLines(one.body));
+  for (const row of rows) {
+    if (row.body === undefined) continue;
+    lines.push('', `${row.seat}/${row.id}:`, ...bodyLines(row.body));
   }
   if (notes.length > 0) lines.push('', ...renderNotes(notes));
   if (differences.length > 0) lines.push('', ...renderDifferences(differences, style));
