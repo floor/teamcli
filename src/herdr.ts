@@ -255,25 +255,46 @@ export async function workspaceListAsync(session: string | undefined, options: H
   }
 }
 
-// The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
-// Every entry must be an object with a string pane_id and a workspace_id equal to the workspace asked for;
-// anything else makes the whole reading unreadable (null).
-export function workspacePanes(workspace: string, session?: string): string[] | null {
+export type WorkspacePaneDisplay = {
+  pane: string;
+  workspace: string;
+  /** Sidebar line 2 as herdr holds it on the pane row; absent when never reported or expired. */
+  displayAgent?: string;
+};
+
+// The panes in a workspace and the display_agent herdr holds for each, or null when herdr can't
+// be reached or the workspace does not exist. Every entry must be an object with a string pane_id
+// and a workspace_id equal to the workspace asked for; anything else makes the whole reading
+// unreadable (null). Probed 2026-11-04 against herdr 0.9.5: `pane list --workspace <id>` carries
+// `display_agent` while the TTL holds and omits the field once it lapses.
+export function workspacePaneDisplays(workspace: string, session?: string): WorkspacePaneDisplay[] | null {
   try {
     const result = run(['pane', 'list', '--workspace', workspace], session) as { panes?: unknown } | undefined;
     if (!result || typeof result !== 'object' || !Array.isArray(result.panes)) return null;
-    const panes: string[] = [];
+    const panes: WorkspacePaneDisplay[] = [];
     for (const entry of result.panes) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
       const p = entry as Record<string, unknown>;
       if (typeof p.pane_id !== 'string' || !p.pane_id) return null;
       if (typeof p.workspace_id !== 'string' || p.workspace_id !== workspace) return null;
-      panes.push(p.pane_id);
+      const displayAgent = typeof p.display_agent === 'string' && p.display_agent !== '' ? p.display_agent : undefined;
+      panes.push({
+        pane: p.pane_id,
+        workspace: p.workspace_id,
+        ...(displayAgent !== undefined ? { displayAgent } : {}),
+      });
     }
     return panes;
   } catch {
     return null;
   }
+}
+
+// The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
+// Every entry must be an object with a string pane_id and a workspace_id equal to the workspace asked for;
+// anything else makes the whole reading unreadable (null).
+export function workspacePanes(workspace: string, session?: string): string[] | null {
+  return workspacePaneDisplays(workspace, session)?.map((entry) => entry.pane) ?? null;
 }
 
 export type SessionState = 'running' | 'stopped' | 'absent';
