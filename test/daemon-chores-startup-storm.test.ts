@@ -40,6 +40,10 @@ const NOW = Date.parse('2026-11-04T02:00:00.000Z');
 const AT = new Date(NOW).toISOString();
 const RSS = 48 * 1024 * 1024;
 const dirs: string[] = [];
+/** A flat CPU reading: these synthetic children have no process behind them, so the supervisor
+ *  is handed the reading it should judge instead of probing the machine. */
+const flatCpu = (): number => 5_000;
+
 
 afterEach(() => {
   while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
@@ -161,6 +165,7 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(rootAfterReady), routeInput(rootBeforeReady)],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         const root = input.config.routes[0]!.root;
         const child = fakeChild(5100 + spawned.length, root, clock.at);
@@ -271,6 +276,7 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       now: () => new Date(clock.at),
       routes: roots.map((root) => routeInput(root, policy({ missedBeats: 2, backoffCapMs: 30_000 }))),
       log: (text) => logs.push(text),
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         const root = input.config.routes[0]!.root;
         const child = fakeChild(5200 + spawned.length, root, clock.at);
@@ -343,6 +349,7 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(rootBacklog), routeInput(rootMidStall)],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         const root = input.config.routes[0]!.root;
         const child = fakeChild(5300 + spawned.length, root, clock.at);
@@ -422,6 +429,7 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(root, policy({ missedBeats: 2, backoffCapMs: 30_000 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         const child = fakeChild(5400 + spawned.length, input.config.routes[0]!.root, clock.at);
         spawned.push(child);
@@ -471,14 +479,15 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       why: 'the child has missed 2 heartbeats',
     });
 
-    // When the child exits, backoff was reset by its 2 beats so the replacement is scheduled 1000 ms later.
+    // When the child exits, the replacement waits the 60 s restart floor: a root that just lost
+    // a child is never restarted more than once a minute, however small its backoff step.
     child.leave(null, 'SIGTERM');
     await Promise.resolve();
     await Promise.resolve();
     expect(fleet.stateFor(root)).toMatchObject({
       state: 'restarting',
       restarts: 1,
-      nextStartAt: new Date(NOW + 20_000 + 1000).toISOString(),
+      nextStartAt: new Date(NOW + 20_000 + 60_000).toISOString(),
     });
   });
 });

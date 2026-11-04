@@ -308,12 +308,17 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
 
   const heartbeat = (): void => {
     const memory = process.memoryUsage();
+    // The child answers for itself: its own cumulative CPU time, in milliseconds, read from its
+    // own process. The daemon needs no process query to know that a child which keeps beating is
+    // making progress; it asks the process table only for one that has gone silent.
+    const usage = process.cpuUsage();
     write({
       type: 'heartbeat',
       at: now().toISOString(),
       rssBytes: memory.rss,
       busy: running.size > 0 ? 'chores' : null,
       markerCache: (input.markerCacheStats ?? markerCacheStats)(),
+      cpuMs: Math.round((usage.user + usage.system) / 1000),
     });
   };
 

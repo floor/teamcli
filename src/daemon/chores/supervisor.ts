@@ -16,12 +16,23 @@
 // turn, so one root's backlog delays another root's chores by a slice.
 import type { TeamFile } from '../../file/types.ts';
 import type { HostedWatchState } from '../../watch/hosted.ts';
+import {
+  isAsyncCpuReading,
+  processCpuTimeAsync,
+  type ProcessCpuTimeProbe,
+} from '../../watch/process-adapter.ts';
 import { routeId, type HostedRoute } from '../routes.ts';
 import type { DaemonChoresState } from '../state.ts';
 import type { HostedWatch } from '../watch.ts';
 import type { ChoresPolicy } from './policy.ts';
 import { tightestPolicy } from './policy.ts';
-import { spawnChoresChild, type ChoresChild, type ChoresChildEvent, type SpawnChoresInput } from './spawn.ts';
+import {
+  CPU_PROGRESS_EPSILON_MS,
+  spawnChoresChild,
+  type ChoresChild,
+  type ChoresChildEvent,
+  type SpawnChoresInput,
+} from './spawn.ts';
 import type {
   ChoresChildConfig,
   ChoresMarkerCache,
@@ -57,6 +68,14 @@ export type ChoresFleetInput = {
   factory?: (input: SpawnChoresInput) => ChoresChild;
   /** How long a terminated child gets before it is forced. */
   killGraceMs?: number;
+  /** Reads the CPU time the machine has charged a process, in milliseconds. It is asked only
+   *  for a child that has gone silent, and asynchronously: a healthy child reports its own CPU
+   *  total in every heartbeat, so no beat starts a process. A late child is judged by whether
+   *  this reading rose above its last reported total: work the machine charged is progress,
+   *  whatever the child's own beats say. Defaults to the process adapter's bounded probe; a test
+   *  injects a fake reading (at once, or as a promise) because its synthetic children have no
+   *  process behind them. */
+  cpuTimeOf?: ProcessCpuTimeProbe;
   /** How long a presence answer waits for the child before the daemon gives it up and holds the
    *  route's seats for that pass. A child that stopped answering must not hold the pass forever;
    *  the child's late answer is dropped as one for a nudge no longer pending. */
@@ -116,6 +135,27 @@ const DEFAULT_PRESENCE_DEADLINE_MS = 10_000;
  *  either way. */
 const STARTUP_DEADLINE_MS = 60_000;
 
+/** The least time one group gets between a child's end and its replacement's start: at most one
+ *  restart a minute, whatever the backoff step works out to. A child ended again moments after
+ *  its replacement started is how a kill storm chains, and the backoff cap (30 s in the release
+ *  policy) sits below this floor, so without it every storm step is a fresh process. The doubling
+ *  is kept for a policy whose cap is above the floor; at the release cadence the floor binds and
+ *  is what an operator sees. A release constant, not a policy knob. */
+const RESTART_FLOOR_MS = 60_000;
+
+/** How long a child may go without a heartbeat while its CPU keeps advancing before it is ended
+ *  anyway: ten minutes, 120 beats at the release cadence. Every pass this child runs is bounded
+ *  by seconds (a two-second slice, a ten-second presence deadline), so a process that has been
+ *  silent for ten minutes while the machine kept charging it is a loop that will not come back.
+ *  Without this ceiling the progress rule would spare it forever. A release constant, not a
+ *  policy knob. */
+const HUNG_CEILING_MS = 600_000;
+
+/** How long a child ended at the hung ceiling gets between the terminate signal and the forced
+ *  end: two default beats. This child is known to be consuming CPU and may only be able to act
+ *  on the signal at a point of its own choosing, so it gets longer than the ordinary grace. */
+const HUNG_CEILING_GRACE_MS = 10_000;
+
 type Group = {
   mode: 'per-root' | 'shared';
   routes: ChoresRouteInput[];
@@ -144,6 +184,29 @@ type Group = {
   backoff: number;
   /** Heartbeats this child has sent since it started; the second one proves a run. */
   beats: number;
+  /** The CPU total this child last reported in a heartbeat, in milliseconds, and when this
+   *  daemon read that frame. The child answers this about itself, so a healthy beat costs the
+   *  daemon no process query at all. */
+  cpuSampleMs: number | null;
+  cpuSampleAtMs: number | null;
+  /** The last reading a probe took of this child, and when. A probe is the daemon's only
+   *  process-table read for liveness: one at a start, and one for a child that has gone silent. */
+  probeCpuMs: number | null;
+  probeCpuAtMs: number | null;
+  /** A probe is out for this child; no second one starts until it answers. */
+  probePending: boolean;
+  /** Bumped when the child speaks, leaves, or the daemon's loop stalls: a probe answer for a
+   *  window that has since closed is dropped rather than judged. */
+  judgeToken: number;
+  /** Why a late child is being kept rather than ended: its CPU advanced, or no reading could
+   *  prove it stopped. Null when the child is not being spared. */
+  spareWhy: string | null;
+  /** The row's own reason while a child is being ended on a reason the missed-beats sentence
+   *  does not state: the hung ceiling is the one such end. */
+  rowWhy: string | null;
+  /** Whether this late episode's spare reason has been logged: the log says it once, not every
+   *  beat, while the row keeps saying it. */
+  spareLogged: boolean;
   nextStartAtMs: number;
   /** How the last child left, for the record and the log. */
   lastExit: { code: number | null; signal: NodeJS.Signals | null } | null;
@@ -209,6 +272,15 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     restarts: 0,
     backoff: 0,
     beats: 0,
+    cpuSampleMs: null,
+    cpuSampleAtMs: null,
+    probeCpuMs: null,
+    probeCpuAtMs: null,
+    probePending: false,
+    judgeToken: 0,
+    spareWhy: null,
+    rowWhy: null,
+    spareLogged: false,
     nextStartAtMs: 0,
     lastExit: null,
     lastPass: new Map(),
@@ -283,7 +355,24 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // A child that is being ended, or whose process has already left, gets no beat: its pipe has
   // no reader, and the write that follows is the daemon's own fault, not the child's. The exit
   // settles the group and schedules the replacement; this beat has nothing to say to it.
-  if (group.killing || !child.alive) return;
+  //
+  // A child the handle spared from an ordinary end request because its CPU kept advancing is
+  // still running and still out of service. Its row says it is still working, and the hung
+  // ceiling is what ends it: silence alone is never a reason to force it, so at the ceiling the
+  // supervisor asks again, this time for a forced end. The ceiling sentence in the row marks a
+  // deliberate end already asked for; this beat must not log or ask for it twice.
+  if (group.killing || !child.alive) {
+    if (
+      group.killing &&
+      child.alive &&
+      !stalled &&
+      group.rowWhy === null &&
+      ms - (group.lastBeatReadMs ?? group.startedAtMs) >= HUNG_CEILING_MS
+    ) {
+      endAtCeiling(input, group, child, `the child has not beaten for ${String(HUNG_CEILING_MS)} ms while its CPU kept advancing`);
+    }
+    return;
+  }
   child.send({ type: 'tick', id: `${String(ms)}-${String(group.restarts)}`, at: at.toISOString() });
   // A beat that itself arrived late is the daemon's own loop having been held, not a child that
   // stopped beating: the heartbeats sent during the stall are still unread in its pipe, and a
@@ -295,17 +384,28 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // and no judgement would ever run.
   if (stalled) {
     group.lastBeatReadMs = ms;
+    // The silence this tick could have judged is the daemon's own held loop, not the child's:
+    // a probe that was out for that window is dropped, and the next on-time judgement measures
+    // from this clock.
+    group.judgeToken += 1;
+    group.probePending = false;
     return;
   }
   // A child that has not been read beating twice since it started has no beat clock to judge: its
   // start can still be loading and building its watches, and that work is not silence it chose.
-  // Until the second heartbeat is read, a deadline from the start judges it instead.
+  // Until the second heartbeat is read, a deadline from the start judges it instead. A start that
+  // is still consuming CPU when the deadline passes is late, not dead: it is kept and judged
+  // again on the next beat, exactly as a late beating child is.
   if (group.beats < 2) {
     if (ms - group.startedAtMs < STARTUP_DEADLINE_MS) return;
-    group.killing = true;
-    group.why = `the child did not beat twice within ${String(STARTUP_DEADLINE_MS)} ms of its start`;
-    input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
-    child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+    const situation = `the child did not beat twice within ${String(STARTUP_DEADLINE_MS)} ms of its start`;
+    requestJudgement(
+      input,
+      group,
+      child,
+      { spare: situation, end: situation },
+      group.startedAtMs + HUNG_CEILING_MS,
+    );
     return;
   }
   // Silence is measured from when this daemon last read a beat, never from the beat's own `at`:
@@ -313,10 +413,176 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // is finally heard, and a child that truly stopped beating stops updating this clock.
   const missed = overdueBeats(group.lastBeatReadMs, group.startedAtMs, ms, input.beatMs);
   if (missed < group.policy.missedBeats) return;
+  // The beat clock says the child should have spoken; the CPU clock says whether it was doing
+  // anything. A child the machine kept charging is late, not gone, and ending it is the kill
+  // storm the daemon's own load feeds. Only a child whose CPU did not advance since the last
+  // reading is ended on silence alone. A child kept this way is ended at the hung ceiling if it
+  // never speaks again, so the rule delays an end without granting one forever.
+  const spoken = `the child has missed ${String(missed)} heartbeat${missed === 1 ? '' : 's'}`;
+  requestJudgement(
+    input,
+    group,
+    child,
+    { spare: spoken, end: `the child missed ${String(group.policy.missedBeats)} heartbeats` },
+    (group.lastBeatReadMs ?? group.startedAtMs) + HUNG_CEILING_MS,
+  );
+}
+
+/** One reading of the child's CPU, or null when there is no pid or the probe cannot read it. */
+/** The most recent CPU reading this group holds for its child, whichever source took it. The
+ *  child's own heartbeat and a probe read the same total of the same process; the later one is
+ *  the baseline the next probe is compared with, so a child that spoke after a probe is judged
+ *  against its own fresher number, and one that has been silent since is judged against the
+ *  probe that last looked at it. */
+function cpuBaseline(group: Group): { ms: number; at: number } | null {
+  const reported =
+    group.cpuSampleMs !== null && group.cpuSampleAtMs !== null
+      ? { ms: group.cpuSampleMs, at: group.cpuSampleAtMs }
+      : null;
+  const probed =
+    group.probeCpuMs !== null && group.probeCpuAtMs !== null
+      ? { ms: group.probeCpuMs, at: group.probeCpuAtMs }
+      : null;
+  if (reported === null) return probed;
+  if (probed === null) return reported;
+  return reported.at >= probed.at ? reported : probed;
+}
+
+/** What a late child is judged on: the sentence its spare carries and the one its end does. */
+type LateSituation = { spare: string; end: string };
+
+type ProgressJudgement =
+  | { kind: 'progressed'; deltaMs: number }
+  | { kind: 'flat'; deltaMs: number }
+  | { kind: 'unproven'; why: 'unreadable' | 'no-baseline' | 'backwards' };
+
+/**
+ * Asks the process table whether a child that has gone silent is still working, without holding
+ * the daemon's loop: the probe starts a process of its own, so its answer arrives after the tick
+ * that asked for it. At most one probe is in flight for a group. A heartbeat, an exit or a held
+ * loop closes the window the probe was asked about, and its late answer is dropped rather than
+ * judged against a window that no longer exists. A reading that cannot be taken is no evidence
+ * either way: the child is spared, never ended on it.
+ */
+function requestJudgement(
+  input: ChoresFleetInput,
+  group: Group,
+  child: ChoresChild,
+  situation: LateSituation,
+  ceilingAtMs: number,
+): void {
+  if (group.probePending) return;
+  const previous = cpuBaseline(group);
+  const pid = child.pid;
+  const probe = input.cpuTimeOf ?? processCpuTimeAsync;
+  let answer: ReturnType<ProcessCpuTimeProbe>;
+  try {
+    answer = pid === null ? null : probe(pid);
+  } catch {
+    answer = null;
+  }
+  group.probePending = true;
+  const token = group.judgeToken;
+  const finish = (now: number | null): void => {
+    if (group.child !== child || group.judgeToken !== token) return;
+    group.probePending = false;
+    if (group.stopping) return;
+    // The probe is the freshest reading the group holds, whether or not it decides anything: a
+    // child whose reading was only a baseline must not be compared with a stale start again.
+    if (now !== null) {
+      group.probeCpuMs = now;
+      group.probeCpuAtMs = input.now().getTime();
+    }
+    applyJudgement(input, group, child, situation, ceilingAtMs, previous, now);
+  };
+  if (isAsyncCpuReading(answer)) {
+    answer.then(finish, () => finish(null));
+    return;
+  }
+  finish(answer);
+}
+
+function judgeReading(previous: { ms: number; at: number } | null, now: number | null): ProgressJudgement {
+  if (now === null) return { kind: 'unproven', why: 'unreadable' };
+  if (previous === null) return { kind: 'unproven', why: 'no-baseline' };
+  const deltaMs = now - previous.ms;
+  // A reading that went backwards is not a flat window: nothing about the same process's total
+  // can shrink, so the two numbers are not comparable and neither is evidence against the child.
+  if (deltaMs < 0) return { kind: 'unproven', why: 'backwards' };
+  return deltaMs > CPU_PROGRESS_EPSILON_MS ? { kind: 'progressed', deltaMs } : { kind: 'flat', deltaMs };
+}
+
+function applyJudgement(
+  input: ChoresFleetInput,
+  group: Group,
+  child: ChoresChild,
+  situation: LateSituation,
+  ceilingAtMs: number,
+  previous: { ms: number; at: number } | null,
+  now: number | null,
+): void {
+  // The window may have closed while the answer was out: the child spoke, left, was already
+  // being ended, or the daemon is stopping. Only the window the probe was asked about is judged.
+  if (group.child !== child || group.killing || !child.alive || group.stopping) return;
+  const judgement = judgeReading(previous, now);
+  if (judgement.kind === 'progressed') {
+    if (input.now().getTime() >= ceilingAtMs) {
+      endAtCeiling(input, group, child, `the child has not beaten for ${String(HUNG_CEILING_MS)} ms while its CPU kept advancing`);
+      return;
+    }
+    spareLate(input, group, situation.spare, judgement);
+    return;
+  }
+  if (judgement.kind !== 'flat') {
+    spareLate(input, group, situation.spare, judgement);
+    return;
+  }
+  // A child spared in an earlier window that is flat now changed state between the two
+  // judgements; the log names that change, so this end is not read as a kill of a working child.
+  const wasSpared = group.spareWhy !== null;
+  group.spareWhy = null;
+  group.spareLogged = false;
   group.killing = true;
-  group.why = `the child missed ${String(group.policy.missedBeats)} heartbeats`;
+  group.why = situation.end;
+  if (wasSpared) input.log(`chores ${rootList(group)}: the child's CPU stopped advancing; ending it`);
   input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
   child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+}
+
+type SpareJudgement = Extract<ProgressJudgement, { kind: 'progressed' } | { kind: 'unproven' }>;
+
+/** Keeps a late child: the row carries the reason and the log carries it once per episode. */
+function spareLate(input: ChoresFleetInput, group: Group, situation: string, judgement: SpareJudgement): void {
+  if (judgement.kind === 'unproven') {
+    const why =
+      judgement.why === 'unreadable'
+        ? 'its CPU could not be read'
+        : judgement.why === 'no-baseline'
+          ? 'there was no earlier CPU reading to compare'
+          : 'its CPU reading went backwards';
+    group.spareWhy = `${situation} and ${why}`;
+    if (group.spareLogged) return;
+    group.spareLogged = true;
+    input.log(`chores ${rootList(group)}: ${group.spareWhy}; keeping it`);
+    return;
+  }
+  group.spareWhy = `${situation} but is still working`;
+  if (group.spareLogged) return;
+  group.spareLogged = true;
+  input.log(`chores ${rootList(group)}: ${situation} but its CPU is still advancing (+${String(judgement.deltaMs)} ms); keeping it`);
+}
+
+/** Ends a child that kept consuming CPU but stopped answering for the whole ceiling: the reason
+ *  names it a hung loop, apart from every child ended on silence alone, and the handle is asked
+ *  to force an end even if the process is still working when its grace expires. */
+function endAtCeiling(input: ChoresFleetInput, group: Group, child: ChoresChild, why: string): void {
+  group.spareWhy = null;
+  group.rowWhy = why;
+  group.spareLogged = false;
+  group.killing = true;
+  group.why = why;
+  input.log(`chores ${rootList(group)}: ${why}; ending it as a hung loop and starting a replacement`);
+  child.kill(why, HUNG_CEILING_GRACE_MS, { evenIfWorking: true });
 }
 
 function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
@@ -337,13 +603,19 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   };
   let child: ChoresChild;
   try {
-    child = (input.factory ?? spawnChoresChild)({ config });
+    child = (input.factory ?? spawnChoresChild)({
+      config,
+      ...(input.cpuTimeOf === undefined ? {} : { cpuTimeOf: input.cpuTimeOf }),
+    });
   } catch (error) {
     // A factory that throws is this start's failure: the restart path decides the next one.
     group.startedOnce = true;
     group.restarts += 1;
     group.backoff += 1;
-    const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
+    const wait = Math.max(
+      Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
+      RESTART_FLOOR_MS,
+    );
     group.nextStartAtMs = at.getTime() + wait;
     group.why = `the child could not be started: ${error instanceof Error ? error.message : String(error)}`;
     input.log(`chores ${rootList(group)}: ${group.why}; starting again in ${String(wait)} ms`);
@@ -358,9 +630,21 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.ready = false;
   group.killing = false;
   group.beats = 0;
+  group.cpuSampleMs = null;
+  group.cpuSampleAtMs = null;
+  group.probeCpuMs = null;
+  group.probeCpuAtMs = null;
+  group.probePending = false;
+  group.judgeToken += 1;
+  group.spareWhy = null;
+  group.rowWhy = null;
+  group.spareLogged = false;
   group.lastExit = null;
   group.startedOnce = true;
   group.why = null;
+  // A child that has not spoken yet is judged against its own start: the one baseline read this
+  // group takes without a heartbeat to carry it. It is asynchronous and happens once per start.
+  startBaseline(input, group, child);
   // A replacement starts with no proved run: every watched root reads starting, effects closed,
   // until the new child reports its own first state. Its chore row starts empty for the same
   // reason: this process has run nothing for the root and holds no marker stamps yet.
@@ -370,6 +654,35 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.markerCache = null;
   group.unsubscribe = child.subscribe((event) => onChildEvent(input, group, child, event));
   void child.exited.then(() => onChildExit(input, group, child));
+}
+
+/**
+ * Takes the one process-table reading a start needs: a child that has not spoken yet has no
+ * heartbeat to carry its CPU, and a start that never beats must still be judged against its own
+ * start rather than spared until the ceiling. The read is the bounded probe, never a query on
+ * the daemon's loop, and a scene's reader may answer at once. A start that speaks before the
+ * answer arrives has already given the group a fresher number; this one is kept only as an older
+ * baseline, and the timestamp comparison in `cpuBaseline` prefers the child's own report.
+ */
+function startBaseline(input: ChoresFleetInput, group: Group, child: ChoresChild): void {
+  const pid = child.pid;
+  if (pid === null) return;
+  let answer: ReturnType<ProcessCpuTimeProbe>;
+  try {
+    answer = (input.cpuTimeOf ?? processCpuTimeAsync)(pid);
+  } catch {
+    return;
+  }
+  const keep = (value: number | null): void => {
+    if (group.child !== child || value === null) return;
+    group.probeCpuMs = value;
+    group.probeCpuAtMs = input.now().getTime();
+  };
+  if (isAsyncCpuReading(answer)) {
+    answer.then(keep, () => {});
+    return;
+  }
+  keep(answer);
 }
 
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
@@ -393,6 +706,25 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       // now. A frame written while this loop was held must not be charged to the child's own
       // cadence, which is what reading the child's `at` as the reference did.
       const readAt = input.now().getTime();
+      // A child the daemon asked to end that answers with a beat is still working: the handle's
+      // guard withholds the forced end from a child that keeps consuming CPU, and the supervisor
+      // must not leave a live child out of service forever. An ordinary end request is withdrawn
+      // and the next late window is judged afresh. A child that was in teardown anyway exits on
+      // its own, and that exit still schedules the replacement exactly as before.
+      //
+      // A deliberate end is not withdrawn: the hung ceiling's request is already going to force
+      // the child, so a beat inside its grace must not put a child that is about to be forced
+      // back into service. The ceiling sentence in the row marks that deliberate request; the
+      // generic bookkeeping below clears it, and `killing` then falls back to the ceiling's reason.
+      if (group.killing && group.rowWhy === null) {
+        group.killing = false;
+        group.why = null;
+      }
+      // A beat closes the window a probe may still be judging: its answer is for a child that
+      // has spoken since, and is dropped. The beat also carries the child's own CPU total, so
+      // the baseline for the next late decision costs no process query at all.
+      group.judgeToken += 1;
+      group.probePending = false;
       group.lastBeatReadMs = readAt;
       group.lastBeatMs = Date.parse(message.at);
       if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
@@ -400,6 +732,13 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       group.busy = message.busy;
       group.markerCache = message.markerCache;
       group.beats += 1;
+      if (typeof message.cpuMs === 'number' && Number.isFinite(message.cpuMs)) {
+        group.cpuSampleMs = message.cpuMs;
+        group.cpuSampleAtMs = readAt;
+      }
+      group.spareWhy = null;
+      group.rowWhy = null;
+      group.spareLogged = false;
       // Two heartbeats span a full beat interval: this child's loop moved on its own after it
       // started, so the next failure waits the first step again. A child that dies before its
       // second beat is a start that did not take, and keeps the doubling wait.
@@ -467,6 +806,15 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   group.killing = false;
   group.lastBeatMs = null;
   group.lastBeatReadMs = null;
+  group.cpuSampleMs = null;
+  group.cpuSampleAtMs = null;
+  group.probeCpuMs = null;
+  group.probeCpuAtMs = null;
+  group.probePending = false;
+  group.judgeToken += 1;
+  group.spareWhy = null;
+  group.rowWhy = null;
+  group.spareLogged = false;
   group.rssBytes = null;
   group.busy = null;
   // The dead child's chore row leaves with it: its cache was that process's memory, and the
@@ -490,8 +838,14 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   if (group.stopping) return;
   group.restarts += 1;
   group.backoff += 1;
-  const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
-  group.nextStartAtMs = input.now().getTime() + wait;
+  // The floor is measured from the end, so a child that leaves early in its minute still gets a
+  // replacement at the first instant its root may start one.
+  const endedAtMs = input.now().getTime();
+  const wait = Math.max(
+    Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
+    RESTART_FLOOR_MS,
+  );
+  group.nextStartAtMs = endedAtMs + wait;
   const reason = exitReason(group.lastExit?.code ?? null, group.lastExit?.signal ?? null);
   group.why = `the child ${reason}`;
   input.log(`chores ${rootList(group)}: the child ${reason}; starting a replacement in ${String(wait)} ms`);
@@ -525,11 +879,15 @@ function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonCh
     ? 'the daemon is stopping this child'
     : group.child === null
       ? group.why
-      : missed > 0
-        ? `the child has missed ${String(missed)} heartbeat${missed === 1 ? '' : 's'}`
-        : group.killing
-          ? group.why
-          : null;
+      // A child kept because its CPU advanced (or because no reading could say otherwise) says
+      // so in the row for as long as it is kept, not only when the log first noticed it.
+      : group.spareWhy ??
+        group.rowWhy ??
+        (missed > 0
+          ? `the child has missed ${String(missed)} heartbeat${missed === 1 ? '' : 's'}`
+          : group.killing
+            ? group.why
+            : null);
   return {
     mode: group.mode,
     state,
@@ -731,7 +1089,9 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         settlePresence(group, 'the daemon is stopping this child');
         const child = group.child;
         if (child === null) continue;
-        child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+        // A stop is a deliberate end, not a liveness judgement: the daemon must not leave a child
+        // behind, so this is one of the two ends that may force a child still consuming CPU.
+        child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS, { evenIfWorking: true });
         // A child that never leaves must not hold the daemon's close: the forced signal above
         // is what ends it, and this bound only keeps the close from waiting past it.
         const bound = input.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
