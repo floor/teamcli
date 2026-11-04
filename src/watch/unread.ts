@@ -563,14 +563,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
     // idle prompt at both reads lets it type. A box that already holds exactly this wake's line
     // is submitted below; any other draft is left, so a draft is still never typed over.
-    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done' && status !== 'blocked') continue;
+    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
     const kind = readScreen(seat.cli, screen).kind;
-    if (kind === 'working') continue;
-    if (kind !== 'idle' && kind !== 'unsent') {
+    if (kind === 'unknown') {
       reportBlockedScreenToLead(scene, seat, pane, dropDir, context, typedDue, unreadAfter, kind, failedLeg, home);
       continue;
     }
-    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
+    if (kind !== 'idle' && kind !== 'unsent') continue;
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {
@@ -961,6 +960,7 @@ function reportBlockedScreenToLead(
       { deduplicate: true },
     );
     if (!appended.ok) {
+      if (leadOutcome.existing !== true) release(leadOutcome.path);
       for (const one of reserved) release(wakePath(dropDir, one.message.id));
       return;
     }
@@ -972,7 +972,26 @@ function reportBlockedScreenToLead(
         : [],
     );
 
+    let claimed = 0;
     for (const [index, one] of reserved.entries()) {
+      if (!alreadyRecorded.has(one.message.id)) {
+        const wrote = appendHistory(scene.team.project, scene.root, home, {
+          ts: at,
+          from: one.payload.from,
+          to: seat.name,
+          body: one.payload.body,
+          id: one.message.id,
+          thread: one.payload.thread,
+          outcome: 'delivered-but-blocked',
+          via: 'lead-report',
+          note: `blocked by a dialog (${kind}); reported to ${leadName}`,
+          ...failedLeg(one.message.id),
+        });
+        if (!wrote.ok) {
+          release(wakePath(dropDir, one.message.id));
+          continue;
+        }
+      }
       const text = lines[index]!;
       const { targets } = reportTargets(scene, one.payload, home);
       const senders = targets.filter(
@@ -990,20 +1009,6 @@ function reportBlockedScreenToLead(
           once: true,
         });
       }
-      if (!alreadyRecorded.has(one.message.id)) {
-        appendHistory(scene.team.project, scene.root, home, {
-          ts: at,
-          from: one.payload.from,
-          to: seat.name,
-          body: one.payload.body,
-          id: one.message.id,
-          thread: one.payload.thread,
-          outcome: 'delivered-but-blocked',
-          via: 'typed',
-          note: `blocked by a dialog (${kind}); reported to ${leadName}`,
-          ...failedLeg(one.message.id),
-        });
-      }
       mark(dropDir, `${one.message.id}.wake`, {
         id: one.message.id,
         at,
@@ -1014,9 +1019,14 @@ function reportBlockedScreenToLead(
         to: leadName,
         report: leadOutcome.id,
       });
+      claimed += 1;
     }
 
-    if (leadOutcome.existing !== true && !appended.duplicate) {
+    if (claimed === 0) {
+      if (leadOutcome.existing !== true) release(leadOutcome.path);
+      return;
+    }
+    if (!appended.duplicate) {
       scene.say(reason, true);
     }
   } finally {
@@ -1212,6 +1222,18 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
     ? null
     : { root: scene.root, session: scene.session, to: leadName, label: leadName };
   const due: DueReport[] = [];
+  let blockedHistoryIds: Set<string> | null = null;
+  const hasBlockedHistory = (id: string): boolean => {
+    if (blockedHistoryIds === null) {
+      const historyRead = readHistory(scene.team.project, scene.root, home);
+      blockedHistoryIds = new Set(
+        historyRead.ok
+          ? historyRead.entries.filter((entry) => entry.outcome === 'delivered-but-blocked').map((entry) => entry.id)
+          : [],
+      );
+    }
+    return blockedHistoryIds.has(id);
+  };
   for (const seat of scene.team.seats) {
     // A person writes no receipt; a drop to a human seat is read by the person, not by a watcher.
     // The retry pass's own give-up already names a drop no watcher read.
@@ -1230,7 +1252,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       const woke = wakeMarkOf(dropDir, message.id);
       // A message whose blocked screen was already reported to the lead within 2N counts as
       // delivered-but-blocked, not lost: it never seeds a 2N queued-not-woken report.
-      if (woke?.state === 'blocked') continue;
+      if (woke?.state === 'blocked' && hasBlockedHistory(message.id)) continue;
       const payload = payloadOf(dropDir, message.id, home);
       if (payload === null) continue;
       // A report the pass wrote is not a message to report about: served as an ordinary drop, it
