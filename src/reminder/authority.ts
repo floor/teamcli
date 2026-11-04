@@ -1,9 +1,16 @@
 // The machine daemon's own authority for a reminder send. A reminder is not sent by a seat, a
-// pane or the owner: it is sent by the daemon process itself, and the only proof of that is the
-// state record the daemon writes at start (`daemon.state.json`), the single-instance lock that
-// names its process, and the heartbeat it refreshes while it serves. This module reads those
-// facts; a missing, stale, foreign or replaced record is a refusal, and an exception is read the
-// same way, never as consent.
+// pane or the owner: it is sent under the daemon's authority, and the proof is the state record
+// the daemon writes at start (`daemon.state.json`), the single-instance lock that names its
+// process, and the heartbeat it refreshes while it serves. This module reads those facts; a
+// missing, stale, foreign or replaced record is a refusal, and an exception is read the same way,
+// never as consent.
+//
+// The sender is either the daemon process itself or a process the daemon started as a supervised
+// child of its own: the reminder beat runs in the machine chores child, beside the daemon's other
+// heavy work. That second sender is proved by the process table, not by a record the child could
+// write: the record names the daemon, the daemon's own parentage names the child. No other
+// process can make itself a child of the daemon, so a seat's CLI — a child of a pane, a shell or
+// a test runner — is read and refused exactly as before.
 //
 // The verifier is asked twice by every reminder send: once to establish the principal, and again
 // before each transport the walk could take (`DaemonSendPrincipal.recheck`). `captured` carries
@@ -39,8 +46,14 @@ export function verifyDaemonAuthority(input: { home: string; captured?: DaemonId
   const state = read.state;
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   if (state.uid !== uid) return { ok: false, why: `the daemon state record names another user's daemon (uid ${String(state.uid)})` };
-  if (state.pid !== process.pid) {
-    return { ok: false, why: `the daemon state record names process ${String(state.pid)}, and this process is ${String(process.pid)}` };
+  // Two senders stand under one identity: the daemon process, and a process the daemon started.
+  // The child is read from the process table — its parent is the recorded pid — never from a
+  // word the child itself could write: only the daemon can make a process its child.
+  if (state.pid !== process.pid && state.pid !== process.ppid) {
+    return {
+      ok: false,
+      why: `the daemon state record names process ${String(state.pid)}, and this process is ${String(process.pid)}, whose parent is ${String(process.ppid)}: neither the daemon nor a process it started`,
+    };
   }
   if (!pidAlive(state.pid)) return { ok: false, why: `the daemon state record names process ${String(state.pid)}, which is not running` };
   const stale = staleHeartbeat(state, input.now ?? new Date());

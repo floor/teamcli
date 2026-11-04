@@ -1,9 +1,9 @@
 // The machine daemon's reminder identity: the state record and single-instance lock prove this
-// process is the daemon, the daemon principal carries the recipients one due instant addresses,
-// and admission refuses every address outside that list, every rooted elsewhere, every human
-// seat and the owner. Nothing here builds a daemon state record for a process that is not this
-// one — the verifier's own proof is that the record names this process — and the transport is
-// the fixture's fake socket and scripted pane, never a live session or CLI home.
+// process is the daemon — or a process the daemon started, proved by the process table and
+// covered across a real boundary in `reminder-authority-child.test.ts` — the daemon principal
+// carries the recipients one due instant addresses, and admission refuses every address outside
+// that list, every rooted elsewhere, every human seat and the owner. The transport here is the
+// fixture's fake socket and scripted pane, never a live session or CLI home.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -101,12 +101,16 @@ describe('the daemon authority', () => {
 
   test('a record naming another process is not this process, whatever it claims', () => {
     const home = machineHome();
-    daemonRecord(home, { pid: process.pid + 1 });
-    daemonLock(home, process.pid + 1);
+    // Neither this process nor its parent: the verifier stands for both, and this pid is neither.
+    const other = [process.pid + 1, process.pid + 2, process.pid + 3].find(
+      (pid) => pid !== process.ppid && pid !== process.pid,
+    ) as number;
+    daemonRecord(home, { pid: other });
+    daemonLock(home, other);
     const verdict = verifyDaemonAuthority({ home, now: AT });
     expect(verdict.ok).toBe(false);
     if (verdict.ok) return;
-    expect(verdict.why).toContain(`names process ${String(process.pid + 1)}, and this process is ${String(process.pid)}`);
+    expect(verdict.why).toContain(`names process ${String(other)}, and this process is ${String(process.pid)}`);
   });
 
   test('a record naming another user\'s daemon is refused before any transport', () => {
