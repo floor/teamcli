@@ -92,6 +92,8 @@ export type ChoresChildConfig = {
   /** Every root this child serves. A per-root child names one; a shared child names the idle
    *  roots its policy grouped; a child that runs only the machine chores names none. */
   routes: ChoresChildRoute[];
+  /** The seat-health watchdog. Absent or false: this child does not read seats or start a restart. */
+  seatHealth?: boolean;
   /** The machine-scoped chores this child runs beside its routes. Absent, the child carries the
    *  root work alone, exactly as before the machine chores moved here. */
   machine?: ChoresMachineConfig;
