@@ -19,6 +19,7 @@ import { plantRecord, recordDir, runMessages } from '../src/commands/messages.ts
 import { generalBriefBody, generalBriefRecord, GENERAL_BRIEF_RULE, GENERAL_BRIEF_SHA256 } from '../src/launch/general-brief.ts';
 import { signRecord, writeRecord } from '../src/send/record.ts';
 import { updateState } from '../src/state.ts';
+import { messageKeyOf } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
 const TEAM = `format: 1
@@ -123,6 +124,9 @@ describe('a forged orchestrator claim', () => {
   });
 
   test('a drop that lands during --follow is attributed in its one line', async () => {
+    // The reader takes this checkout's key once, when it starts: seed it first, as an earlier
+    // send would have, so the drop that lands during the follow can be verified and attributed.
+    messageKeyOf(home);
     const result = await runDropsAs(['--follow'], {
       home,
       poll: async (tick) => {
@@ -219,7 +223,8 @@ describe('a forged owner claim beside an unsigned marker', () => {
   });
 
   test('a plain-text file this key cannot vouch for is listed as unattributed', async () => {
-    writeFileSync(join(dropDir, 'raw-note'), `from stranger — handed over by hand\n\nhello\n`);
+    mkdirSync(dropDir, { recursive: true });
+    writeFileSync(join(dropDir, 'raw-note'), `from stranger — admitted by: handed over by hand\n\nhello\n`);
     const result = await runDropsAs();
     expect(result.code).toBe(0);
     expect(result.out).toContain('stranger (unattributed)');
