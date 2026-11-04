@@ -277,6 +277,43 @@ export function registerDeclaredSeat(input: RegistryTeam, seat: Seat): { id: str
 }
 
 /**
+ * The roster line a seat needs before its first launch. The launch's inbox registration resolves
+ * the seat by the registry's roster (`src/mcp/register.ts`), and the server the launch starts
+ * resolves it again the same way (`src/mcp/serve.ts`), both before the run's own `registerLaunch`
+ * writes a line — so without this a seat the record declares but no launch has run for can never
+ * start. The agent is this team's own: the live record for (team, seat) when there is one, else
+ * the declaration-time record, with the same id a later launch keeps.
+ *
+ * Only a seat the launching team's own record declares gets a line, under this team's id. A name
+ * another team's roster or record holds is not this team's to write: a caller passing one gets a
+ * note and the registry is left as it was.
+ */
+export function ensureSeatLine(input: RegistryTeam, seat: Pick<Seat, 'name'>): { id: string } | { note: string } {
+  try {
+    const declared = input.team.seats.find((candidate) => candidate.name === seat.name);
+    if (declared === undefined) {
+      return { note: `registry not written: the team does not declare seat ${JSON.stringify(seat.name)}` };
+    }
+    const unrecorded = ensureTeam(input);
+    if (unrecorded) return { note: unrecorded };
+    const teamId = teamIdOf(input.root);
+    const known = findAgent(input.home, { team: teamId, seat: declared.name });
+    let id: string;
+    if (known !== null) {
+      id = known.id;
+    } else {
+      const made = registerDeclaredSeat(input, declared);
+      if ('note' in made) return made;
+      id = made.id;
+    }
+    writeRoster(input, teamId, declared.name, { agent: id, role: declared.role });
+    return { id };
+  } catch (error) {
+    return { note: noteOf(error) };
+  }
+}
+
+/**
  * Marks the retained record of a seat the team file no longer declares: the bootstrap ruling's
  * orphan marker. Nothing is deleted and no signed entry is touched, so every setting stays
  * readable; a record already marked is left as it is. A team file that does not load declares

@@ -69,7 +69,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/c
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -85,7 +85,7 @@ import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQ
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
@@ -1205,6 +1205,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       doctor: sources.doctor,
       ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
+    // The roster line this relaunch needs before its CLI starts when it starts from the
+    // registry's record: the inbox registration and the server it starts resolve the seat by it,
+    // before the run's own registerLaunch writes one. A launch that names a team file reads the
+    // seat from that file, and the completed launch's own record writes the line.
+    for (const name of registryLaunches(plan)) {
+      const declared = team.seats.find((candidate) => candidate.name === name);
+      if (declared === undefined) continue;
+      const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
+      if ('note' in lined) logLine(dir, input.command, who, lined.note, sources.now());
+    }
     const report = await executePlan(plan, session, host);
     let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;

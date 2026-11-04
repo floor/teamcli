@@ -50,7 +50,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -60,7 +60,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
@@ -1203,6 +1203,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby }) : null;
       },
     });
+    // The roster line this launch needs before its CLI starts when it starts from the registry's
+    // record: the inbox registration and the server it starts resolve the seat by it, before the
+    // run's own registerLaunch writes one. A launch that names a team file reads the seat from
+    // that file, and the completed launch's own record writes the line.
+    for (const name of registryLaunches(plan)) {
+      const declared = prepared.team.seats.find((candidate) => candidate.name === name);
+      if (declared === undefined) continue;
+      const lined = ensureSeatLine({ home: sources.home, team: prepared.team, root, by: who, session }, declared);
+      if ('note' in lined) logLine(dir, 'add', who, lined.note, sources.now());
+    }
     const report = await executePlan(plan, session, host);
     // A binding is minted for a launch this run is about to type. A refusal that leaves the
     // seat before its line runs never gave the new settings file to a process, so the seat
