@@ -4,10 +4,13 @@
 // parser reads, the tighten-only order with keep-all loosest, and the two places a zero window
 // must mean "no age bound" rather than "everything is old".
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, EVENT_LOG_TOTAL_BYTES, eventLogPath, pruneEventLog, readEvents } from '../src/bus/log.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
 import {
   EVENT_SEGMENT_BYTES,
   EVENT_SEGMENT_MB,
@@ -65,6 +68,67 @@ function idsRead(root: string, home: string): string[] {
   const read = readEvents('acme', root, home);
   if (!read.ok) throw new Error(read.reason);
   return read.events.map((event) => event.payload.record_id);
+}
+
+const TEAM_YAML = `format: 1
+project: acme
+entity: floor
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+`;
+
+type TeamScratch = { base: string; root: string; home: string; teamId: string };
+
+function makeTeamScratch(): TeamScratch {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-bus-log-team-')));
+  dirs.push(base);
+  const home = join(base, 'home');
+  const root = join(base, 'acme');
+  mkdirSync(home);
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
+  return { base, root, home, teamId: teamIdOf(root) };
+}
+
+function setTeamPolicy(fx: TeamScratch, name: string, value: number | string): void {
+  const written = writePolicySet(
+    fx.home,
+    { level: 'team', target: fx.teamId, teamRoot: fx.root, name, value },
+    { now: NOW },
+  );
+  if (!written.ok) throw new Error(written.why);
+}
+
+/** One signed record whose line is about `bytes` long, so a small fixture can cross a segment. */
+function appendLarge(fx: TeamScratch, id: string, bytes: number): void {
+  const appended = appendEvent('acme', fx.root, fx.home, {
+    ts: NOW.toISOString(),
+    kind: 'message.arrived',
+    session: 'acme',
+    record_id: id,
+    reason: 'x'.repeat(bytes),
+  });
+  if (!appended.ok) throw new Error(appended.reason);
 }
 
 describe('the bus log settings', () => {
@@ -180,5 +244,28 @@ describe('a keep-all window in the log', () => {
 
     expect(existsSync(`${path}.1`)).toBe(false);
     expect(idsRead(root, home)).toEqual(['old-1', 'new-1']);
+  });
+});
+
+describe('the segment size in force', () => {
+  test('an append past the team word rotates the live segment before writing', () => {
+    const fx = makeTeamScratch();
+    setTeamPolicy(fx, 'bus.segment_mb', 1);
+    appendLarge(fx, 'big-1', 600_000);
+    appendLarge(fx, 'big-2', 600_000);
+
+    const path = eventLogPath('acme', fx.root, fx.home);
+    expect(existsSync(`${path}.1`)).toBe(true);
+    expect(idsRead(fx.root, fx.home)).toEqual(['big-1', 'big-2']);
+  });
+
+  test('without a word the shipped 8 MB bounds the live segment, not 1 MB', () => {
+    const fx = makeTeamScratch();
+    appendLarge(fx, 'big-1', 600_000);
+    appendLarge(fx, 'big-2', 600_000);
+
+    const path = eventLogPath('acme', fx.root, fx.home);
+    expect(existsSync(`${path}.1`)).toBe(false);
+    expect(idsRead(fx.root, fx.home)).toEqual(['big-1', 'big-2']);
   });
 });

@@ -31,6 +31,7 @@ import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
 import { createPresencePublisher, presenceRecordIdOf } from '../src/daemon/presence/publish.ts';
 import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { STATE_FILE } from '../src/state.ts';
 import { messageKeyOf, signDomain, type Json } from '../src/store/keys.ts';
@@ -111,6 +112,15 @@ function addRoot(world: World, name: string, lines: number): Root {
     roster: [{ agent: 'agt_crewlead0000', seat: 'crew-lead', role: 'coordinator', leads: true }],
     lifecycle: 'running',
   });
+  // This file's scenes each read one segment as one file: the cold-copy step copies the live
+  // path, and the tamper step rewrites a record inside it. The team's largest segment word keeps
+  // this fixture's log in one live segment; segment rotation has its own scenes.
+  const wrote = writePolicySet(
+    world.home,
+    { level: 'team', target: root, teamRoot: root, name: 'event-segment-mb', value: 50 },
+    { now: new Date() },
+  );
+  if (!wrote.ok) throw new Error(wrote.why);
   fillLog(world.home, root, lines);
   return { root, dir };
 }

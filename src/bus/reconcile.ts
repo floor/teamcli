@@ -57,6 +57,7 @@ import {
   type EventReadResult,
   type SignedEventRecord,
 } from './log.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
 import { isOwnerDigestRecord } from './owner.ts';
 
 export type ReconcileOptions = {
@@ -67,6 +68,9 @@ export type ReconcileOptions = {
   now?: Date;
   maxBytes?: number;
   kept?: number;
+  /** The age window the log retention applies; absent, the team's `bus.retain_days` word is read
+   *  once for the pass (keep-all included). */
+  retentionSeconds?: number;
   heldThresholdSeconds?: number;
   onEvent?: (record: SignedEventRecord) => void;
   /** The caches and counters a sequence of passes shares. Absent, every pass starts empty, which
@@ -387,6 +391,28 @@ function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
  * The pass as a sequence of steps. Every `yield` is a point where the caller may give the event
  * loop a turn; the caller's pacing never changes what the pass reads or raises.
  */
+/**
+ * The log's policy words, read once per pass. The stamp that decides whether the retained log is
+ * re-read must count the same files the read used, so the set bound cannot be one value here and
+ * another inside `readEventsSteps`; the appends the pass raises reuse the same three values.
+ */
+function withLogSettings(options: ReconcileOptions): ReconcileOptions {
+  if (
+    options.kept !== undefined &&
+    options.maxBytes !== undefined &&
+    options.retentionSeconds !== undefined
+  ) {
+    return options;
+  }
+  const settings = eventLogSettingsFor(options.root, options.home, options.now ?? new Date());
+  return {
+    ...options,
+    kept: options.kept ?? settings.kept,
+    maxBytes: options.maxBytes ?? settings.segmentBytes,
+    retentionSeconds: options.retentionSeconds ?? settings.retentionSeconds,
+  };
+}
+
 export function* reconcileSteps(options: ReconcileOptions): Generator<void, ReconcileResult, void> {
   const { project, root, session, home } = options;
   const state = options.state ?? createReconcileState();
@@ -397,6 +423,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   stats.verifies = 0;
   stats.verifiesReused = 0;
   stats.yields = 0;
+  options = withLogSettings(options);
+  const kept = options.kept ?? EVENT_LOG_KEPT;
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
   const visited = new Set<string>();
@@ -410,6 +438,9 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // every retained line — is skipped.
   let existing: EventReadResult;
   let cachedLog = state.log;
+  // A segment-size word that changed since the cached read moved the set's bound: the cached
+  // stamp counted a different set of files, so it cannot answer for this one.
+  if (cachedLog !== null && cachedLog.kept !== kept) cachedLog = null;
   if (cachedLog !== null) {
     const stamp = retainedStamp(cachedLog.path, cachedLog.kept);
     if (stamp !== cachedLog.stamp) cachedLog = null;
@@ -417,9 +448,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   if (cachedLog === null) {
     // The read is drained here, in slices: a large cold log gives the caller's driver a turn
     // between slices instead of holding the loop for the whole verification.
-    existing = yield* readEventsSteps(project, root, home, { kept: options.kept });
+    existing = yield* readEventsSteps(project, root, home, { kept });
     if (!existing.ok) return existing;
-    const kept = options.kept ?? EVENT_LOG_KEPT;
     cachedLog = {
       path: existing.path,
       kept,
@@ -480,7 +510,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
     if (seen.has(key)) return true;
     const res = appendEvent(project, root, home, input, {
       maxBytes: options.maxBytes,
-      kept: options.kept,
+      kept,
+      retentionSeconds: options.retentionSeconds,
       deduplicate: true,
       ...(options.appendWaitMs !== undefined ? { lockWaitMs: options.appendWaitMs } : {}),
     });
@@ -1043,6 +1074,7 @@ function tryDeferredAppend(options: ReconcileOptions, item: DeferredAppend): Def
       ? appendEvent(options.project, options.root, options.home, item.input, {
           maxBytes: options.maxBytes,
           kept: options.kept,
+          retentionSeconds: options.retentionSeconds,
           deduplicate: true,
           lockWaitMs: 0,
         })
@@ -1128,8 +1160,11 @@ async function retryDeferredAppends(
  */
 export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
   const state = options.state ?? createReconcileState();
+  // Read once for the pass and its deferred drain, so neither re-reads the policy store per
+  // append and both count the same retained files.
+  const resolved = withLogSettings(options);
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
-  const steps = reconcileSteps({ ...options, state, appendWaitMs: 0 });
+  const steps = reconcileSteps({ ...resolved, state, appendWaitMs: 0 });
   let since = performance.now();
   for (;;) {
     // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
@@ -1139,7 +1174,7 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
     if (next.done) {
       const result = next.value;
       if (result.ok) {
-        await retryDeferredAppends(options, state, result.raised);
+        await retryDeferredAppends(resolved, state, result.raised);
       }
       return result;
     }

@@ -64,6 +64,7 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
 import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
@@ -723,6 +724,16 @@ function reportReloadProblem(stderr: (text: string) => void, previous: string | 
 async function startBusWalk(input: StartBusInput, path: string): Promise<StartBusResult> {
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
+  // The log's size bound and age window are the team's policy words: read once for this bus's
+  // lifetime, like the daemon's other knobs, so a publish, a read and the reconcile pass all use
+  // the same values. A caller that named one keeps it.
+  const logSettings = eventLogSettingsFor(input.root, home, now());
+  input = {
+    ...input,
+    maxLogBytes: input.maxLogBytes ?? logSettings.segmentBytes,
+    keptLogFiles: input.keptLogFiles ?? logSettings.kept,
+    retentionSeconds: input.retentionSeconds ?? logSettings.retentionSeconds,
+  };
   const registryTeamId = teamIdOf(input.root);
   // A routing word may name a seat by its registry id; resolve it against the registry on disk so
   // that `{ seat: agt_… }` reaches the seat that holds it, while plain names stand as written.
@@ -919,6 +930,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         now: now(),
         maxBytes: input.maxLogBytes,
         kept: input.keptLogFiles,
+        retentionSeconds: input.retentionSeconds,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
         // A record the pass will not raise is named once: a linked file or folder, an unsigned

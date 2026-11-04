@@ -43,18 +43,23 @@ import {
   type Json,
 } from '../store/keys.ts';
 import { storePath, storesFolder } from '../store/store.ts';
-import { DEFAULT_EVENT_RETENTION_SECONDS, isEventKind, type EventKind } from './kinds.ts';
+import {
+  DEFAULT_EVENT_RETENTION_SECONDS,
+  EVENT_LOG_KEPT,
+  EVENT_LOG_TOTAL_BYTES,
+  isEventKind,
+  type EventKind,
+} from './kinds.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 export const EVENT_DOMAIN = 'team.event.v1\n';
 export const EVENT_LOG_FILE = 'events.jsonl';
-/** One segment reaches this size before it rotates. */
+/** One segment reaches this size before it rotates, in a root whose team file names no smaller
+ *  policy word; a team's `bus.segment_mb` replaces it through `eventLogSettingsFor`. */
 export const MAX_EVENT_LOG_BYTES = 100_000_000;
-/** The live file and one sealed segment. */
-export const EVENT_LOG_KEPT = 2;
-/** The most the team's retained event log may hold, across its files. */
-export const EVENT_LOG_TOTAL_BYTES = 100_000_000;
+export { EVENT_LOG_KEPT, EVENT_LOG_TOTAL_BYTES } from './kinds.ts';
 
 export type EventPayload = {
   v: 1;
@@ -464,8 +469,19 @@ export function pruneEventLog(
   options: EventLogRetention & { kept?: number; session?: string } = {},
 ): void {
   try {
-    const kept = options.kept ?? EVENT_LOG_KEPT;
-    const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+    // The team's words answer whatever the caller left out; a caller that names all three is
+    // never sent through the policy store.
+    const settings =
+      options.kept === undefined || options.retentionSeconds === undefined
+        ? eventLogSettingsFor(root, home)
+        : null;
+    const kept = options.kept ?? settings?.kept ?? EVENT_LOG_KEPT;
+    const retentionSeconds =
+      options.retentionSeconds ?? settings?.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+    const retention: EventLogRetention = {
+      ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
+      retentionSeconds,
+    };
     const storeDir = storePath(project, root, home);
     if (ensureStoreLadder(storeDir, home) !== null) return;
     // The whole pass holds the append lock: its rotation and drops move the retained files the
@@ -479,8 +495,8 @@ export function pruneEventLog(
         const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
         if (sealed !== null) drops.push(sealed);
       }
-      drops.push(...pruneSealed(path, home, kept, options));
-      declareDrop(project, root, home, kept, options, drops, options.session ?? project);
+      drops.push(...pruneSealed(path, home, kept, retention));
+      declareDrop(project, root, home, kept, retention, drops, options.session ?? project);
     });
   } catch {
     // Dropped on purpose: reads and writes are unaffected by retention failing.
@@ -983,7 +999,9 @@ export function* readEventsSteps(
   home: string,
   options: { kept?: number } = {},
 ): Generator<void, EventReadResult, void> {
-  const kept = options.kept ?? EVENT_LOG_KEPT;
+  // A reader that was not told the set's bound reads the team's segment-size word the way an
+  // append does; the count follows the same segment size, so both sides see the same files.
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
   const storeDir = storePath(project, root, home);
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
@@ -1889,8 +1907,22 @@ export function appendEvent(
     lockWaitMs?: number;
   } = {},
 ): EventAppendResult {
-  const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
-  const kept = options.kept ?? EVENT_LOG_KEPT;
+  // The team's words answer whatever the caller left out; a caller that names the size, the set
+  // and the window is never sent through the policy store. A record that performs no retention
+  // (`retain: false`) needs only the set bound, so its append skips the chain too.
+  const settingsNeeded =
+    options.kept === undefined ||
+    (options.retain !== false &&
+      (options.maxBytes === undefined || options.retentionSeconds === undefined));
+  const settings = settingsNeeded ? eventLogSettingsFor(root, home) : null;
+  const maxBytes = options.maxBytes ?? settings?.segmentBytes ?? MAX_EVENT_LOG_BYTES;
+  const kept = options.kept ?? settings?.kept ?? EVENT_LOG_KEPT;
+  const retentionSeconds =
+    options.retentionSeconds ?? settings?.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
+  const retention: EventLogRetention = {
+    ...(options.maxTotalBytes !== undefined ? { maxTotalBytes: options.maxTotalBytes } : {}),
+    retentionSeconds,
+  };
   const deduplicate = options.deduplicate ?? true;
 
   // Refused before the store is touched, with the reason a caller can act on. Parse holds the same
@@ -1916,7 +1948,17 @@ export function appendEvent(
   const lockDir = join(storeDir, 'locks', 'events');
   if (!heldEventLocks.has(lockDir)) {
     try {
-      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options), options.lockWaitMs);
+      return withEventLock(
+        storeDir,
+        () =>
+          appendEvent(project, root, home, input, {
+            ...options,
+            maxBytes,
+            kept,
+            retentionSeconds,
+          }),
+        options.lockWaitMs,
+      );
     } catch (error) {
       if (error instanceof LockBusyError) {
         return { ok: false, busy: true, reason: 'the event log is busy; the record was not written' };
@@ -1925,16 +1967,63 @@ export function appendEvent(
     }
   }
 
+  const path = join(storeDir, EVENT_LOG_FILE);
+  const retain = options.retain ?? true;
+  const drops: DroppedSegment[] = [];
+  /** Declares whatever this append rotated away, on every exit that does not reach the write's
+   *  own declaration. Best effort: retention never fails the caller. */
+  const declare = (): void => {
+    if (drops.length === 0) return;
+    try {
+      declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
+    } catch {
+      // The caller's own result stands either way.
+    }
+  };
+
+  // A live file already at or past the segment bound rotates before this append's index is
+  // built: the index then reads the set it will keep answering for, instead of reading the live
+  // file and re-reading it as the just-sealed segment on the next append. A file that still has
+  // room is left to the write path below, which knows the exact line length.
+  if (retain) {
+    try {
+      const current = heldAt(path);
+      if (current.kind === 'file') {
+        const size = statSync(path).size;
+        if (size > 0 && size >= maxBytes) {
+          const captured = captureOldestSlot(path, kept, home, 'rotation');
+          const rotateErr = rotateEventLog(path, kept);
+          if (rotateErr !== null) return { ok: false, reason: rotateErr };
+          if (captured !== null) drops.push(captured);
+          // Leave the new live segment in place, empty. The index built below then reads the set
+          // it will keep answering for; its next look reads only this file's appended bytes
+          // instead of re-reading the segment the rotation just sealed.
+          try {
+            closeSync(openSync(path, constants.O_WRONLY | constants.O_CREAT | NOFOLLOW, 0o600));
+          } catch {
+            // The write below creates the file when this cannot.
+          }
+        }
+      }
+    } catch {
+      // Retention never fails an append: the write below carries on.
+    }
+  }
+
   // The index answers for one key at a time: a fresh process reads each retained file once and
   // verifies only the lines that can hold the record it is about to append — plus the newest
   // line, for the sequence — instead of every record retention kept.
   const wanted: WantedKey | null = deduplicate ? { key: eventKey(input), recordId: input.record_id } : null;
   const indexed = appendIndexOf(project, root, home, kept, wanted);
-  if (!indexed.ok) return indexed;
+  if (!indexed.ok) {
+    declare();
+    return indexed;
+  }
 
   if (deduplicate) {
     const found = indexed.index.duplicates.get(eventKey(input));
     if (found !== undefined) {
+      declare();
       return { ok: true, record: found, duplicate: true, path: indexed.index.path };
     }
   }
@@ -1954,21 +2043,17 @@ export function appendEvent(
   }
 
   const record: SignedEventRecord = { payload: validated, signature };
-  const path = join(storeDir, EVENT_LOG_FILE);
   const targetErr = fileProblem(path);
   if (targetErr !== null) return { ok: false, reason: targetErr };
 
   const line = `${JSON.stringify(record)}\n`;
   const bytes = Buffer.from(line, 'utf8');
-  const retain = options.retain ?? true;
-  const drops: DroppedSegment[] = [];
 
   try {
     if (retain) {
       // An idle live file is sealed first, so the append starts a new segment and the records the
       // old one holds are dropped by the prune below as one past-the-window segment.
       try {
-        const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
         if (retentionSeconds > 0) {
           const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
           if (sealed !== null) drops.push(sealed);
@@ -2003,12 +2088,12 @@ export function appendEvent(
     }
     if (retain) {
       try {
-        drops.push(...pruneSealed(path, home, kept, options));
+        drops.push(...pruneSealed(path, home, kept, retention));
       } catch {
         // Retention never fails an append: the record is written either way.
       }
       try {
-        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
+        declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
       } catch {
         // Retention never fails an append: the record is written either way.
       }
@@ -2017,7 +2102,7 @@ export function appendEvent(
   } catch {
     if (drops.length > 0) {
       try {
-        declareDrop(project, root, home, kept, { ...options, maxBytes }, drops, input.session);
+        declareDrop(project, root, home, kept, { ...retention, maxBytes }, drops, input.session);
       } catch {
         // The append already failed; the declaration is best effort too.
       }
