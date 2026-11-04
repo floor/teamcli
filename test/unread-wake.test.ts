@@ -2512,11 +2512,11 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     }
   });
 
-  test('a failed event append leaves nothing claimed and the retry within 2N speaks the scene line once', async () => {
+  test('the event append fails after a good history write; the next pass appends seat.blocked exactly once, and the drop and marker stay', async () => {
     const made = world();
     const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
-    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nevent fails then retries', new Date(NOW.getTime() - 11 * MIN));
-    // Replace events.jsonl with a directory so appendEvent fails on the first attempt.
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nevent fails after history', new Date(NOW.getTime() - 11 * MIN));
+    // Replace events.jsonl with a directory so appendEvent fails on the first pass after appendHistory succeeds.
     const eventsDirAsFile = join(storePath('acme', made.root, made.home), 'events.jsonl');
     mkdirSync(eventsDirAsFile, { recursive: true });
 
@@ -2526,34 +2526,116 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     const live = liveWith('helper', 'helper-pane', 'done');
     const said: string[] = [];
 
-    // First attempt within 2N: appendEvent fails, leaving no `.wake` marker, no lead drop, no history line, and speaking nothing.
+    // First pass within 2N: history write succeeds, so the lead drop, the `.wake` blocked marker,
+    // the history record, and the scene line all stand even though appendEvent failed.
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(said).toEqual([]);
-    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const leadFilesBefore = existsSync(leadDir) ? readdirSync(leadDir) : [];
-    expect(leadFilesBefore).toEqual([]);
-    const historyBefore = readHistory('acme', made.root, made.home);
-    expect(historyBefore.ok && historyBefore.entries).toEqual([]);
-
-    // Restore events.jsonl and retry within 2N (15 min): the retry writes the drop, appends the event,
-    // marks the message delivered-but-blocked, and speaks the scene line once.
-    rmSync(eventsDirAsFile, { recursive: true });
-    const within2N = new Date(NOW.getTime() + 4 * MIN);
-    const retrySaid: string[] = [];
-    await wakeUnreadDrops(sceneOf(made, team, one, retrySaid, { sources, live, now: within2N }), { unreadAfter: N });
-
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
-    expect(retrySaid).toHaveLength(1);
-    expect(retrySaid[0]).toContain('blocked by a dialog (unknown)');
-    expect(retrySaid[0]).toContain('delivered-but-blocked');
-    const eventsAfter = readEvents('acme', made.root, made.home);
-    expect(eventsAfter.ok && eventsAfter.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
-    const historyAfter = readHistory('acme', made.root, made.home);
-    expect(historyAfter.ok && historyAfter.entries).toHaveLength(1);
-    if (historyAfter.ok) {
-      expect(historyAfter.entries[0]?.outcome).toBe('delivered-but-blocked');
-      expect(historyAfter.entries[0]?.via).toBe('lead-report');
+    expect(JSON.parse(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8'))).toMatchObject({
+      id: UNREAD_A,
+      state: 'blocked',
+      outcome: 'delivered-but-blocked',
+      screen: 'unknown',
+      to: 'lead',
+    });
+    const toLead = leadReportBody(made.dir, UNREAD_A);
+    expect(toLead).toContain('blocked by a dialog (unknown)');
+    expect(toLead).toContain('delivered-but-blocked');
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('blocked by a dialog (unknown)');
+    expect(said[0]).toContain('delivered-but-blocked');
+    const historyAfterFirst = readHistory('acme', made.root, made.home);
+    expect(historyAfterFirst.ok && historyAfterFirst.entries).toHaveLength(1);
+    if (historyAfterFirst.ok) {
+      expect(historyAfterFirst.entries[0]?.id).toBe(UNREAD_A);
+      expect(historyAfterFirst.entries[0]?.outcome).toBe('delivered-but-blocked');
+      expect(historyAfterFirst.entries[0]?.via).toBe('lead-report');
+    }
+
+    // Restore events.jsonl: the next pass catches up the missing seat.blocked event once,
+    // keeps the standing drop and marker, and does not speak or write history a second time.
+    rmSync(eventsDirAsFile, { recursive: true });
+    const nextSaid: string[] = [];
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, nextSaid, { sources, live, now: new Date(NOW.getTime() + 4 * MIN) }),
+      { unreadAfter: N },
+    );
+
+    expect(nextSaid).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(leadReportBody(made.dir, UNREAD_A)).toBe(toLead);
+    const eventsAfterCatchUp = readEvents('acme', made.root, made.home);
+    expect(eventsAfterCatchUp.ok).toBe(true);
+    if (eventsAfterCatchUp.ok) {
+      const blocked = eventsAfterCatchUp.events.filter((e) => e.payload.kind === 'seat.blocked');
+      expect(blocked).toHaveLength(1);
+      expect(blocked[0]?.payload).toMatchObject({
+        kind: 'seat.blocked',
+        seat: 'helper',
+        subject: 'helper',
+        to: 'lead',
+        prompt: 'unknown',
+        outcome: 'delivered-but-blocked',
+      });
+    }
+    const historyAfterSecond = readHistory('acme', made.root, made.home);
+    expect(historyAfterSecond.ok && historyAfterSecond.entries).toHaveLength(1);
+
+    // A third pass is idempotent by message id: still one seat.blocked event.
+    await wakeUnreadDrops(
+      sceneOf(made, team, one, nextSaid, { sources, live, now: new Date(NOW.getTime() + 5 * MIN) }),
+      { unreadAfter: N },
+    );
+    const eventsAfterThird = readEvents('acme', made.root, made.home);
+    expect(eventsAfterThird.ok && eventsAfterThird.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+  });
+
+  test('concurrent history lines appended by another writer survive a failed event append', async () => {
+    const made = world();
+    const baseTeam = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nblocked while another writer appends', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'socket' });
+    const eventsDirAsFile = join(storePath('acme', made.root, made.home), 'events.jsonl');
+    mkdirSync(eventsDirAsFile, { recursive: true });
+
+    // Simulate another writer appending a concurrent history line while reportBlockedScreenToLead is in flight
+    // (after any pre-write snapshot, before appendEvent fails).
+    let injected = false;
+    let projectReads = 0;
+    const teamProxy = new Proxy(baseTeam, {
+      get(target, prop, receiver) {
+        if (prop === 'project') {
+          projectReads += 1;
+          if (!injected && projectReads >= 3) {
+            injected = true;
+            appendHistory('acme', made.root, made.home, {
+              ts: NOW.toISOString(),
+              from: 'owner',
+              to: 'lead',
+              body: 'concurrent line from another writer',
+              id: UNREAD_B,
+              outcome: 'delivered',
+              via: 'socket',
+            });
+          }
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const one = pane(ANTIGRAVITY_SURVEY_FRAME, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane', 'done');
+    const said: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(made, teamProxy, one, said, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(injected).toBe(true);
+
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries.some((e) => e.id === UNREAD_B && e.outcome === 'delivered' && e.body === 'concurrent line from another writer')).toBe(true);
+      expect(history.entries.some((e) => e.id === UNREAD_A && e.outcome === 'delivered-but-blocked' && e.via === 'lead-report')).toBe(true);
     }
   });
 
@@ -2637,12 +2719,18 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     const later = new Date(NOW.getTime() + 4 * MIN);
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: later }), { unreadAfter: N });
 
-    // Only ONE lead notice / event was emitted across the 2N window, and both messages are delivered-but-blocked.
+    // Only ONE lead notice drop and one scene line are emitted across the 2N window, while each
+    // delivered-but-blocked history line is mirrored once onto the bus by message id.
     expect(said).toHaveLength(1);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toHaveLength(1);
     const events = readEvents('acme', made.root, made.home);
     expect(events.ok).toBe(true);
     if (events.ok) {
-      expect(events.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+      expect(events.events.filter((e) => e.payload.kind === 'seat.blocked').map((e) => e.payload.record_id)).toEqual([
+        `unread-blocked:${UNREAD_A}`,
+        `unread-blocked:${UNREAD_B}`,
+      ]);
     }
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);

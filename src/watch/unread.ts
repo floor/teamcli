@@ -55,8 +55,6 @@ import {
   readdirSync,
   realpathSync,
   readFileSync,
-  statSync,
-  truncateSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -73,7 +71,7 @@ import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
-import { appendHistory, historyPath, readHistory, type HistoryEntry } from '../send/history.ts';
+import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
@@ -487,6 +485,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (options.noNudge === true) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
+  catchUpBlockedSeatEvents(scene, home);
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
   // The first history line per message id names the leg that carried it. Read once per pass, on
@@ -864,6 +863,54 @@ function writeLeadBlockedDrop(
   return { ok: true, path, id };
 }
 
+const BLOCKED_HISTORY_NOTE = /^blocked by a dialog \((.+)\); reported to (.+)$/;
+
+/** Mirrors one `delivered-but-blocked` history line onto the bus as a `seat.blocked` event,
+ *  idempotent by message id (`unread-blocked:<message-id>`). Best effort: history is the record,
+ *  and a failed append is caught up on the next pass without undoing the history line, the lead
+ *  drop, or the `.wake` marker. */
+function appendBlockedSeatEvent(scene: RetryScene, home: string, entry: HistoryEntry): void {
+  const fallbackLead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
+  const matched = typeof entry.note === 'string' ? BLOCKED_HISTORY_NOTE.exec(entry.note) : null;
+  const prompt = matched?.[1] ?? 'unknown';
+  const to = matched?.[2] ?? fallbackLead;
+  if (to === '') return;
+  const reason = `${entry.to}: blocked by a dialog (${prompt}) — a message from ${entry.from} is delivered-but-blocked (id ${entry.id}); reported to ${to}`;
+  appendEvent(
+    scene.team.project,
+    scene.root,
+    home,
+    {
+      ts: entry.ts,
+      kind: 'seat.blocked',
+      session: scene.session,
+      record_id: `unread-blocked:${entry.id}`,
+      seat: entry.to,
+      subject: entry.to,
+      to,
+      prompt,
+      outcome: 'delivered-but-blocked',
+      reason,
+    },
+    { deduplicate: true },
+  );
+}
+
+/** Catches up any `delivered-but-blocked` history line whose `seat.blocked` bus event has not yet
+ *  been appended. `appendEvent` deduplicates by `(kind, record_id, session)`, where `record_id` is
+ *  keyed by message id (`unread-blocked:<id>`), so each history line is mirrored onto the bus once. */
+function catchUpBlockedSeatEvents(scene: RetryScene, home: string): void {
+  const historyRead = readHistory(scene.team.project, scene.root, home);
+  if (!historyRead.ok) return;
+  const seen = new Set<string>();
+  for (const entry of historyRead.entries) {
+    if (entry.outcome !== 'delivered-but-blocked') continue;
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    appendBlockedSeatEvent(scene, home, entry);
+  }
+}
+
 /**
  * When a seat with due unread messages is covered by a dialog or an unrecognised screen (`kind`
  * is neither `idle`, `unsent`, nor `working`) within the `2N` window, never types into or answers
@@ -940,19 +987,6 @@ function reportBlockedScreenToLead(
     }
     const alreadyTold = activeReportId !== null || leadOutcome.existing === true;
 
-    const historyFile = historyPath(scene.team.project, scene.root, home);
-    let historyPrior: { existed: false } | { existed: true; ino: number; size: number } | null = null;
-    try {
-      if (!existsSync(historyFile)) {
-        historyPrior = { existed: false };
-      } else {
-        const st = statSync(historyFile);
-        if (st.isFile()) historyPrior = { existed: true, ino: st.ino, size: st.size };
-      }
-    } catch {
-      historyPrior = null;
-    }
-
     const historyRead = readHistory(scene.team.project, scene.root, home);
     const alreadyRecorded = new Set(
       historyRead.ok
@@ -960,29 +994,28 @@ function reportBlockedScreenToLead(
         : [],
     );
 
-    const recorded: { index: number; one: (typeof reserved)[number] }[] = [];
-    let wroteHistory = false;
+    const recorded: { index: number; one: (typeof reserved)[number]; entry: HistoryEntry }[] = [];
     for (const [index, one] of reserved.entries()) {
+      const entry: HistoryEntry = {
+        ts: at,
+        from: one.payload.from,
+        to: seat.name,
+        body: one.payload.body,
+        id: one.message.id,
+        thread: one.payload.thread,
+        outcome: 'delivered-but-blocked',
+        via: 'lead-report',
+        note: `blocked by a dialog (${kind}); reported to ${leadName}`,
+        ...failedLeg(one.message.id),
+      };
       if (!alreadyRecorded.has(one.message.id)) {
-        const wrote = appendHistory(scene.team.project, scene.root, home, {
-          ts: at,
-          from: one.payload.from,
-          to: seat.name,
-          body: one.payload.body,
-          id: one.message.id,
-          thread: one.payload.thread,
-          outcome: 'delivered-but-blocked',
-          via: 'lead-report',
-          note: `blocked by a dialog (${kind}); reported to ${leadName}`,
-          ...failedLeg(one.message.id),
-        });
+        const wrote = appendHistory(scene.team.project, scene.root, home, entry);
         if (!wrote.ok) {
           release(wakePath(dropDir, one.message.id));
           continue;
         }
-        wroteHistory = true;
       }
-      recorded.push({ index, one });
+      recorded.push({ index, one, entry });
     }
 
     if (recorded.length === 0) {
@@ -994,47 +1027,8 @@ function reportBlockedScreenToLead(
     const reason = recorded.length === 1
       ? `${seat.name}: blocked by a dialog (${kind}) — a message from ${recorded[0]!.one.payload.from} is delivered-but-blocked (id ${recorded[0]!.one.message.id}); reported to ${leadName}`
       : `${seat.name}: blocked by a dialog (${kind}) — ${String(recorded.length)} messages are delivered-but-blocked (ids ${recordedIds.join(', ')}); reported to ${leadName}`;
-    const kindSlug = kind.replace(/[^A-Za-z0-9._-]/g, '-');
-    const appended = appendEvent(
-      scene.team.project,
-      scene.root,
-      home,
-      {
-        ts: at,
-        kind: 'seat.blocked',
-        session: scene.session,
-        record_id: `unread-blocked:${seat.name}:${kindSlug}:${leadOutcome.id}`,
-        seat: seat.name,
-        subject: seat.name,
-        to: leadName,
-        prompt: kind,
-        outcome: 'delivered-but-blocked',
-        reason,
-      },
-      { deduplicate: true },
-    );
-    if (!appended.ok) {
-      if (wroteHistory && historyPrior !== null) {
-        try {
-          if (!historyPrior.existed) {
-            unlinkSync(historyFile);
-          } else {
-            const st = statSync(historyFile);
-            if (st.isFile() && st.ino === historyPrior.ino && st.size > historyPrior.size) {
-              truncateSync(historyFile, historyPrior.size);
-            }
-          }
-        } catch {
-          // Best-effort rollback when the event append fails after the history write; reconcile
-          // still repairs message.delivered from a surviving history line.
-        }
-      }
-      if (leadOutcome.existing !== true) release(leadOutcome.path);
-      for (const { one } of recorded) release(wakePath(dropDir, one.message.id));
-      return;
-    }
 
-    for (const { index, one } of recorded) {
+    for (const { index, one, entry } of recorded) {
       const text = lines[index]!;
       const { targets } = reportTargets(scene, one.payload, home);
       const senders = targets.filter(
@@ -1062,6 +1056,7 @@ function reportBlockedScreenToLead(
         to: leadName,
         report: leadOutcome.id,
       });
+      appendBlockedSeatEvent(scene, home, entry);
     }
 
     if (!alreadyTold) {
