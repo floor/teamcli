@@ -7,47 +7,75 @@
 //
 // Safety rules:
 // 1. Only a verified message record with a verified read or replied receipt (`isRead`) and no
-//    `.pending`, `.taken`, `.fallback.json` or `.fallback-note-*` marker, older than the resolved
-//    retention window, may move. Unread drops, general briefs and client records never move.
+//    `.pending`, `.taken`, `.fallback.json` or `.fallback-note-*` marker, whose signed `at`
+//    timestamps (record and verified receipts) are older than the resolved retention window, may
+//    move. Unread drops, general briefs and client records never move.
 // 2. Never follow a symbolic link, never leave `<root>/.agents/send-drops`, and refuse the whole
 //    pass before moving anything if any link, non-regular entry, foreign-owned entry or unexpected
 //    file name appears anywhere in the tree.
-// 3. Within each family, the record and non-receipt sidecars move first and the read/replied
-//    receipts move last, so a crash mid-move never leaves an unacked record in the live folder.
-// 4. `.unread.json` stays in the live seat folder: unread ids stay untouched, and any stale entry
+// 3. Source and destination directories are opened step-by-step from `send-drops` with
+//    `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (`openat`/`mkdirat` under Bun) and held open across the
+//    pass; moves use `renameatx_np(..., RENAME_EXCL)` / `renameat` relative to the held directory
+//    descriptors (and the manifest is created with `openat(..., O_CREAT | O_EXCL | O_NOFOLLOW)`
+//    plus `fchmodSync(fd, 0o600)`), with parent-chain `(dev, ino)` re-verification and automatic
+//    rollback if any directory in the chain was swapped after the check.
+// 4. Within each family, the record and non-receipt sidecars move first and the read/replied
+//    receipts move last. If the pass stops at a slice boundary or fails on a later family, every
+//    family that left the live folder is recorded in a signed manifest and named in the report.
+// 5. `.unread.json` stays in the live seat folder: unread ids stay untouched, and any stale entry
 //    naming a drop that was just archived is pruned atomically.
 import { createHash, type KeyObject } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
   constants,
-  existsSync,
+  fchmodSync,
   fstatSync,
+  lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   renameSync,
-  writeFileSync,
+  unlinkSync,
+  writeSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { SweepSlices } from '../daemon/fallback-sweep.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { folderProblemAt } from '../held.ts';
+import { folderProblem, folderProblemAt } from '../held.ts';
 import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { currentClaimIn } from '../mcp/inbox.ts';
 import { DAEMON_BACKLOG_DEFAULTS, eventThresholdsInForce } from '../policy/index.ts';
 import { messageKeyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { ensureFoldersBelow } from './history.ts';
 import type { MovedFile } from './message-archive.ts';
-import { isRead, recordAuthOf, sameFolder, type RecordPayload } from './record.ts';
+import {
+  closeAuthOf,
+  receiptAuthOf,
+  recordAuthOf,
+  sameFolder,
+  type ReceiptStatus,
+  type RecordPayload,
+} from './record.ts';
 
 export const DROP_ARCHIVE_DOMAIN = 'teamcli-drop-archive-v1\0';
 export const DROP_ARCHIVE_DIR = '.archive';
 
 /** Default steady-state limit per pass, matching `FALLBACK_STORE_PASS_LIMIT`. */
 export const DROP_ARCHIVE_PASS_LIMIT = 256;
+
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0x0100;
+const DIRECTORY = constants.O_DIRECTORY ?? 0x100000;
+const EEXIST = 17;
+const ENOENT = 2;
+const ENOTDIR = 20;
+const ELOOP = process.platform === 'linux' ? 40 : 62;
+const RENAME_EXCL = 0x00000004;
+const RENAME_NOREPLACE = 1;
 
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const WORK_PREFIX = 'work-';
@@ -130,6 +158,523 @@ export type DropRetirementReport = {
   refused: string | null;
 };
 
+/** Shape of `bun:ffi` used when running under Bun, so `tsc -p tsconfig.build.json` compiles under Node types. */
+interface BunFfi {
+  dlopen: (
+    library: string,
+    symbols: Record<string, { args: unknown[]; returns: unknown }>,
+  ) => {
+    symbols: {
+      openat: (dirfd: number, path: Buffer, flags: number, mode: number) => number;
+      mkdirat: (dirfd: number, path: Buffer, mode: number) => number;
+      renameat: (fromfd: number, from: Buffer, tofd: number, to: Buffer) => number;
+      renameatx_np?: (fromfd: number, from: Buffer, tofd: number, to: Buffer, flags: number) => number;
+      renameat2?: (fromfd: number, from: Buffer, tofd: number, to: Buffer, flags: number) => number;
+      unlinkat: (dirfd: number, path: Buffer, flags: number) => number;
+      __errno_location?: () => number;
+      __error?: () => number;
+    };
+  };
+  read: { i32(address: number, offset: number): number };
+  FFIType: { i32: unknown; u32: unknown; cstring: unknown; ptr: unknown };
+}
+
+type PosixAtFfi = {
+  openat: (dirfd: number, name: string, flags: number, mode?: number) => { fd: number; errno: number };
+  mkdirat: (dirfd: number, name: string, mode: number) => { ok: boolean; errno: number };
+  renameatExcl: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
+  renameatReplace: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
+  unlinkat: (dirfd: number, name: string) => { ok: boolean; errno: number };
+};
+
+let loadedAtFfi: PosixAtFfi | null | undefined;
+
+function cstr(name: string): Buffer {
+  return Buffer.from(`${name}\0`, 'utf8');
+}
+
+function getPosixAtFfi(): PosixAtFfi | null {
+  if (loadedAtFfi !== undefined) return loadedAtFfi;
+  if (process.versions.bun === undefined) {
+    loadedAtFfi = null;
+    return null;
+  }
+  try {
+    const req = createRequire(import.meta.url);
+    const ffi = req('bun:ffi') as BunFfi;
+    const isLinux = process.platform === 'linux';
+    const lib = isLinux
+      ? ffi.dlopen('libc.so.6', {
+          openat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          mkdirat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          renameat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
+            returns: ffi.FFIType.i32,
+          },
+          renameat2: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
+            returns: ffi.FFIType.i32,
+          },
+          unlinkat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          __errno_location: { args: [], returns: ffi.FFIType.ptr },
+        })
+      : ffi.dlopen('libSystem.B.dylib', {
+          openat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          mkdirat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          renameat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring],
+            returns: ffi.FFIType.i32,
+          },
+          renameatx_np: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.u32],
+            returns: ffi.FFIType.i32,
+          },
+          unlinkat: {
+            args: [ffi.FFIType.i32, ffi.FFIType.cstring, ffi.FFIType.i32],
+            returns: ffi.FFIType.i32,
+          },
+          __error: { args: [], returns: ffi.FFIType.ptr },
+        });
+    const errnoFn = isLinux ? lib.symbols.__errno_location! : lib.symbols.__error!;
+    const readErrno = (): number => ffi.read.i32(errnoFn(), 0);
+    loadedAtFfi = {
+      openat: (dirfd, name, flags, mode = 0) => {
+        const fd = lib.symbols.openat(dirfd, cstr(name), flags, mode);
+        return { fd, errno: fd < 0 ? readErrno() : 0 };
+      },
+      mkdirat: (dirfd, name, mode) => {
+        const rc = lib.symbols.mkdirat(dirfd, cstr(name), mode);
+        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+      },
+      renameatExcl: (fromfd, fromName, tofd, toName) => {
+        const rc = isLinux
+          ? lib.symbols.renameat2!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_NOREPLACE)
+          : lib.symbols.renameatx_np!(fromfd, cstr(fromName), tofd, cstr(toName), RENAME_EXCL);
+        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+      },
+      renameatReplace: (fromfd, fromName, tofd, toName) => {
+        const rc = lib.symbols.renameat(fromfd, cstr(fromName), tofd, cstr(toName));
+        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+      },
+      unlinkat: (dirfd, name) => {
+        const rc = lib.symbols.unlinkat(dirfd, cstr(name), 0);
+        return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+      },
+    };
+  } catch {
+    loadedAtFfi = null;
+  }
+  return loadedAtFfi;
+}
+
+type ChainStep = {
+  name: string;
+  path: string;
+  dev: number;
+  ino: number;
+};
+
+type HeldDir = {
+  fd: number;
+  path: string;
+  dev: number;
+  ino: number;
+  chain: readonly ChainStep[];
+};
+
+function validSegment(part: string): boolean {
+  return part !== '' && part !== '.' && part !== '..' && !part.includes('/') && !part.includes('\0');
+}
+
+function openChildDirNoFollow(
+  parentFd: number,
+  childPath: string,
+  childName: string,
+): { ok: true; fd: number; dev: number; ino: number } | { ok: false; reason: string } {
+  const held = heldAt(childPath);
+  if (held.kind === 'link') return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
+  const problem = folderProblem(held);
+  if (problem !== null) return { ok: false, reason: `${childPath}: ${problem}` };
+  if (held.kind !== 'folder') return { ok: false, reason: `${childPath}: unexpected ${held.kind}` };
+
+  const atFfi = getPosixAtFfi();
+  let fd = -1;
+  if (atFfi !== null && parentFd >= 0) {
+    const opened = atFfi.openat(parentFd, childName, constants.O_RDONLY | DIRECTORY | NOFOLLOW, 0);
+    if (opened.fd < 0) {
+      if (opened.errno === ELOOP || opened.errno === ENOTDIR || heldAt(childPath).kind === 'link') {
+        return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
+      }
+      return { ok: false, reason: `${childPath}: the state folder could not be opened` };
+    }
+    fd = opened.fd;
+  } else {
+    try {
+      fd = openSync(childPath, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ELOOP' || code === 'ENOTDIR' || heldAt(childPath).kind === 'link') {
+        return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
+      }
+      return { ok: false, reason: `${childPath}: the state folder could not be opened` };
+    }
+  }
+
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isDirectory()) {
+      closeSync(fd);
+      return { ok: false, reason: `${childPath}: the state folder path is not a directory` };
+    }
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) {
+      closeSync(fd);
+      return { ok: false, reason: `${childPath}: another user's folder` };
+    }
+    const lstat = lstatSync(childPath);
+    if (!lstat.isDirectory() || lstat.dev !== stat.dev || lstat.ino !== stat.ino) {
+      closeSync(fd);
+      return { ok: false, reason: `${childPath}: a symbolic link was found and not followed` };
+    }
+    return { ok: true, fd, dev: stat.dev, ino: stat.ino };
+  } catch {
+    try {
+      closeSync(fd);
+    } catch {}
+    return { ok: false, reason: `${childPath}: the state folder could not be verified` };
+  }
+}
+
+/**
+ * Opens or creates a chain of subdirectories below `baseHeld` (`send-drops`), one component at a
+ * time, without ever following a symbolic link. Every opened descriptor is registered in `pool`
+ * so the caller closes all held descriptors in `finally`.
+ */
+function openSubdirChain(
+  baseHeld: HeldDir,
+  parts: readonly string[],
+  createMissing: boolean,
+  pool: number[],
+): { ok: true; dir: HeldDir } | { ok: false; reason: string } {
+  const atFfi = getPosixAtFfi();
+  let curFd = baseHeld.fd;
+  let curPath = baseHeld.path;
+  const chain: ChainStep[] = [...baseHeld.chain];
+  const intermediateFds: number[] = [];
+
+  try {
+    for (let i = 0; i < parts.length; i += 1) {
+      const part = parts[i]!;
+      if (!validSegment(part)) {
+        return { ok: false, reason: `${join(curPath, part)}: invalid directory component` };
+      }
+      const nextPath = join(curPath, part);
+      const before = heldAt(nextPath);
+      if (before.kind === 'link') {
+        return { ok: false, reason: `${nextPath}: a symbolic link was found and not followed` };
+      }
+      if (before.kind === 'missing') {
+        if (!createMissing) {
+          return { ok: false, reason: `${nextPath}: missing folder` };
+        }
+        if (atFfi !== null && curFd >= 0) {
+          const mk = atFfi.mkdirat(curFd, part, 0o700);
+          if (!mk.ok && mk.errno !== EEXIST) {
+            return { ok: false, reason: `${nextPath}: the state folder could not be created` };
+          }
+        } else {
+          try {
+            mkdirSync(nextPath, { mode: 0o700 });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+              return { ok: false, reason: `${nextPath}: the state folder could not be created` };
+            }
+          }
+        }
+      }
+      const step = openChildDirNoFollow(curFd, nextPath, part);
+      if (!step.ok) return step;
+      if (createMissing) {
+        try {
+          if (atFfi !== null) {
+            fchmodSync(step.fd, 0o700);
+          } else {
+            chmodSync(nextPath, 0o700);
+          }
+        } catch {
+          closeSync(step.fd);
+          return { ok: false, reason: `${nextPath}: the state folder permissions could not be set to 0700` };
+        }
+      }
+      chain.push({ name: part, path: nextPath, dev: step.dev, ino: step.ino });
+      curPath = nextPath;
+      curFd = step.fd;
+      if (i < parts.length - 1) {
+        intermediateFds.push(step.fd);
+      } else {
+        pool.push(step.fd);
+      }
+    }
+    const last = chain[chain.length - 1];
+    return {
+      ok: true,
+      dir: {
+        fd: curFd,
+        path: curPath,
+        dev: last !== undefined ? last.dev : baseHeld.dev,
+        ino: last !== undefined ? last.ino : baseHeld.ino,
+        chain,
+      },
+    };
+  } finally {
+    for (const fd of intermediateFds) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Re-verifies that `baseHeld` (`send-drops`) and every component in `target.chain` still resolve
+ * without symlinks to the exact same `(dev, ino)` as when `target` was opened.
+ */
+function verifyHeldDirChain(baseHeld: HeldDir, target: HeldDir): string | null {
+  try {
+    const baseStat = fstatSync(baseHeld.fd);
+    const baseLstat = lstatSync(baseHeld.path);
+    if (
+      !baseStat.isDirectory() ||
+      !baseLstat.isDirectory() ||
+      baseStat.dev !== baseHeld.dev ||
+      baseStat.ino !== baseHeld.ino ||
+      baseLstat.dev !== baseHeld.dev ||
+      baseLstat.ino !== baseHeld.ino
+    ) {
+      return `${baseHeld.path}: a symbolic link was found and not followed`;
+    }
+  } catch {
+    return `${baseHeld.path}: a symbolic link was found and not followed`;
+  }
+
+  let curFd = baseHeld.fd;
+  const opened: number[] = [];
+  try {
+    for (const step of target.chain) {
+      const checked = openChildDirNoFollow(curFd, step.path, step.name);
+      if (!checked.ok) return checked.reason;
+      opened.push(checked.fd);
+      if (checked.dev !== step.dev || checked.ino !== step.ino) {
+        return `${step.path}: a symbolic link was found and not followed`;
+      }
+      curFd = checked.fd;
+    }
+    const targetStat = fstatSync(target.fd);
+    if (!targetStat.isDirectory() || targetStat.dev !== target.dev || targetStat.ino !== target.ino) {
+      return `${target.path}: a symbolic link was found and not followed`;
+    }
+    return null;
+  } catch {
+    return `${target.path}: a symbolic link was found and not followed`;
+  } finally {
+    for (const fd of opened) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+  }
+}
+
+function moveFileBetweenHeldDirs(
+  baseHeld: HeldDir,
+  srcHeld: HeldDir,
+  destHeld: HeldDir,
+  fileName: string,
+  root: string,
+): { ok: true } | { ok: false; reason: string } {
+  const srcPath = join(srcHeld.path, fileName);
+  const destPath = join(destHeld.path, fileName);
+
+  const srcChainProblem = verifyHeldDirChain(baseHeld, srcHeld);
+  if (srcChainProblem !== null) return { ok: false, reason: srcChainProblem };
+  const destChainProblem = verifyHeldDirChain(baseHeld, destHeld);
+  if (destChainProblem !== null) return { ok: false, reason: destChainProblem };
+
+  const existingDest = heldAt(destPath);
+  if (existingDest.kind === 'link') {
+    return { ok: false, reason: `${destPath}: a symbolic link was found and not followed` };
+  }
+  if (existingDest.kind !== 'missing') {
+    return { ok: false, reason: `${destPath}: destination already holds ${fileName}` };
+  }
+
+  const atFfi = getPosixAtFfi();
+  if (atFfi !== null) {
+    const moved = atFfi.renameatExcl(srcHeld.fd, fileName, destHeld.fd, fileName);
+    if (!moved.ok) {
+      if (heldAt(destPath).kind === 'link') {
+        return { ok: false, reason: `${destPath}: a symbolic link was found and not followed` };
+      }
+      if (moved.errno === EEXIST) {
+        return { ok: false, reason: `${destPath}: destination already holds ${fileName}` };
+      }
+      return {
+        ok: false,
+        reason: `cannot move ${relative(root, srcPath)}: errno ${String(moved.errno)}`,
+      };
+    }
+  } else {
+    try {
+      renameSync(srcPath, destPath);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: `cannot move ${relative(root, srcPath)}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  // Re-verify the destination parent chain after the rename; if any parent was swapped, undo
+  // the move immediately using the held directory descriptors.
+  const postChainProblem = verifyHeldDirChain(baseHeld, destHeld);
+  const postHeld = heldAt(destPath);
+  if (postChainProblem !== null || postHeld.kind !== 'file') {
+    undoMovedFile(destHeld, srcHeld, fileName);
+    return {
+      ok: false,
+      reason: postChainProblem ?? `${destPath}: a symbolic link was found and not followed`,
+    };
+  }
+  return { ok: true };
+}
+
+function undoMovedFile(destHeld: HeldDir, srcHeld: HeldDir, fileName: string): void {
+  const atFfi = getPosixAtFfi();
+  if (atFfi !== null) {
+    atFfi.renameatReplace(destHeld.fd, fileName, srcHeld.fd, fileName);
+    return;
+  }
+  try {
+    renameSync(join(destHeld.path, fileName), join(srcHeld.path, fileName));
+  } catch {}
+}
+
+function unlinkInHeldDir(dirHeld: HeldDir, fileName: string): void {
+  const atFfi = getPosixAtFfi();
+  if (atFfi !== null) {
+    atFfi.unlinkat(dirHeld.fd, fileName);
+    return;
+  }
+  try {
+    unlinkSync(join(dirHeld.path, fileName));
+  } catch {}
+}
+
+/**
+ * Creates a new file with `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW` relative to `dirHeld.fd`,
+ * sets mode `0600` on the descriptor before writing (`openat`'s 4th parameter is variadic on
+ * Darwin ARM64), writes `bytes`, and re-verifies the parent directory chain.
+ */
+function writeNewFileInHeldDir(
+  baseHeld: HeldDir,
+  dirHeld: HeldDir,
+  fileName: string,
+  bytes: Buffer,
+): { ok: true; path: string } | { ok: false; code: 'eexist' | 'error'; reason: string } {
+  const fullPath = join(dirHeld.path, fileName);
+  const preProblem = verifyHeldDirChain(baseHeld, dirHeld);
+  if (preProblem !== null) return { ok: false, code: 'error', reason: preProblem };
+
+  const held = heldAt(fullPath);
+  if (held.kind === 'link') {
+    return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
+  }
+  if (held.kind !== 'missing') {
+    return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
+  }
+
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW;
+  const atFfi = getPosixAtFfi();
+  let fd = -1;
+  if (atFfi !== null) {
+    const opened = atFfi.openat(dirHeld.fd, fileName, flags, 0o600);
+    if (opened.fd < 0) {
+      if (opened.errno === EEXIST) {
+        return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
+      }
+      if (opened.errno === ELOOP || heldAt(fullPath).kind === 'link') {
+        return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
+      }
+      return { ok: false, code: 'error', reason: `${fullPath}: errno ${String(opened.errno)}` };
+    }
+    fd = opened.fd;
+  } else {
+    try {
+      fd = openSync(fullPath, flags, 0o600);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        return { ok: false, code: 'eexist', reason: `${fullPath}: file already exists` };
+      }
+      if (code === 'ELOOP' || heldAt(fullPath).kind === 'link') {
+        return { ok: false, code: 'error', reason: `${fullPath}: a symbolic link was found and not followed` };
+      }
+      return {
+        ok: false,
+        code: 'error',
+        reason: `${fullPath}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      return { ok: false, code: 'error', reason: `${fullPath}: not a regular file` };
+    }
+    fchmodSync(fd, 0o600);
+    for (let wrote = 0; wrote < bytes.length;) {
+      wrote += writeSync(fd, bytes, wrote, bytes.length - wrote);
+    }
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {}
+    unlinkInHeldDir(dirHeld, fileName);
+    return {
+      ok: false,
+      code: 'error',
+      reason: `${fullPath}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  closeSync(fd);
+
+  const postProblem = verifyHeldDirChain(baseHeld, dirHeld);
+  if (postProblem !== null || heldAt(fullPath).kind !== 'file') {
+    unlinkInHeldDir(dirHeld, fileName);
+    return {
+      ok: false,
+      code: 'error',
+      reason: postProblem ?? `${fullPath}: a symbolic link was found and not followed`,
+    };
+  }
+  return { ok: true, path: fullPath };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -186,19 +731,37 @@ function isExpectedSeatDropFile(name: string): boolean {
   return false;
 }
 
-/** Reads a regular file with `O_NOFOLLOW` and returns its bytes and mtimeMs, or throws. */
-function readRegularNoFollow(path: string): { data: Buffer; mtimeMs: number } {
+/** Reads a regular file with `O_NOFOLLOW` relative to `dirHeld` when available and returns its bytes, or throws. */
+function readRegularNoFollowInDir(dirHeld: HeldDir, name: string): Buffer {
+  const path = join(dirHeld.path, name);
   const held = heldAt(path);
   if (held.kind === 'link') throw new Error(`${path}: a symbolic link was found and not followed`);
   if (held.kind !== 'file') throw new Error(`${path}: not a regular file`);
   if (process.getuid !== undefined && held.uid !== process.getuid()) {
     throw new Error(`${path}: another user's file`);
   }
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const atFfi = getPosixAtFfi();
+  let fd = -1;
+  if (atFfi !== null && dirHeld.fd >= 0) {
+    const opened = atFfi.openat(dirHeld.fd, name, constants.O_RDONLY | NOFOLLOW, 0);
+    if (opened.fd < 0) {
+      throw new Error(
+        opened.errno === ELOOP
+          ? `${path}: a symbolic link was found and not followed`
+          : `${path}: cannot open file`,
+      );
+    }
+    fd = opened.fd;
+  } else {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  }
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) throw new Error(`${path}: not a regular file`);
-    return { data: readFileSync(fd), mtimeMs: stat.mtimeMs };
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) {
+      throw new Error(`${path}: another user's file`);
+    }
+    return readFileSync(fd);
   } finally {
     closeSync(fd);
   }
@@ -249,28 +812,89 @@ function isClientRecord(payload: RecordPayload): boolean {
   return payload.from_client !== undefined || payload.to_client !== undefined;
 }
 
+/**
+ * Verifies a receipt file in `seatHeld` for `(id, status, seat, root, session)` and returns its
+ * signed `at` timestamp in ms, or null when missing, unverified, or carrying a non-finite `at`.
+ */
+function verifiedReceiptAtMs(
+  seatHeld: HeldDir,
+  id: string,
+  status: ReceiptStatus,
+  context: { to: string; root: string; session: string },
+  key: KeyObject,
+): number | null {
+  let data: Buffer;
+  try {
+    data = readRegularNoFollowInDir(seatHeld, `${id}.${status}.json`);
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.toString('utf8')) as unknown;
+  } catch {
+    return null;
+  }
+  const auth = receiptAuthOf(parsed, key);
+  if (auth.kind !== 'ok') return null;
+  const payload = auth.value.payload;
+  if (payload.id !== id || payload.status !== status) return null;
+  if (payload.to !== context.to || payload.session !== context.session) return null;
+  if (!sameFolder(payload.root, context.root)) return null;
+  const ms = Date.parse(payload.at);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Verifies a `.closed.json` file in `seatHeld` for `(id, root, session)` and returns its signed
+ * `at` timestamp in ms, or null when missing, unverified, or carrying a non-finite `at`.
+ */
+function verifiedCloseAtMs(
+  seatHeld: HeldDir,
+  id: string,
+  context: { root: string; session: string },
+  key: KeyObject,
+): number | null {
+  let data: Buffer;
+  try {
+    data = readRegularNoFollowInDir(seatHeld, `${id}.closed.json`);
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.toString('utf8')) as unknown;
+  } catch {
+    return null;
+  }
+  const auth = closeAuthOf(parsed, key);
+  if (auth.kind !== 'ok') return null;
+  const payload = auth.value.payload;
+  if (payload.id !== id || payload.session !== context.session) return null;
+  if (!sameFolder(payload.root, context.root)) return null;
+  const ms = Date.parse(payload.at);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 type CandidateFamily = {
   session: string;
   seat: string;
   id: string;
-  seatDir: string;
+  seatHeld: HeldDir;
   files: string[];
   newestMs: number;
 };
 
-function archiveManifestPath(archiveDateDir: string, at: Date): string {
-  const stamp = at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  let path = join(archiveDateDir, `manifest-${stamp}.json`);
-  for (let n = 2; existsSync(path); n += 1) {
-    path = join(archiveDateDir, `manifest-${stamp}-${String(n)}.json`);
-  }
-  return path;
-}
-
-/** Removes archived message ids from `.unread.json` in `seatDir` while keeping all unread ids intact. */
-function pruneArchivedFromUnreadHint(seatDir: string, archivedIds: ReadonlySet<string>): string | null {
+/** Removes archived message ids from `.unread.json` in `seatHeld` while keeping all unread ids intact. */
+function pruneArchivedFromUnreadHint(
+  baseHeld: HeldDir,
+  seatHeld: HeldDir,
+  archivedIds: ReadonlySet<string>,
+): string | null {
   if (archivedIds.size === 0) return null;
-  const hintPath = join(seatDir, '.unread.json');
+  const chainProblem = verifyHeldDirChain(baseHeld, seatHeld);
+  if (chainProblem !== null) return chainProblem;
+  const hintPath = join(seatHeld.path, '.unread.json');
   const held = heldAt(hintPath);
   if (held.kind === 'missing') return null;
   if (held.kind === 'link') return `${hintPath}: a symbolic link was found and not followed`;
@@ -280,7 +904,7 @@ function pruneArchivedFromUnreadHint(seatDir: string, archivedIds: ReadonlySet<s
   }
   let parsed: unknown;
   try {
-    const { data } = readRegularNoFollow(hintPath);
+    const data = readRegularNoFollowInDir(seatHeld, '.unread.json');
     parsed = JSON.parse(data.toString('utf8')) as unknown;
   } catch {
     // An unreadable hint is left untouched as it stands.
@@ -304,359 +928,37 @@ function pruneArchivedFromUnreadHint(seatDir: string, archivedIds: ReadonlySet<s
     if (kept.length > 0) nextUnread[peer] = { entries: kept };
   }
   if (!changed) return null;
-  const tmp = join(seatDir, `.unread.json.${String(process.pid)}.tmp`);
+  const tmpName = `.unread.json.${String(process.pid)}.tmp`;
+  const bytes = Buffer.from(`${JSON.stringify({ v: 1, unread: nextUnread }, null, 2)}\n`, 'utf8');
+  const wrote = writeNewFileInHeldDir(baseHeld, seatHeld, tmpName, bytes);
+  if (!wrote.ok) return null;
   try {
-    writeFileSync(tmp, `${JSON.stringify({ v: 1, unread: nextUnread }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-    renameSync(tmp, hintPath);
+    const atFfi = getPosixAtFfi();
+    if (atFfi !== null) {
+      const moved = atFfi.renameatReplace(seatHeld.fd, tmpName, seatHeld.fd, '.unread.json');
+      if (!moved.ok) throw new Error(`renameat failed: errno ${String(moved.errno)}`);
+    } else {
+      renameSync(wrote.path, hintPath);
+    }
   } catch {
-    try {
-      // Leave the existing hint intact if the atomic swap could not complete.
-    } catch {}
+    // Clean up the temporary file and leave the existing hint intact if the atomic swap failed.
+    unlinkInHeldDir(seatHeld, tmpName);
   }
   return null;
 }
 
-/**
- * Generator driving one root's drop-archive pass a step at a time. Yields between directory and
- * candidate inspections so the chores child's slice clock can yield to the event loop and answer
- * heartbeats without stalling.
- */
-export function* dropRetirementSteps(input: DropRetirementInput): Generator<void, DropRetirementReport> {
-  const { root, home, at } = input;
-  const atIso = at.toISOString();
-  const date = atIso.slice(0, 10);
-  const empty = (refused: string | null = null, scanned = 0, stayed = 0): DropRetirementReport => ({
-    at: atIso,
-    archived: [],
-    manifestPath: null,
-    scanned,
-    stayed,
-    refused,
-  });
-
-  yield;
-  const agentsDir = join(root, '.agents');
-  if (heldAt(agentsDir).kind === 'missing') return empty();
-  const agentsProblem = folderProblemAt(agentsDir);
-  if (agentsProblem !== null) return empty(`${agentsDir}: ${agentsProblem}`);
-
-  const sendDropsDir = join(agentsDir, 'send-drops');
-  if (heldAt(sendDropsDir).kind === 'missing') return empty();
-  const sendDropsProblem = folderProblemAt(sendDropsDir);
-  if (sendDropsProblem !== null) return empty(`${sendDropsDir}: ${sendDropsProblem}`);
-
-  // Pre-check `.archive` if it already stands in `send-drops`: a link or non-folder refuses the pass.
-  const archiveRoot = join(sendDropsDir, DROP_ARCHIVE_DIR);
-  if (heldAt(archiveRoot).kind !== 'missing') {
-    const archiveProblem = folderProblemAt(archiveRoot);
-    if (archiveProblem !== null) return empty(`${archiveRoot}: ${archiveProblem}`);
-  }
-
-  const retention = resolveRetentionMs(root, home, input.team, at, input.olderThanMs);
-  if (retention.ms === null) return empty(retention.refusal);
-  const cutoff = at.getTime() - retention.ms;
-
-  const keyState = messageKeyState(home);
-  if (keyState.kind === 'missing') return empty();
-  if (keyState.kind === 'unreadable') return empty(`the message key is unreadable: ${keyState.why}`);
-  const key = keyState.key;
-
-  // Phase 1: Full pre-flight tree inspection + candidate discovery.
-  // Any link, non-regular entry in a seat folder, foreign-owned entry, or unexpected file name
-  // refuses the whole pass before a single file is moved.
-  let sessionEntries: string[];
-  try {
-    sessionEntries = readdirSync(sendDropsDir).sort();
-  } catch (error) {
-    return empty(`${sendDropsDir}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  const candidates: CandidateFamily[] = [];
-  let scanned = 0;
-  let stayed = 0;
-
-  for (const session of sessionEntries) {
-    yield;
-    if (session === DROP_ARCHIVE_DIR) continue;
-    const sessionDir = join(sendDropsDir, session);
-    if (!insideSendDrops(sendDropsDir, sessionDir) || !RECORD_NAME.test(session)) {
-      return empty(`${sessionDir}: unexpected entry in send-drops`);
-    }
-    const sessionHeld = heldAt(sessionDir);
-    if (sessionHeld.kind === 'link') {
-      return empty(`${sessionDir}: a symbolic link was found and not followed`);
-    }
-    if (sessionHeld.kind !== 'folder') {
-      return empty(`${sessionDir}: unexpected ${sessionHeld.kind} in send-drops`);
-    }
-    const sessionProblem = folderProblemAt(sessionDir);
-    if (sessionProblem !== null) return empty(`${sessionDir}: ${sessionProblem}`);
-
-    let seatEntries: string[];
-    try {
-      seatEntries = readdirSync(sessionDir).sort();
-    } catch (error) {
-      return empty(`${sessionDir}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    for (const seat of seatEntries) {
-      yield;
-      const seatDir = join(sessionDir, seat);
-      if (!insideSendDrops(sendDropsDir, seatDir) || !RECORD_NAME.test(seat)) {
-        return empty(`${seatDir}: unexpected entry in session drop folder`);
-      }
-      const seatHeld = heldAt(seatDir);
-      if (seatHeld.kind === 'link') {
-        return empty(`${seatDir}: a symbolic link was found and not followed`);
-      }
-      if (seatHeld.kind !== 'folder') {
-        return empty(`${seatDir}: unexpected ${seatHeld.kind} in session drop folder`);
-      }
-      const seatProblem = folderProblemAt(seatDir);
-      if (seatProblem !== null) return empty(`${seatDir}: ${seatProblem}`);
-
-      let fileNames: string[];
-      try {
-        fileNames = readdirSync(seatDir).sort();
-      } catch (error) {
-        return empty(`${seatDir}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-
-      const fileSet = new Set<string>();
-      const fallbackNoteIds = new Set<string>();
-      for (const name of fileNames) {
-        yield;
-        const filePath = join(seatDir, name);
-        if (!insideSendDrops(sendDropsDir, filePath)) {
-          return empty(`${filePath}: path escapes send-drops`);
-        }
-        const held = heldAt(filePath);
-        if (held.kind === 'link') {
-          return empty(`${filePath}: a symbolic link was found and not followed`);
-        }
-        if (held.kind !== 'file') {
-          return empty(`${filePath}: unexpected ${held.kind} in seat drop folder`);
-        }
-        if (process.getuid !== undefined && held.uid !== process.getuid()) {
-          return empty(`${filePath}: another user's file`);
-        }
-        if (!isExpectedSeatDropFile(name)) {
-          return empty(`${filePath}: unexpected file in seat drop folder`);
-        }
-        fileSet.add(name);
-        const dot = name.indexOf('.');
-        if (dot > 0 && FALLBACK_NOTE_SUFFIX.test(name.slice(dot))) {
-          fallbackNoteIds.add(name.slice(0, dot));
-        }
-      }
-
-      const activeClaim = currentClaimIn(root, session, seat);
-
-      for (const name of fileNames) {
-        if (name.includes('.') || name.startsWith(WORK_PREFIX) || !RECORD_NAME.test(name)) continue;
-        yield;
-        scanned += 1;
-        const recordPath = join(seatDir, name);
-        let recordRead: { data: Buffer; mtimeMs: number };
-        try {
-          recordRead = readRegularNoFollow(recordPath);
-        } catch (error) {
-          return empty(error instanceof Error ? error.message : String(error), scanned, stayed);
-        }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(recordRead.data.toString('utf8')) as unknown;
-        } catch {
-          stayed += 1;
-          continue;
-        }
-        const auth = recordAuthOf(parsed, key);
-        if (auth.kind !== 'ok') {
-          stayed += 1;
-          continue;
-        }
-        const payload = auth.value.payload;
-        if (
-          payload.id !== name ||
-          payload.to !== seat ||
-          payload.session !== session ||
-          !sameFolder(payload.root, root)
-        ) {
-          stayed += 1;
-          continue;
-        }
-        if (
-          isGeneralBriefRecord(payload) ||
-          (payload.from === GENERAL_BRIEF_FROM && payload.rule === GENERAL_BRIEF_RULE) ||
-          activeClaim?.id === name
-        ) {
-          stayed += 1;
-          continue;
-        }
-        if (isClientRecord(payload)) {
-          stayed += 1;
-          continue;
-        }
-        if (
-          fileSet.has(`${name}.pending`) ||
-          fileSet.has(`${name}.taken`) ||
-          fileSet.has(`${name}.fallback.json`) ||
-          fallbackNoteIds.has(name)
-        ) {
-          stayed += 1;
-          continue;
-        }
-        if (!isRead(seatDir, name, { to: seat, root, session }, key)) {
-          stayed += 1;
-          continue;
-        }
-
-        const familyFiles: string[] = [
-          name,
-          ...PRE_RECEIPT_SUFFIXES.map((suffix) => `${name}${suffix}`).filter((f) => fileSet.has(f)),
-          ...RECEIPT_SUFFIXES.map((suffix) => `${name}${suffix}`).filter((f) => fileSet.has(f)),
-        ];
-        let newestMs = Date.parse(payload.at);
-        if (!Number.isFinite(newestMs)) {
-          stayed += 1;
-          continue;
-        }
-        let mtimeOk = true;
-        for (const f of familyFiles) {
-          try {
-            const { mtimeMs } = readRegularNoFollow(join(seatDir, f));
-            if (mtimeMs > newestMs) newestMs = mtimeMs;
-          } catch {
-            mtimeOk = false;
-            break;
-          }
-        }
-        if (!mtimeOk || newestMs > cutoff) {
-          stayed += 1;
-          continue;
-        }
-        candidates.push({ session, seat, id: name, seatDir, files: familyFiles, newestMs });
-      }
-    }
-  }
-
-  if (candidates.length === 0) return empty(null, scanned, stayed);
-
-  candidates.sort((a, b) =>
-    a.newestMs - b.newestMs ||
-    a.session.localeCompare(b.session) ||
-    a.seat.localeCompare(b.seat) ||
-    a.id.localeCompare(b.id),
-  );
-
-  const steadyLimit = input.limit ?? DROP_ARCHIVE_PASS_LIMIT;
-  const backlogAbove = input.backlogAbove ?? DAEMON_BACKLOG_DEFAULTS.above;
-  const backlogLimit = input.backlogLimit ?? DAEMON_BACKLOG_DEFAULTS.limit;
-  const passLimit = candidates.length > backlogAbove ? Math.max(steadyLimit, backlogLimit) : steadyLimit;
-  const selected = candidates.slice(0, passLimit);
-
-  // Phase 2: Pre-check all destination folders and hash every source file before moving anything.
-  const relativeDestFolders = new Set<string>();
-  const archiveDateRel = join(DROP_ARCHIVE_DIR, date);
-  relativeDestFolders.add(archiveDateRel);
-  for (const item of selected) {
-    const relFolder = join(DROP_ARCHIVE_DIR, date, item.session, item.seat);
-    const absDest = join(sendDropsDir, relFolder);
-    if (!insideSendDrops(sendDropsDir, absDest)) {
-      return empty(`${absDest}: destination escapes send-drops`, scanned, stayed);
-    }
-    relativeDestFolders.add(relFolder);
-  }
-
-  const folderProblem = ensureFoldersBelow(sendDropsDir, [...relativeDestFolders]);
-  if (folderProblem !== null) return empty(folderProblem, scanned, stayed);
-
-  type PreparedFamily = {
-    candidate: CandidateFamily;
-    destDir: string;
-    hashed: { name: string; digest: string; bytes: number }[];
-  };
-  const prepared: PreparedFamily[] = [];
-
-  for (const item of selected) {
-    yield;
-    const destDir = join(sendDropsDir, DROP_ARCHIVE_DIR, date, item.session, item.seat);
-    for (const file of item.files) {
-      const destPath = join(destDir, file);
-      if (heldAt(destPath).kind !== 'missing') {
-        return empty(`${destPath}: destination already holds ${file}`, scanned, stayed);
-      }
-    }
-    const hashed: { name: string; digest: string; bytes: number }[] = [];
-    for (const file of item.files) {
-      try {
-        const { data } = readRegularNoFollow(join(item.seatDir, file));
-        hashed.push({
-          name: file,
-          digest: createHash('sha256').update(data).digest('hex'),
-          bytes: data.byteLength,
-        });
-      } catch (error) {
-        return empty(error instanceof Error ? error.message : String(error), scanned, stayed);
-      }
-    }
-    prepared.push({ candidate: item, destDir, hashed });
-  }
-
-  // Phase 3: Move each family (record and non-receipt sidecars first, receipts last), update
-  // `.unread.json` per seat folder, and write the signed archive manifest.
-  const archived: DropArchiveFamily[] = [];
-  const archivedBySeatDir = new Map<string, Set<string>>();
-
-  for (const item of prepared) {
-    yield;
-    const { candidate, destDir, hashed } = item;
-    const movedFiles: MovedFile[] = [];
-    for (const file of hashed) {
-      const source = join(candidate.seatDir, file.name);
-      const dest = join(destDir, file.name);
-      if (!insideSendDrops(sendDropsDir, source) || !insideSendDrops(sendDropsDir, dest)) {
-        return empty('archive move path escapes send-drops', scanned, stayed);
-      }
-      try {
-        renameSync(source, dest);
-      } catch (error) {
-        return empty(
-          `cannot move ${relative(root, source)}: ${error instanceof Error ? error.message : String(error)}`,
-          scanned,
-          stayed,
-        );
-      }
-      movedFiles.push({
-        digest: file.digest,
-        bytes: file.bytes,
-        source: relative(root, source).split(sep).join('/'),
-        dest: relative(root, dest).split(sep).join('/'),
-      });
-    }
-    archived.push({
-      session: candidate.session,
-      seat: candidate.seat,
-      id: candidate.id,
-      files: movedFiles,
-    });
-    let ids = archivedBySeatDir.get(candidate.seatDir);
-    if (ids === undefined) {
-      ids = new Set<string>();
-      archivedBySeatDir.set(candidate.seatDir, ids);
-    }
-    ids.add(candidate.id);
-  }
-
-  for (const [seatDir, ids] of archivedBySeatDir.entries()) {
-    const problem = pruneArchivedFromUnreadHint(seatDir, ids);
-    if (problem !== null) return empty(problem, scanned, stayed);
-  }
-
-  const archiveDateDir = join(sendDropsDir, DROP_ARCHIVE_DIR, date);
-  const manifestPath = archiveManifestPath(archiveDateDir, at);
-  if (!insideSendDrops(sendDropsDir, manifestPath) || dirname(manifestPath) !== archiveDateDir) {
-    return empty('manifest path escapes send-drops archive', scanned, stayed);
+function writeArchiveManifestInHeldDir(
+  baseHeld: HeldDir,
+  archiveDateHeld: HeldDir,
+  root: string,
+  date: string,
+  at: Date,
+  atIso: string,
+  families: DropArchiveFamily[],
+  key: KeyObject,
+): { ok: true; manifestPath: string } | { ok: false; reason: string } {
+  if (!insideSendDrops(baseHeld.path, archiveDateHeld.path)) {
+    return { ok: false, reason: 'manifest path escapes send-drops archive' };
   }
   const payload: DropArchivePayload = {
     kind: 'drop-archive',
@@ -664,64 +966,549 @@ export function* dropRetirementSteps(input: DropRetirementInput): Generator<void
     root,
     date,
     at: atIso,
-    families: archived,
+    families,
   };
   const signed: SignedDropArchive = {
     payload,
     signature: signDomain(DROP_ARCHIVE_DOMAIN, payload as unknown as Json, key),
   };
-  try {
-    writeFileSync(manifestPath, `${JSON.stringify(signed, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-  } catch (error) {
-    return empty(
-      `${manifestPath}: the archive manifest could not be written: ${error instanceof Error ? error.message : String(error)}`,
+  const bytes = Buffer.from(`${JSON.stringify(signed, null, 2)}\n`, 'utf8');
+  const stamp = at.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  for (let n = 1; n <= 10_000; n += 1) {
+    const fileName = n === 1 ? `manifest-${stamp}.json` : `manifest-${stamp}-${String(n)}.json`;
+    const candidatePath = join(archiveDateHeld.path, fileName);
+    if (!insideSendDrops(baseHeld.path, candidatePath) || dirname(candidatePath) !== archiveDateHeld.path) {
+      return { ok: false, reason: 'manifest path escapes send-drops archive' };
+    }
+    const wrote = writeNewFileInHeldDir(baseHeld, archiveDateHeld, fileName, bytes);
+    if (wrote.ok) return { ok: true, manifestPath: wrote.path };
+    if (wrote.code === 'eexist') continue;
+    return { ok: false, reason: `${candidatePath}: the archive manifest could not be written: ${wrote.reason}` };
+  }
+  return {
+    ok: false,
+    reason: `${archiveDateHeld.path}: the archive manifest could not be written: no free manifest name`,
+  };
+}
+
+/**
+ * Generator driving one root's drop-archive pass a step at a time. Yields between directory and
+ * candidate inspections so the chores child's slice clock can yield to the event loop and answer
+ * heartbeats without stalling.
+ */
+export function* dropRetirementSteps(
+  input: DropRetirementInput,
+  stateSink?: { report: DropRetirementReport },
+): Generator<void, DropRetirementReport> {
+  const { root, home, at } = input;
+  const atIso = at.toISOString();
+  const date = atIso.slice(0, 10);
+
+  const openedFds: number[] = [];
+  const archived: DropArchiveFamily[] = [];
+  const movedRecords: { srcHeld: HeldDir; destHeld: HeldDir; files: string[] }[] = [];
+  const archivedBySeatDir = new Map<string, { seatHeld: HeldDir; ids: Set<string> }>();
+  let manifestPath: string | null = null;
+  let scanned = 0;
+  let stayed = 0;
+  let refused: string | null = null;
+  let sendDropsHeld: HeldDir | null = null;
+  let archiveDateHeld: HeldDir | null = null;
+  let key: KeyObject | null = null;
+  let finalized = false;
+
+  const snapshot = (): DropRetirementReport => {
+    const report: DropRetirementReport = {
+      at: atIso,
+      archived: [...archived],
+      manifestPath,
       scanned,
       stayed,
-    );
-  }
-
-  return {
-    at: atIso,
-    archived,
-    manifestPath,
-    scanned,
-    stayed,
-    refused: null,
+      refused,
+    };
+    if (stateSink !== undefined) stateSink.report = report;
+    return report;
   };
+
+  const fail = (reason: string): DropRetirementReport => {
+    refused = reason;
+    return snapshot();
+  };
+
+  const rollbackAllMoved = (): void => {
+    for (let i = movedRecords.length - 1; i >= 0; i -= 1) {
+      const rec = movedRecords[i]!;
+      for (let j = rec.files.length - 1; j >= 0; j -= 1) {
+        undoMovedFile(rec.destHeld, rec.srcHeld, rec.files[j]!);
+      }
+    }
+    movedRecords.length = 0;
+    archived.length = 0;
+    archivedBySeatDir.clear();
+  };
+
+  const finalizeMoved = (): void => {
+    if (finalized) return;
+    finalized = true;
+    if (archived.length === 0 || sendDropsHeld === null || archiveDateHeld === null || key === null) {
+      snapshot();
+      return;
+    }
+
+    // Before writing `.unread.json` updates or the signed manifest, verify that `.archive/<date>`
+    // and every moved family's destination folder still resolve inside `send-drops` without any
+    // symbolic link. If any archive parent was swapped for a link, roll back all moved files so no
+    // family escapes or sits without a manifest.
+    const dateChainProblem = verifyHeldDirChain(sendDropsHeld, archiveDateHeld);
+    if (dateChainProblem !== null) {
+      rollbackAllMoved();
+      if (refused === null) refused = dateChainProblem;
+      snapshot();
+      return;
+    }
+    for (const rec of movedRecords) {
+      const destProblem = verifyHeldDirChain(sendDropsHeld, rec.destHeld);
+      if (destProblem !== null) {
+        rollbackAllMoved();
+        if (refused === null) refused = destProblem;
+        snapshot();
+        return;
+      }
+    }
+
+    for (const { seatHeld, ids } of archivedBySeatDir.values()) {
+      const problem = pruneArchivedFromUnreadHint(sendDropsHeld, seatHeld, ids);
+      if (problem !== null && refused === null) refused = problem;
+    }
+
+    const wrote = writeArchiveManifestInHeldDir(
+      sendDropsHeld,
+      archiveDateHeld,
+      root,
+      date,
+      at,
+      atIso,
+      archived,
+      key,
+    );
+    if (!wrote.ok) {
+      rollbackAllMoved();
+      if (refused === null) refused = wrote.reason;
+      snapshot();
+      return;
+    }
+    manifestPath = wrote.manifestPath;
+    snapshot();
+  };
+
+  snapshot();
+  try {
+    yield;
+    const agentsDir = join(root, '.agents');
+    if (heldAt(agentsDir).kind === 'missing') return snapshot();
+    const agentsProblem = folderProblemAt(agentsDir);
+    if (agentsProblem !== null) return fail(`${agentsDir}: ${agentsProblem}`);
+
+    const sendDropsDir = join(agentsDir, 'send-drops');
+    if (heldAt(sendDropsDir).kind === 'missing') return snapshot();
+    const sendDropsProblem = folderProblemAt(sendDropsDir);
+    if (sendDropsProblem !== null) return fail(`${sendDropsDir}: ${sendDropsProblem}`);
+
+    const agentsStep = openChildDirNoFollow(-1, agentsDir, '.agents');
+    if (!agentsStep.ok) return fail(agentsStep.reason);
+    openedFds.push(agentsStep.fd);
+    const sendDropsStep = openChildDirNoFollow(agentsStep.fd, sendDropsDir, 'send-drops');
+    if (!sendDropsStep.ok) return fail(sendDropsStep.reason);
+    openedFds.push(sendDropsStep.fd);
+    sendDropsHeld = {
+      fd: sendDropsStep.fd,
+      path: sendDropsDir,
+      dev: sendDropsStep.dev,
+      ino: sendDropsStep.ino,
+      chain: [],
+    };
+
+    // Pre-check `.archive` if it already stands in `send-drops`: a link or non-folder refuses the pass.
+    const archiveRoot = join(sendDropsDir, DROP_ARCHIVE_DIR);
+    if (heldAt(archiveRoot).kind !== 'missing') {
+      const archiveProblem = folderProblemAt(archiveRoot);
+      if (archiveProblem !== null) return fail(`${archiveRoot}: ${archiveProblem}`);
+    }
+
+    const retention = resolveRetentionMs(root, home, input.team, at, input.olderThanMs);
+    if (retention.ms === null) return fail(retention.refusal);
+    const cutoff = at.getTime() - retention.ms;
+
+    const keyState = messageKeyState(home);
+    if (keyState.kind === 'missing') return snapshot();
+    if (keyState.kind === 'unreadable') return fail(`the message key is unreadable: ${keyState.why}`);
+    key = keyState.key;
+
+    // Phase 1: Full pre-flight tree inspection + candidate discovery.
+    // Any link, non-regular entry in a seat folder, foreign-owned entry, or unexpected file name
+    // refuses the whole pass before a single file is moved.
+    let sessionEntries: string[];
+    try {
+      sessionEntries = readdirSync(sendDropsDir).sort();
+    } catch (error) {
+      return fail(`${sendDropsDir}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const candidates: CandidateFamily[] = [];
+
+    for (const session of sessionEntries) {
+      yield;
+      if (session === DROP_ARCHIVE_DIR) continue;
+      const sessionDir = join(sendDropsDir, session);
+      if (!insideSendDrops(sendDropsDir, sessionDir) || !RECORD_NAME.test(session)) {
+        return fail(`${sessionDir}: unexpected entry in send-drops`);
+      }
+      const sessionHeld = heldAt(sessionDir);
+      if (sessionHeld.kind === 'link') {
+        return fail(`${sessionDir}: a symbolic link was found and not followed`);
+      }
+      if (sessionHeld.kind !== 'folder') {
+        return fail(`${sessionDir}: unexpected ${sessionHeld.kind} in send-drops`);
+      }
+      const sessionProblem = folderProblemAt(sessionDir);
+      if (sessionProblem !== null) return fail(`${sessionDir}: ${sessionProblem}`);
+
+      let seatEntries: string[];
+      try {
+        seatEntries = readdirSync(sessionDir).sort();
+      } catch (error) {
+        return fail(`${sessionDir}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      for (const seat of seatEntries) {
+        yield;
+        const seatDir = join(sessionDir, seat);
+        if (!insideSendDrops(sendDropsDir, seatDir) || !RECORD_NAME.test(seat)) {
+          return fail(`${seatDir}: unexpected entry in session drop folder`);
+        }
+        const seatHeldCheck = heldAt(seatDir);
+        if (seatHeldCheck.kind === 'link') {
+          return fail(`${seatDir}: a symbolic link was found and not followed`);
+        }
+        if (seatHeldCheck.kind !== 'folder') {
+          return fail(`${seatDir}: unexpected ${seatHeldCheck.kind} in session drop folder`);
+        }
+        const seatProblem = folderProblemAt(seatDir);
+        if (seatProblem !== null) return fail(`${seatDir}: ${seatProblem}`);
+
+        const openedSeat = openSubdirChain(sendDropsHeld, [session, seat], false, openedFds);
+        if (!openedSeat.ok) return fail(openedSeat.reason);
+        const seatHeld = openedSeat.dir;
+
+        let fileNames: string[];
+        try {
+          fileNames = readdirSync(seatDir).sort();
+        } catch (error) {
+          return fail(`${seatDir}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        const fileSet = new Set<string>();
+        const fallbackNoteIds = new Set<string>();
+        for (const name of fileNames) {
+          yield;
+          const filePath = join(seatDir, name);
+          if (!insideSendDrops(sendDropsDir, filePath)) {
+            return fail(`${filePath}: path escapes send-drops`);
+          }
+          const held = heldAt(filePath);
+          if (held.kind === 'link') {
+            return fail(`${filePath}: a symbolic link was found and not followed`);
+          }
+          if (held.kind !== 'file') {
+            return fail(`${filePath}: unexpected ${held.kind} in seat drop folder`);
+          }
+          if (process.getuid !== undefined && held.uid !== process.getuid()) {
+            return fail(`${filePath}: another user's file`);
+          }
+          if (!isExpectedSeatDropFile(name)) {
+            return fail(`${filePath}: unexpected file in seat drop folder`);
+          }
+          fileSet.add(name);
+          const dot = name.indexOf('.');
+          if (dot > 0 && FALLBACK_NOTE_SUFFIX.test(name.slice(dot))) {
+            fallbackNoteIds.add(name.slice(0, dot));
+          }
+        }
+
+        const activeClaim = currentClaimIn(root, session, seat);
+
+        for (const name of fileNames) {
+          if (name.includes('.') || name.startsWith(WORK_PREFIX) || !RECORD_NAME.test(name)) continue;
+          yield;
+          scanned += 1;
+          let recordData: Buffer;
+          try {
+            recordData = readRegularNoFollowInDir(seatHeld, name);
+          } catch (error) {
+            return fail(error instanceof Error ? error.message : String(error));
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(recordData.toString('utf8')) as unknown;
+          } catch {
+            stayed += 1;
+            continue;
+          }
+          const auth = recordAuthOf(parsed, key);
+          if (auth.kind !== 'ok') {
+            stayed += 1;
+            continue;
+          }
+          const payload = auth.value.payload;
+          if (
+            payload.id !== name ||
+            payload.to !== seat ||
+            payload.session !== session ||
+            !sameFolder(payload.root, root)
+          ) {
+            stayed += 1;
+            continue;
+          }
+          if (
+            isGeneralBriefRecord(payload) ||
+            (payload.from === GENERAL_BRIEF_FROM && payload.rule === GENERAL_BRIEF_RULE) ||
+            activeClaim?.id === name
+          ) {
+            stayed += 1;
+            continue;
+          }
+          if (isClientRecord(payload)) {
+            stayed += 1;
+            continue;
+          }
+          if (
+            fileSet.has(`${name}.pending`) ||
+            fileSet.has(`${name}.taken`) ||
+            fileSet.has(`${name}.fallback.json`) ||
+            fallbackNoteIds.has(name)
+          ) {
+            stayed += 1;
+            continue;
+          }
+
+          // Age uses the signed `at` timestamps only (the verified message record and its verified
+          // receipts/close), never `mtime`, so a same-user `utimes` cannot retire a fresh read.
+          let newestMs = Date.parse(payload.at);
+          if (!Number.isFinite(newestMs)) {
+            stayed += 1;
+            continue;
+          }
+          const context = { to: seat, root, session };
+          const readMs = fileSet.has(`${name}.read.json`)
+            ? verifiedReceiptAtMs(seatHeld, name, 'read', context, key)
+            : null;
+          const repliedMs = fileSet.has(`${name}.replied.json`)
+            ? verifiedReceiptAtMs(seatHeld, name, 'replied', context, key)
+            : null;
+          if (readMs === null && repliedMs === null) {
+            stayed += 1;
+            continue;
+          }
+          if (readMs !== null && readMs > newestMs) newestMs = readMs;
+          if (repliedMs !== null && repliedMs > newestMs) newestMs = repliedMs;
+          for (const extraStatus of ['held', 'delivered'] as const) {
+            if (!fileSet.has(`${name}.${extraStatus}.json`)) continue;
+            const extraMs = verifiedReceiptAtMs(seatHeld, name, extraStatus, context, key);
+            if (extraMs !== null && extraMs > newestMs) newestMs = extraMs;
+          }
+          if (fileSet.has(`${name}.closed.json`)) {
+            const closeMs = verifiedCloseAtMs(seatHeld, name, context, key);
+            if (closeMs !== null && closeMs > newestMs) newestMs = closeMs;
+          }
+          if (newestMs > cutoff) {
+            stayed += 1;
+            continue;
+          }
+
+          const familyFiles: string[] = [
+            name,
+            ...PRE_RECEIPT_SUFFIXES.map((suffix) => `${name}${suffix}`).filter((f) => fileSet.has(f)),
+            ...RECEIPT_SUFFIXES.map((suffix) => `${name}${suffix}`).filter((f) => fileSet.has(f)),
+          ];
+          candidates.push({ session, seat, id: name, seatHeld, files: familyFiles, newestMs });
+        }
+      }
+    }
+
+    if (candidates.length === 0) return snapshot();
+
+    candidates.sort((a, b) =>
+      a.newestMs - b.newestMs ||
+      a.session.localeCompare(b.session) ||
+      a.seat.localeCompare(b.seat) ||
+      a.id.localeCompare(b.id),
+    );
+
+    const steadyLimit = input.limit ?? DROP_ARCHIVE_PASS_LIMIT;
+    const backlogAbove = input.backlogAbove ?? DAEMON_BACKLOG_DEFAULTS.above;
+    const backlogLimit = input.backlogLimit ?? DAEMON_BACKLOG_DEFAULTS.limit;
+    const passLimit = candidates.length > backlogAbove ? Math.max(steadyLimit, backlogLimit) : steadyLimit;
+    const selected = candidates.slice(0, passLimit);
+
+    // Phase 2: Open and hold destination archive directories (`O_RDONLY | O_DIRECTORY | O_NOFOLLOW`)
+    // and hash every source file before moving anything.
+    const openedDateDir = openSubdirChain(sendDropsHeld, [DROP_ARCHIVE_DIR, date], true, openedFds);
+    if (!openedDateDir.ok) return fail(openedDateDir.reason);
+    archiveDateHeld = openedDateDir.dir;
+
+    const destHeldBySeat = new Map<string, HeldDir>();
+    for (const item of selected) {
+      const seatKey = `${item.session}/${item.seat}`;
+      if (destHeldBySeat.has(seatKey)) continue;
+      const absDest = join(sendDropsDir, DROP_ARCHIVE_DIR, date, item.session, item.seat);
+      if (!insideSendDrops(sendDropsDir, absDest)) {
+        return fail(`${absDest}: destination escapes send-drops`);
+      }
+      const openedDest = openSubdirChain(
+        sendDropsHeld,
+        [DROP_ARCHIVE_DIR, date, item.session, item.seat],
+        true,
+        openedFds,
+      );
+      if (!openedDest.ok) return fail(openedDest.reason);
+      destHeldBySeat.set(seatKey, openedDest.dir);
+    }
+
+    type PreparedFamily = {
+      candidate: CandidateFamily;
+      destHeld: HeldDir;
+      hashed: { name: string; digest: string; bytes: number }[];
+    };
+    const prepared: PreparedFamily[] = [];
+
+    for (const item of selected) {
+      yield;
+      const destHeld = destHeldBySeat.get(`${item.session}/${item.seat}`)!;
+      for (const file of item.files) {
+        const destPath = join(destHeld.path, file);
+        const existing = heldAt(destPath);
+        if (existing.kind === 'link') {
+          return fail(`${destPath}: a symbolic link was found and not followed`);
+        }
+        if (existing.kind !== 'missing') {
+          return fail(`${destPath}: destination already holds ${file}`);
+        }
+      }
+      const hashed: { name: string; digest: string; bytes: number }[] = [];
+      for (const file of item.files) {
+        try {
+          const data = readRegularNoFollowInDir(item.seatHeld, file);
+          hashed.push({
+            name: file,
+            digest: createHash('sha256').update(data).digest('hex'),
+            bytes: data.byteLength,
+          });
+        } catch (error) {
+          return fail(error instanceof Error ? error.message : String(error));
+        }
+      }
+      prepared.push({ candidate: item, destHeld, hashed });
+    }
+
+    // Phase 3: Move each family relative to the held `seatHeld.fd` and `destHeld.fd` descriptors
+    // (record and non-receipt sidecars first, receipts last). If the pass stops at a slice boundary
+    // or fails on a later family, `finalizeMoved()` in `finally` updates `.unread.json` and writes
+    // the signed manifest for every family that completed its move.
+    for (const item of prepared) {
+      yield;
+      const { candidate, destHeld, hashed } = item;
+      const movedFiles: MovedFile[] = [];
+      const movedNames: string[] = [];
+      let familyFailed: string | null = null;
+      for (const file of hashed) {
+        const source = join(candidate.seatHeld.path, file.name);
+        const dest = join(destHeld.path, file.name);
+        if (!insideSendDrops(sendDropsDir, source) || !insideSendDrops(sendDropsDir, dest)) {
+          familyFailed = 'archive move path escapes send-drops';
+          break;
+        }
+        const moveRes = moveFileBetweenHeldDirs(
+          sendDropsHeld,
+          candidate.seatHeld,
+          destHeld,
+          file.name,
+          root,
+        );
+        if (!moveRes.ok) {
+          familyFailed = moveRes.reason;
+          break;
+        }
+        movedNames.push(file.name);
+        movedFiles.push({
+          digest: file.digest,
+          bytes: file.bytes,
+          source: relative(root, source).split(sep).join('/'),
+          dest: relative(root, dest).split(sep).join('/'),
+        });
+      }
+      if (familyFailed !== null) {
+        for (let i = movedNames.length - 1; i >= 0; i -= 1) {
+          undoMovedFile(destHeld, candidate.seatHeld, movedNames[i]!);
+        }
+        refused = familyFailed;
+        break;
+      }
+      movedRecords.push({ srcHeld: candidate.seatHeld, destHeld, files: movedNames });
+      archived.push({
+        session: candidate.session,
+        seat: candidate.seat,
+        id: candidate.id,
+        files: movedFiles,
+      });
+      let seatEntry = archivedBySeatDir.get(candidate.seatHeld.path);
+      if (seatEntry === undefined) {
+        seatEntry = { seatHeld: candidate.seatHeld, ids: new Set<string>() };
+        archivedBySeatDir.set(candidate.seatHeld.path, seatEntry);
+      }
+      seatEntry.ids.add(candidate.id);
+      snapshot();
+    }
+
+    finalizeMoved();
+    return snapshot();
+  } finally {
+    finalizeMoved();
+    for (let i = openedFds.length - 1; i >= 0; i -= 1) {
+      try {
+        closeSync(openedFds[i]!);
+      } catch {}
+    }
+  }
 }
 
 /**
  * Runs the drop-archive pass a slice at a time under `input.slices`, yielding to the chores
  * child's event loop whenever `sliceMs` elapses. Stops cleanly at the next slice boundary when
- * `slices.stopping()` is true.
+ * `slices.stopping()` is true, writing the manifest and reporting any families already moved.
  */
 export async function retireDropsSliced(
   input: DropRetirementInput & { slices: SweepSlices; sliceClock?: () => number },
 ): Promise<DropRetirementReport> {
   const clock = input.sliceClock ?? Date.now;
-  const steps = dropRetirementSteps(input);
+  const stateSink: { report: DropRetirementReport } = {
+    report: {
+      at: input.at.toISOString(),
+      archived: [],
+      manifestPath: null,
+      scanned: 0,
+      stayed: 0,
+      refused: null,
+    },
+  };
+  const steps = dropRetirementSteps(input, stateSink);
   let sliceStart = clock();
   let step = steps.next();
   while (!step.done) {
     if (clock() - sliceStart >= input.slices.sliceMs) {
       const more = await input.slices.yield();
       if (!more || input.slices.stopping()) {
-        steps.return({
-          at: input.at.toISOString(),
-          archived: [],
-          manifestPath: null,
-          scanned: 0,
-          stayed: 0,
-          refused: null,
-        });
-        return {
-          at: input.at.toISOString(),
-          archived: [],
-          manifestPath: null,
-          scanned: 0,
-          stayed: 0,
-          refused: null,
-        };
+        steps.return(stateSink.report);
+        return stateSink.report;
       }
       sliceStart = clock();
     }

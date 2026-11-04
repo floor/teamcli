@@ -308,6 +308,156 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     expect(existsSync(livePath('worker', FALLBACK_ID))).toBe(true);
     expect(existsSync(livePath('worker', RECENT_ID))).toBe(true);
   });
+
+  test('age uses signed at only, never mtime (same-user utimes cannot retire a fresh read or hold back an old read)', async () => {
+    // 1. Sent 35d ago, read today (fresh read), but same-user utimes backdates both files to 35d ago -> must stay.
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, NOW_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    // 2. Sent 35d ago and read 35d ago, but same-user utimes sets both files' mtime to NOW -> must retire.
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, NOW);
+
+    const report = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+
+    expect(report.refused).toBeNull();
+    expect(report.archived.map((f) => f.id)).toEqual([READ_ID_2]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_2))).toBe(true);
+  });
+
+  test('a pass that stops or fails mid-way writes a signed manifest and reports every family that left the live folder', async () => {
+    // Scene A: pass stops mid-way after moving READ_ID_1 and before moving READ_ID_2.
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    plant('worker', UNREAD_ID, OLD_ISO);
+
+    const unreadPath = livePath('worker', '.unread.json');
+    writeFileSync(
+      unreadPath,
+      `${JSON.stringify(
+        {
+          v: 1,
+          unread: {
+            lead: {
+              entries: [
+                { id: UNREAD_ID, at: OLD_ISO },
+                { id: READ_ID_1, at: OLD_ISO },
+                { id: READ_ID_2, at: OLD_ISO },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+
+    let tickA = 0;
+    let stopNow = false;
+    const stopReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      sliceClock: () => {
+        tickA += 10;
+        return tickA;
+      },
+      slices: {
+        sliceMs: 5,
+        stopping: () => stopNow,
+        yield: async () => {
+          // Stop as soon as READ_ID_1 has been moved into the archive folder, before READ_ID_2 moves.
+          if (existsSync(join(archiveSeatDir('worker'), READ_ID_1))) {
+            stopNow = true;
+            return false;
+          }
+          return true;
+        },
+      },
+    });
+
+    expect(stopReport.refused).toBeNull();
+    expect(stopReport.archived.map((f) => f.id)).toEqual([READ_ID_1]);
+    expect(stopReport.manifestPath).not.toBeNull();
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_2))).toBe(false);
+
+    const stopManifest = verifyDropArchive(
+      JSON.parse(readFileSync(stopReport.manifestPath!, 'utf8')) as unknown,
+      messageKeyOf(home),
+    );
+    expect(stopManifest).not.toBeNull();
+    expect(stopManifest?.families.map((f) => f.id)).toEqual([READ_ID_1]);
+
+    const hintAfterStop = JSON.parse(readFileSync(unreadPath, 'utf8')) as {
+      unread: Record<string, { entries: { id: string; at: string }[] }>;
+    };
+    expect(hintAfterStop.unread.lead?.entries.map((e) => e.id)).toEqual([UNREAD_ID, READ_ID_2]);
+
+    // Scene B: pass fails on a later family (READ_ID_3 fails on its receipt rename after READ_ID_2 moved).
+    const readId3 = '11111111-2222-4333-8444-555555555553';
+    plant('worker', readId3, OLD_ISO);
+    markRead('worker', readId3, OLD_ISO);
+
+    let tickB = 0;
+    let injectedFault = false;
+    const errorReport = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      sliceClock: () => {
+        tickB += 10;
+        return tickB;
+      },
+      slices: {
+        sliceMs: 5,
+        stopping: () => false,
+        yield: async () => {
+          // Once READ_ID_2 has moved into the archive folder, plant a colliding file at
+          // readId3's receipt destination so readId3 fails mid-family after moving its record.
+          if (!injectedFault && existsSync(join(archiveSeatDir('worker'), READ_ID_2))) {
+            injectedFault = true;
+            writeFileSync(join(archiveSeatDir('worker'), `${readId3}.read.json`), 'collision\n');
+          }
+          return true;
+        },
+      },
+    });
+
+    expect(errorReport.refused).toContain(`${readId3}.read.json`);
+    // READ_ID_2 completed its move and is covered by both the report and the signed manifest.
+    expect(errorReport.archived.map((f) => f.id)).toEqual([READ_ID_2]);
+    expect(errorReport.manifestPath).not.toBeNull();
+    const errorManifest = verifyDropArchive(
+      JSON.parse(readFileSync(errorReport.manifestPath!, 'utf8')) as unknown,
+      messageKeyOf(home),
+    );
+    expect(errorManifest).not.toBeNull();
+    expect(errorManifest?.families.map((f) => f.id)).toEqual([READ_ID_2]);
+
+    // readId3's partial move (its record file) was rolled back to the live folder.
+    expect(existsSync(livePath('worker', readId3))).toBe(true);
+    expect(existsSync(livePath('worker', `${readId3}.read.json`))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), readId3))).toBe(false);
+  });
 });
 
 describe('condition 2: never follow a link, never leave send-drops, and refuse whole pass on unexpected file types', () => {
@@ -392,6 +542,85 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(report2.refused).toContain('unexpected');
     expect(report2.archived).toEqual([]);
     expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+  });
+
+  test('refuses check-then-rename race when archive destination or manifest parent is swapped for a symlink mid-pass', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+
+    const outsideDir = join(base, 'outside-race');
+    mkdirSync(outsideDir, { recursive: true });
+
+    // Race 1: After Phase 2 creates `.archive/<DATE>/acme/worker` and before Phase 3 moves READ_ID_1,
+    // swap `.archive/<DATE>/acme/worker` for a symlink pointing to `outsideDir`.
+    const destSeatDir = archiveSeatDir('worker');
+    let tick1 = 0;
+    let swappedSeatDir = false;
+    const raceReport1 = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      sliceClock: () => {
+        tick1 += 10;
+        return tick1;
+      },
+      slices: {
+        sliceMs: 5,
+        stopping: () => false,
+        yield: async () => {
+          if (!swappedSeatDir && existsSync(destSeatDir)) {
+            swappedSeatDir = true;
+            rmSync(destSeatDir, { recursive: true, force: true });
+            symlinkSync(outsideDir, destSeatDir);
+          }
+          return true;
+        },
+      },
+    });
+
+    expect(raceReport1.refused).toContain('symbolic link');
+    expect(raceReport1.archived).toEqual([]);
+    expect(raceReport1.manifestPath).toBeNull();
+    expect(readdirSync(outsideDir)).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+
+    // Clean up `.archive` and test Race 2: swap `.archive/<DATE>` for a symlink after Phase 2's
+    // directory check so the manifest parent path points outside `send-drops`.
+    rmSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR), { recursive: true, force: true });
+    const archiveDateDir = join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR, DATE);
+    let tick2 = 0;
+    let swappedDateDir = false;
+    const raceReport2 = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      sliceClock: () => {
+        tick2 += 10;
+        return tick2;
+      },
+      slices: {
+        sliceMs: 5,
+        stopping: () => false,
+        yield: async () => {
+          if (!swappedDateDir && existsSync(destSeatDir)) {
+            swappedDateDir = true;
+            rmSync(archiveDateDir, { recursive: true, force: true });
+            symlinkSync(outsideDir, archiveDateDir);
+          }
+          return true;
+        },
+      },
+    });
+
+    expect(raceReport2.refused).toContain('symbolic link');
+    expect(raceReport2.archived).toEqual([]);
+    expect(raceReport2.manifestPath).toBeNull();
+    expect(readdirSync(outsideDir)).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
   });
 });
 
