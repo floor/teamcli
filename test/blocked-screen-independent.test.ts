@@ -2,7 +2,8 @@
 // A rate limit or a provider error writes no lead report, and a later idle screen still types.
 // An unknown screen records delivered-but-blocked with via lead-report. A failed history write
 // leaves no blocked claim and the 2N report says queued, not woken. A failed event append after
-// a good history write keeps that line for reconcile, and a retry within 2N speaks once.
+// a good history write keeps the history, the drop and the marker; the next pass appends
+// seat.blocked once, and a concurrent history line survives.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
@@ -29,6 +30,7 @@ const NOW = new Date('2026-11-04T15:00:00.000Z');
 const N = 600;
 const MIN = 60_000;
 const UNREAD = '019a4f61-4000-7000-8000-000000000001';
+const OTHER = '019a4f61-4000-7000-8000-000000000002';
 const SURVEY = ['● Done.', '', "How's the CLI experience so far? [1] Good [2] Fine [3] Bad [0] Skip"].join('\n');
 const IDLE = readFileSync(new URL('./fixtures/antigravity/1.4.2/idle.txt', import.meta.url), 'utf8');
 const RATE_LIMIT = (() => {
@@ -277,32 +279,85 @@ describe('blocked screen tells the lead', () => {
     expect(atReport.ok && atReport.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
   });
 
-  test('a failed event append after a good history write leaves the history line, and reconcile raises message.delivered', async () => {
+  test('a failed event append keeps the history, the drop and the marker, and the next pass appends seat.blocked once', async () => {
     const { made, team } = world('antigravity');
-    seed(made, 'from the owner\n\nhistory then event fails', 11);
-    const wrote = appendHistory('acme', made.root, made.home, {
-      ts: NOW.toISOString(),
-      from: 'owner',
-      to: 'helper',
-      body: 'from the owner\n\nhistory then event fails',
-      id: UNREAD,
-      thread: UNREAD,
-      outcome: 'delivered-but-blocked',
-      via: 'lead-report',
-    });
-    expect(wrote.ok).toBe(true);
+    const dropDir = seed(made, 'from the owner\n\nevent fails after history', 11);
     const eventsPath = join(storePath('acme', made.root, made.home), 'events.jsonl');
-    mkdirSync(eventsPath);
+    mkdirSync(eventsPath, { recursive: true });
+    let injected = false;
+    let projectReads = 0;
+    const watched = new Proxy(team.team, {
+      get(target, prop, receiver) {
+        if (prop === 'project') {
+          projectReads += 1;
+          if (!injected && projectReads >= 3) {
+            injected = true;
+            appendHistory('acme', made.root, made.home, {
+              ts: NOW.toISOString(),
+              from: 'owner',
+              to: 'helper',
+              body: 'a line another writer appended during the pass',
+              id: OTHER,
+              thread: OTHER,
+              outcome: 'delivered (typed wake)',
+              via: 'typed',
+            });
+          }
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const one = pane(SURVEY, 'done');
     const said: string[] = [];
-    await wakeUnreadDrops(scene(made, team, said, typedSources(pane(SURVEY, 'done'), []), NOW, 'done'), { unreadAfter: N });
-    expect(said).toEqual([]);
+    const sources = typedSources(one, []);
+    await wakeUnreadDrops(scene(made, { ok: true, team: watched }, said, sources, NOW, 'done'), { unreadAfter: N });
+    expect(injected).toBe(true);
+    expect(said).toHaveLength(1);
+
     const history = readHistory('acme', made.root, made.home);
-    expect(history.ok && history.entries).toHaveLength(1);
-    if (history.ok) expect(history.entries[0]).toMatchObject({ id: UNREAD, outcome: 'delivered-but-blocked', via: 'lead-report' });
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      const ids = history.entries.map((entry) => entry.id).sort();
+      expect(ids).toEqual([OTHER, UNREAD].sort());
+      expect(history.entries.find((entry) => entry.id === UNREAD)).toMatchObject({
+        outcome: 'delivered-but-blocked',
+        via: 'lead-report',
+      });
+    }
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+    expect(leadBody(made.dir)).toContain('delivered-but-blocked');
     rmdirSync(eventsPath);
     const blocked = readEvents('acme', made.root, made.home);
     expect(blocked.ok).toBe(true);
     if (blocked.ok) expect(blocked.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
+
+    const next: string[] = [];
+    await wakeUnreadDrops(
+      scene(made, team, next, sources, new Date(NOW.getTime() + 4 * MIN), 'done'),
+      { unreadAfter: N },
+    );
+    expect(next).toEqual([]);
+    const caughtUp = readEvents('acme', made.root, made.home);
+    expect(caughtUp.ok).toBe(true);
+    if (caughtUp.ok) {
+      const blockedEvents = caughtUp.events.filter((event) => event.payload.kind === 'seat.blocked');
+      expect(blockedEvents).toHaveLength(1);
+      expect(blockedEvents[0]?.payload.record_id).toBe(`unread-blocked:${UNREAD}`);
+    }
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('delivered-but-blocked');
+
+    await wakeUnreadDrops(
+      scene(made, team, next, sources, new Date(NOW.getTime() + 5 * MIN), 'done'),
+      { unreadAfter: N },
+    );
+    const again = readEvents('acme', made.root, made.home);
+    expect(again.ok).toBe(true);
+    if (again.ok) expect(again.events.filter((event) => event.payload.kind === 'seat.blocked')).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(next).toEqual([]);
+    const kept = readHistory('acme', made.root, made.home);
+    expect(kept.ok && kept.entries.map((entry) => entry.id).sort()).toEqual([OTHER, UNREAD].sort());
 
     reconcilePass({ project: 'acme', root: made.root, home: made.home, session: 'acme', now: NOW });
     const reconciled = readEvents('acme', made.root, made.home);
@@ -312,50 +367,7 @@ describe('blocked screen tells the lead', () => {
         (event) => event.payload.kind === 'message.delivered' && event.payload.record_id === `${UNREAD}:delivered`,
       );
       expect(delivered).toHaveLength(1);
-      expect(delivered[0]?.payload).toMatchObject({
-        kind: 'message.delivered',
-        outcome: 'delivered-but-blocked',
-        via: 'lead-report',
-      });
+      expect(delivered[0]?.payload).toMatchObject({ outcome: 'delivered-but-blocked', via: 'lead-report' });
     }
-  });
-
-  test('a failed event append leaves no drop, and the retry speaks the scene once', async () => {
-    const { made, team } = world('antigravity');
-    const dropDir = seed(made, 'from the owner\n\nevent fails', 11);
-    const eventStore = storePath('acme', made.root, made.home);
-    mkdirSync(eventStore, { recursive: true });
-    const eventsPath = join(eventStore, 'events.jsonl');
-    mkdirSync(eventsPath);
-    const one = pane(SURVEY, 'done');
-    const said: string[] = [];
-    const sources = typedSources(one, []);
-    await wakeUnreadDrops(scene(made, team, said, sources, NOW, 'done'), { unreadAfter: N });
-    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
-    expect(said).toEqual([]);
-    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    expect(existsSync(leadDir) ? readdirSync(leadDir) : []).toEqual([]);
-    const historyBefore = readHistory('acme', made.root, made.home);
-    expect(historyBefore.ok && historyBefore.entries).toEqual([]);
-    rmdirSync(eventsPath);
-    const blocked = readEvents('acme', made.root, made.home);
-    expect(blocked.ok).toBe(true);
-    if (blocked.ok) expect(blocked.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
-    const retry: string[] = [];
-    await wakeUnreadDrops(
-      scene(made, team, retry, sources, new Date(NOW.getTime() + 4 * MIN), 'done'),
-      { unreadAfter: N },
-    );
-    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
-    expect(retry).toHaveLength(1);
-    expect(retry[0]).toContain('delivered-but-blocked');
-    await wakeUnreadDrops(
-      scene(made, team, retry, sources, new Date(NOW.getTime() + 5 * MIN), 'done'),
-      { unreadAfter: N },
-    );
-    expect(retry).toHaveLength(1);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok && history.entries).toHaveLength(1);
-    if (history.ok) expect(history.entries[0]?.via).toBe('lead-report');
   });
 });
