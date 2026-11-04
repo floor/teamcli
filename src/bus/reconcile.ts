@@ -784,7 +784,12 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       const heldAgeMs = nowMs - Date.parse(entry.ts);
       const heldDue = !Number.isFinite(heldAgeMs) || heldAgeMs >= heldThresholdMs;
       const wanted = [`message.arrived\0${entry.id}`];
-      if (entry.outcome === 'delivered' || entry.outcome === 'delivered (late)' || entry.outcome === 'delivered (read)') {
+      if (
+        entry.outcome === 'delivered'
+        || entry.outcome === 'delivered (late)'
+        || entry.outcome === 'delivered (read)'
+        || entry.outcome === 'delivered-but-blocked'
+      ) {
         wanted.push(`message.delivered\0${entry.id}:delivered`);
       }
       if (entry.outcome === 'delivered (read)') wanted.push(`message.read\0${entry.id}:read`);
@@ -839,7 +844,11 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       const from = arrival.from;
       const to = arrival.to;
       raise(arrival);
-      if (entry.outcome === 'delivered' || entry.outcome === 'delivered (late)') {
+      if (
+        entry.outcome === 'delivered'
+        || entry.outcome === 'delivered (late)'
+        || entry.outcome === 'delivered-but-blocked'
+      ) {
         raise({
           ts: entry.ts,
           kind: 'message.delivered',
@@ -848,6 +857,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
           ...(from !== undefined ? { from } : {}),
           ...(to !== undefined ? { to } : {}),
           ...(entry.via !== undefined ? { via: entry.via } : {}),
+          ...(entry.outcome === 'delivered-but-blocked' ? { outcome: 'delivered-but-blocked' } : {}),
         });
       } else if (entry.outcome === 'delivered (read)') {
         raise({
