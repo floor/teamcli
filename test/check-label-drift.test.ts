@@ -87,6 +87,16 @@ function check(root: string, home: string, session: Live): { code: number; out: 
     standing: (at) => approvalStanding(at, home),
     now: () => NOW,
     home,
+    sidebar: {
+      paneDisplays: (_s, workspace) =>
+        session.agents
+          .filter((agent) => agent.workspace === workspace)
+          .map((agent) => ({
+            pane: agent.pane,
+            workspace: agent.workspace,
+            ...(agent.displayAgent === undefined ? {} : { displayAgent: agent.displayAgent }),
+          })),
+    },
   });
   return { code, out: `${io.out}${io.err}` };
 }
@@ -126,12 +136,12 @@ describe('the sidebar the file is entitled to', () => {
     rmSync(base, { recursive: true, force: true });
   });
 
-  test('a pane herdr holds no display for is not drift', () => {
+  test('a running seat whose pane holds no display is named as missing or expired', () => {
     const { base, root, home } = place();
-    // Many panes never had a display reported, and the file does not require one: only a line
-    // something else wrote is a difference.
-    const { out } = check(root, home, live(TITLE, undefined));
-    expect(out).not.toContain('its herdr display');
+    const { code, out } = check(root, home, live(TITLE, undefined));
+    expect(out).toContain(`difference: lead: its sidebar display line is missing or expired; the file's line is "${DISPLAY}"`);
+    expect(out).toContain('  repair: team register lead');
+    expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
   });
 

@@ -119,8 +119,18 @@ import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
 import { busProblemNotes } from '../bus/notes.ts';
 import { pingpongLegDifferences } from './pingpong-legs.ts';
+import {
+  EMPTY_SIDEBAR_REPAIR,
+  readSeatPaneDisplays,
+  realSidebarCheckSources,
+  repairSidebarLayout,
+  sidebarLayoutDifferences,
+  type CheckSidebarSources,
+} from './sidebar.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
+
+export type { CheckSidebarSources };
 
 /** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
 export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
@@ -162,6 +172,8 @@ export type CheckSources = {
    *  own live app-server on its planned flags; absent in scenes that do not stand one in so no
    *  test reads this machine's process table. */
   codexEndpoint?: CodexEndpointCheckSources;
+  /** The sidebar layout, per-session reload, and pane display reads/writes; adapter defaults when absent. */
+  sidebar?: CheckSidebarSources;
 };
 
 export type CodexEndpointCheckSources = {
@@ -240,6 +252,7 @@ export const realCheckSources: CheckSources = {
     startOf: processStartOf,
     isSocket: isSocketFile,
   },
+  sidebar: realSidebarCheckSources,
 };
 
 /**
@@ -369,6 +382,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // ever guessed back into it.
   let stale = staleState(team, session, whole);
   const repaired: string[] = [];
+  let sidebarRepair = EMPTY_SIDEBAR_REPAIR;
+  const repairedDisplayPanes = new Set<string>();
   if (args.repair === true) {
     // The owner's one repair, in the order the readings below depend on: the state's leftovers
     // first, then the registration an agent wrote under dev mode, then the two sidebar lines. Each
@@ -385,22 +400,43 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       stale = staleState(team, session, whole);
     }
     named(reRecordMarked(team, root, sources.home));
+    sidebarRepair = repairSidebarLayout({
+      home: sources.home,
+      root,
+      team,
+      session,
+      now: sources.now(),
+      sidebar: sources.sidebar,
+      io,
+    });
+    if (sidebarRepair.repaired.length > 0) named(sidebarRepair.repaired);
     // The file is the truth for both sidebar lines: a drifted one is set back from it, through
     // the same two writes `team register <seat>` makes. The live session is read again after the
     // writes, so the comparison below reads the sidebar the repair left; a session herdr no
     // longer answers keeps the first read, and its rows stand.
     const after = whole.sessions[session] ?? emptySession();
-    const drifts = labelDrifts(team, after, live);
+    const prePaneDisplays = readSeatPaneDisplays(session, team, after, live, sources.sidebar, sources.home);
+    const drifts = labelDrifts(team, after, live, prePaneDisplays);
     if (drifts.length > 0) {
       const sidebarTtlMs =
         sources.home === undefined
           ? SIDEBAR_TTL_CAP_MS
           : sidebarPolicy({ home: sources.home, root, team, now: sources.now() }).ttlMs;
-      named(syncLabels(drifts, session, sources, io, sidebarTtlMs));
+      named(syncLabels(drifts, session, sources, io, sidebarTtlMs, repairedDisplayPanes));
       live = sources.live(session, team, after) ?? live;
     }
   }
   const state = whole.sessions[session] ?? emptySession();
+  const paneDisplays = readSeatPaneDisplays(session, team, state, live, sources.sidebar, sources.home);
+  const sidebarChecked = sidebarLayoutDifferences({
+    home: sources.home,
+    root,
+    team,
+    session,
+    now: sources.now(),
+    sidebar: sources.sidebar,
+    repairState: sidebarRepair,
+  });
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
@@ -487,7 +523,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...provenance.differences,
     ...liftCardDriftDifferences(sources.home, root, quiet, sources.now()),
     ...attention.differences,
-    ...labelDifferences(team, state, live),
+    ...labelDifferences(team, state, live, paneDisplays, repairedDisplayPanes),
+    ...sidebarChecked.differences,
     ...featureDifferences(team, state),
     ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
     ...rosterDifferences(team, state, live, root, sources.home),
@@ -657,6 +694,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
     for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
+    if (sidebarChecked.tomlBlock !== null) io.stdout(`${sidebarChecked.tomlBlock}\n`);
     // One line, once, after the per-seat lines: this build's brief is ahead of a seat's claim,
     // and the rollout is the repair that delivers it to every live seat. The exit stays as it is.
     if (briefs.stale) io.stdout(`${ROLLOUT_HINT}\n`);
@@ -1445,7 +1483,7 @@ type LabelDrift = {
   seat: Seat;
   pane: string;
   workspace?: { id: string; title: string };
-  display?: { line: string };
+  display?: { kind: 'drift'; line: string } | { kind: 'missing' };
 };
 
 /**
@@ -1456,20 +1494,45 @@ type LabelDrift = {
  * and an effort word read from a screen, so a line the observation explains is left alone. One
  * pane per seat, the one this project's state records — the same read the attention report makes.
  */
-function labelDrifts(team: TeamFile, state: SessionState, live: Live): LabelDrift[] {
+function labelDrifts(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  paneDisplays: ReadonlyMap<string, string | undefined> | null = null,
+  repairedDisplayPanes?: ReadonlySet<string>,
+): LabelDrift[] {
   const out: LabelDrift[] = [];
   for (const seat of team.seats) {
+    if (seat.stopped) continue;
     const recorded = state.seats[seat.name]?.pane;
     if (recorded === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
-    if (!agent || agent.pane !== recorded) continue;
-    const title = live.workspaces.find((workspace) => workspace.id === agent.workspace)?.label;
+    const agentOnPane = agent !== undefined && agent.pane === recorded;
+    const paneListed = paneDisplays !== null && paneDisplays.has(recorded);
+    if (!agentOnPane && !paneListed) continue;
+    const workspaceId = agentOnPane ? agent.workspace : state.seats[seat.name]?.workspace;
+    const title = workspaceId === undefined
+      ? undefined
+      : live.workspaces.find((workspace) => workspace.id === workspaceId)?.label;
     const drift: LabelDrift = { seat, pane: recorded };
-    if (title !== undefined && title !== workspaceLabel(seat)) drift.workspace = { id: agent.workspace, title };
-    const line = agent.displayAgent;
-    // A pane herdr holds no display for is not drift: many panes never had one reported, and the
-    // file does not say a pane must carry one. Only a line something else wrote is named.
-    if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) drift.display = { line };
+    if (workspaceId !== undefined && title !== undefined && title !== workspaceLabel(seat)) {
+      drift.workspace = { id: workspaceId, title };
+    }
+    if (paneDisplays !== null) {
+      const line = repairedDisplayPanes?.has(recorded)
+        ? displayAgent(seat)
+        : (paneListed ? paneDisplays.get(recorded) : agent?.displayAgent);
+      if (line === undefined) {
+        drift.display = { kind: 'missing' };
+      } else if (!displayLineMatches(seat, line, live.screens[recorded])) {
+        drift.display = { kind: 'drift', line };
+      }
+    } else if (agentOnPane) {
+      const line = repairedDisplayPanes?.has(recorded) ? displayAgent(seat) : agent.displayAgent;
+      if (line !== undefined && !displayLineMatches(seat, line, live.screens[recorded])) {
+        drift.display = { kind: 'drift', line };
+      }
+    }
     if (drift.workspace !== undefined || drift.display !== undefined) out.push(drift);
   }
   return out;
@@ -1662,9 +1725,15 @@ function unmanagedCodexServerDifferences(
  * The drifts as differences, one per line: the repair is `team register <seat>`, which re-applies
  * both lines from the file without a relaunch.
  */
-function labelDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+function labelDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  paneDisplays: ReadonlyMap<string, string | undefined> | null = null,
+  repairedDisplayPanes?: ReadonlySet<string>,
+): Difference[] {
   const out: Difference[] = [];
-  for (const drift of labelDrifts(team, state, live)) {
+  for (const drift of labelDrifts(team, state, live, paneDisplays, repairedDisplayPanes)) {
     const name = drift.seat.name;
     if (drift.workspace !== undefined) {
       out.push({
@@ -1672,7 +1741,13 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
         repair: `team register ${name}`,
       });
     }
-    if (drift.display !== undefined) {
+    if (drift.display?.kind === 'missing') {
+      out.push({
+        what: `${name}: its sidebar display line is missing or expired; the file's line is "${displayAgent(drift.seat)}"`,
+        repair: `team register ${name}`,
+      });
+    }
+    if (drift.display?.kind === 'drift') {
       out.push({
         what: `${name}: its herdr display reads "${drift.display.line}", the file's line is "${displayAgent(drift.seat)}"`,
         repair: `team register ${name}`,
@@ -1694,6 +1769,7 @@ function syncLabels(
   sources: CheckSources,
   io: Io,
   ttlMs = SIDEBAR_TTL_CAP_MS,
+  repairedDisplayPanes?: Set<string>,
 ): string[] {
   const lines: string[] = [];
   const rename = sources.renameWorkspace ?? ((s: string, workspace: string, label: string) => workspaceRename(workspace, label, s));
@@ -1713,6 +1789,7 @@ function syncLabels(
     if (drift.display !== undefined) {
       const text = displayAgent(drift.seat);
       if (report(session, drift.pane, text, ttlMs)) {
+        repairedDisplayPanes?.add(drift.pane);
         lines.push(`${name}: its herdr display is set back to "${text}"`);
       } else {
         io.stdout(`${plainLine(name)}: its display was not reported\n`);
