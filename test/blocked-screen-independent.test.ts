@@ -1,18 +1,20 @@
 // Independent coverage of an unrecognised screen telling the lead once within 2N.
 // A rate limit or a provider error writes no lead report, and a later idle screen still types.
 // An unknown screen records delivered-but-blocked with via lead-report. A failed history write
-// still reports the message lost at 2N. A failed event append leaves no drop, and the retry speaks once.
+// leaves no blocked claim and the 2N report says queued, not woken. A failed event append after
+// a good history write keeps that line for reconcile, and a retry within 2N speaks once.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
+import { reconcilePass } from '../src/bus/reconcile.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
-import { readHistory } from '../src/send/history.ts';
+import { appendHistory, readHistory } from '../src/send/history.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { readRecord, signRecord } from '../src/send/record.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
@@ -257,6 +259,10 @@ describe('blocked screen tells the lead', () => {
     await wakeUnreadDrops(scene(made, team, said, sources, NOW, 'done'), { unreadAfter: N });
     expect(existsSync(wakePath(dropDir, UNREAD))).toBe(false);
     expect(said).toEqual([]);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(existsSync(leadDir) ? readdirSync(leadDir) : []).toEqual([]);
+    const failed = readEvents('acme', made.root, made.home);
+    expect(failed.ok && failed.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
 
     const reported: string[] = [];
     reportUnreadDrops(
@@ -267,6 +273,51 @@ describe('blocked screen tells the lead', () => {
     const owner = JSON.parse(readFileSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD}.json`), 'utf8')) as { payload: { body: string } };
     expect(owner.payload.body).toContain('queued, not woken - unread for 21 min');
     expect(owner.payload.body).not.toContain('delivered-but-blocked');
+    const atReport = readEvents('acme', made.root, made.home);
+    expect(atReport.ok && atReport.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
+  });
+
+  test('a failed event append after a good history write leaves the history line, and reconcile raises message.delivered', async () => {
+    const { made, team } = world('antigravity');
+    seed(made, 'from the owner\n\nhistory then event fails', 11);
+    const wrote = appendHistory('acme', made.root, made.home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'helper',
+      body: 'from the owner\n\nhistory then event fails',
+      id: UNREAD,
+      thread: UNREAD,
+      outcome: 'delivered-but-blocked',
+      via: 'lead-report',
+    });
+    expect(wrote.ok).toBe(true);
+    const eventsPath = join(storePath('acme', made.root, made.home), 'events.jsonl');
+    mkdirSync(eventsPath);
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(pane(SURVEY, 'done'), []), NOW, 'done'), { unreadAfter: N });
+    expect(said).toEqual([]);
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok && history.entries).toHaveLength(1);
+    if (history.ok) expect(history.entries[0]).toMatchObject({ id: UNREAD, outcome: 'delivered-but-blocked', via: 'lead-report' });
+    rmdirSync(eventsPath);
+    const blocked = readEvents('acme', made.root, made.home);
+    expect(blocked.ok).toBe(true);
+    if (blocked.ok) expect(blocked.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
+
+    reconcilePass({ project: 'acme', root: made.root, home: made.home, session: 'acme', now: NOW });
+    const reconciled = readEvents('acme', made.root, made.home);
+    expect(reconciled.ok).toBe(true);
+    if (reconciled.ok) {
+      const delivered = reconciled.events.filter(
+        (event) => event.payload.kind === 'message.delivered' && event.payload.record_id === `${UNREAD}:delivered`,
+      );
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]?.payload).toMatchObject({
+        kind: 'message.delivered',
+        outcome: 'delivered-but-blocked',
+        via: 'lead-report',
+      });
+    }
   });
 
   test('a failed event append leaves no drop, and the retry speaks the scene once', async () => {
@@ -284,8 +335,12 @@ describe('blocked screen tells the lead', () => {
     expect(said).toEqual([]);
     const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
     expect(existsSync(leadDir) ? readdirSync(leadDir) : []).toEqual([]);
-
+    const historyBefore = readHistory('acme', made.root, made.home);
+    expect(historyBefore.ok && historyBefore.entries).toEqual([]);
     rmdirSync(eventsPath);
+    const blocked = readEvents('acme', made.root, made.home);
+    expect(blocked.ok).toBe(true);
+    if (blocked.ok) expect(blocked.events.filter((event) => event.payload.kind === 'seat.blocked')).toEqual([]);
     const retry: string[] = [];
     await wakeUnreadDrops(
       scene(made, team, retry, sources, new Date(NOW.getTime() + 4 * MIN), 'done'),
@@ -294,6 +349,11 @@ describe('blocked screen tells the lead', () => {
     expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
     expect(retry).toHaveLength(1);
     expect(retry[0]).toContain('delivered-but-blocked');
+    await wakeUnreadDrops(
+      scene(made, team, retry, sources, new Date(NOW.getTime() + 5 * MIN), 'done'),
+      { unreadAfter: N },
+    );
+    expect(retry).toHaveLength(1);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok && history.entries).toHaveLength(1);
     if (history.ok) expect(history.entries[0]?.via).toBe('lead-report');
