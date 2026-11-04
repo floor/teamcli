@@ -4,7 +4,7 @@
 // state this launch wrote. The record is offered as a resume id only while both name the same
 // agent, seat, team, CLI and id: a record that does not is foreign or stale, and no resume is
 // offered from it. No CLI home, transcript, credential or session file is read here.
-import { readAllSessions, readStoreSessions } from '../sessions/registry.ts';
+import { readStoreSessions } from '../sessions/registry.ts';
 import type { SeatState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { findAgent, type Agent } from './agents.ts';
@@ -302,14 +302,10 @@ export function pinnedSeatSession(input: {
     }
   }
   const storeRead = readStoreSessions(storePath(input.project, input.root, input.home), input.home);
-  const matching = storeRead.ok ? storeRead.sessions.filter((one) => one.cli_session === sessionId) : [];
-  const allRead = matching.length > 0 ? null : readAllSessions(input.home);
-  const candidates =
-    matching.length > 0
-      ? matching
-      : allRead !== null && allRead.ok
-        ? allRead.sessions.filter((one) => one.cli_session === sessionId)
-        : [];
+  if (!storeRead.ok) {
+    return { kind: 'refused', why: storeRead.reason };
+  }
+  const candidates = storeRead.sessions.filter((one) => one.cli_session === sessionId);
   const own = candidates.filter(
     (one) =>
       one.team === input.project &&

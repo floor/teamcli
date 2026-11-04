@@ -16,6 +16,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { beginSession, endSession } from '../src/sessions/registry.ts';
+import { storePath } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
@@ -424,5 +425,58 @@ describe('team restart --resume <cli-session-id> (R4)', () => {
     ).toBe(1);
     expect(otherCli.err).toContain('ran codex, the seat now declares claude-code');
     expect(harness.closed).toEqual([]);
+  });
+
+  test('refuses a conversation recorded in another checkout of the same project, session, seat, and CLI, or when this checkout store cannot be read', async () => {
+    const fixture = makeFixture();
+    seedSeatWithSessions(fixture);
+    const workerSeat = fixture.team.seats.find((s) => s.name === 'worker')!;
+
+    const secondRoot = join(fixture.root, '..', 'acme-checkout-2');
+    mkdirSync(secondRoot, { recursive: true });
+    beginSession({
+      home: fixture.home,
+      root: secondRoot,
+      team: fixture.team,
+      session: 'acme',
+      seat: workerSeat,
+      pane: 'pane-second',
+      workspace: 'ws-second',
+      cli_session: 'sess-other-checkout',
+      now: EARLIER,
+    });
+
+    const harness = makeHarness(fixture);
+    const otherCheckout = testIo(fixture.root, leadCaller);
+    expect(
+      await runRestart(
+        ['worker', '--resume', 'sess-other-checkout', '--json'],
+        otherCheckout,
+        harness.sources,
+      ),
+    ).toBe(1);
+    expect(harness.closed).toEqual([]);
+    assertJsonErrorShape(otherCheckout.out, {
+      id: 'restart.not-ready',
+      messageContains: 'sess-other-checkout is not a recorded session of worker',
+    });
+
+    const storeSessionsFile = join(storePath('acme', fixture.root, fixture.home), 'sessions.jsonl');
+    discardFixtures([storeSessionsFile]);
+    mkdirSync(storeSessionsFile, { recursive: true });
+
+    const brokenStore = testIo(fixture.root, leadCaller);
+    expect(
+      await runRestart(
+        ['worker', '--resume', 'sess-other-checkout', '--json'],
+        brokenStore,
+        harness.sources,
+      ),
+    ).toBe(1);
+    expect(harness.closed).toEqual([]);
+    assertJsonErrorShape(brokenStore.out, {
+      id: 'restart.not-ready',
+      messageContains: 'the session registry path is a directory',
+    });
   });
 });
