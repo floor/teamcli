@@ -264,8 +264,14 @@ function ticketName(nowMs: number, waiterPid: number): string {
   return `${String(nowMs).padStart(15, '0')}-${waiterPid}-${randomBytes(4).toString('hex')}`;
 }
 
+/** The one shape `ticketName` writes. Only a name in this shape is a waiter: anything else in
+ *  the queue folder — a finder's droppings, an editor's file — is not counted, never pruned
+ *  and never served, so it cannot wedge the queue. Ignoring it cannot jump the queue either:
+ *  every real ticket still counts, in the same order. */
+const TICKET_NAME = /^[0-9]{15,}-([0-9]+)-[0-9a-f]{8}$/;
+
 function ticketWaiterPid(file: string): number | null {
-  const match = /^[0-9]+-([0-9]+)-/.exec(file);
+  const match = TICKET_NAME.exec(file);
   if (!match) return null;
   const pid = Number(match[1]);
   return Number.isInteger(pid) && pid > 0 ? pid : null;
@@ -278,14 +284,15 @@ function listTickets(home: string, name: string): string[] {
     // and prune outside the lock root. An unreadable queue reads as no queue.
     const stat = lstatSync(dir);
     if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
-    return readdirSync(dir).sort();
+    return readdirSync(dir).filter((file) => TICKET_NAME.test(file)).sort();
   } catch {
     return [];
   }
 }
 
-/** Removes tickets whose waiter process is gone, never `keep` (the caller's own). A ticket
- *  whose name carries no readable pid is left standing: unknown is live, never pruned. */
+/** Removes tickets whose waiter process is gone, never `keep` (the caller's own). Only real
+ *  tickets reach here (`listTickets` filters to the ticket shape), so a name with no readable
+ *  pid cannot occur; one is left standing anyway: unknown is live, never pruned. */
 function pruneTickets(input: TakeInput, keep: string | null): void {
   const alive = aliveOf(input);
   const dir = queueDirectory(input.home, input.name);

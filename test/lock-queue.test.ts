@@ -141,6 +141,28 @@ describe('the queue', () => {
     expect(tickets(home)).toEqual([]);
   });
 
+  test('a non-ticket file in the queue folder never wedges or counts', async () => {
+    // Pinned from review on 29713c1be: `.DS_Store` sorts before every ticket, and a listing
+    // that counts it as a live waiter ahead wedges the queue permanently.
+    const home = homeOf();
+    const clock: Clock = { at: AT };
+    const dir = queueDirectory(home, 'heavy-run');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '.DS_Store'), 'finder droppings');
+    writeFileSync(join(dir, 'notes.txt'), 'not a ticket either');
+
+    // The lock stands free: the take goes through at once, and the strays are left untouched.
+    expect(await runLock(['heavy-run'], testIo(base, { kind: 'owner' }), sources(home, A, clock))).toBe(0);
+    expect(readFileSync(join(dir, '.DS_Store'), 'utf8')).toBe('finder droppings');
+    expect(readFileSync(join(dir, 'notes.txt'), 'utf8')).toBe('not a ticket either');
+
+    // A refused take counts only real waiters: with none queued, the held line names no queue.
+    const io = testIo(base, { kind: 'seat', name: 'seat-b', pane: 'pane-2' });
+    expect(await runLock(['heavy-run'], io, sources(home, B, clock))).toBe(1);
+    expect(io.err).toContain('heavy-run: held since');
+    expect(io.err).not.toContain('waiting');
+  });
+
   test('a dead waiter ahead is pruned, and the next in line is served', async () => {
     const home = homeOf();
     const clock: Clock = { at: AT };
