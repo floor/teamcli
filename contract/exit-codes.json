@@ -3014,6 +3014,13 @@
     {
       "code": 1,
       "command": "messages",
+      "id": "messages.caller",
+      "meaning": "the caller is not placed as the owner or a seat of the team's session",
+      "trigger": "team messages"
+    },
+    {
+      "code": 1,
+      "command": "messages",
       "id": "messages.client-key",
       "meaning": "the client key is missing or unreadable, or the ack receipt could not be signed with it",
       "trigger": "team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"

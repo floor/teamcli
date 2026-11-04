@@ -1,21 +1,28 @@
 # team messages
 
-Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
-the checkout may run it. A send writes the message as one signed record into the recipient's
-folder, `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still
-waiting there, verifies its signature with this checkout's message key, publishes the signed read
-receipt (`<id>.read.json`) with an exclusive, no-clobber link, makes it durable, and prints the
-body. The receipt is the read-once gate every reader shares, so a record another reader already
-served is skipped, and a body is never printed without the receipt that proves it went out. A
-record that does not verify prints no body and writes nothing. A waiting general seat brief is not
-shown here: it belongs to the seat's own turn-start reader, and the run skips it and notes the seat
-(see below). An entry at a receipt name that
+Shows a message that is already waiting in the caller's mailbox and writes the receipt that says
+it was shown. A send writes the message as one signed record into the recipient's folder,
+`<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still waiting
+there, verifies its signature with this checkout's message key, publishes the signed read receipt
+(`<id>.read.json`) with an exclusive, no-clobber link, makes it durable, and prints the body. The
+receipt is the read-once gate every reader shares, so a record another reader already served is
+skipped, and a body is never printed without the receipt that proves it went out. A record that
+does not verify prints no body and writes nothing. A waiting general seat brief is not shown here:
+it belongs to the seat's own turn-start reader, and the run skips it and notes the seat (see below).
+An entry at a receipt name that
 does not verify is held rather than repaired, and shows no body. A message a previous build left
-in `.agents/messages/<seat>/` is read the same way and keeps its own print-then-write order. The
-owner's mailbox, `.agents/messages/owner/`, is read with the rest: the Runtime
+in `.agents/messages/<seat>/` is read the same way and keeps its own print-then-write order.
+
+A run serves one mailbox: the owner's, or the seat its caller is placed as in the team's session,
+by the same placement `team send` and `team ack` judge. The record stores are shared, so records
+addressed to other seats are still listed — one `waiting` row each, carrying the fields a key can
+verify and no body — but they are never shown and never receipted: the receipt is the read that
+spends an id, and only the addressed mailbox's own reader may spend it. A caller the placement
+cannot resolve reads nothing and publishes nothing. The owner's mailbox, `.agents/messages/owner/`,
+is the owner's own: the Runtime
 writes a signed record there for each event it delivers to the owner (see [the event log and the
-bus](../internal/events.md)), its `FROM` is `runtime`, and the run shows it and writes its receipt
-like any other waiting record.
+bus](../internal/events.md)), its `FROM` is `runtime`, and the owner's run shows it and writes its
+receipt like any other waiting record of that mailbox.
 
 A second form reads a client's own replies. `team messages --client <grant-file> --key <key-file>`
 presents the owner's client grant and the client's private key; the command builds and verifies a
@@ -47,9 +54,12 @@ the send-only vocabulary, and the read is refused with the owner's repair named.
 
 ## Who may run it
 
-Anyone in the checkout. The watch asks the recipient's pane to run it. The command shows every
-waiting message in the checkout, not only the caller's: a seat runs as the owner-user, and the
-mailbox is not a wall between seats.
+The owner, or a seat of the team's session, placed by the caller rules `team send` and `team ack`
+use. The run serves the caller's own mailbox, and the watch asks the recipient's pane to run it, so
+a seat reads only its own mail. A call the placement cannot resolve — a terminal it cannot walk to
+a seat, or a pane this session does not hold — reads nothing: no body, no receipt, exit 1. There
+is no checkout-wide view that spends mail: records for other mailboxes list as `waiting` rows,
+without their bodies and without receipts.
 
 The client form has no caller placement and reads no seat: the client id in the verified request
 decides which inbox is read, and the owner's grant and the client's own key are the whole
@@ -58,18 +68,25 @@ authority.
 ## Output and exit codes
 
 The reading opens with the context line (`team <project>, session "<session>"`) and the headed
-table `ID  FROM  TO  SENT  STATUS`, one row per waiting record; each verified body prints under
+table `ID  FROM  TO  SENT  STATUS`, one row per waiting record: the caller's mailbox's records as
+`shown` or `refused`, and every record addressed to another mailbox as `waiting`; each verified
+body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
 [`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
-and the signed record keeps the sender's registry id apart from it.
+and the signed record keeps the sender's registry id apart from it. A `waiting` row has no body
+and no receipt: it says the record is there for its own mailbox's reader. `--json` counts the rows
+as `messages`, the bodies shown as `shown`, the differences as `refused`, and the other mailboxes'
+rows as `waiting`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every waiting record was shown and receipted | the reading above, each verified row `shown`, its read receipt published and durable before its body is printed; a record another reader already served is skipped | 0 |
-| a general seat brief was waiting | no row and no body for it, no receipt; a note names the seat: `<seat>: the general seat brief is not shown here; the seat's own turn-start reader serves it.` | 0 |
+| every waiting record of the caller's mailbox was shown and receipted | the reading above, each verified row `shown`, its read receipt published and durable before its body is printed; a record another reader already served is skipped | 0 |
+| a record for another mailbox was waiting | one `waiting` row for it, no body and no receipt, and the note `1 message addressed to another mailbox is waiting; it is listed without its body, and no receipt is written for it.` (`2 messages … are waiting; they are listed without their bodies, and no receipts are written for them.` for more) | 0 |
+| a general seat brief of the caller's own mailbox was waiting | no row and no body for it, no receipt; a note names the seat: `<seat>: the general seat brief is not shown here; the seat's own turn-start reader serves it.` | 0 |
 | nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 messages` | 0 |
+| the caller is not the owner or a seat of the team's session | `team messages: only the owner or a seat of this session reads a mailbox; this call is <caller>` (under `--json`, the `messages.caller` envelope); nothing is listed and nothing is receipted | 1 |
 | a record did not verify, a read or replied receipt name is held by an entry that does not verify, the message key is missing or unreadable, or the team file can't be read | the record as a `refused` row with its `difference:` block (`repair:` names the file, `who: any seat`), or `team messages: no message key; nothing was shown` / `team messages: <team-file problem>` | 1 |
 | the invocation can't be read, or this folder is neither a checkout nor a team root | `team messages: <problem>`, with the usage for the invocation | 2 |
 
@@ -77,12 +94,14 @@ A record that does not verify prints no body and writes no receipt. A record who
 held by an entry that does not verify prints no body, and the entry is left as it is: it may
 record a read that already happened, so the run never deletes or rewrites it.
 
-A general seat brief is never shown here, because its read is bound to the seat's current claim and
-only the seat's own turn-start reader writes that receipt. The record is verified first — a brief
-that does not verify is still a refused row with its difference — and a verified one is skipped
-with no row, no body, no receipt and no claim or state read. One note names each seat it skipped:
+A general seat brief in the caller's own mailbox is never shown here, because its read is bound to
+the seat's current claim and only the seat's own turn-start reader writes that receipt. The record
+is verified first — a brief that does not verify is still a refused row with its difference — and
+a verified one is skipped with no row, no body, no receipt and no claim or state read. One note
+names each seat it skipped:
 `<seat>: the general seat brief is not shown here; the seat's own turn-start reader serves it.`
-The counts are unchanged: a skipped brief is neither `shown` nor `refused`.
+The counts are unchanged: a skipped brief is neither `shown` nor `refused`. A brief waiting for
+another mailbox is a plain `waiting` row, like any record that mailbox's reader has not served.
 
 The client reading has the same shape: the context line, the table, one heading and body under
 each verified reply, the notes and differences, the `ack:` line when `--ack` was given, and the

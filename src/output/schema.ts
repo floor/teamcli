@@ -1878,7 +1878,9 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
           to: { type: ['string', 'null'] },
           sent: { type: ['string', 'null'] },
           sent_display: { type: 'string', minLength: 1 },
-          status: { type: 'string', enum: ['shown', 'refused'] },
+          // `waiting`: a record addressed to another mailbox, listed read-only — no body, and
+          // no receipt published for it.
+          status: { type: 'string', enum: ['shown', 'refused', 'waiting'] },
           body: { type: 'string' },
         },
       },
@@ -1889,11 +1891,12 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
     counts: {
       type: 'object',
       additionalProperties: false,
-      required: ['messages', 'shown', 'refused'],
+      required: ['messages', 'shown', 'refused', 'waiting'],
       properties: {
         messages: { type: 'integer', minimum: 0 },
         shown: { type: 'integer', minimum: 0 },
         refused: { type: 'integer', minimum: 0 },
+        waiting: { type: 'integer', minimum: 0 },
       },
     },
   },

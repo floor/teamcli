@@ -4,6 +4,11 @@
 // with an exclusive link and flushed before the body, and a record another reader already served
 // is skipped. An entry at a receipt name that does not verify is held, never replaced.
 //
+// A run serves one mailbox: the owner's, or the seat its caller is placed as. Records for other
+// seats share the transport tree, and they are listed read-only — a `waiting` row, no body, no
+// receipt — because a receipt is the read that proves exposure, and only the addressed seat's
+// reader may spend its mail. A caller the placement cannot resolve reads nothing at all.
+//
 // A send of this version writes a signed record into the recipient's transport tree,
 // `<root>/.agents/send-drops/<session>/<seat>/<id>` (`src/send/record.ts`), and this command reads
 // it there. The older `.agents/messages/<seat>/<id>.json` store is still read, read-only, so a
@@ -12,9 +17,10 @@
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { describeCaller, judgeCallerIn, type Caller } from '../caller.ts';
 import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -67,6 +73,12 @@ Exits 0 when the inbox is read, 1 when the caller, team file, or message record 
 `;
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+
+/** The owner's mailbox folder, `.agents/messages/owner/`. It is spelled here rather than imported
+ *  from `src/bus/owner.ts`: that module imports this one for `messageFile`, so importing its
+ *  constant back would close a cycle. The Runtime writes the owner's signed records under this
+ *  name, and the owner's own call is the only reader it is scoped to. */
+const OWNER_MAILBOX = 'owner';
 
 /** The payload the older `.agents/messages` store holds. New sends write a signed record into
  *  the transport tree instead; this shape is read, never written. */
@@ -564,7 +576,7 @@ type MailboxRow = {
   to: string | null;
   sent: string | null;
   sent_display: string;
-  status: 'shown' | 'refused';
+  status: 'shown' | 'refused' | 'waiting';
 };
 
 /** The record's path as the caller reads it in the refusal's repair. */
@@ -573,6 +585,48 @@ function mailboxPath(candidate: Candidate): string {
     return `.agents/send-drops/${candidate.session ?? ''}/${candidate.seat}/${candidate.id}`;
   }
   return `.agents/messages/${candidate.seat}/${candidate.id}.json`;
+}
+
+/**
+ * The mailbox a placed caller reads. The owner reads the owner's mailbox; a seat reads the one
+ * named for it; every other placement — a no-terminal owner, an agentless pane, a caller the walk
+ * cannot place — names none, and the run refuses instead of guessing. The mailbox is a record
+ * folder's seat name, which is exactly what a send addressed, so one seat's read cannot spend
+ * another's record.
+ */
+export function mailboxOf(caller: Caller): string | null {
+  if (caller.kind === 'owner') return OWNER_MAILBOX;
+  if (caller.kind === 'seat') return caller.name;
+  return null;
+}
+
+/**
+ * The row one record waits under when it is addressed to another mailbox. It is read-only: the
+ * fields are the read-only verification's when a key is present and the record verifies, and null
+ * otherwise; `to` is the folder the record waits in. There is no body, no receipt, no difference
+ * and no event — the record belongs to the addressed mailbox's own reader, and this reading only
+ * says it is there.
+ */
+function waitingRow(candidate: Candidate, root: string, session: string, key: KeyObject | null, now: Date): MailboxRow {
+  const verified = key === null ? null : problemOf(candidate, root, session, key);
+  const fields = verified !== null && !('text' in verified) ? verified : null;
+  return {
+    id: candidate.id,
+    seat: candidate.seat,
+    from: fields?.from ?? null,
+    from_id: fields?.from_id ?? null,
+    to: candidate.seat,
+    sent: fields?.at ?? null,
+    sent_display: formatRelativeTime(fields?.at, now),
+    status: 'waiting',
+  };
+}
+
+/** The note a reading carries when records for other mailboxes are listed beside its own. */
+function otherMailboxNote(count: number): string {
+  return count === 1
+    ? '1 message addressed to another mailbox is waiting; it is listed without its body, and no receipt is written for it.'
+    : `${count} messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.`;
 }
 
 /** What an unverifying record's repair is, per failed check. It names the file the caller already
@@ -621,8 +675,10 @@ function bodyLines(body: string): string[] {
  * was. A record that does not verify prints no body and writes nothing; it is a `refused` row and
  * a difference, and the run exits 1. A record another reader already served is skipped silently.
  * An empty mailbox is a `0 messages` reading with the note that nothing is waiting, and creates
- * no key. Anyone in the checkout may run it: the ring asks the recipient's pane, and the receipt
- * records that a process was shown the body.
+ * no key. The run serves one mailbox: the owner's, or the seat the caller is placed as, and the
+ * receipt records that the addressed party's reader was shown the body. Records for other
+ * mailboxes are listed as `waiting` rows with no body and no receipt, and a caller the placement
+ * cannot resolve is refused before anything is listed.
  */
 export async function runMessages(argv: string[], io: Io, sources: MessagesSources = realSources): Promise<number> {
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -682,6 +738,22 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   }
   const root = loaded.root;
   const session = loaded.team.session;
+  // Who is reading: the owner's mailbox, or the seat this call is placed as in the team's own
+  // session, by the same placement `team send` and `team ack` judge. A caller that placement
+  // cannot resolve reads no mailbox — no body shown, no receipt published — so one seat's run
+  // can never spend another seat's mail.
+  const placed = judgeCallerIn(io, dirname(loaded.path), loaded.team).caller;
+  const mailbox = mailboxOf(placed);
+  if (mailbox === null) {
+    const why = `only the owner or a seat of this session reads a mailbox; this call is ${describeCaller(placed)}`;
+    if (json) {
+      writeJsonError(io, 'messages.caller', why, null);
+    } else {
+      io.stderr(`team messages: ${why}\n`);
+    }
+    // exit: messages.caller
+    return 1;
+  }
   // The table's FROM cell is the readable name the project's `sender_name` asks for; the row's
   // `from` stays the record's own value, which is what `--json` carries.
   const naming = namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team });
@@ -704,7 +776,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         notes: ['nothing is waiting'],
         differences: [],
         summary: summaryCounts([]),
-        counts: { messages: 0, shown: 0, refused: 0 },
+        counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
       });
     } else {
       io.stdout(renderMailbox(loaded.team.project, session, emptyRows, [], [], ['nothing is waiting'], ttyStyle(io), naming));
@@ -712,7 +784,12 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.none
     return 0;
   }
-  if (state.kind !== 'key') {
+  // Records for other mailboxes are listed read-only and need no key. Records for this call's
+  // own mailbox cannot be verified without one, so a keyless run with any of its own refuses
+  // before it lists anything, exactly as it did.
+  const own = waiting.filter((candidate) => candidate.seat === mailbox);
+  const otherCount = waiting.length - own.length;
+  if (state.kind !== 'key' && own.length > 0) {
     const why = state.kind === 'missing' ? 'no message key; nothing was shown' : `${state.why}; nothing was shown`;
     if (json) {
       writeJsonError(io, 'messages.key', why, null);
@@ -722,6 +799,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     // exit: messages.key
     return 1;
   }
+  const key = state.kind === 'key' ? state.key : null;
   const now = sources.now();
   const rows: MailboxRow[] = [];
   /** The body each shown row carries, keyed by the row itself: a refused or served candidate
@@ -735,7 +813,15 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   /** Seats whose waiting general seat brief this mailbox does not serve, in first-seen order. */
   const briefSeats: string[] = [];
   for (const candidate of waiting) {
-    const result = problemOf(candidate, root, session, state.key);
+    if (candidate.seat !== mailbox) {
+      // Addressed to another mailbox: listed, never shown, never receipted.
+      rows.push(waitingRow(candidate, root, session, key, now));
+      continue;
+    }
+    // Every record of this mailbox reaching here is the key's to verify: a keyless run with one
+    // was refused above.
+    if (key === null) continue;
+    const result = problemOf(candidate, root, session, key);
     const recordPayload =
       candidate.store === 'record' ? (signedRecordOf(readJson(candidate.path))?.payload ?? null) : null;
     const parsedLike = candidate.store === 'record' ? recordPayload : messagePayload(readJson(candidate.path));
@@ -774,7 +860,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
     if (candidate.store === 'record') {
       // The receipt is published and flushed before the body: one reader wins the id, and the
       // proof of exposure survives a crash that follows it.
-      const gate = openRecord(candidate, root, session, sources.home, state.key, sources.now().toISOString());
+      const gate = openRecord(candidate, root, session, sources.home, key, sources.now().toISOString());
       if (gate.kind === 'served') continue; // another reader already spent this id: no row, no body
       if (gate.kind === 'refused') {
         rows.push({
@@ -809,6 +895,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const notes = briefSeats.map(
     (seat) => `${seat}: the general seat brief is not shown here; the seat's own turn-start reader serves it.`,
   );
+  if (otherCount > 0) notes.push(otherMailboxNote(otherCount));
   if (json) {
     writeJson(io, 'team.messages', {
       format: 1 as const,
@@ -835,6 +922,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
         messages: rows.length,
         shown: shownBodies.length,
         refused: differences.length,
+        waiting: otherCount,
       },
     });
   } else {

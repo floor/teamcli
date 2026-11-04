@@ -234,7 +234,7 @@ team messages [--json]
 Shows a message that is already waiting and writes the receipt that says it was shown. Exits 0 when
 the inbox is read (`messages.shown`, or `messages.none` when empty), 1 when the caller, team file,
 or message record is refused (`messages.file`, `.id`, `.key`, `.root`, `.seat`, `.session`,
-`.shape`, `.signature`), 2 when the invocation cannot be read or this folder is not a git
+`.shape`, `.signature`, `.caller`), 2 when the invocation cannot be read or this folder is not a git
 repository (`messages.invocation`, `messages.not-a-repo`). A seat name matches
 `^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`.
 
