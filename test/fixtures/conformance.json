@@ -1499,6 +1499,13 @@
       "provenance": "capture"
     },
     {
+      "file": "grok/1.0.70/idle.txt",
+      "cli": "grok",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "antigravity/1.3.5/exit.txt",
       "cli": "antigravity",
       "classify": "unknown",
@@ -1693,6 +1700,34 @@
       "classify": "working",
       "composer": "idle",
       "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/exit-completion-unsent.txt",
+      "cli": "antigravity",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/idle-compacted.txt",
+      "cli": "antigravity",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.12/working-synthetic.txt",
+      "cli": "antigravity",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "cursor/2026.10.14/exit.txt",
@@ -2066,6 +2101,34 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.11/goal-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/goal-hint-synthetic.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/loop-hint-dim.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/slash-draft-synthetic.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
       "file": "muse/1.4.14/idle.txt",
       "cli": "muse",
       "classify": "idle",
@@ -2189,6 +2252,13 @@
       "cli": "cursor",
       "classify": "unsent",
       "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/idle-after-edit.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
       "provenance": "capture"
     },
     {
