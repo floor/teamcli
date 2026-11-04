@@ -15,6 +15,8 @@ import { actionApprovalsFolder, setApprovalMode, listApprovalModes, createTeamCr
 import { createOwnerActionRequest, approveOwnerAction, listOwnerActionRules } from '../src/client/owner-action.ts';
 import { newClientKeyPair, clientKeyDir, writeClientKeyFiles } from '../src/client/records.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 const NOW = new Date('2026-11-01T16:00:00Z');
 const bases: string[] = [];
@@ -42,7 +44,23 @@ function must<T extends { ok: boolean }>(value: T): Extract<T, { ok: true }> {
 function world() {
   const base = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'ig-'))); bases.push(base);
   const root = join(base, 'r'); const other = join(base, 'other'); const home = join(base, 'h');
-  fs.mkdirSync(root); fs.mkdirSync(other); fs.mkdirSync(home); execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  fs.mkdirSync(join(root, '.agents'), { recursive: true }); fs.mkdirSync(other); fs.mkdirSync(home);
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  fs.writeFileSync(join(root, '.agents', 'team.yaml'), [
+    'format: 1', 'project: fixture-owner', 'entity: fixture-entity', 'session: synthetic-session',
+    'coordinator: lead', 'operator: lead', 'workspace:', '  mode: shared', 'seats:',
+    '  - role: coordinator', '    name: lead', '    cli: claude-code', '    vendor: anthropic',
+    '    model: Claude Opus', '    version: "5.5"', '    launch: claude --model claude-opus-5-5', '    leads: true',
+    '  - role: implementer', '    name: member', '    cli: claude-code', '    vendor: anthropic',
+    '    model: Claude Opus', '    version: "5.5"', '    launch: claude --model claude-opus-5-5', '',
+  ].join('\n'));
+  updateState(join(root, '.agents'), state => {
+    state.sessions['synthetic-session'] = {
+      seats: { lead: { stage: 'ready', pane: 'synthetic-lead' }, member: { stage: 'ready', pane: 'synthetic-member' } },
+      worktrees: {},
+    };
+  });
+  upsertTeam(home, teamIdOf(root), { project: 'fixture-owner', entity: 'fixture-entity', session: 'synthetic-session', root, roster: [], by: 'test' });
   const signer = signerStore();
   must(registerOwnerSeat(home, { team: 'fixture-owner', entity: 'fixture-entity', signer: 'fixture-signer' }, signer.store, NOW));
   must(acceptOwnerSigner(home, 'fixture-entity', 'fixture-signer', NOW));
@@ -56,7 +74,9 @@ function snapshot(w: World) {
   return Object.fromEntries(fs.readdirSync(dir).filter(name => name.startsWith('am_')).sort().map(name => [name, fs.readFileSync(join(dir, name), 'utf8')]));
 }
 const callers = {
-  owner: { kind: 'owner' }, seat: { kind: 'seat', name: 'member', pane: 'synthetic-member', session: 'synthetic-session' },
+  owner: { kind: 'owner' },
+  lead: { kind: 'seat', name: 'lead', pane: 'synthetic-lead', session: 'synthetic-session' },
+  seat: { kind: 'seat', name: 'member', pane: 'synthetic-member', session: 'synthetic-session' },
   detached: { kind: 'owner-no-tty' }, unplaced: { kind: 'unplaced', reason: 'synthetic unplaced process' },
 } satisfies Record<string, Caller>;
 async function run(w: World, argv: string[], caller: Caller) {
@@ -121,17 +141,23 @@ function allow(w: World, root = w.root, action: 'team-revoke-approval' | 'team-s
   must(approveOwnerAction(w.home, request.record.request_id, 'always', w.signer.store, NOW, { signer: 'fixture-signer' }));
 }
 for (const mode of ['none', 'per-action', 'always-rule']) {
-  test('an owner-signed folder rule admits a seat to mode ' + mode, async () => {
-    const w = world(); allow(w); const result = await run(w, words(w, mode), callers.seat); expect(result.code, result.io.out).toBe(0);
+  test('an owner-signed folder rule admits the team lead to mode ' + mode, async () => {
+    const w = world(); allow(w); const result = await run(w, words(w, mode), callers.lead); expect(result.code, result.io.out).toBe(0);
     const modes = listApprovalModes(w.home, w.signer.store, NOW).modes.filter(held => held.scope === w.root);
     expect(modes).toHaveLength(mode === 'none' ? 1 : 0);
+  });
+  test('an owner-signed folder rule still refuses a plain seat for mode ' + mode, async () => {
+    const w = world(); allow(w); const before = snapshot(w);
+    const result = await run(w, words(w, mode), callers.seat);
+    expect(result.code).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
+    expect(snapshot(w)).toEqual(before);
   });
 }
 for (const mode of ['wrong-scope', 'wrong-action'] as const) {
   test('a signed rule with ' + mode + ' admits no mode change', async () => {
     const w = world(); const isolated = join(w.other, 'child'); fs.mkdirSync(isolated);
     allow(w, mode === 'wrong-scope' ? isolated : w.root, mode === 'wrong-action' ? 'team-send' : 'team-revoke-approval');
-    const before = snapshot(w); const result = await run(w, words(w, 'per-action'), callers.seat);
+    const before = snapshot(w); const result = await run(w, words(w, 'per-action'), callers.lead);
     expect(result.code).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused'); expect(snapshot(w)).toEqual(before);
   });
 }
@@ -140,11 +166,20 @@ for (const byRule of [false, true]) {
     const w = world(); const request = must(createTeamCreateRequest(w.home, w.root, null, NOW));
     must(approveTeamCreate(w.home, request.record.request_id, 'always', w.signer.store, NOW, { signer: 'fixture-signer' }));
     if (byRule) allow(w); const before = snapshot(w);
-    const result = await run(w, ['--revoke-approval', request.record.request_id], byRule ? callers.detached : callers.owner);
+    const result = await run(w, ['--revoke-approval', request.record.request_id], byRule ? callers.lead : callers.owner);
     expect(result.code, result.io.out).toBe(0); expect(snapshot(w)).toEqual(before);
     expect(fs.existsSync(join(actionApprovalsFolder(w.home), request.record.request_id + '.json'))).toBe(false);
   });
 }
+test('revoke under a signed scope rule still refuses a plain seat', async () => {
+  const w = world(); const request = must(createTeamCreateRequest(w.home, w.root, null, NOW));
+  must(approveTeamCreate(w.home, request.record.request_id, 'always', w.signer.store, NOW, { signer: 'fixture-signer' }));
+  allow(w); const before = snapshot(w);
+  const result = await run(w, ['--revoke-approval', request.record.request_id], callers.seat);
+  expect(result.code).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
+  expect(snapshot(w)).toEqual(before);
+  expect(fs.existsSync(join(actionApprovalsFolder(w.home), request.record.request_id + '.json'))).toBe(true);
+});
 for (const form of ['mode', 'revoke']) {
   test('a real general grant beside the singular ' + form + ' form is usage, with no writes', async () => {
     const w = world(); const key = newClientKeyPair(); const keys = must(writeClientKeyFiles(clientKeyDir(w.home, 'init-fixture'), key));
@@ -165,10 +200,10 @@ test('a folder rule cannot change an approval mode at an outside requested scope
   assert.ok(outsideMode.modeId);
   allow(w); // This API's always rule covers the caller repository's parent, w.base.
   expect(listOwnerActionRules(w.home, w.signer.store, NOW).rules.some(rule => rule.scope === w.base && rule.actions.includes('team-revoke-approval'))).toBe(true);
-  const control = await run(w, words(w, 'per-action'), callers.seat);
+  const control = await run(w, words(w, 'per-action'), callers.lead);
   expect(control.code, control.io.out).toBe(0); // Prove this exact signed rule admits its own folder.
   const before = snapshot(w);
-  const result = await run(w, ['--approval-mode', 'per-action', '--scope', outside], callers.seat);
+  const result = await run(w, ['--approval-mode', 'per-action', '--scope', outside], callers.lead);
   const after = snapshot(w);
   console.info('outside scope result: ' + JSON.stringify({ code: result.code, output: result.io.out, targetExistedBefore: before[outsideMode.modeId + '.json'] !== undefined, targetExistsAfter: after[outsideMode.modeId + '.json'] !== undefined, allModeBytesUnchanged: JSON.stringify(before) === JSON.stringify(after) }));
   expect(result.code).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
@@ -188,9 +223,9 @@ for (const shape of ['symlink', 'parent'] as const) {
     } else { canonical = dirname(w.base); target = canonical; }
     const seeded = must(setApprovalMode(w.home, 'team-create', 'none', canonical, w.signer.store, NOW));
     assert.ok(seeded.modeId); allow(w);
-    const control = await run(w, words(w, 'per-action'), callers.seat); expect(control.code, control.io.out).toBe(0);
+    const control = await run(w, words(w, 'per-action'), callers.lead); expect(control.code, control.io.out).toBe(0);
     const before = snapshot(w);
-    const result = await run(w, ['--approval-mode', 'per-action', '--scope', target], callers.seat);
+    const result = await run(w, ['--approval-mode', 'per-action', '--scope', target], callers.lead);
     expect(result.code, result.io.out).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
     expect(snapshot(w)).toEqual(before); expect(fs.realpathSync(target)).toBe(canonical);
   });
