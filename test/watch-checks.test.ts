@@ -103,17 +103,25 @@ describe('watch.checks, the section', () => {
     expect(teamFile('  checks: { disk: off }\n').watch.checks).toEqual(['disk']);
   });
 
-  test('the retired swap-free check loads as a deprecation, never a refusal', () => {
-    // Free swap no longer pages the owner (ruling D8), so the check is gone; a file that
-    // still turns it off loads, turns nothing off, and is told to drop the line.
+  test('the retired swap-free check loads carried and deprecated, never dropped or refused', () => {
+    // Free swap no longer pages the owner (ruling D8), so the check is gone — but the name
+    // stays in the file's checks list exactly as written. The canonical record and the
+    // `watch.checks` fingerprint digest that list, so dropping the name would move signed
+    // approvals; carrying it moves nothing, and no check runs for it.
     const tail = '  checks:\n    swap-free: off\n';
     const result = validateTeamFile(source(tail));
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
-    expect(result.team.watch.checks).toEqual([]);
+    expect(result.team.watch.checks).toEqual(['swap-free']);
     expect(result.deprecations).toEqual([{
       line: lineOf(tail, '    swap-free: off'),
       message: '`swap-free` is not a check any more: free swap is not reported',
       repair: 'remove swap-free from watch.checks in {file}',
+    }]);
+    // Carried is not accepted-anyhow: only `off` ever was a setting, and still is.
+    const on = '  checks:\n    swap-free: on\n';
+    expect(refused(on)).toEqual([{
+      line: lineOf(on, '    swap-free: on'),
+      message: 'watch.checks.swap-free must be off: the only setting is off',
     }]);
   });
 

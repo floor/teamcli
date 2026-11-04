@@ -479,13 +479,14 @@
               "memory",
               "disk",
               "swap-growth",
-              "budget"
+              "budget",
+              "swap-free"
             ]
           },
           "additionalProperties": {
             "const": "off"
           },
-          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too"
+          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated"
         }
       }
     },

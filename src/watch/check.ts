@@ -227,7 +227,9 @@ export const CHECK_NAMES = [
 ] as const;
 
 // Checks this build no longer runs, kept as known names so a file written while they ran still
-// loads: `watch.checks` accepts the name, reports it deprecated, and runs nothing for it.
+// loads: `watch.checks` accepts the name, carries it in the file's list exactly as written
+// (the canonical record and the `watch.checks` fingerprint digest that list, so dropping it
+// would move signed approvals), reports it deprecated, and runs nothing for it.
 // `swap-free` reported free swap under `machine.swap_free_min`; free swap decides nothing now —
 // the OS keeps swap nearly full while memory is free — so the check is gone.
 export const RETIRED_CHECK_NAMES = ['swap-free'] as const;
