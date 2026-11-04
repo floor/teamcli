@@ -108,6 +108,14 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
  *  two default heartbeats, the same bound after which the child would be replaced. */
 const DEFAULT_PRESENCE_DEADLINE_MS = 10_000;
 
+/** How long a fresh child has to prove it runs: two heartbeats read since it started. Until that
+ *  second beat the missed-beats rule does not apply, because the start the daemon cannot yet hear
+ *  is not silence the child chose — loading its watches and building them can take a while on a
+ *  cold process, and that time is no evidence about its loop. A child still short of the proof
+ *  when this deadline passes is ended on its own reason, so a child that never beats is replaced
+ *  either way. */
+const STARTUP_DEADLINE_MS = 60_000;
+
 type Group = {
   mode: 'per-root' | 'shared';
   routes: ChoresRouteInput[];
@@ -279,11 +287,27 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   child.send({ type: 'tick', id: `${String(ms)}-${String(group.restarts)}`, at: at.toISOString() });
   // A beat that itself arrived late is the daemon's own loop having been held, not a child that
   // stopped beating: the heartbeats sent during the stall are still unread in its pipe, and a
-  // reading this daemon could not hear must not end the child. The next on-time beat reads the
-  // backlog and judges again. The tick interval is one beat, so `stalled` means one beat of
-  // lateness beyond that cadence, not one bare beat: a guard at one interval would trip on every
-  // on-time tick and no judgement would ever run.
-  if (stalled) return;
+  // reading this daemon could not hear must not end the child. The read clock moves to this
+  // instant before anything judges, so the first on-time beat after the stall measures silence
+  // from here and never from a clock the stall froze. The next on-time beat reads the backlog and
+  // judges again. The tick interval is one beat, so `stalled` means one beat of lateness beyond
+  // that cadence, not one bare beat: a guard at one interval would trip on every on-time tick
+  // and no judgement would ever run.
+  if (stalled) {
+    group.lastBeatReadMs = ms;
+    return;
+  }
+  // A child that has not been read beating twice since it started has no beat clock to judge: its
+  // start can still be loading and building its watches, and that work is not silence it chose.
+  // Until the second heartbeat is read, a deadline from the start judges it instead.
+  if (group.beats < 2) {
+    if (ms - group.startedAtMs < STARTUP_DEADLINE_MS) return;
+    group.killing = true;
+    group.why = `the child did not beat twice within ${String(STARTUP_DEADLINE_MS)} ms of its start`;
+    input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
+    child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+    return;
+  }
   // Silence is measured from when this daemon last read a beat, never from the beat's own `at`:
   // a frame that waited unread in the pipe during a held loop starts the child's grace when it
   // is finally heard, and a child that truly stopped beating stops updating this clock.
@@ -477,9 +501,11 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
 function groupRow(input: ChoresFleetInput, group: Group, root: string): DaemonChoresState {
   const ms = input.now().getTime();
   // The cap is the kill threshold, so it must count what the supervisor counts: beats this
-  // daemon has not heard, from its own read clock. `heartbeatAt` below stays the child's `at`,
-  // which is what the child last said about itself.
-  const missed = group.child === null || group.lastBeatReadMs === null
+  // daemon has not heard, from its own read clock. The count starts only once the child has been
+  // read beating twice — before that the startup deadline governs and nothing is overdue — so a
+  // row never reports a count that would not end the child. `heartbeatAt` below stays the child's
+  // `at`, which is what the child last said about itself.
+  const missed = group.child === null || group.lastBeatReadMs === null || group.beats < 2
     ? 0
     : Math.min(
         group.policy.missedBeats,

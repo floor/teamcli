@@ -559,7 +559,7 @@ describe('the chores fleet', () => {
     expect(made2[0]!.sends).toEqual([{ type: 'tick', id: `${String(NOW + 1000)}-0`, at: new Date(NOW + 1000).toISOString() }]);
   });
 
-  test('two missed beats end the child and the replacement waits out a doubling, capped backoff', async () => {
+  test('two missed beats end a child that proved its run, and a failed start waits out a doubling, capped backoff', async () => {
     const made = world();
     const clock = { at: NOW };
     const made2: Fake[] = [];
@@ -585,6 +585,9 @@ describe('the chores fleet', () => {
     tickAt(0);
     expect(made2).toHaveLength(1);
     made2[0]!.emit({ type: 'ready', pid: 4200, at: AT });
+    // Two hearts read since the start: this child has proved its own loop runs, so the
+    // missed-beats rule is the one that judges it.
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
     made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
 
     // One overdue beat is late, not missed; the second ends the child, and only once.
@@ -618,28 +621,212 @@ describe('the chores fleet', () => {
     tickAt(4500);
     expect(made2).toHaveLength(2);
 
-    // A second failure waits twice as long; a third is held at the policy's cap.
+    // A replacement that has not been read beating twice is judged by the startup deadline, not
+    // by beats: one heartbeat at its start, then silence, and the row counts nothing missed.
     made2[1]!.emit({ type: 'ready', pid: 4201, at: new Date(NOW + 4500).toISOString() });
     made2[1]!.emit({ type: 'heartbeat', at: new Date(NOW + 4500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
-    tickAt(5500);
-    tickAt(6500);
-    tickAt(7500);
+    for (let offset = 5500; offset <= 63_500; offset += 1000) tickAt(offset);
+    expect(made2[1]!.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0, why: null });
+    tickAt(64_500);
     expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('did not beat twice within 60000 ms');
     made2[1]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 7500 + 2000).toISOString() });
-    tickAt(9500);
+    // A start that never proved a run still doubles the wait.
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 64_500 + 2000).toISOString() });
+    expect(log.some((line) => line.includes('starting a replacement in 2000 ms'))).toBe(true);
+    tickAt(66_500);
     expect(made2).toHaveLength(3);
-    made2[2]!.emit({ type: 'ready', pid: 4202, at: new Date(NOW + 9500).toISOString() });
-    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 9500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
-    tickAt(10_500);
-    tickAt(11_500);
-    tickAt(12_500);
+    made2[2]!.emit({ type: 'ready', pid: 4202, at: new Date(NOW + 66_500).toISOString() });
+    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 66_500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
+    for (let offset = 67_500; offset <= 125_500; offset += 1000) tickAt(offset);
+    expect(made2[2]!.kills).toHaveLength(0);
+    tickAt(126_500);
     expect(made2[2]!.kills).toHaveLength(1);
     made2[2]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     // 4000 would be the uncapped wait; the policy's 3000 holds it.
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 12_500 + 3000).toISOString() });
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 126_500 + 3000).toISOString() });
+    expect(log.some((line) => line.includes('starting a replacement in 3000 ms'))).toBe(true);
+  });
+
+  test('a start that takes 25 s is not silence: a child short of its second beat is never ended by beats', () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4310 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    const beat = (written: number): void => {
+      made2[0]!.emit({
+        type: 'heartbeat',
+        at: new Date(NOW + written).toISOString(),
+        rssBytes: rss,
+        busy: null,
+        markerCache: null,
+      });
+    };
+
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4310, at: AT });
+    beat(0);
+    // The child is building: its loop is held for twenty-five beats, so no frame crosses the
+    // pipe. None of that is silence the child chose, and the start has not been proved by two
+    // reads, so the beats it does not send cannot end it.
+    for (let offset = 1000; offset <= 25_000; offset += 1000) {
+      tickAt(offset);
+      expect(made2[0]!.kills).toHaveLength(0);
+    }
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0, pid: 4310 });
+    // The build ends and the child beats from there; the rule judges it on those beats again.
+    for (let offset = 25_000; offset <= 30_000; offset += 1000) {
+      beat(offset);
+      tickAt(offset);
+    }
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0, restarts: 0 });
+  });
+
+  test('a child that never beats twice is ended at the startup deadline, once, and a proved run resets the wait', async () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const log: string[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2, backoffCapMs: 30_000 }))],
+      log: (text) => log.push(text),
+      factory: () => {
+        const child = fakeChild(4320 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    const startsOnce = (fake: Fake, pid: number, at: number): void => {
+      const iso = new Date(at).toISOString();
+      fake.emit({ type: 'ready', pid, at: iso });
+      fake.emit({ type: 'heartbeat', at: iso, rssBytes: rss, busy: null, markerCache: null });
+    };
+
+    tickAt(0);
+    startsOnce(made2[0]!, 4320, NOW);
+    // Fifty-nine on-time beats later the child is still inside its start: nothing is counted as
+    // missed and nothing is ended.
+    for (let offset = 1000; offset <= 59_000; offset += 1000) tickAt(offset);
+    expect(made2[0]!.kills).toHaveLength(0);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0 });
+    // The deadline ends it, once, on its own reason.
+    tickAt(60_000);
+    expect(made2[0]!.kills).toHaveLength(1);
+    expect(made2[0]!.kills[0]).toContain('did not beat twice within 60000 ms');
+    tickAt(61_000);
+    expect(made2[0]!.kills).toHaveLength(1);
+    made2[0]!.leave(null, 'SIGTERM');
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      restarts: 1,
+      nextStartAt: new Date(NOW + 61_000 + 1000).toISOString(),
+    });
+
+    // The replacement proves its run and then fails: the wait is the first step again, never the
+    // second, so a deadline in the group's past cannot pin the next start higher than a healthy
+    // run earns.
+    tickAt(62_000);
+    expect(made2).toHaveLength(2);
+    const iso = new Date(NOW + 62_000).toISOString();
+    made2[1]!.emit({ type: 'ready', pid: 4321, at: iso });
+    made2[1]!.emit({ type: 'heartbeat', at: iso, rssBytes: rss, busy: null, markerCache: null });
+    made2[1]!.emit({ type: 'heartbeat', at: iso, rssBytes: rss, busy: null, markerCache: null });
+    for (let offset = 63_000; offset <= 65_000; offset += 1000) tickAt(offset);
+    expect(made2[1]!.kills).toHaveLength(1);
+    expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
+    made2[1]!.leave(null, 'SIGTERM');
+    await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
+    expect(fleet.stateFor(made.root)).toMatchObject({
+      restarts: 2,
+      nextStartAt: new Date(NOW + 65_000 + 1000).toISOString(),
+    });
+    expect(log.filter((line) => line.includes('starting a replacement in 1000 ms'))).toHaveLength(2);
+  });
+
+  test('a stall ends no child whose frames were still in the pipe when the daemon resumed', () => {
+    const made = world();
+    const clock = { at: NOW };
+    const made2: Fake[] = [];
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 1000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
+      log: () => {},
+      factory: () => {
+        const child = fakeChild(4330 + made2.length);
+        made2.push(child);
+        return child.child;
+      },
+    });
+    const tickAt = (offset: number): void => {
+      clock.at = NOW + offset;
+      fleet.tick(new Date(clock.at));
+    };
+    const rss = 40 * 1024 * 1024;
+    tickAt(0);
+    made2[0]!.emit({ type: 'ready', pid: 4330, at: AT });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    made2[0]!.emit({ type: 'heartbeat', at: AT, rssBytes: rss, busy: null, markerCache: null });
+    tickAt(1000);
+
+    // The daemon's loop is held from before the second beat until the fifth. The child kept
+    // beating; those frames are still in the pipe, unread, when the late beat fires at 5000.
+    tickAt(5000);
+    // The next beat is on time by the daemon's own schedule, but it fires before the pipe has
+    // been read: judging from the clock the stall froze would end a child that never missed.
+    tickAt(6000);
+    expect(made2[0]!.kills).toHaveLength(0);
+    // The pipe is read once the loop is free: three beats arrive, written during the stall.
+    clock.at = NOW + 6050;
+    for (const written of [2000, 3000, 4000]) {
+      made2[0]!.emit({
+        type: 'heartbeat',
+        at: new Date(NOW + written).toISOString(),
+        rssBytes: rss,
+        busy: null,
+        markerCache: null,
+      });
+    }
+    tickAt(7000);
+    tickAt(8000);
+    expect(fleet.stateFor(made.root)).toMatchObject({ state: 'late', missed: 1 });
+    expect(made2[0]!.kills).toHaveLength(0);
+    // A child that really stops beating is still ended, on an on-time beat.
+    tickAt(9000);
+    expect(made2[0]!.kills).toHaveLength(1);
+    expect(made2[0]!.kills[0]).toContain('missed 2 heartbeats');
   });
 
   test('a child that exits right after it starts is replaced, and no beat is written to its pipe', async () => {

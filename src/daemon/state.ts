@@ -140,7 +140,9 @@ export type DaemonRootState = {
  * One route's chores record: the mode in force, what the supervised child is doing, the resident
  * size its own heartbeat reported, and the last completed pass. `missed` counts heartbeats the
  * daemon has not heard, capped at the policy's own kill threshold; a record at that cap is about
- * to be ended and restarted. This is display evidence for an operator, never a hosting fact.
+ * to be ended and restarted. The count starts once the child has been read beating twice since it
+ * started: before that its start is judged by a deadline instead and nothing is counted as
+ * missed. This is display evidence for an operator, never a hosting fact.
  */
 export type DaemonChoresState = {
   mode: 'per-root' | 'shared' | 'inline';
