@@ -28,8 +28,9 @@ names it), then the `typed` leg where the seat's profile declares a typed wake, 
 leg. Each leg in turn either takes the send, which
 ends the walk, or definitely cannot take it, which hands the send to the next leg and is recorded
 as a failure — the history line names the channel the send went by and the legs that failed
-before it. A word this build reads but never walks, `mcp-inbox`, is reported skipped with its
-reason — the MCP inbox is the store's reader, not a wake — and `team check` notes the word. The
+before it. The retired `mcp-inbox` word never reaches the walk — the MCP inbox is the store's
+reader, not a wake, so the word is dropped from the order before the walk runs — and `team
+check` names the word for removal. The
 walk filters typing legs out before it runs anything, so a `typed` word contributes no leg
 wherever it stands in the order: where a declared order put it for a Claude seat, the seat's own
 event adapters stand in its place — the live channel, then the socket its launch accepts — for a
@@ -69,9 +70,10 @@ taken, the runtime queue was not there, or the adapter did not take the post —
 cascade always closes on the mailbox: a word that places `drop` first still stores after every
 wake the order names. A level of the receiving seat's own chain — entity, project, team, seat —
 may drop legs from the order or put the legs it keeps in a different order, and may add `native`,
-`socket`, `headless-resume` or `session`, and keep an `mcp-inbox` word the walk reports
-unavailable: a word naming any other leg the order in force does not have is set aside and the
-order in force stands. The words are read from the receiving seat's own files: the team file's
+`socket`, `headless-resume` or `session`: a word naming any other leg the order in force does not
+have is set aside and the order in force stands. An `mcp-inbox` word declares nothing: it is
+dropped from the order as a retired alias, never a set-aside, and the legs beside it keep their
+word. The words are read from the receiving seat's own files: the team file's
 `delivery_order` key and the seat's, and the registry project's record for the project the team
 sits in ([the team file](../team-file.md#delivery_order)). A team file that writes a word with no
 leg, an unknown leg, or a leg twice is refused when the file is read.
@@ -191,13 +193,14 @@ the retry window's bound, or the pane never frees — leaves the channel push he
 read (`inbox_check`, the turn-start drop read, or `team messages`). The record stays in the inbox
 throughout, so a held name never withholds the message.
 
-The `mcp-inbox` word is not a delivery leg in this build: the MCP inbox is the store's reader —
+The `mcp-inbox` word is retired — no longer a leg: the MCP inbox is the store's reader —
 the same signed records the drop leg leaves, read by `team drops --read`, by the inbox server's
-own read tool or by `team messages` — and a reader is not a wake. The word keeps its place in the
-catalogue, and the walk reads it as unavailable: the leg is never attempted, the report lists it
-`skipped` with the reason `not a delivery leg in this build; the inbox is the store's reader`,
-and `team check` notes a seat whose order still names it. A record beside the drop says which leg
-left it, and a seat that reads one leaves the same signed receipt the drop leg's reader does. The
+own read tool or by `team messages` — and a reader is not a wake. A word that still names it is
+read as an alias and dropped from the order, never an error: no leg is attempted, the report
+carries nothing for it, and `team check` says `delivery_order [...] names mcp-inbox, which is no
+longer a leg; remove it` once per team and per seat. A record an older build left beside the drop
+says which leg left it, and a seat that reads one leaves the same signed receipt the drop leg's
+reader does. The
 `native` leg is a call the sender's own process makes or the receiving seat's own runtime queue,
 never a frame this walk writes. A Codex receiver's queue takes the send
 only when its `codex-daemon` policy is on, a trusted runtime session is bound to the seat, and
@@ -444,9 +447,8 @@ appends the message's body to the project's message history ([team feed](feed.md
 completes. The history line names the channel the send went by, when one took it (`via`), and the
 legs of the walk that definitely could not take it (`failed`, each as `<leg>: <reason>` — `native`
 is recorded `unavailable` there when neither the receiving runtime's queue nor the handoff takes
-the send, and an `mcp-inbox` word is named once with `not a delivery leg in this build; the inbox
-is the store's reader`, in the report as a skipped leg and, on a human's walk, in the failure
-list). The line also carries `thread`, the first message's id, and `in-reply-to` when the message
+the send; the retired `mcp-inbox` word names no leg and appears in no failure list). The line
+also carries `thread`, the first message's id, and `in-reply-to` when the message
 answers one, so [team feed](feed.md) reads a thread's status from the receipts beside its
 records. The daily log keeps the seat and the size; the history keeps the message.
 
@@ -544,8 +546,8 @@ walk refuses before it types — so a seat in the middle of a turn can take the 
 declared order the walk is the socket when the seat's launch declares `crossSessionInbound:
 accept`, then the refused typed leg. A level that declares an order is walked as written; its
 `drop`, `native` and `headless-resume` words add nothing, because the drop the grant wrote is
-already the durable copy and the other two belong to the seat's own runtime, and its `mcp-inbox`
-word is no leg in this build.
+already the durable copy and the other two belong to the seat's own runtime; a retired
+`mcp-inbox` word is dropped before this walk, so it names nothing here.
 
 Every leg keeps its ordinary pane-safety checks. A human's pane is never dialed or typed into, a
 bare shell is never typed into, and a held frame keeps the socket out until the seat's

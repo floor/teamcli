@@ -1,6 +1,6 @@
 # The team inbox leg: routes, bounds and evidence
 
-`team mcp serve` is the seat-side half of the mcp-inbox delivery leg. The seat's launch line
+`team mcp serve` is the seat-side half of the retired mcp-inbox delivery name. The seat's launch line
 starts it with the seat's own CLI, the CLI calls `inbox_check` and `inbox_read`, and `inbox_read`
 writes the receipt that says the message was read. This page is the runbook: which CLIs carry a
 route in this build, what each registration writes, the bounds on every wait, and the evidence
@@ -192,8 +192,8 @@ The listener marker names the install the server started from — its `version`,
 short digest of the entry module it loaded) and the packed `head` when the package carries one. A
 sender of another version or another packed commit judges the marker stale and walks its next
 leg, exactly as it does for a dead pid, and a marker that records no identity cannot vouch for
-the server's code. The channel leg and the `mcp-inbox` leg both require a marker this build can
-vouch for.
+the server's code. The channel leg and the inbox read a record an older build named `mcp-inbox`
+both require a marker this build can vouch for.
 
 On every channel tick, and after each line its client writes, the server compares the install
 under it — the version and packed commit the installed entry names — with the one it started
