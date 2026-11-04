@@ -1,5 +1,4 @@
-// Independent verification of feat/sender-attributed (612a09d9f, based on int/0.5.13 63adaf839)
-// by tester-3 (Cassandra).
+// Independent verification of feat/sender-attributed (612a09d9f, based on int/0.5.13 63adaf839).
 //
 // Behaviour covered:
 // 1. messages: the FROM cell carries (attributed) for a record the shared key verified and
