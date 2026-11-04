@@ -319,6 +319,15 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
 
   write({ type: 'ready', pid: process.pid, at: now().toISOString() });
   heartbeat();
+  // The beat is armed before the watches load and build. Loading a watch module on a cold
+  // process and building a watcher for every route take real time, and the daemon hears the
+  // child only through this beat: armed after that work, the pipe would be silent through it and
+  // the child would be judged on silence it did not choose. The timers are unref'd, so they never
+  // hold the process open past its stop.
+  const beatTimer = setInterval(heartbeat, config.beatMs);
+  beatTimer.unref();
+  const passTimer = setInterval(enqueue, config.beatMs);
+  passTimer.unref();
   // The hosted watches this token asked for. The production module loads only when a route
   // carries one, so a child started before the watch isolation carries the chores alone. Every
   // state, pulse and fault answer crosses the same newline-framed pipe as the chores messages.
@@ -335,10 +344,6 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
       ...(input.watchBase === undefined ? {} : { base: input.watchBase }),
     });
   }
-  const beatTimer = setInterval(heartbeat, config.beatMs);
-  beatTimer.unref();
-  const passTimer = setInterval(enqueue, config.beatMs);
-  passTimer.unref();
 
   let buffer = '';
   let overflow = false;
