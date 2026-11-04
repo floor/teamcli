@@ -27,7 +27,7 @@ import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from 
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
-import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { callerLabel, fileOwnerRefusal, isOwner, readAncestors, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -117,10 +117,12 @@ import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
+import { processFoldersOf, processTable } from '../watch/process-adapter.ts';
 import { EVENT_LOG_TOTAL_BYTES } from '../bus/kinds.ts';
 import { retainedLogBytes } from '../bus/log.ts';
 import { busLogSizeNotes, busProblemNotes } from '../bus/notes.ts';
 import { pingpongLegDifferences } from './pingpong-legs.ts';
+import { orphanReading, type OrphanProcessSources } from './orphans.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -164,6 +166,10 @@ export type CheckSources = {
    *  own live app-server on its planned flags; absent in scenes that do not stand one in so no
    *  test reads this machine's process table. */
   codexEndpoint?: CodexEndpointCheckSources;
+  /** The process readings the orphan scan makes — the table, many working folders at once, and
+   *  this run's own ancestry. Absent when no producer is wired: a run then reads no process table,
+   *  as a scene that does not stand one in must not touch this machine. */
+  orphans?: OrphanProcessSources;
 };
 
 export type CodexEndpointCheckSources = {
@@ -176,8 +182,10 @@ export type CodexEndpointCheckSources = {
 
 /**
  * The shipped sources. The live read is `status`'s own with one narrowing: `status` reads every
- * agent's pane, a stray's included, and this reads a pane only where this project's state records
- * one for a seat of this team in the session read. The rest is the same code, not a copy of it.
+ * agent's screen, a stray's included, and this reads a screen only where this project's state
+ * records the pane for a seat of this team. Every agent's process identity is read either way:
+ * the orphan reading holds a CLI herdr names at a pane even when no record of this project's
+ * names the seat there. The rest is the same code, not a copy of it.
  */
 export const realCheckSources: CheckSources = {
   live(session, team, state) {
@@ -204,9 +212,10 @@ export const realCheckSources: CheckSources = {
     const processes: Record<string, PaneProcesses | null> = {};
     const foreground: Record<string, string[] | null> = {};
     for (const agent of agents) {
-      if (!recorded.has(agent.pane)) continue;
-      const screen = paneRead(agent.pane, PANE_WINDOW, session);
-      if (screen !== null) screens[agent.pane] = screen;
+      if (recorded.has(agent.pane)) {
+        const screen = paneRead(agent.pane, PANE_WINDOW, session);
+        if (screen !== null) screens[agent.pane] = screen;
+      }
       // The pane's process identity, for the comparison with the one the state recorded: a pane
       // that no longer holds what team launched is not the seat. Null when herdr can't tell. The
       // same reading carries the foreground names the restore proof ties a restored CLI with, so
@@ -241,6 +250,14 @@ export const realCheckSources: CheckSources = {
     alive: pidAlive,
     startOf: processStartOf,
     isSocket: isSocketFile,
+  },
+  // The process adapter's own readings: the table scoped to this user, one bulk folder query, and
+  // this run's ancestry so the check never names or closes itself.
+  orphans: {
+    table: processTable,
+    foldersOf: processFoldersOf,
+    ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
+    own: () => readAncestors(process.pid)?.map((one) => one.pid) ?? [process.pid],
   },
 };
 
@@ -403,6 +420,22 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     }
   }
   const state = whole.sessions[session] ?? emptySession();
+  // Live agent CLIs no pane holds any more, read from the state's own launches and from the
+  // working folders inside this root. A scene that wires no process source reads no process
+  // table, and the reading itself asks for nothing until a seat or an agent exists.
+  const orphans =
+    sources.orphans === undefined
+      ? null
+      : orphanReading({
+          project: team.project,
+          root,
+          session,
+          state,
+          live,
+          now: sources.now(),
+          daemonSince: sources.daemon?.since ?? null,
+          sources: sources.orphans,
+        });
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
@@ -513,6 +546,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     ...staleDifferences(stale),
+    // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
+    // the team's own close where a state record or the daemon's start proves it the team's.
+    ...(orphans?.differences ?? []),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
@@ -636,6 +672,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...unfinishedWebhookNotes({ root, alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid) }),
     ...record.notes,
     ...provenance.notes,
+    // Why the orphan reading named nothing it might otherwise have named: a pane list that read
+    // no agents, a pane herdr could not answer for, a folder or process read that did not answer.
+    ...(orphans?.notes ?? []),
     ...idleNotes,
     ...watchPaceNotes(watchPace),
   ]);
