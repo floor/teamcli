@@ -594,6 +594,43 @@ function pruneSealed(path: string, home: string, kept: number, options: EventLog
   return dropped;
 }
 
+/** Removes a seal or an index whose segment is gone. An older build prunes a segment without
+ *  knowing the sidecars a newer build wrote beside it, so a downgrade can leave a seal pointing
+ *  at nothing; the orphan is never read as evidence, and a missing segment is judged by the drop
+ *  records that remain. Each removal is written once to the team log, and a sidecar that cannot
+ *  be removed is left for the next sweep. Callers hold the append lock: a rotation moves a
+ *  segment and its sidecars in separate steps, and a sweep between them would remove a live
+ *  index. Best effort: the sweep never fails its caller. */
+export function sweepOrphanedSidecars(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): string[] {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = eventLogPath(project, root, home);
+  const segments: { segment: string; name: string }[] = [{ segment: path, name: EVENT_LOG_FILE }];
+  for (let n = 1; n <= kept - 1; n++) {
+    segments.push({ segment: `${path}.${String(n)}`, name: `${EVENT_LOG_FILE}.${String(n)}` });
+  }
+  const removed: string[] = [];
+  for (const { segment, name } of segments) {
+    if (heldAt(segment).kind !== 'missing') continue;
+    for (const suffix of [SEAL_SUFFIX, INDEX_SUFFIX]) {
+      const sidecar = `${segment}${suffix}`;
+      if (heldAt(sidecar).kind !== 'file') continue;
+      try {
+        unlinkSync(sidecar);
+      } catch {
+        continue;
+      }
+      removed.push(`${name}${suffix}`);
+      logLine(join(root, '.agents'), 'bus', 'event-log', `removed orphan ${name}${suffix}`);
+    }
+  }
+  return removed;
+}
+
 /** One operational record per dropping pass. The `.agents/team.log` line names every segment the
  *  pass dropped; a signed `team.event-log-dropped` event appended to the live log names the
  *  dropped sequence range — its newest sequence is this pass's, its oldest carries forward the
@@ -719,6 +756,10 @@ export function pruneEventLog(
         if (sealed !== null) drops.push(sealed);
       }
       drops.push(...pruneSealed(path, home, kept, retention));
+      // Sidecars whose segment a downgrade (or an older build's prune) removed stay behind in
+      // slots retention never reaches; the sweep runs under this same lock so it cannot catch a
+      // rotation between the segment rename and its sidecar moves.
+      sweepOrphanedSidecars(project, root, home, { kept });
       declareDrop(project, root, home, kept, retention, drops, options.session ?? project);
     });
   } catch {
