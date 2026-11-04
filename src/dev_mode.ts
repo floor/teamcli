@@ -24,7 +24,7 @@
 // guards, the client pane guard, the public-action refusals and every other owner gate are
 // untouched; with dev mode `off` every one of these gates refuses exactly as before.
 //
-// The rules audit's second widening (ruling D5, owner answer A3) adds the operator place, as a
+// The rules audit's second widening adds the operator place, as a
 // caller-set policy — `lead-gates`, in the catalogue below this comment's list, set at entity,
 // project or team and never at a seat. Its default `lead` keeps every gate the lead's; while the
 // effective value reads `lead+operator` on a chain that loads, and dev mode is on, the target
@@ -291,8 +291,8 @@ export function devModeOwnerRoleOf(name: string, team: TeamFile): DevModeOwnerRo
 }
 
 /**
- * Whether the `lead-gates` policy admits the operator place beside the lead (ruling D5, owner
- * answer A3): the effective value on the caller's own chain must read `lead+operator`. Fail
+ * Whether the `lead-gates` policy admits the operator place beside the lead:
+ * the effective value on the caller's own chain must read `lead+operator`. Fail
  * closed in every other case — no chain to read, a chain that will not load, an unread value
  * and the `lead` default all admit no operator. The policy never has a level of its own to
  * turn dev mode on: dev mode itself is asked separately (`devModeState`), and this reading only
@@ -408,8 +408,8 @@ const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning:
  * the target team's orchestrator on the pane the target state records for it in the target
  * session, or — the main orchestrator's route — a lead of another team the registry holds, on
  * the pane that team's own state records, in that team's session; and dev mode must be `on` for
- * the caller's place. The file's own `operator:` seat holds a second, narrower admission
- * (ruling D5, owner answer A3): only at a command that passes `admitsOperator` — `check
+ * the caller's place. The file's own `operator:` seat holds a second, narrower admission:
+ * only at a command that passes `admitsOperator` — `check
  * --repair`, `remove --abandon`, `down --abandon`, `policy set`/`unset`, `daemon restart` — and
  * only while the `lead-gates` policy reads `lead+operator` on the caller's chain. The owner is
  * not this path's to admit — the command's own `isOwner` answers first — and a no-terminal or

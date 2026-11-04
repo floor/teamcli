@@ -6,7 +6,7 @@
 // never to a third seat, and admission judges the pair exactly as a send's, with the reply rule
 // (draft 3 §7, `reply-on-open-thread`) asked last: a reply is admitted while its thread is open,
 // even between seats no other rule pairs. A seat's answer to the entity's main orchestrator is
-// the one reply the reach itself admits (OD-20261103-02): bound to the record the orchestrator
+// the one reply that reach itself admits: bound to the record the orchestrator
 // sent to this seat and to the thread that orchestrator opened, gated by the reach's own setting,
 // and never a new thread of the seat's own.
 //
@@ -912,7 +912,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
 
   // ---- the answer to the entity's main orchestrator -------------------------------------------
   //
-  // The reach (OD-20261103-02) has a reply direction, and only one: a seat answers the entity's
+  // The main orchestrator's reach has a reply direction, and only one: a seat answers the entity's
   // main orchestrator on the thread that orchestrator opened, and nowhere else. The binding is
   // read from the verified records. The answered record's sender resolved to a seat of another
   // team whose live file names that seat its orchestrator, and that team's project is the

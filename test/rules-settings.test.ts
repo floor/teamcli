@@ -1,4 +1,4 @@
-// The lead rules OD-20261103-03 decided, carried in every seat's generated rules: the entity
+// The lead rules carried in every seat's generated rules: the entity
 // main orchestrator's relay of the owner's word, pane actions and self-service for leads, and
 // the owner's reserved scope with the team-owned rest. The lead lines print at their defaults
 // and a setting turned off drops its line; the relay line is off by default and prints only
@@ -84,8 +84,8 @@ function set(w: { home: string; root: string }, level: 'entity' | 'team', name: 
   return writePolicySet(w.home, { level, target, ...(level === 'team' ? { teamRoot: w.root } : {}), name, value }, { now: NOW });
 }
 
-describe('the generated rules carry the lead rules of OD-20261103-03', () => {
-  test('the relay line is off until the entity turns it on, and on when it does', () => {
+describe('the generated rules carry the lead rules', () => {
+  test('a lead reads all four at their defaults; the defaults are what an unset chain gives', () => {
     const w = world();
     const work = workOf(w);
     // The entity sets a main orchestrator and still no setting: the relay line is absent, because

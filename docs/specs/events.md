@@ -272,7 +272,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
     while the thread is open, neither seat has been removed, and no revocation or deny applies to
     the pair; the rule is named on the record, and the owner may switch it off per team. A
     seat's answer to the entity's main orchestrator is the reach's own reply direction
-    (OD-20261103-02): admitted only on the thread that orchestrator opened, under the same
+    (owner decision, 2026-11-03): admitted only on the thread that orchestrator opened, under the same
     `seats_cross_teams` setting as the reach, named on the record, and never by reopening a
     closed thread. A thread admits nothing by itself.
 11. **No typing into a pane a human types in.** A typed line is refused for the owner's own seat
@@ -316,7 +316,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
   record), while the accepted amendment names the lead and the owner. Both positions are kept
   here: the code defines Today, and the amendment's lead-and-owner requirement stands for
   reconciliation.
-- Owner question 5 is settled (OD-20261018-05, under the owner's direction, revisable by the
+- Owner question 5 is settled (owner decision, 2026-10-18, under the owner's direction, revisable by the
   owner): at once, only a blocker or a decision that needs the owner, a release ready for his go,
   and a security refusal or a forged or invalid record; the rest batched in the lead's summary. The
   same word settles which kinds `privileged-kinds` grows to.
@@ -331,7 +331,7 @@ webhook where the seat declares an adapter row, then the typed leg, then the mai
 
 - **Draft** (the writer, 2026-10-18): lifted from the send-events amendment's v2 draft; read at
   int/0.5.1 (8acb470b).
-- **Folded** (the writer, 2026-10-19): owner question 5 recorded as settled by OD-20261018-05 (the
+- **Folded** (the writer, 2026-10-19): owner question 5 recorded as settled by owner decision, 2026-10-18 (the
   blocker or decision, the release ready, the security or invalid record at once; the rest
   batched), matching the amendment's v2 fold.
 - **Fix round 1** (the writer, 2026-10-18, on the architect's line): §3's kinds table is one row per

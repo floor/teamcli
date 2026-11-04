@@ -394,7 +394,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
         root: current.root,
         dir: current.dir,
         now: sources.now(),
-        // Ruling D5: the placed operator may repair, under the lead-gates policy.
+        // The placed operator may repair, under the lead-gates policy.
         admitsOperator: true,
       });
       if (!lift.lifted) {

@@ -437,8 +437,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   const ceilings = ceilingsOf(team);
 
   const mayChange = verdictOf(caller, standingOf(dir, session, caller));
-  // The entity's main orchestrator stands as this team's lead (OD-02): proven by its own head
-  // team's record, live file and recorded pane, never by its seat name. A run that proves it
+  // The entity's main orchestrator stands as, and reaches as, each team lead: proven by its own
+  // head team's record, live file and recorded pane, never by its seat name. A run that proves it
   // passes the gate the way a lead of this team would, and the guard below decides the rest.
   const mainOrchestrator = entityMainOrchestrator(io, { home, root, entity: team.entity });
   // The who-may-run-it gate: the caller, its placement, and the owner rule. Set to exactly
@@ -2296,11 +2296,11 @@ function callerRefused(
 /**
  * The entity's main orchestrator, when this run is it: the lead seat of the team whose project
  * is the entity itself — the head team send admission reads in `onMainCoordinator` — placed in
- * that team's own session on the pane its state records. The reach is the same one OD-02 names
- * for sends, limited to the entity: the target's registry record must name that entity, and the
- * proof comes from the caller's own team's record, live file and state. A name alone is never
- * this proof, and the target team is never the head team this reach comes from: its own
- * orchestrator is judged by this team's map, exactly as before.
+ * that team's own session on the pane its state records. The entity main orchestrator stands as,
+ * and reaches as, each team lead, limited to the entity: the target's registry record must name
+ * that entity, and the proof comes from the caller's own team's record, live file and state. A
+ * name alone is never this proof, and the target team is never the head team this reach comes
+ * from: its own orchestrator is judged by this team's map, exactly as before.
  */
 function entityMainOrchestrator(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,

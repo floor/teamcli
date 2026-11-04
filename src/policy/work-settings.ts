@@ -1,8 +1,8 @@
 // How a team works, resolved from the signed policy chain (entity -> project -> team) with the
 // team file and the seat on top: where a seat works (`workspace-mode`), how changes land
 // (`landing-mode`), where memory lives (`vault-root`), whether the entity has its own
-// orchestrator (`entity-orchestrator`), and the lead rules the owner decided on 2026-11-03
-// (OD-20261103-03): the main orchestrator's relay of the owner's word
+// orchestrator (`entity-orchestrator`), and the lead rules:
+// the main orchestrator's relay of the owner's word
 // (`entity.main-orchestrator.relays-owner`), pane actions and self-service for leads
 // (`leads.pane-actions`, `leads.self-service`), and the owner's reserved scope
 // (`owner.reserved-scope`). These are advised settings: they shape the work and the rules a
@@ -121,7 +121,7 @@ export function vaultRule(vaultRoot: string, project: string): string {
 }
 
 /** What the rules line says the owner's machine covers, so "the machine" is never read as any
- *  act on it (OD-20261103-03(4); ruling B4). */
+ *  act on it. */
 const MACHINE_SCOPE = "the owner's machine";
 const MACHINE_GLOSS = 'OS and system settings, accounts and logins, keychain, hardware';
 
@@ -136,7 +136,7 @@ function scopeText(item: string): string {
 /**
  * The lines the lead rules print. Unlike `workLines`, these print at their release defaults
  * too: they are the rules a seat acts by, not a record of an override, so an unset setting
- * prints its default and every launch carries them (OD-20261103-03(1)-(4)). A setting turned
+ * prints its default and every launch carries them. A setting turned
  * `off` drops its line; the owner's reserved scope is always printed, because the team-owned
  * sentence under it is the rule, not a record of a choice.
  */

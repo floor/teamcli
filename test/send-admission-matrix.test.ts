@@ -510,7 +510,7 @@ describe('the three refused role cases of 2026-10-18 and 2026-10-19', () => {
     };
     expect(admitSend(floorLead, materialCoordinator, stale, undefined, { projects: {} })).toEqual({ ok: true, rule: RULE.leads });
     // The renamed seat is not the lead place yet, so the lead test refuses it; the entity's main
-    // orchestrator reaches it as any seat of the entity's teams (OD-20261103-02).
+    // orchestrator reaches it as any seat of the entity's teams.
     expect(admitSend(floorLead, materialLead, stale, undefined, { projects: {} })).toEqual({
       ok: true,
       rule: RULE.mainOrchestrator,

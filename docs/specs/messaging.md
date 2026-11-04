@@ -162,7 +162,7 @@ through the CLI is written to the history with the body marker
 `(native delivery; the text did not pass through the team CLI)`, outcome `delivered`, `via`
 `native`.
 
-### The envelope (planned; OD-20261019-14)
+### The envelope (planned; owner decision, 2026-10-19)
 
 One message model for every channel: whatever the channel, a message becomes one envelope. Nothing
 at the tag writes or reads one. Fields:
@@ -176,7 +176,7 @@ at the tag writes or reads one. Fields:
 | `at` | object | yes | — | planned | one timestamp per stage |
 | `priority` | string | yes | — | planned | the message's priority |
 
-*Source:* OD-20261019-14. *Proof:* none at the tag.
+*Source:* owner decision, 2026-10-19. *Proof:* none at the tag.
 
 ## 4. Commands and options
 
@@ -286,16 +286,16 @@ registry holds no record for is refused. Exits `route.routed` (0), `route.dry-ru
 5. The address is not an authorization: admission judges the resolved pair, and a nickname confers
    nothing.
 
-### Addressing a seat (planned; OD-20261019-19, OD-20261019-23)
+### Addressing a seat (planned; owner decision, 2026-10-19)
 
 | Rule | At v0.5.0 | Meaning |
 |---|---|---|
 | A name is unique within its team, not across the entity | yes (rule 1, and the terms) | two teams may share one name; `@<nickname>` still refuses when the entity holds several |
 | A seat is addressed `name@team` across the entity | yes: `<seat>@<team>` and `<nickname>@<team>` resolve from any folder (rule 2) | the address names one seat and resolves to its agent id |
-| The address is the seat (the normal team address); an agent may also be addressed directly | not built at v0.5.0 | a message to a seat goes to the agent on watch when it is delivered — a reattribution changes the watch, never the address; an agent may also be addressed directly under the same admission and authority rules, for example about its own watch after it was relieved (OD-20261019-23) |
+| The address is the seat (the normal team address); an agent may also be addressed directly | not built at v0.5.0 | a message to a seat goes to the agent on watch when it is delivered — a reattribution changes the watch, never the address; an agent may also be addressed directly under the same admission and authority rules, for example about its own watch after it was relieved (owner decision, 2026-10-19) |
 | The address resolves through the registry at delivery | not built at v0.5.0: it is resolved when the message is sent | delivery resolves the address again, to the seat attributed at that moment |
 
-*Source:* OD-20261019-19, OD-20261019-23. *Proof:* the resolve tests at the tag cover the forms;
+*Source:* owner decision, 2026-10-19. *Proof:* the resolve tests at the tag cover the forms;
 none at the tag covers resolution at delivery.
 
 ### The admission rules
@@ -314,7 +314,7 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 7. an assistant seat to its entity's coordinator;
 8. the entity's main orchestrator to any seat of the entity's teams — the lead of the team whose
    project is the entity itself, the `seats_cross_teams` declaration with its own default on
-   (OD-20261103-02), never across entities;
+   (owner decision, 2026-11-03), never across entities;
 9. a seat to its own team's orchestrator;
 10. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
     its agent id, never a runner or process name; the record is signed with the owner's approval
@@ -472,7 +472,7 @@ signed steps the send, the bus, the seat and the watch write for it, in one log,
 
 - **Draft** (the writer, 2026-10-18): lifted from the Communication v2 draft; read at the tag.
 - **Fold before the round** (the writer, 2026-10-19): the envelope's fields added to §3 and the
-  address rows to §5 as planned, from OD-20261019-14, -19 and -23; the rest read at the tag.
+  address rows to §5 as planned, from owner decision, 2026-10-19; the rest read at the tag.
 - **Fold after the pre-round reviews** (the writer, 2026-10-19): §5's address row keeps the
   explicit direct-agent address beside the seat address, both under the same admission and
-  authority rules (OD-20261019-23).
+  authority rules (owner decision, 2026-10-19).

@@ -37,7 +37,7 @@ the checkout selection are built, and §7 says exactly where the code stops.
 - **approval observation:** the historical record of what `team approve` showed and signed: absent,
   default or explicit, with the canonical directory and the visibility. `team approve` was removed
   at v0.5.0 (`team.approve-removed`, `src/cli.ts:59`); the observation survives in retained legacy
-  records, and current authority over knowledge is the grant/create flow (OD-20261015-03), not an
+  records, and current authority over knowledge is the grant/create flow (owner decision, 2026-10-15), not an
   approving command.
 - **automatic default change:** the fixed default appearing or disappearing under an absent key or
   a mapping with no `path`; class (c), informational, never gating a launch.
@@ -51,7 +51,7 @@ the checkout selection are built, and §7 says exactly where the code stops.
 
 It lives in the selected team file, `team config`. It is an owner section, beside `trust` and
 `dialogs`, written by the owner; the historical `team approve` recorded the observation, while a
-change today is authorized by the grant/create flow (OD-20261015-03).
+change today is authorized by the grant/create flow (owner decision, 2026-10-15).
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
@@ -112,7 +112,7 @@ Do not put user documentation here; keep that in `docs/`.
 so a team can adopt the default without making the folder by hand. At v0.5.0 the step and the stub
 are not built, and `team init` is owner-only (`src/permissions/map.ts`: no create bounds exist, so
 no agent holds `create`); the decision's init row names `create` where it exists, so under the
-current grant/create flow a seat admitted by a `create` grant may perform the step (OD-20261015-03),
+current grant/create flow a seat admitted by a `create` grant may perform the step (owner decision, 2026-10-15),
 never through a revived approving command. A repository team keeps its
 local `.git/info/exclude` entries for the private file and the runtime files; the stub is meant to
 be committed, and a `.gitignore` that hides `.agents/` needs the owner's narrow exception.
@@ -172,7 +172,7 @@ The first resolving command after each observed change appends one line to `.age
 
 `at approval` names the historical signed observation of §3.6: `team approve` was removed at
 v0.5.0 (`team.approve-removed`, `src/cli.ts:59`), the line is informational, and no approving
-command is required today (OD-20261015-03).
+command is required today (owner decision, 2026-10-15).
 
 The warnings:
 
@@ -226,7 +226,7 @@ dispatch.scope: <seat> has scope public; this brief is private
 The historical signed approval record lives in the project's approval store; retained legacy
 records are read as history: `team approve` was removed at v0.5.0 (`team.approve-removed`,
 `src/cli.ts:59`), and current authority over knowledge and disclosure is the grant/create flow
-(OD-20261015-03), never a new approval. A folder project is keyed by the canonical root path's
+(owner decision, 2026-10-15), never a new approval. A folder project is keyed by the canonical root path's
 SHA-256 12-hex prefix, at `<home>/.config/team/<project>-<hash>`. The state and log stay beside the
 file, at `.agents/team.state.json` and `.agents/team.log`.
 
@@ -351,7 +351,7 @@ from a folder root: their tag read is remote.
    SHA-256 12-hex prefix, at `<home>/.config/team/<project>-<hash>`; a repository approval **MUST
    NOT** be migrated or reused for it; moving or renaming the folder **MUST** be a new project,
    and a retained record **MUST NOT** be reused for it — admission today is the grant/create flow
-   (OD-20261015-03), never a new approval. The state and the log **MUST** stay beside the file, at
+   (owner decision, 2026-10-15), never a new approval. The state and the log **MUST** stay beside the file, at
    `.agents/team.state.json` and `.agents/team.log`. *Source:* `src/store/store.ts`, `src/state.ts`,
    `src/log.ts`, at the tag. *Proof:* `test/commands/plain-folder.test.ts`.
 
@@ -362,7 +362,7 @@ from a folder root: their tag read is remote.
    NOT** be created or inferred by any command except `team init`, which **MUST** create the
    missing stub of §3.3 even when it keeps its team-file refusal — at v0.5.0 `init` is owner-only
    (`src/permissions/map.ts`), and the decision's init row names `create` where it exists, so a
-   seat admitted by the current grant/create flow may perform it (OD-20261015-03; the stub itself
+   seat admitted by the current grant/create flow may perform it (owner decision, 2026-10-15; the stub itself
    is not built at the tag); `team` **MUST NOT** read anything inside the resolved directory.
    *Source:* the decision, § Knowledge; not built at v0.5.0 — there is no
    `knowledge` section (`src/file/sections/index.ts`), and validation refuses unknown top-level
@@ -389,7 +389,7 @@ from a folder root: their tag read is remote.
 12. **Knowledge disclosure and change authority.** A change to `knowledge` (a mapping with no
     `path` included) or `knowledge.visibility`, to the project `visibility`, to `start_at`, or to
     an effective seat scope **MUST** be authorized through the current grant/create flow
-    (OD-20261015-03) before a launch or an owner-authorized mutation; no approving command is
+    (owner decision, 2026-10-15) before a launch or an owner-authorized mutation; no approving command is
     required, and `team approve` does not exist at v0.5.0 (`team.approve-removed`,
     `src/cli.ts:59`). A retained historical approval record is the observation §3.6 describes: it
     **MUST** be read as history and compared for the automatic default observation of rule 13, and
@@ -397,7 +397,7 @@ from a folder root: their tag read is remote.
     explicit `scope: full` **MUST NOT** require a new authorization, because it hashes as the
     omitted scope. A retained record with no keys **MUST** compare unchanged when no default
     directory resolves. *Source:* the decision, § Approval, validation, and output, read with
-    OD-20261015-03 and `src/cli.ts` at the tag; not built at v0.5.0 — neither `knowledge` nor seat
+    owner decision, 2026-10-15 and `src/cli.ts` at the tag; not built at v0.5.0 — neither `knowledge` nor seat
     `scope`/`start_at` exists in the team file's sections or seats. *Proof:* none at the tag.
 
 13. **The automatic default observation.** Under an absent key or a mapping with no `path`, the
@@ -477,12 +477,12 @@ approval signed. The planned mapping to the decisions is:
 
 | Area | Decided home | Decision |
 |---|---|---|
-| the project record, its canonical root and the approval store | the registry's pluggable storage adapter family — files, a database, a service | OD-20261018-08 |
-| the state and the log beside the file | the same storage family, once the registry holds the project | OD-20261018-08 |
-| the knowledge folder and its README | the entity's vault: raw sources, curated pages, an index and a log; one vault per entity | OD-20261018-10 |
-| knowledge resolution and the README's delivery | the vault's pages chosen at a start; TeamCLI manages the vault through its commands | OD-20261018-11 |
-| seat scope and the public marker | the vault's grants: read and write by scope, deny by default | OD-20261018-12 |
-| the automatic default observation | the historical approval record, and the vault's operation log | OD-20261018-08; OD-20261018-10 |
+| the project record, its canonical root and the approval store | the registry's pluggable storage adapter family — files, a database, a service | owner decision, 2026-10-18 |
+| the state and the log beside the file | the same storage family, once the registry holds the project | owner decision, 2026-10-18 |
+| the knowledge folder and its README | the entity's vault: raw sources, curated pages, an index and a log; one vault per entity | owner decision, 2026-10-18 |
+| knowledge resolution and the README's delivery | the vault's pages chosen at a start; TeamCLI manages the vault through its commands | owner decision, 2026-10-18 |
+| seat scope and the public marker | the vault's grants: read and write by scope, deny by default | owner decision, 2026-10-18 |
+| the automatic default observation | the historical approval record, and the vault's operation log | owner decision, 2026-10-18 |
 
 Until the vault exists, the knowledge folder is a folder any seat reads directly, and §5's
 boundary stands.
@@ -503,7 +503,7 @@ boundary stands.
    their rules belong in this spec or in the launch spec is open.
 4. **The README after the vault.** Whether the delivered README stays a file at
    `.agents/docs/README.md` or becomes a vault page named at a start is decided in direction
-   (OD-20261018-10 to -12) and not in form.
+   (owner decision, 2026-10-18) and not in form.
 5. **A mapping with no `path`.** The decision treats it as the absent-key default with a recorded
    visibility; whether the file should also accept an empty mapping (`knowledge: {}`) as the same
    form is open.
@@ -519,7 +519,7 @@ boundary stands.
   2026-10-05, read against v0.5.0 (52db9b75) and int/0.5.1 (8acb470b); the checkout selection and
   the tag's plain-folder loader are stated as the code, and the rest as the decision's contract;
   no private link. S2 review fold (writer, 2026-10-19): the signed observation is labelled
-  historical and current authority is the grant/create flow (OD-20261015-03); `approve` loses its
+  historical and current authority is the grant/create flow (owner decision, 2026-10-15); `approve` loses its
   matrix row and its approval-based rules 8 and 12; the `--file` claim is limited to the commands
   that accept it (`plan` and `feed` do not); `init`'s stub exception is stated with its authority;
   the `knowledge.invalid` note no longer points at the exit-codes registry; and the int/0.5.1

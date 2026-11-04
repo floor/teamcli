@@ -4,7 +4,7 @@ updated: 2026-10-18
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75) for what the core does today through herdr; herdr and tmux behaviour as documented by their own help on 2026-10-18
-for: Runtime (the workspace, seat persistence, the seat state, the watch); the design note 2-runtime/work/workspace-adapters-2026-10-18.md (OD-20261018-09)
+for: Runtime (the workspace, seat persistence, the seat state, the watch); the design note 2-runtime/work/workspace-adapters-2026-10-18.md (owner decision, 2026-10-18)
 public: staged for review; contains no private links
 ---
 
@@ -71,7 +71,7 @@ states map onto TeamCLI's seat states.
 
 ## 4. Commands and options
 
-Choosing an adapter is a setting at entity or project level (registry, OD-20261018-08):
+Choosing an adapter is a setting at entity or project level (registry; owner decision, 2026-10-18):
 `workspace: headless | herdr | tmux` (default `headless` from step 3 of the plan; `herdr` until then).
 `team doctor` reports the adapter in use, its version, and which optional operations it lacks.
 `team attach <seat>` (pane adapters only) opens the seat's pane.
@@ -100,4 +100,4 @@ noise, the waiter count on a loaded machine, headless hooks, turn-runner limits 
 
 ## Revision log
 
-- 2026-10-18: draft 1 (the orchestrator), from the owner's directions that evening; same night: renamed from workspace-plugins, headless and the turn runner added (OD-20261018-09).
+- 2026-10-18: draft 1 (the orchestrator), from the owner's directions that evening; same night: renamed from workspace-plugins, headless and the turn runner added (owner decision, 2026-10-18).

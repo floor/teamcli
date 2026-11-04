@@ -337,7 +337,7 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
  *   dispatcher's door verified the grant's chain, its key and the `daemon` op once, and this
  *   command verifies them again here, so a grant whose chain, key or ops no longer admit
  *   `daemon` cannot act. A grant holder needs no terminal and no owner seat;
- * - the owner's widening (OD-20261019-49), which admits a placed team orchestrator through the
+ * - the owner's dev-mode widening, which admits a placed team orchestrator through the
  *   same central admission every owner-only command shares; the admission is the file's lead on
  *   the pane its team's state records, never a bare name or a role claim.
  *
@@ -368,7 +368,7 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb:
     refusal: message,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     ...(sources.now !== undefined ? { now: sources.now() } : {}),
-    // Ruling D5: the placed operator may restart the daemon, under the lead-gates policy — and
+    // The placed operator may restart the daemon, under the lead-gates policy — and
     // nothing else here: install, uninstall and fault-watch stay the owner's or the lead's.
     admitsOperator: verb === 'restart',
   });
@@ -1266,7 +1266,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
 
   // The four verbs left here are owner-gated: install, restart, uninstall and fault-watch. Two
   // admissions widen the gate through `ownerAllows`: the owner's dev-mode lift admits a placed
-  // orchestrator (OD-20261019-49), and install and restart also admit a verified general grant
+  // orchestrator, and install and restart also admit a verified general grant
   // whose ops name `daemon`. status returned above, and run has its own gate.
   if (!ownerAllows(io, sources, parsed.json, parsed.verb)) {
     // exit: daemon.not-owner

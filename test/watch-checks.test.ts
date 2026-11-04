@@ -104,7 +104,7 @@ describe('watch.checks, the section', () => {
   });
 
   test('the retired swap-free check loads carried and deprecated, never dropped or refused', () => {
-    // Free swap no longer pages the owner (ruling D8), so the check is gone — but the name
+    // Free swap no longer pages the owner, so the check is gone — but the name
     // stays in the file's checks list exactly as written. The canonical record and the
     // `watch.checks` fingerprint digest that list, so dropping the name would move signed
     // approvals; carrying it moves nothing, and no check runs for it.
