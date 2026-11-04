@@ -2107,6 +2107,106 @@ export function* readEventsSteps(
   return result;
 }
 
+/** What a matching read may ask of one record before any sealed byte is read: the kind and the
+ *  record id, the two fields a sealed segment's index carries and its seal signs. A predicate
+ *  never sees a payload the reader has not verified. */
+export type EventBriefFilter = (entry: { kind: string; record_id: string }) => boolean;
+
+/** The retained records whose kind or record id satisfies `filter`, read through the sealed
+ *  segments' signed indexes: for every matching index entry only that entry's own line is read
+ *  and its signature verified, and the open segment is read whole, line by line, as every read
+ *  does. Nothing is appended and nothing is written.
+ *
+ *  The index is trusted only where `verifyEventLogSealsCached` trusts its seal: a signed index
+ *  triple, chained to the trusted segment before it. When no segment is sealed, a present
+ *  segment is unsealed or missing, there is no key to check a candidate line with, or a candidate
+ *  line no longer parses as the record the index named under the key's signature, the read falls
+ *  back to the ordinary verified read of the whole retained log and filters it, so no answer
+ *  rests on an index the seal does not vouch for. */
+export function readEventsMatching(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number } = {},
+): EventReadResult {
+  return drainSteps(readEventsMatchingSteps(project, root, home, filter, options));
+}
+
+function* readEventsMatchingSteps(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number },
+): Generator<void, EventReadResult, void> {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
+  if (!checked.ok) return checked;
+
+  const keyState = messageKeyState(home);
+  // Every present segment must be trusted, seal and index both: a hole in the chain leaves a
+  // stretch of the retained history no index accounts for, so the whole read stays ordinary.
+  const trusted =
+    checked.segments.length > 0
+    && checked.segments.every((segment) => segment.state === 'sealed' && segment.entries !== undefined);
+  if (!trusted || keyState.kind !== 'key') {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const events: SignedEventRecord[] = [];
+  let checkedLines = 0;
+  let disagree = false;
+  for (const segment of checked.segments) {
+    if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+    for (const entry of segment.entries) {
+      if (!filter(entry)) continue;
+      checkedLines += 1;
+      const raw = readLineAt(segment.path, entry.offset);
+      const parsed = raw === null ? null : parseSignedEventLine(raw);
+      if (
+        parsed === null
+        || parsed.payload.seq !== entry.seq
+        || parsed.payload.kind !== entry.kind
+        || parsed.payload.record_id !== entry.record_id
+        || !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+      ) {
+        // The index named a line this segment no longer holds as that signed record: the sealed
+        // bytes and the index disagree, so the answer comes from the whole retained log instead.
+        disagree = true;
+        break;
+      }
+      events.push(parsed);
+    }
+    if (disagree) break;
+    yield;
+  }
+  if (disagree) {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const path = checked.open?.path ?? eventLogPath(project, root, home);
+  const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
+  if (open === null) return { ok: false, reason: 'the event log could not be read' };
+  for (const record of open.records) {
+    if (filter(record.payload)) events.push(record);
+  }
+  return {
+    ok: true,
+    events,
+    unverified: open.unverified,
+    checked: checkedLines + open.checked,
+    full: false,
+    oldestSeq: events.length > 0 ? events[0]!.payload.seq : null,
+    newestSeq: events.length > 0 ? events[events.length - 1]!.payload.seq : null,
+    path,
+  };
+}
+
 /** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
  *  Ranges may abut and overlap; together they must reach the whole missing window. */
 function declaredDropCovers(events: SignedEventRecord[], from: number, to: number): boolean {

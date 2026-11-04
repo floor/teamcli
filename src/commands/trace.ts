@@ -17,7 +17,7 @@
 
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { EVENT_RECORD_ID, readEvents, type EventPayload } from '../bus/log.ts';
+import { EVENT_RECORD_ID, readEventsMatching, type EventPayload } from '../bus/log.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
@@ -79,15 +79,15 @@ export async function runTrace(argv: string[], io: Io, sources: TraceSources = r
   }
   const { team, root } = loaded;
 
-  const read = readEvents(team.project, root, sources.home);
+  // The record id is the key: the bare id is the arrival, and every step's id is the message id
+  // plus its own tail. Both match, and a full step id matches only its own step. The sealed
+  // segments' signed indexes answer the filter, so only the steps' own lines are read.
+  const read = readEventsMatching(team.project, root, sources.home, (entry) =>
+    entry.record_id === id || entry.record_id.startsWith(`${id}:`),
+  );
   if (!read.ok) return unreadable(io, read.reason, json);
 
-  // The record id is the key: the bare id is the arrival, and every step's id is the message id
-  // plus its own tail. Both match, and a full step id matches only its own step.
-  const found = read.events
-    .filter((record) => record.payload.record_id === id || record.payload.record_id.startsWith(`${id}:`))
-    .map((record) => record.payload)
-    .sort((a, b) => a.seq - b.seq);
+  const found = read.events.map((record) => record.payload).sort((a, b) => a.seq - b.seq);
   const steps: TraceStep[] = found.map((payload, index) => {
     const previous = index === 0 ? null : found[index - 1] as EventPayload;
     return { payload, delta: previous === null ? null : deltaOf(previous, payload) };

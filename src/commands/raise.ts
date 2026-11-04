@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { appendEvent, readEvents, type EventAppendInput, type EventPayload } from '../bus/log.ts';
+import { appendEvent, readEventsMatching, type EventAppendInput, type EventPayload } from '../bus/log.ts';
 import { leadSeatsOf } from '../bus/kinds.ts';
 import { OWNER_MAILBOX, ownerRecordId, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import {
@@ -161,11 +161,13 @@ export async function runRaise(argv: string[], io: Io, sources: RaiseSources = r
   // The gate admitted a seat; the name is read once, here, for the record and the merge test.
   const seat = caller.kind === 'seat' ? caller.name : '';
 
-  const read = readEvents(team.project, current.root, sources.home);
+  // The cap and the hour count raise records only, and a sealed segment's signed index names
+  // every record's kind: the read asks for the raise kinds and reads only their own lines.
+  const read = readEventsMatching(team.project, current.root, sources.home, (entry) => isRaiseKind(entry.kind));
   if (!read.ok) {
     return ioRefusal(out, json, `the event log can't be read: ${read.reason}`, notice);
   }
-  const raises = read.events.filter((record) => isRaiseKind(record.payload.kind));
+  const raises = read.events;
   const recent = raises
     .filter(
       (record) =>
