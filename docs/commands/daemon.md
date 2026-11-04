@@ -190,11 +190,12 @@ brace text stands as written.
 
 An address names a team through the machine's team registry — by id, then project name, then
 session name — and then a seat that checkout's team file declares by name or nickname; `lead`
-names the team's coordinator seat. The team must belong to the reminder's entity: a team whose
+names the team's coordinator seat. The team must be inside the reminder's entity: a team whose
 file declares another entity, or whose registry record does when the file declares none, is
-refused naming both, and a team that declares no entity anywhere is addressable from any
-entity's reminders. A scope two registry records answer is refused naming both,
-and the owner, a seat the file marks as a person's and a name no seat declares are refused too.
+refused naming both, and a team that declares no entity anywhere is refused too — a reminder
+never reaches outside the entity it belongs to. A scope two registry records answer is refused
+naming both, and the owner, a seat the file marks as a person's and a name no seat declares are
+refused too.
 A refused entry is refused alone: a configuration entry the parser refuses, and an address the
 resolver refuses, are each named `<entity>.reminders: <why>` in the daemon's log, once per
 change of the file rather than on every beat, and the entries around it still run. `status`'s

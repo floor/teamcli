@@ -30,12 +30,17 @@ function entry(over: Partial<ReminderConfigEntry> = {}): ReminderConfigEntry {
 }
 
 /** The fixture world's team, recorded in its own home registry: the address resolves through the
- *  registry to this checkout, and the seat through the file it names. */
+ *  registry to this checkout, and the seat through the file it names. The team is inside the
+ *  reminder's entity; `lobby:` names the machine-global lobby outright so the entity line does
+ *  not move the trust check's subject. */
 function registered(withHuman = false): World {
   const one = world(['mcp-inbox', 'typed'], withHuman ? [{ name: 'person', role: 'observer', human: true }] : []);
   made.push(one);
+  const path = join(one.root, '.agents', 'team.yaml');
+  writeFileSync(path, `${readFileSync(path, 'utf8')}entity: acme\nlobby: ${lobbyDir(one.home)}\n`);
   upsertTeam(one.home, teamIdOf(one.root), {
     project: 'acme',
+    entity: 'acme',
     session: 'acme',
     root: one.root,
     by: 'reminder-resolve-test',
@@ -152,6 +157,20 @@ describe('resolving a reminder address', () => {
     expect(resolved.specs).toEqual([]);
     expect(resolved.problems[0]?.why).toContain('lead@beta');
     expect(resolved.problems[0]?.why).toContain('entity "beta"');
+  });
+
+  test('a team that declares no entity anywhere is outside the reminder, and refused', () => {
+    const one = registered();
+    otherEntity(one.home, null, null);
+
+    const resolved = resolveReminderEntries(one.home, [
+      entry({ targets: [{ address: 'lead@beta', text: null }] }),
+    ]);
+
+    expect(resolved.specs).toEqual([]);
+    expect(resolved.problems[0]?.why).toContain('lead@beta');
+    expect(resolved.problems[0]?.why).toContain('declares no entity');
+    expect(resolved.problems[0]?.why).toContain('"acme"');
   });
 
   test('a target checkout the caller does not host refuses the reminder, naming the checkout', () => {

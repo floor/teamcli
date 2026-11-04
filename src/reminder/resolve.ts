@@ -4,10 +4,10 @@
 // text is filled per target, so `{team}` and `{seat}` say what the receiving seat reads rather
 // than the sender's own team.
 //
-// The team must also belong to the reminder's entity: a team file that declares another entity
-// (or, when the file declares none, a registry record that does) is refused at the read, the
-// same way an unresolvable seat is. A team that declares no entity anywhere is addressable from
-// any entity's reminders.
+// The team must also be inside the reminder's entity: a team file that declares another entity
+// (or, when the file declares none, a registry record that does) is refused at the read, and so
+// is a team that declares no entity anywhere — it is not inside the entity this reminder belongs
+// to, and the reminder never reaches outside it.
 //
 // A target that does not resolve refuses its whole reminder, named, and the other reminders
 // read: a reminder that could reach only some of the seats it names would deliver a partial
@@ -103,7 +103,10 @@ function resolveAddress(home: string, entry: ReminderConfigEntry, address: strin
   }
   const team = loaded.team;
   const declared = team.entity ?? record.entity;
-  if (declared !== null && declared !== entry.entity) {
+  if (declared === null) {
+    return { why: `${address}: the team ${team.project} declares no entity, and a reminder stays inside entity "${entry.entity}"` };
+  }
+  if (declared !== entry.entity) {
     return { why: `${address}: the team ${team.project} belongs to entity "${declared}", not "${entry.entity}"` };
   }
   const seat = namedSeat(team.seats, parsed.target, team.orchestrator);
