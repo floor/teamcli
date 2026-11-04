@@ -17,6 +17,7 @@ import { launchedCliBinary } from '../src/launch/line.ts';
 import { SWAP_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { beginSession } from '../src/sessions/registry.ts';
+import { askCheckpoint } from '../src/checkpoint/checkpoint.ts';
 import { readState } from '../src/state.ts';
 import type { Screen } from '../src/watch/screen.ts';
 import { CLAUDE_IDLE, claudeBox, testIo } from './helpers.ts';
@@ -1129,6 +1130,30 @@ describe('team swap now and --run', () => {
     expect(log).toContain(`lead: using the handover already at ${named}`);
     expect(log).toContain(`handover passed from ${named}`);
     expect(world.did.typed.join('\n')).not.toContain('write a handover');
+    expect(queue()).toEqual({});
+  });
+
+  // Context reset R2: a checkpoint ask standing for the seat never overrides the handover the
+  // queued swap itself named — the swap's own path is the one used and passed on, and the
+  // standing checkpoint is left for a restart to read.
+  test('a queued swap\'s own handover keeps precedence over a standing checkpoint', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    mkdirSync(dirname(named), { recursive: true });
+    writeFileSync(named, '# handover\n\nwhat is left\n');
+    // The checkpoint a boundary asked for in this session, its file there to tempt the read.
+    const checkpoint = askCheckpoint(join(root, '.agents'), 'lead', 'acme', 'the owner', new Date(NOW.getTime() + 60_000));
+    mkdirSync(dirname(checkpoint.path), { recursive: true });
+    writeFileSync(checkpoint.path, '# checkpoint handover\n\nwhat the checkpoint holds\n');
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain(`lead: using the handover already at ${named}`);
+    expect(log).not.toContain(`lead: using the handover already at ${checkpoint.path}`);
+    expect(log).toContain(`handover passed from ${named}`);
     expect(queue()).toEqual({});
   });
 
