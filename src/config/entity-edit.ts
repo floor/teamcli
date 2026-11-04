@@ -117,7 +117,14 @@ function isMap(value: YamlValue): value is { [key: string]: YamlValue } {
 
 /** The entities file written the atomic way the other stores are: a temporary file renamed over
  *  it, at the mode it already had (0600 for a file that appeared between the read and the
- *  write). The owner's own file keeps the permissions they set. */
+ *  write). The owner's own file keeps the permissions they set.
+ *
+ *  It is written here, not as a signed settings record beside `writeConfigSet` and
+ *  `writePolicySet`: `entities.yaml` is the owner's own file of words — the `names.unique` write
+ *  has always gone through this function — and the reminder path reads the file itself
+ *  (`src/reminder/config.ts`, through `entitiesPath`), never the signed chain under the registry.
+ *  A signed record here would be a value nothing reads. The door is the same as the word's:
+ *  the owner at a terminal, or the owner's general grant. */
 function writeOwnerFile(path: string, text: string): void {
   let mode = 0o600;
   try {
