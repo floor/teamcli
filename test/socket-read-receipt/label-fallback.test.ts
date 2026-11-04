@@ -1,6 +1,7 @@
 // The accepted frame's name fallback: nickname, then the written label's name, then the seat.
 //
-// Contract pinned by builder-5 for #682: the opening line is `Message from <name> (<seat>@<team>)`.
+// Contract pinned by builder-5 for #682: the display line is `Message from <name> (<seat>@<team>)`,
+// third in the frame, after the unverified-claim banner and its blank line.
 // <name> is the seat's signed nickname setting, else the roster nickname, else the written
 // `label:` of the sender's seat stanza in the sending run's own team file — the text before the
 // first middle dot, trimmed, the whole label when it holds none — and the seat name only when
@@ -50,9 +51,12 @@ test('an accepted frame reads the written label name when no nickname stands', a
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   const lines = frame.content.split('\n');
-  // The label's name precedes the middle dot; the address stays the record's own seat.
-  expect(lines[0]).toBe('Message from Bea (helper@acme)');
+  // Nothing attests the caller: the claim is marked first, then the display line follows.
+  expect(lines[0]).toBe('[unverified sender: claimed helper]');
   expect(lines[1]).toBe('');
+  // The label's name precedes the middle dot; the address stays the record's own seat.
+  expect(lines[2]).toBe('Message from Bea (helper@acme)');
+  expect(lines[3]).toBe('');
   // Display only: the body keeps its own attribution (no nickname stands there either), and the
   // signed bytes never carry the display header.
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
@@ -74,7 +78,7 @@ test('a nickname stands over the written label name', async () => {
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   // The roster nickname wins; the label's name is never printed.
-  expect(frame.content.split('\n')[0]).toBe('Message from Bea (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from Bea (helper@acme)');
   expect(record.body.startsWith('from Bea — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Ada');
 });
@@ -91,7 +95,7 @@ test('a written label with no middle dot is the whole name', async () => {
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[0]).toBe('Message from Bea (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from Bea (helper@acme)');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from');
 });
@@ -110,7 +114,7 @@ test('no written label falls through to the seat name, and another seat label na
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   // The default title (model and version) is no name, and the lead's label is not the sender's.
-  expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Dora');
 });
@@ -128,7 +132,7 @@ test('a written label whose name is empty before the middle dot falls through to
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   // No blank name and no stray dot: the seat name stands.
-  expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
 });
 
@@ -145,6 +149,6 @@ test('an owner frame reads owner, not a seat label', async () => {
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   // The caller is not a seat: no label is read, and the owner's line is unchanged.
-  expect(frame.content.split('\n')[0]).toBe('Message from owner (owner@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from owner (owner@acme)');
   expect(record.body.startsWith('from the owner — admitted by: ')).toBe(true);
 });

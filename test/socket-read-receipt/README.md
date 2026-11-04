@@ -39,11 +39,12 @@ the team's roster with a nickname, or with none.
    pass types nothing before the window, nothing after it (the typed leg is refused), and
    nothing on a later pass. This row pins the behavior the frame acceptance leaves
    unchanged.
-5. An accepted frame from a seat with nickname `Bea` opens with exactly
-   `Message from Bea (helper@acme)`, alone on its first line, then one blank line, then
-   the unchanged record body. The header is display only: the signed record keeps its own
-   `from Bea — admitted by: …` line and its bytes never carry the display header.
-6. With no nickname on the roster, the same frame opens with
+5. An accepted frame opens with the claim banner `[unverified sender: claimed helper]`,
+   then one blank line, then exactly `Message from Bea (helper@acme)` alone on its line
+   (a seat with nickname `Bea`), then one blank line, then the unchanged record body. The
+   banner says the claim is unattested; the header is display only: the signed record keeps
+   its own `from Bea — admitted by: …` line and its bytes never carry the display header.
+6. With no nickname on the roster, the same frame's display line reads
    `Message from helper (helper@acme)`.
 
 ## Contract pinned
@@ -64,12 +65,15 @@ The product branch's answers, at the strings level:
 - Unread pass: a socket-delivered record is due like any other. No pane messaging refuses
   the typed leg, so the pass spends no wake marker; at twice the window
   `reportUnreadDrops` writes the sender report, the lead report and the reported marker.
+- Frame claim banner: `[unverified sender: claimed <seat>]`, first in every frame. Nothing
+  attests the caller yet, so the name the record claims is marked before any display text.
 - Frame header: `Message from <name> (<seat>@<team>)`, with no trailing colon, no summary,
-  nothing else on the line and no admitted-by suffix. `<name>` is the sender's nickname as
+  nothing else on the line and no admitted-by suffix; it follows the banner and its blank
+  line. `<name>` is the sender's nickname as
   the naming rule resolves it, falling back to the seat name; `<seat>` is the record's
   signed sender; `<team>` is the sending team's project name. The frame keeps its shape:
-  header, blank line, record body (which keeps its own attribution line), blank line, the
-  reader line ADR `zeus-message-path`, D3 pins:
+  claim banner, blank line, header, blank line, record body (which keeps its own attribution
+  line), blank line, the reader line ADR `zeus-message-path`, D3 pins:
   `Answer with team reply <id> "…" (this marks it read), or team ack <id> if no answer is
   needed.` The id is the record's own, appears on the line once, and names both acts that
   settle it — `team reply <id>` answers and writes the seat's signed read, `team ack <id>`

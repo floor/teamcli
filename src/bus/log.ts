@@ -123,6 +123,11 @@ export type EventPayload = {
   /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
    *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
   reconciled?: string;
+  /** On a `config.changed` the reconcile pass appended: `"false"`. The record verified with the
+   *  checkout's approval key, which every seat can read, so the event's author is a claim no
+   *  reader can prove; the pass names no `from` and says so here. A write-time event carries no
+   *  mark. A string because this payload carries no booleans. */
+  sender_verified?: string;
   /** On `team.event-log-dropped`: the oldest sequence retention has dropped (carried forward
    *  across declarations) and the newest sequence the declaring pass dropped. */
   dropped_oldest_seq?: number;
@@ -803,6 +808,7 @@ const OPTIONAL_STRING_FIELDS = [
   'config_old',
   'config_new',
   'reconciled',
+  'sender_verified',
   'outcome',
   'presence_state',
   'presence_event',

@@ -1060,11 +1060,14 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
             level: setting.level,
             target: setting.target,
             key: setting.key,
-            // The record keeps the value, not the value it replaced.
+            // The record keeps the value, not the value it replaced. No author is stamped: the
+            // signed settings record verifies with the checkout's shared approval key, which
+            // every seat can read, so the pass that found it cannot say who wrote it. The event
+            // carries `sender_verified: "false"` instead, and the owner reads that a change was
+            // found on disk.
             old: null,
             value: setting.value,
             generation: setting.generation,
-            from: 'owner',
             ...(source.seat !== undefined ? { seat: source.seat, subject: source.seat } : {}),
             reconciled: true,
           };

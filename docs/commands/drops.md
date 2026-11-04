@@ -65,7 +65,7 @@ refusal, its body is not printed, and the file is left in place — only
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>`, flushed as each is read; Ctrl-C stops it and exits 0 |
+| `--follow` | — | keep reading the folder and print one line per new drop, `from <sender> — <path>` (`<sender>` carries `(unverified)` when the claim does not verify), flushed as each is read; Ctrl-C stops it and exits 0 |
 | `--json` | — | print one `team.drops` document (`format: 1`, `project`, `session`, `seat`, `drops`, `counts`) |
 | `--read` | — | hand the seat's waiting messages to the launch's turn: verify each record, write its signed `<id>.read.json` receipt, then print its body; at most ten a run, newest first. `--seat` is required |
 | `--seat` | a seat name | the seat whose folder `--read` serves; only with `--read` |
@@ -117,11 +117,13 @@ A reading prints the context line (`team <project>, session "<session>"`), the t
 with one row per waiting drop, then one summary line, `<n> drop` or `<n> drops`. `FROM` is the
 sender the record names — `the owner`, a seat's name, or a registered name — or, in a raw body
 file an earlier build wrote, the sender its first line names. It reads `unknown` when there is
-neither, and when a record does not verify against the message key. `PATH` is the file's absolute
-path.
+neither, and when a record does not verify against the message key. A named sender carries
+`(unverified)` unless its claim verifies: only the seat's current general seat brief does, so
+every other signed record and every raw drop is marked. `PATH` is the file's absolute path.
 
 A follow prints nothing at start: the drops already on disk are waiting, not new. Then it prints
-one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C stops it with exit 0.
+one line, `from <sender> — <path>`, for each drop that appears, with `<sender>` marked
+`(unverified)` as in the table, and Ctrl-C stops it with exit 0.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
@@ -136,8 +138,9 @@ one line, `from <sender> — <path>`, for each drop that appears, and Ctrl-C sto
 | `--read` named another session, or a seat the file does not declare | `team drops: the team's session is "…", not "…"`, or `team drops: the team file declares no seat "…"` | 1 |
 | the invocation can't be read, `--follow` and `--json` are both given, `--read` is given without `--seat` or with `--follow` or `--json`, or this folder is neither a checkout nor a team root | `team drops: <problem>`, with the usage for the invocation | 2 |
 
-The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "received": …, "path": …}], "counts": {"drops": …}}`.
-`received` is the file's modification time, ISO 8601.
+The `--json` document is `{"schema": {"name": "team.drops", "version": 1}, "format": 1, "project": …, "session": …, "seat": …, "drops": [{"from": …, "sender_verified": …, "received": …, "path": …}], "counts": {"drops": …}}`.
+`received` is the file's modification time, ISO 8601; `sender_verified` is true only for the
+seat's current general seat brief.
 
 ## Example
 
@@ -189,8 +192,8 @@ orchestrator: read the review note, then report.
 ```console caller=claude-keeper
 $ team drops ; echo "exit $?"
 team beacon, session "beacon"
-  FROM          PATH
-  orchestrator  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
+  FROM                       PATH
+  orchestrator (unverified)  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
 
 1 drop
 exit 0
@@ -206,9 +209,9 @@ an older build left this body with no sender line
 ```console caller=claude-keeper
 $ team drops ; echo "exit $?"
 team beacon, session "beacon"
-  FROM          PATH
-  orchestrator  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
-  unknown       ./.agents/send-drops/beacon/claude-keeper/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d
+  FROM                       PATH
+  orchestrator (unverified)  ./.agents/send-drops/beacon/claude-keeper/3b3e9a27-e222-4e2e-90d9-95f4273e319d
+  unknown                    ./.agents/send-drops/beacon/claude-keeper/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d
 
 2 drops
 exit 0

@@ -188,10 +188,12 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
   };
 }
 
+/** The frame's display line: the unverified-claim banner stands first, then a blank line, so the
+ *  name line is the third. */
 function frameLine(frames: readonly string[]): string {
   const frame = frames[0];
   if (frame === undefined) throw new Error('no socket frame was dialed');
-  return (JSON.parse(frame) as { message: { content: string } }).message.content.split('\n')[0] ?? '';
+  return (JSON.parse(frame) as { message: { content: string } }).message.content.split('\n')[2] ?? '';
 }
 
 test('a sender reads its own team nickname ahead of its written label', async () => {

@@ -57,7 +57,8 @@
         "required": [
           "from",
           "received",
-          "path"
+          "path",
+          "sender_verified"
         ],
         "properties": {
           "from": {
@@ -65,6 +66,9 @@
               "string",
               "null"
             ]
+          },
+          "sender_verified": {
+            "type": "boolean"
           },
           "received": {
             "type": "string",

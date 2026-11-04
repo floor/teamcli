@@ -241,6 +241,11 @@ export function isOwnerAddressed(
  *  detail. Whitespace is folded: the mailbox body is one line. */
 export function ownerDeliveryText(event: EventPayload): string {
   if (event.to === 'owner' && event.reason !== undefined) return clip(event.reason);
+  // A settings change the reconcile pass found on disk: the signed record proves the value, not
+  // who wrote it, so the line names the key and says the author is unverified.
+  if (event.kind === 'config.changed' && event.from === undefined) {
+    return clip(`${event.config_key ?? 'config'} changed on disk [unverified author]`);
+  }
   if (event.kind === 'record.invalid' || event.kind === 'security.refused') {
     // A refusal names its rule and the object it names — the record id and where it stands, or
     // the seat a denied call was addressed to — and never a body.
