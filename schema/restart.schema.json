@@ -123,6 +123,10 @@
       "type": "string",
       "minLength": 1
     },
+    "handover": {
+      "type": "string",
+      "minLength": 1
+    },
     "handover_asked": {
       "type": "string",
       "minLength": 1

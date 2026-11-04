@@ -762,6 +762,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         notes,
         performed.pullOnly,
         performed.handoverAsked,
+        performed.handover,
       );
     }
     default: {
@@ -2549,6 +2550,7 @@ function readyExit(
   notes: readonly string[],
   pullOnly?: string,
   handoverAsked?: string,
+  handover?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
   // The stale-checkpoint line is the design's own words for the case: the restart ran from the
@@ -2568,6 +2570,7 @@ function readyExit(
       pane: toPane,
       notes,
       ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
+      ...(handover === undefined ? {} : { handover }),
       ...(handoverAsked === undefined ? {} : { handover_asked: handoverAsked }),
     });
   } else {
