@@ -193,6 +193,9 @@ describe('a live handoff re-parents the pane root, and the server still vouches 
   test('(d) a server read that fails is still the detached refusal', () => {
     const silent = handoff({ agents: () => null, paneRootPid: () => null });
     expect(placeCaller(silent, 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+    // The pane root vouched, and the agent list then went silent: still the refusal the caller
+    // got before the fix, not a new one.
+    expect(placeCaller(handoff({ agents: () => null }), 'main')).toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
   });
 
   test('(e) the classic path with a herdr ancestor is unchanged, and reads the hint only to order the agents', () => {

@@ -72,7 +72,13 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
   const hintedRoot = underHerdr || hint === undefined || hint === '' ? null : sources.paneRootPid(hint);
   if (underHerdr || (hintedRoot !== null && pids.has(hintedRoot))) {
     const agents = sources.agents();
-    if (!agents) return { kind: 'unplaced', reason: 'it runs under herdr, and herdr doesn\'t answer' };
+    if (!agents) {
+      // In the handoff reading the server answered once already (the pane root above). A second
+      // read failing keeps the refusal the caller got before this fix, never a new one.
+      return underHerdr
+        ? { kind: 'unplaced', reason: 'it runs under herdr, and herdr doesn\'t answer' }
+        : walkOutside(ancestors, sources);
+    }
     // The variable only says which pane to read first; the pids decide.
     const ordered = [...agents].sort((a, b) => Number(b.pane === hint) - Number(a.pane === hint));
     // In the handoff reading the hinted pane's root was the server's own answer, already read
