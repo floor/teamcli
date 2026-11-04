@@ -5,21 +5,29 @@
 // already exists, so the take must not be recursive on the lock itself — an existing directory
 // is a held lock, and this process writes nothing into it. The holder file is written only after
 // that `mkdir` succeeds, and written by rename, so a failed take leaves no `who` and a reader
-// never sees a half-written one. A held lock is waited out, never cleared and never guessed:
-// a missing or unreadable holder stays held, including for the owner.
+// never sees a half-written one.
 //
-// This is not the session mutator lock (`launch/run-lock.ts`). That one guards a live command
-// process, so a dead pid may be taken over. A machine lock guards a person's run, which outlives
-// the `team lock` process that took it; the take process's pid is dead immediately and must not
-// be read as a stale holder.
+// Waiters queue fairly. A take that waits leaves a ticket in `<name>.queue`, named by its
+// arrival so the files sort in order, and only the oldest live ticket may take the lock when it
+// frees; a take that does not wait is refused while a queue stands, so nobody jumps it. A
+// ticket whose waiter process is gone is pruned by the next waiter to look.
+//
+// A stale holder is reclaimed only on proof. This is not the session mutator lock
+// (`launch/run-lock.ts`): a machine lock guards a person's run, which outlives the `team lock`
+// process that took it, so that process's pid is dead immediately and proves nothing. The
+// holder file instead records the long-lived shell's pid — the shell the run lives in. When
+// that pid is dead, and the holder file re-reads byte for byte as it did before the check, the
+// next take clears the lock and takes it. A holder with no recorded pid, a live pid, or a
+// missing or unreadable holder file is never cleared and never guessed, including for the owner.
 import { randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { callerOf, describeCaller } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
+import { pidAlive } from '../state.ts';
 import { validLockName } from './name.ts';
 
 /** The lock's name rule lives in its own leaf module, so the state can clean a key by it too. */
@@ -29,7 +37,9 @@ export const WAIT_MAX_SECONDS = 86_400;
 const WHO_FILE = 'who';
 
 export type LockIdentity = { team: string; by: string };
-export type Who = LockIdentity & { run: string; at: string };
+/** One holder (or waiter) record. `pid` is the long-lived shell the run lives in, when the take
+ *  could name it; a record written before the pid was recorded has none, and is never stale. */
+export type Who = LockIdentity & { run: string; at: string; pid?: number };
 
 export type LockHome = {
   /** The home whose `.config/team/locks` is used. Required, so no test reaches the owner's. */
@@ -43,6 +53,16 @@ export type Sleeper = (ms: number) => void | Promise<void>;
 export type LockSources = LockHome & {
   now: () => Date;
   sleep: Sleeper;
+  /** The long-lived shell's pid to record for this take. Absent: no pid is recorded, and the
+   *  lock this take leaves can never be read as stale. The real source is the parent process —
+   *  the shell that ran `team lock` and goes on to run the work. */
+  pid?: () => number;
+  /** This waiting process's own pid, carried in its queue ticket's name so a later waiter can
+   *  prune a ticket whose waiter is gone. Absent: this process's pid. */
+  waiterPid?: () => number;
+  /** Whether a pid names a live process. Absent: signal 0. A pid this cannot judge (another
+   *  user's process) reads as alive — never as stale. */
+  alive?: (pid: number) => boolean;
 };
 
 export const realLockHome: LockHome = { home: homedir() };
@@ -51,6 +71,9 @@ export const realLockSources: LockSources = {
   ...realLockHome,
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  pid: () => process.ppid,
+  waiterPid: () => process.pid,
+  alive: pidAlive,
 };
 
 /** `<home>/.config/team/locks`, the same home `lobbyDir` uses, one folder in from it. */
@@ -60,6 +83,11 @@ export function locksRoot(home: string): string {
 
 export function lockDirectory(home: string, name: string): string {
   return join(locksRoot(home), `${name}.lock`);
+}
+
+/** The queue for `name`: one ticket file per waiter, beside the lock it waits for. */
+export function queueDirectory(home: string, name: string): string {
+  return join(locksRoot(home), `${name}.queue`);
 }
 
 /** The stamp the hand-written holder files use: UTC, to the second. */
@@ -81,14 +109,16 @@ export function formatAge(ms: number): string {
 }
 
 export function formatWho(who: Who): string {
-  return `team: ${who.team}\nrun: ${who.run}\nby: ${who.by}\nat: ${who.at}\n`;
+  const pid = who.pid === undefined ? '' : `pid: ${who.pid}\n`;
+  return `team: ${who.team}\nrun: ${who.run}\nby: ${who.by}\nat: ${who.at}\n${pid}`;
 }
 
-/** The holder file, or null when it is not the four lines this command writes. */
+/** The holder file, or null when it is not the lines this command writes: the four identity
+ *  lines, plus the shell pid when the take recorded one. A file from before the pid has four. */
 export function parseWho(text: string): Who | null {
   const body = text.endsWith('\n') ? text.slice(0, -1) : text;
   const lines = body.split('\n');
-  if (lines.length !== 4) return null;
+  if (lines.length !== 4 && lines.length !== 5) return null;
   const keys = ['team', 'run', 'by', 'at'] as const;
   const values: Record<(typeof keys)[number], string> = { team: '', run: '', by: '', at: '' };
   for (let i = 0; i < keys.length; i++) {
@@ -103,7 +133,12 @@ export function parseWho(text: string): Who | null {
   }
   if (!values.team || !values.by || !values.at) return null;
   if (Number.isNaN(Date.parse(values.at))) return null;
-  return values;
+  if (lines.length === 4) return values;
+  const pidLine = lines[4] ?? '';
+  if (!pidLine.startsWith('pid: ')) return null;
+  const pid = Number(pidLine.slice('pid: '.length));
+  if (!Number.isInteger(pid) || pid < 1) return null;
+  return { ...values, pid };
 }
 
 export function takenText(name: string, who: Who): string {
@@ -200,13 +235,152 @@ function writeWho(root: string, name: string, dir: string, text: string): void {
   }
 }
 
-function takeOnce(input: {
+/** What one take carries, beyond the lock's own name and holder-to-be. */
+type TakeInput = {
   home: string;
   name: string;
   run: string;
   identity: LockIdentity;
   now: () => Date;
-}): Attempt {
+  pid?: () => number;
+  waiterPid?: () => number;
+  alive?: (pid: number) => boolean;
+};
+
+/** The shell pid worth recording: a whole pid above the init process. Anything else records
+ *  nothing — an unrecorded holder is never read as stale, which is the safe side. */
+function shellPidOf(input: TakeInput): number | undefined {
+  const pid = input.pid?.();
+  return pid !== undefined && Number.isInteger(pid) && pid > 1 ? pid : undefined;
+}
+
+function aliveOf(input: TakeInput): (pid: number) => boolean {
+  return input.alive ?? pidAlive;
+}
+
+/** A waiter's place in its ticket's name: arrival instant, then the waiting process's pid, then
+ *  a nonce, so the names sort in arrival order and a dead waiter can be told from its name. */
+function ticketName(nowMs: number, waiterPid: number): string {
+  return `${String(nowMs).padStart(15, '0')}-${waiterPid}-${randomBytes(4).toString('hex')}`;
+}
+
+function ticketWaiterPid(file: string): number | null {
+  const match = /^[0-9]+-([0-9]+)-/.exec(file);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function listTickets(home: string, name: string): string[] {
+  const dir = queueDirectory(home, name);
+  try {
+    // A symlink is not followed, exactly as at the lock path: the queue would otherwise read
+    // and prune outside the lock root. An unreadable queue reads as no queue.
+    const stat = lstatSync(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
+    return readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** Removes tickets whose waiter process is gone, never `keep` (the caller's own). A ticket
+ *  whose name carries no readable pid is left standing: unknown is live, never pruned. */
+function pruneTickets(input: TakeInput, keep: string | null): void {
+  const alive = aliveOf(input);
+  const dir = queueDirectory(input.home, input.name);
+  for (const file of listTickets(input.home, input.name)) {
+    if (file === keep) continue;
+    const pid = ticketWaiterPid(file);
+    if (pid === null || alive(pid)) continue;
+    try { unlinkSync(join(dir, file)); } catch { /* another waiter pruned it first */ }
+  }
+}
+
+/** Leaves this waiter's ticket and returns its file name, or null when it could not be written. */
+function enqueue(input: TakeInput, who: Who): string | null {
+  const dir = queueDirectory(input.home, input.name);
+  const waiterPid = input.waiterPid?.() ?? process.pid;
+  const file = ticketName(input.now().getTime(), waiterPid);
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (lstatSync(dir).isSymbolicLink()) return null;
+    writeFileSync(join(dir, file), formatWho(who), { flag: 'wx' });
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+/** Takes this waiter's ticket away; the queue folder goes with the last ticket, best effort. */
+function dequeue(home: string, name: string, ticket: string): void {
+  const dir = queueDirectory(home, name);
+  try { unlinkSync(join(dir, ticket)); } catch { /* already gone */ }
+  try { rmdirSync(dir); } catch { /* other waiters remain, or it is already gone */ }
+}
+
+/**
+ * Clears a holder proven stale, if one stands. Proof
+ * is narrow: the holder file records a shell pid, that pid is dead, and the file re-reads byte
+ * for byte as it did before the liveness check — so a holder replaced between the reads, a
+ * live shell, and a file with no pid all leave the lock exactly as it was.
+ */
+function clearStaleHolder(input: TakeInput): void {
+  const dir = lockDirectory(input.home, input.name);
+  const whoPath = join(dir, WHO_FILE);
+  const alive = aliveOf(input);
+  try {
+    // The same refusal `see` makes: a symlink at the lock path is never followed, so a stale
+    // proof is never read — or cleared — through one.
+    const stat = lstatSync(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return;
+  } catch {
+    return;
+  }
+  let first: string;
+  try {
+    first = readFileSync(whoPath, 'utf8');
+  } catch {
+    return;
+  }
+  const seen = parseWho(first);
+  if (seen === null || seen.pid === undefined || alive(seen.pid)) return;
+  let again: string;
+  try {
+    again = readFileSync(whoPath, 'utf8');
+  } catch {
+    return;
+  }
+  if (again !== first || alive(seen.pid)) return;
+  try {
+    unlinkSync(whoPath);
+    rmdirSync(dir);
+  } catch { /* raced or held open: the take below reads whatever now stands */ }
+}
+
+/**
+ * One attempt under the queue's rule. A waiter with a live ticket ahead of it — or any live
+ * ticket, for a take that holds none — waits its turn; the line it is refused with names the
+ * holder, or the queue being served when the lock itself stands free between turns, and how
+ * many are waiting. With nobody ahead, a proven-stale holder is cleared and the take is tried.
+ */
+function tryTake(input: TakeInput, ticket: string | null): Attempt {
+  if (!validLockName(input.name)) return { kind: 'bad-name' };
+  pruneTickets(input, ticket);
+  const live = listTickets(input.home, input.name);
+  const ahead = ticket === null ? live : live.filter((file) => file < ticket);
+  if (ahead.length > 0) {
+    const seen = see(lockDirectory(input.home, input.name));
+    const base = seen.kind === 'absent'
+      ? `${input.name}: held; its queue is being served`
+      : heldText(input.name, seen, input.now());
+    return { kind: 'retry', line: `${base}; ${live.length} waiting` };
+  }
+  clearStaleHolder(input);
+  return takeOnce(input);
+}
+
+function takeOnce(input: TakeInput): Attempt {
   if (!validLockName(input.name)) return { kind: 'bad-name' };
   const root = locksRoot(input.home);
   const dir = lockDirectory(input.home, input.name);
@@ -225,7 +399,11 @@ function takeOnce(input: {
     const line = heldText(input.name, seen, input.now());
     return mayRetry(seen) ? { kind: 'retry', line } : { kind: 'held', line };
   }
-  const who: Who = { team: input.identity.team, by: input.identity.by, run: input.run, at: lockStamp(input.now()) };
+  const shell = shellPidOf(input);
+  const who: Who = {
+    team: input.identity.team, by: input.identity.by, run: input.run, at: lockStamp(input.now()),
+    ...(shell === undefined ? {} : { pid: shell }),
+  };
   try {
     writeWho(root, input.name, dir, formatWho(who));
   } catch (error) {
@@ -238,29 +416,40 @@ function takeOnce(input: {
 }
 
 /**
- * Takes `name`, or waits up to `waitSeconds` for a holder to release it. A held lock is never
- * removed here. A clock that does not move during the sleep ends the wait, so a frozen clock
- * cannot spin.
+ * Takes `name`, or waits up to `waitSeconds` for its turn. The first attempt is unqueued, so a
+ * free lock with nobody waiting is taken at once; a take that must wait leaves its ticket and
+ * is served in arrival order, and every ending — taken, timed out, or refused — takes the
+ * ticket with it. A held lock is removed here only when its holder is proven stale (see
+ * `clearStaleHolder`). A clock that does not move during the sleep ends the wait, so a frozen
+ * clock cannot spin.
  */
-export async function takeLock(input: {
-  home: string;
-  name: string;
-  run: string;
-  identity: LockIdentity;
-  now: () => Date;
+export async function takeLock(input: TakeInput & {
   sleep: Sleeper;
   waitSeconds: number;
 }): Promise<TakeResult> {
   const start = input.now().getTime();
   const waitMs = input.waitSeconds * 1000;
+  let ticket: string | null = null;
+  const finish = (result: TakeResult): TakeResult => {
+    if (ticket !== null) dequeue(input.home, input.name, ticket);
+    return result;
+  };
   for (;;) {
-    const outcome = takeOnce(input);
-    if (outcome.kind !== 'retry') return outcome;
+    const outcome = tryTake(input, ticket);
+    if (outcome.kind !== 'retry') return finish(outcome);
     const elapsed = input.now().getTime() - start;
-    if (elapsed >= waitMs) return { kind: 'held', line: outcome.line };
+    if (elapsed >= waitMs) return finish({ kind: 'held', line: outcome.line });
+    if (ticket === null) {
+      const shell = shellPidOf(input);
+      ticket = enqueue(input, {
+        team: input.identity.team, by: input.identity.by, run: input.run, at: lockStamp(input.now()),
+        ...(shell === undefined ? {} : { pid: shell }),
+      });
+      if (ticket === null) return { kind: 'io', message: `could not write a queue ticket in ${queueDirectory(input.home, input.name)}` };
+    }
     const before = input.now().getTime();
     await input.sleep(Math.min(1000, waitMs - elapsed));
-    if (input.now().getTime() <= before) return { kind: 'held', line: outcome.line };
+    if (input.now().getTime() <= before) return finish({ kind: 'held', line: outcome.line });
   }
 }
 
