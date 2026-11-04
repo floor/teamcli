@@ -14,6 +14,9 @@ import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, auditRule
 import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import type { TeamFile } from '../file/types.ts';
+import { ownerSubjectProof } from '../dev_mode.ts';
+import { readTeams } from '../registry/teams.ts';
 import type { Io } from '../io.ts';
 import { refuse } from '../output/index.ts';
 
@@ -122,14 +125,94 @@ export function ownerSeatStep(
   return { kind: 'admitted', admission: admitted };
 }
 
-/** With no request: whether a verified owner-seat `always` rule covers this action here. Asked only where the ordinary gate refused. */
-export function ownerSeatRuleAdmits(action: OwnerAction, cwd: string, dry: boolean, sources: OwnerSeatSources): boolean {
+/** One team a rule folder names, with the folder its own state lives in. */
+type RuleTeam = { team: TeamFile; root: string; dir: string };
+
+/** Every team an owner-seat rule folder can name: the folder's own team, and each registry team
+ *  whose repository sits directly in it — the two shapes a rule scope takes (a team's own folder,
+ *  or the folder holding the project teams). A folder no team answers for names none, and a rule
+ *  signed for it then admits no one but the owner. */
+function ruleTeams(home: string, folder: string): RuleTeam[] {
+  const out = new Map<string, RuleTeam>();
+  const add = (loaded: Extract<ReturnType<typeof readTeamConfig>, { ok: true }>): void => {
+    out.set(canonicalRoot(loaded.root), { team: loaded.team, root: loaded.root, dir: dirname(loaded.path) });
+  };
+  try {
+    const loaded = readTeamConfig(folder, { home });
+    if (loaded.ok && canonicalRoot(loaded.root) === canonicalRoot(folder)) add(loaded);
+  } catch {
+    // A folder with no readable team is no subject: the other shape may still answer.
+  }
+  try {
+    const records = readTeams(home);
+    for (const record of Object.values(records)) {
+      const root = canonicalRoot(record.root);
+      if (root !== canonicalRoot(folder) && dirname(root) !== canonicalRoot(folder)) continue;
+      try {
+        const loaded = readTeamConfig(record.root, { home });
+        if (loaded.ok) add(loaded);
+      } catch {
+        // One unreadable record names no subject; the folder's other teams still may.
+      }
+    }
+  } catch {
+    // A registry that cannot be read names no further team.
+  }
+  return [...out.values()];
+}
+
+/**
+ * Whether the caller is the subject an owner-seat rule admits: the lead of the team the rule was
+ * signed for, placed in that team's session, or the same entity's main orchestrator placed above
+ * it. The rule names the team at its creation (`rule.team`), so a sibling team's lead standing in
+ * the same folder is no admission, and neither is a plain seat anywhere in it.
+ */
+function ruleSubjectAdmits(
+  rule: { team: string; scope: string },
+  home: string,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+): boolean {
+  for (const held of ruleTeams(home, rule.scope)) {
+    if (held.team.project !== rule.team) continue;
+    const proof = ownerSubjectProof(io, { home, team: held.team, root: held.root, dir: held.dir });
+    if (proof !== null && proof.role === 'orchestrator') return true;
+  }
+  return false;
+}
+
+/** With no request: whether a verified owner-seat `always` rule covers this action here, for
+ *  the subject that rule admits — the lead of the team the rule was signed for, or the same
+ *  entity's main orchestrator. Asked only where the ordinary gate refused. The rule actually
+ *  spent is the one that names the caller's team, so two teams sharing a folder cannot spend
+ *  each other's rules. */
+export function ownerSeatRuleAdmits(
+  action: OwnerAction,
+  cwd: string,
+  dry: boolean,
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  sources: OwnerSeatSources,
+): boolean {
   const home = sources.home ?? homedir();
   const root = findRoot(cwd);
   if (root === null) return false;
   try {
     const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
-    return admitOwnerActionByRule(home, { action, root, team: teamNameAt(root, home), claim: !dry }, store, sources.now?.() ?? new Date()).ok;
+    const now = sources.now?.() ?? new Date();
+    const caller = callerOf(io);
+    // The owner's own no-terminal run is the rule's first subject: `--request` was signed by
+    // the owner seat, and an `always` answer is her standing consent for the same shape.
+    // Everyone else must prove the lead of the team the covering rule names, or that team's
+    // entity's main orchestrator. A plain seat, a lead of another team sharing the folder and
+    // another entity's orchestrator never reach the claim, write no audit line, and leave every
+    // rule exactly as it was.
+    const folder = dirname(canonicalRoot(root));
+    const covering = listOwnerActionRules(home, store, now).rules
+      .filter((rule) => rule.actions.includes(action) && rule.scope === folder);
+    const admits = caller.kind === 'owner-no-tty'
+      ? covering[0]
+      : covering.find((rule) => ruleSubjectAdmits(rule, home, io));
+    if (admits === undefined) return false;
+    return admitOwnerActionByRule(home, { action, root, team: teamNameAt(root, home), claim: !dry, ruleId: admits.rule_id }, store, now).ok;
   } catch {
     return false;
   }
@@ -174,8 +257,17 @@ export function ownerAdmitsRecord(action: OwnerAction, io: Io, targets: readonly
     const rules = listOwnerActionRules(home, store, now).rules.filter((rule) => rule.actions.includes(action));
     if (rules.length === 0) return { ok: false, kind: 'caller', caller };
     if (targets === null || targets.length === 0) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
-    const rule = rules.find((one) => targets.every((target) => isSameOrInside(one.scope, target)));
-    if (rule === undefined) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    const covering = rules.filter((one) => targets.every((target) => isSameOrInside(one.scope, target)));
+    if (covering.length === 0) return { ok: false, kind: 'target', caller, ruleFolder: rules[0]!.scope, targets };
+    // The rule is the owner's standing consent for a folder's records. The owner's own
+    // no-terminal run may spend it; everyone else must be the lead of the team the rule was
+    // signed for, or that team's entity's main orchestrator — never a plain seat, a lead of
+    // another team, or another entity's orchestrator. Among rules covering the same record, the
+    // one spent is the one whose team the caller leads. Asked before the audit line is written.
+    const rule = caller.kind === 'owner-no-tty'
+      ? covering[0]!
+      : covering.find((one) => ruleSubjectAdmits(one, home, io));
+    if (rule === undefined) return { ok: false, kind: 'caller', caller };
     auditRuleAdmission(home, rule, action, targets, now);
     return { ok: true, via: 'rule', ruleId: rule.rule_id, signer: rule.signer, ruleFolder: rule.scope };
   } catch {

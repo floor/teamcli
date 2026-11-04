@@ -1154,7 +1154,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     host.watch === undefined && !seatApproved && !isOwner(callerOf(io))
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
-    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), seatSources);
+    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
   }
   // The no-terminal refusal judges the ordinary caller. A direct-work run's caller is the watch
   // principal, established and verified by its internal entry, which may run with no terminal;

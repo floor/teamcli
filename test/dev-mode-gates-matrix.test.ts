@@ -476,15 +476,15 @@ test('remove: the caller gate refuses unset and is a logged warning under dev mo
 });
 
 // --- add --------------------------------------------------------------------------------------
-// Past the gate under dev mode the run reads the session next: with it stopped, that reading
-// refuses — which a run still standing at the gate could never say. The exact `1` is the mode;
-// `true` is not it.
+// `add`'s caller gate is dev mode's owner lift: it admits only the target team's own lead (or
+// the same entity's main orchestrator), so a caller the walk cannot place keeps the refusal in
+// every mode. The variable alone never opens this gate, and no warning or audit line is owed.
 
 const ADD_LINE = 'only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is unplaced (it runs under herdr)';
 const INIT_LINE = 'only the owner runs this, from a terminal outside herdr; this call is unplaced (it runs under herdr)';
 
-test('add: unset, the caller gate refuses; set, it warns, logs and the run reads on', async () => {
+test('add: the unplaced caller is refused in every mode, `1` included', async () => {
   const refused = repo();
   const refusedIo = testIo(refused.root, UNPLACED);
   expect(await runAdd(['worker'], refusedIo, addSources(refused.home, 'stopped'))).toBe(1);
@@ -501,15 +501,12 @@ test('add: unset, the caller gate refuses; set, it warns, logs and the run reads
   const readOn = repo();
   const readIo = testIo(readOn.root, UNPLACED);
   readIo.env = { ...readIo.env, TEAMCLI_DEV_MODE: '1' };
+  // The lift asks who is calling: an unplaced walk proves no lead, so the gate stays where it
+  // stood and the session read behind it is never reached.
   expect(await runAdd(['worker'], readIo, addSources(readOn.home, 'stopped'))).toBe(1);
-  // The warning is the gate moved aside; the line after it is the run having moved with it.
-  expect(readIo.err).toBe(
-    `team add: warning: ${ADD_LINE}; dev mode continues\n`
-    + 'team add: session acme is stopped; clear it with `herdr session delete acme`\n',
-  );
+  expect(readIo.err).toBe(`team add: ${ADD_LINE}\n`);
   expect(readIo.out).toBe('');
-  expect(readFileSync(join(readOn.root, '.agents', 'team.log'), 'utf8'))
-    .toBe(`${NOW.toISOString()} add [unplaced (it runs under herdr)] warning: ${ADD_LINE}; dev mode continues\n`);
+  expect(existsSync(join(readOn.root, '.agents', 'team.log'))).toBe(false);
 });
 
 // --- restart ----------------------------------------------------------------------------------

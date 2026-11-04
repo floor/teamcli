@@ -725,7 +725,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     seatApproved = seat.kind === 'admitted';
   }
   if (clientDown === null && !seatApproved && !isOwner(walkCaller(io))) {
-    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, seatSources);
+    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, io, seatSources);
   }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is

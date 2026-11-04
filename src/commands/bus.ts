@@ -79,7 +79,7 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
     seatApproved = seat.kind === 'admitted';
   }
   if (!seatApproved && args.values.inherited === undefined && !isOwner(caller)) {
-    seatApproved = ownerSeatRuleAdmits('team-bus', io.cwd, false, seatSources);
+    seatApproved = ownerSeatRuleAdmits('team-bus', io.cwd, false, io, seatSources);
   }
 
   // `--inherited` is how `team up` starts a bus with no owner terminal. The token is a one-use

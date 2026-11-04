@@ -324,7 +324,7 @@ export async function runTeamImport(
     }
   }
   const seatApproved = charterAdmitted || seat.kind === 'admitted'
-    || (mode === 'import' && !isOwner(caller) && ownerSeatRuleAdmits('team-import', io.cwd, dryRun, sources));
+    || (mode === 'import' && !isOwner(caller) && ownerSeatRuleAdmits('team-import', io.cwd, dryRun, io, sources));
   // Migrate's dry run, the owner at a terminal, a charter, or a verified card skips the old gate.
   // Import keeps it. A migrate that already failed closed (nothing to ask) does too.
   const skipOwner = mode === 'migrate' && (dryRun || ownerTerminal || charterAdmitted || doorAdmitted || outcome !== undefined);

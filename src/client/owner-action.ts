@@ -587,9 +587,9 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
   return admitted;
 }
 
-function ruleFor(home: string, ask: Pick<OwnerActionAsk, 'action' | 'root' | 'team'>, store: OwnerSeatKeyStore, now: Date): OwnerActionRule | undefined {
+function ruleFor(home: string, ask: Pick<OwnerActionAsk, 'action' | 'root' | 'team'> & { ruleId?: string }, store: OwnerSeatKeyStore, now: Date): OwnerActionRule | undefined {
   const root = canonicalRoot(ask.root);
-  return listOwnerActionRules(home, store, now).rules.find((r) => r.actions.includes(ask.action) && r.scope === dirname(root));
+  return listOwnerActionRules(home, store, now).rules.find((r) => (ask.ruleId === undefined || r.rule_id === ask.ruleId) && r.actions.includes(ask.action) && r.scope === dirname(root));
 }
 
 /** Removes one owner-action `always` rule (`oa_…`). A missing file is a refusal; nothing else is touched. */
@@ -605,8 +605,10 @@ export function revokeOwnerActionRule(home: string, ruleId: string): { ok: true 
   }
 }
 
-/** With no request id: a verified `always` rule for this action whose scope holds the repository. */
-export function admitOwnerActionByRule(home: string, ask: Omit<OwnerActionAsk, 'head' | 'words'>, store: OwnerSeatKeyStore, now: Date = new Date()): OwnerActionAdmission {
+/** With no request id: a verified `always` rule for this action whose scope holds the repository.
+ *  `ruleId` names the one rule the caller's subject proof selected; absent, the first verified
+ *  rule covering the action and folder, as before. */
+export function admitOwnerActionByRule(home: string, ask: Omit<OwnerActionAsk, 'head' | 'words'> & { ruleId?: string }, store: OwnerSeatKeyStore, now: Date = new Date()): OwnerActionAdmission {
   const rule = ruleFor(home, ask, store, now);
   if (rule === undefined) return { ok: false, why: 'no owner-seat always rule covers this action' };
   if (ask.claim) audit(home, `rule-${rule.rule_id}-${ask.action}-${now.getTime()}`, { rule_id: rule.rule_id, action: ask.action, root: canonicalRoot(ask.root), team: ask.team, via: 'rule', signer: rule.signer, at: now.toISOString() });

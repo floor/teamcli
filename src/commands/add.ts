@@ -12,7 +12,7 @@ import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import type { Launch } from '../commands/up.ts';
 import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
@@ -422,7 +422,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
   // An owner-seat approval for this run, or a signed always rule asked only where the ordinary
   // rule refused, admits it the way a create-grant does.
-  const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, sources)) || (mayChange.kind !== 'ok'
+  const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, io, sources)) || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
@@ -463,24 +463,36 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
   // The who-may-run-it gate: the map's `add` row, the owner's alone, with the standing grant the
-  // delegate gate above may have answered read as its opening. Set to exactly `1`, dev mode says
-  // this gate once, as a warning, and the edit continues — exactly as `up` does. Every other
-  // refusal stays a refusal: the target placement, the CLI, the records, the approvals and
-  // trust. The warning is logged where this call runs; a dry run says it beside the dry answer
-  // and decides nothing.
+  // delegate gate above may have answered read as its opening. Dev mode's owner admission is the
+  // one the sibling record writers use (`config`, `settings`): the target team's own lead or its
+  // entity's main orchestrator, each placed by the walk, continues with the warning; a plain
+  // seat, a lead of another team and another entity's orchestrator keep this refusal byte for
+  // byte. The audit waits for the write below: this gate answers before the change is validated,
+  // and a refused, dry or unchanged run writes no record line. Every other refusal stays a
+  // refusal: the target placement, the CLI, the records, the approvals and trust.
   const mayRun = mayChange.kind === 'refused' && delegatePane === null && !createGranted
     ? `only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
     : null;
+  let liftAudit: (() => void) | null = null;
   if (mayRun !== null) {
-    const folded = devModeCallerGate(dev, mayRun);
-    if (folded !== null) {
+    const lift = devModeOwnerLift(io, {
+      command: 'add',
+      refusal: mayRun,
+      home: sources.home,
+      team,
+      root,
+      dir,
+      now: sources.now(),
+      audit: 'later',
+    });
+    if (lift.lifted) {
       devFolded = true;
+      if (!dry) liftAudit = lift.audit;
       // The document's note is the sentence itself; only the terminal's line carries the
       // dry run's `! ` and the command's name in front.
-      if (json) (dry ? finalRecords : jsonNotes).push(folded);
-      else if (dry) out.stdout(`! ${folded}\n`);
-      else out.stderr(`team add: ${plainText(folded)}\n`);
-      if (!dry) logDevMode(dir, 'add', describeCaller(caller), folded, sources.now());
+      if (json) (dry ? finalRecords : jsonNotes).push(lift.warning!);
+      else if (dry) out.stdout(`! ${lift.warning}\n`);
+      else out.stderr(`team add: ${plainText(lift.warning!)}\n`);
     } else {
       if (json) {
         refuse(io, true, 'add', {
@@ -1124,6 +1136,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         if (projectionNote) logLine(dir, 'add', describeCaller(caller), projectionNote, sources.now());
       }
     }
+    // The lead's dev-mode admission leaves its audit line only now: the record is on disk, or
+    // the seat was already in it and this run only launches. Every refusal above — the changed
+    // file, the invalid edit, the pretrust question — returned with the folder as it was.
+    if (liftAudit !== null) liftAudit();
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
     const who = clientText ?? describeCaller(caller);

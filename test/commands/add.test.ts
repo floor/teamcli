@@ -409,18 +409,23 @@ describe('team add', () => {
     expect(made.creates).toEqual(['worker-tmp.2']);
   });
 
-  test('a dev-mode add records the mark and the caller it admitted', async () => {
+  test('a dev-mode add records the mark and the lead it admitted', async () => {
+    // The lift admits the team's own lead, placed on the pane its state records: the helper
+    // seat of the older scenes is refused, so the mark's scene is the lead's.
+    updateState(join(project, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
+    });
     const made = world();
-    const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'synthetic-pane-lead', session: 'acme' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
-    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues\n');
+    expect(io.err).toContain('team add: warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead; dev mode continues\n');
     // The launch's write says the run was folded and who it admitted: the record a later
-    // `team check` reads names the helper, and the owner's own write is what takes it off.
+    // `team check` reads names the lead, and the owner's own write is what takes it off.
     const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
     expect(record?.provenance.dev_mode).toBe(true);
-    expect(record?.provenance.dev_mode_by).toBe('helper');
-    expect(record?.provenance.registered_by).toBe('helper');
+    expect(record?.provenance.dev_mode_by).toBe('lead');
+    expect(record?.provenance.registered_by).toBe('lead');
   });
 
   test('dev mode stands the live file in for the approval add asks for, and only dev mode does', async () => {

@@ -305,7 +305,7 @@ export function leadGatesAdmitOperator(io: Pick<Io, 'env'>, context: DevModeCont
 }
 
 /** A proven role: the caller as the team's own session placed it, and the role its file gives it. */
-type DevModeOwnerProof = { role: DevModeOwnerRole; caller: Caller };
+export type DevModeOwnerProof = { role: DevModeOwnerRole; caller: Caller };
 
 /** The target team's own lead, placed in the target team's session. */
 function roleAtTarget(
@@ -371,6 +371,21 @@ function holds(parent: string, child: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+/**
+ * The caller's proven role in the team whose record a command changes: the target team's own
+ * lead, placed in its session, or the same entity's main orchestrator, placed above it. These
+ * are the only two subjects an owner's standing rule and dev mode's lift both admit; a plain
+ * seat, a lead of another team and another entity's orchestrator prove nothing here. Dev mode
+ * is not asked: this proves who the caller is, not whether the lift is on.
+ */
+export function ownerSubjectProof(
+  io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
+  options: { home?: string; team: TeamFile; root: string; dir: string },
+): DevModeOwnerProof | null {
+  const caller = callerOf(io, options.team.session);
+  return roleAtTarget(caller, options) ?? roleElsewhere(io, options);
+}
+
 /** The result of asking whether dev mode admits this caller to an owner-only gate. */
 export type DevModeOwnerLift = {
   lifted: boolean;
@@ -431,7 +446,7 @@ export function devModeOwnerLift(
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
   if (!state.on) return NO_LIFT(caller);
-  const proof = roleAtTarget(caller, options) ?? roleElsewhere(io, options);
+  const proof = ownerSubjectProof(io, options);
   if (proof === null) return NO_LIFT(caller);
   // The operator's admission is the policy's to give, gate by gate: a site that did not ask,
   // a chain that cannot be read, and the `lead` default all fail closed, and no other route
