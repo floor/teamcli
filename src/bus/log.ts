@@ -1381,6 +1381,192 @@ export function verifyEventLogSeals(
   return { ok: true, segments, open, problems };
 }
 
+/** What a hydrated record contributes to the reconcile and presence sets: the fields those passes
+ *  ask of a verified record, without its signature or its byte offset. */
+export type EventBrief = {
+  seq: number;
+  kind: string;
+  record_id: string;
+  session: string;
+  seat?: string;
+  ts?: string;
+  from?: string;
+  to?: string;
+};
+
+export type EventIndexReadResult =
+  | {
+      ok: true;
+      entries: EventBrief[];
+      /** Record signatures this read checked itself. A hydrated sealed segment contributes none;
+       *  the lines of the open segment are checked one by one as before. */
+      checked: number;
+      full: boolean;
+      path: string;
+      oldestSeq: number | null;
+      newestSeq: number | null;
+      unverified: number;
+    }
+  | { ok: false; reason: string };
+
+function briefOfEntry(entry: SegmentIndexEntry): EventBrief {
+  const brief: EventBrief = {
+    seq: entry.seq,
+    kind: entry.kind,
+    record_id: entry.record_id,
+    session: entry.session,
+  };
+  if (entry.seat !== undefined) brief.seat = entry.seat;
+  if (entry.ts !== undefined) brief.ts = entry.ts;
+  if (entry.from !== undefined) brief.from = entry.from;
+  if (entry.to !== undefined) brief.to = entry.to;
+  return brief;
+}
+
+function briefOfRecord(record: SignedEventRecord): EventBrief {
+  const { payload } = record;
+  const brief: EventBrief = {
+    seq: payload.seq,
+    kind: payload.kind,
+    record_id: payload.record_id,
+    session: payload.session,
+  };
+  if (payload.seat !== undefined) brief.seat = payload.seat;
+  if (payload.ts !== undefined) brief.ts = payload.ts;
+  if (payload.from !== undefined) brief.from = payload.from;
+  if (payload.to !== undefined) brief.to = payload.to;
+  return brief;
+}
+
+type HydratedStore = {
+  keyPrint: string;
+  kept: number;
+  seals: string;
+  openStamp: LogFileStamp | null;
+  result: Extract<EventIndexReadResult, { ok: true }>;
+};
+
+const hydratedStores = new Map<string, HydratedStore>();
+
+/**
+ * The dedupe view of the retained log for the reconcile pass: every sealed segment contributes
+ * its signed index, and only the open segment's bytes are read and checked line by line. The
+ * sealed set is verified by `verifyEventLogSeals` first; a segment that is present but unsealed
+ * sends the whole read through the ordinary verified path, so hydration is a saving over a sealed
+ * log, never a way around verification. The result is cached per store until a seal, a segment or
+ * the open file changes.
+ */
+export function hydrateEventLog(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): EventIndexReadResult {
+  return drainSteps(hydrateEventLogSteps(project, root, home, options));
+}
+
+export function* hydrateEventLogSteps(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): Generator<void, EventIndexReadResult, void> {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const checked = verifyEventLogSeals(project, root, home, { kept });
+  if (!checked.ok) return checked;
+
+  const keyState = messageKeyState(home);
+  const keyPrint = keyPrintOf(home);
+  const path = checked.open?.path ?? eventLogPath(project, root, home);
+  const openStamp = fileStamp(path);
+  const sealKey = checked.segments
+    .map((segment) => `${segment.name}:${segment.state}:${segment.seal?.sealDigest ?? ''}`)
+    .join('|');
+  const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}`;
+  const cached = hydratedStores.get(cacheKey);
+  if (
+    cached !== undefined &&
+    cached.keyPrint === keyPrint &&
+    cached.kept === kept &&
+    cached.seals === sealKey &&
+    sameStamp(cached.openStamp, openStamp)
+  ) {
+    // No seal and no retained byte moved since this process hydrated them.
+    return { ...cached.result, checked: 0, full: false };
+  }
+
+  // With no sealed segment there is nothing to hydrate, and a present segment without a trusted
+  // seal carries records this index cannot vouch for: read the retained log the ordinary way,
+  // which verifies every record it returns and keeps the checkpoint rules it always had.
+  if (checked.segments.length === 0 || checked.segments.some((segment) => segment.state === 'unsealed')) {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return {
+      ok: true,
+      entries: read.events.map((event) => briefOfRecord(event)),
+      checked: read.checked,
+      full: read.full,
+      path: read.path,
+      oldestSeq: read.oldestSeq,
+      newestSeq: read.newestSeq,
+      unverified: read.unverified,
+    };
+  }
+
+  const entries: EventBrief[] = [];
+  for (const segment of checked.segments) {
+    if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+    for (const entry of segment.entries) entries.push(briefOfEntry(entry));
+    yield;
+  }
+
+  let checkedOpen = 0;
+  let unverified = 0;
+  if (checked.open !== null && checked.open.size > 0) {
+    const text = readNoFollow(path);
+    if (text === null) return { ok: false, reason: 'the event log could not be read' };
+    let position = 0;
+    let seen = 0;
+    while (position < text.length) {
+      const newline = text.indexOf('\n', position);
+      const end = newline < 0 ? text.length : newline;
+      const raw = text.slice(position, end);
+      position = newline < 0 ? text.length : newline + 1;
+      if (raw.trim() === '') continue;
+      seen += 1;
+      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
+      const parsed = parseSignedEventLine(raw);
+      checkedOpen += 1;
+      if (
+        parsed === null ||
+        keyState.kind !== 'key' ||
+        !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+      ) {
+        unverified += 1;
+        continue;
+      }
+      entries.push(briefOfRecord(parsed));
+    }
+  }
+
+  const result: Extract<EventIndexReadResult, { ok: true }> = {
+    ok: true,
+    entries,
+    checked: checkedOpen,
+    full: false,
+    path,
+    oldestSeq: entries.length > 0 ? entries[0]!.seq : null,
+    newestSeq: entries.length > 0 ? entries[entries.length - 1]!.seq : null,
+    unverified,
+  };
+  if (keyState.kind === 'key' && unverified === 0) {
+    hydratedStores.set(cacheKey, { keyPrint, kept, seals: sealKey, openStamp, result });
+  } else {
+    hydratedStores.delete(cacheKey);
+  }
+  return result;
+}
+
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
  *  verifying each record's signature against the checkout's message key. Unverified or malformed
  *  lines are counted in `unverified` and never returned as events.

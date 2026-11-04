@@ -52,9 +52,9 @@ import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
   EVENT_LOG_KEPT,
-  readEventsSteps,
+  hydrateEventLogSteps,
   type EventAppendInput,
-  type EventReadResult,
+  type EventIndexReadResult,
   type SignedEventRecord,
 } from './log.ts';
 import { eventLogSettingsFor } from './log-settings.ts';
@@ -394,7 +394,7 @@ function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
 /**
  * The log's policy words, read once per pass. The stamp that decides whether the retained log is
  * re-read must count the same files the read used, so the set bound cannot be one value here and
- * another inside `readEventsSteps`; the appends the pass raises reuse the same three values.
+ * another inside the hydrated log read; the appends the pass raises reuse the same three values.
  */
 function withLogSettings(options: ReconcileOptions): ReconcileOptions {
   if (
@@ -436,7 +436,7 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // The retained log is read as a whole only when one of its files changed. Until then the
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
   // every retained line — is skipped.
-  let existing: EventReadResult;
+  let existing: EventIndexReadResult;
   let cachedLog = state.log;
   // A segment-size word that changed since the cached read moved the set's bound: the cached
   // stamp counted a different set of files, so it cannot answer for this one.
@@ -447,8 +447,10 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   }
   if (cachedLog === null) {
     // The read is drained here, in slices: a large cold log gives the caller's driver a turn
-    // between slices instead of holding the loop for the whole verification.
-    existing = yield* readEventsSteps(project, root, home, { kept });
+    // between slices instead of holding the loop for the whole verification. A log whose retained
+    // segments are all sealed hydrates its dedupe sets from their signed indexes; only the open
+    // segment's bytes are read.
+    existing = yield* hydrateEventLogSteps(project, root, home, { kept });
     if (!existing.ok) return existing;
     cachedLog = {
       path: existing.path,
@@ -461,21 +463,17 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       lastSeatEventTs: new Map<string, string>(),
       arrivedFrom: new Map<string, string>(),
     };
-    for (const entry of existing.events) {
-      if (entry.payload.kind === 'config.changed') cachedLog.configSeen.add(entry.payload.record_id);
-      if (entry.payload.session !== session) continue;
-      cachedLog.seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
-      if (
-        entry.payload.kind === 'message.arrived' &&
-        entry.payload.to !== undefined &&
-        entry.payload.from !== undefined
-      ) {
-        cachedLog.arrivedFrom.set(`${entry.payload.to}\0${entry.payload.record_id}`, entry.payload.from);
+    for (const entry of existing.entries) {
+      if (entry.kind === 'config.changed') cachedLog.configSeen.add(entry.record_id);
+      if (entry.session !== session) continue;
+      cachedLog.seen.add(`${entry.kind}\0${entry.record_id}`);
+      if (entry.kind === 'message.arrived' && entry.to !== undefined && entry.from !== undefined) {
+        cachedLog.arrivedFrom.set(`${entry.to}\0${entry.record_id}`, entry.from);
       }
-      if (entry.payload.seat !== undefined) {
-        const prev = cachedLog.lastSeatEventTs.get(entry.payload.seat);
-        if (prev === undefined || Date.parse(entry.payload.ts) >= Date.parse(prev)) {
-          cachedLog.lastSeatEventTs.set(entry.payload.seat, entry.payload.ts);
+      if (entry.seat !== undefined && entry.ts !== undefined) {
+        const prev = cachedLog.lastSeatEventTs.get(entry.seat);
+        if (prev === undefined || Date.parse(entry.ts) >= Date.parse(prev)) {
+          cachedLog.lastSeatEventTs.set(entry.seat, entry.ts);
         }
       }
     }
