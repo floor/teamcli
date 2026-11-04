@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { findAgent } from '../registry/agents.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
-import type { DeliveryLeg } from '../settings/inherit.ts';
+import type { OrderWord } from '../settings/inherit.ts';
 import {
   composeSeatConfig,
   type ConfigRecordValue,
@@ -37,7 +37,7 @@ export type SeatSettingsInput = {
   /** The team's own name (the file's `project:`), which a seat's registry entry carries. */
   project: string;
   seat: ConfigSeatInput & { name: string };
-  teamDeliveryOrder: readonly DeliveryLeg[] | null;
+  teamDeliveryOrder: readonly OrderWord[] | null;
   /** The loaded declaration's `entity:`, when it names one. It is the entity a team file
    *  declares, which a registry that names no entity must not hide: the entity source is still
    *  read, and one that does not verify refuses the read instead of being skipped. */

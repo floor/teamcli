@@ -23,11 +23,11 @@ import { readEntityPolicySource, readProjectPolicySource, readTeamPolicySource }
 import { getPolicySpec, normalizePolicyName, type Policy } from '../policy/types.ts';
 import type { ProjectRecord } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
+import type { DeliveryLeg, OrderWord, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 
 /** A chain as the levels that declare an order; a level left out declares nothing. */
-export type DeliveryChain = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
+export type DeliveryChain = Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>;
 
 /**
  * A project registry or project policy record this reader cannot read. A project's word can
@@ -90,7 +90,8 @@ export function deliveryChainOf(input: {
     }
   }
   const entity = signedOrderOf(readEntityPolicySource(input.home, file?.entity ?? null), now) ?? undefined;
-  let project: readonly DeliveryLeg[] | undefined;
+  // The project's word keeps any retired name it still carries; the resolver drops it.
+  let project: readonly OrderWord[] | undefined;
   let projectId: string | null = null;
   try {
     const record = input.projectOfTeam(teamIdOf(input.root));
@@ -173,8 +174,8 @@ function expiredPolicy(policy: Policy, now: Date): boolean {
  * The watcherless shape is read off the chain the wider levels resolve, less the drop leg: the
  * shape says only that this seat reads no drop file, never that a channel leg a word declares is
  * unreachable. Under the default (`typed`, `drop`) the shape is `typed` alone; a team word such
- * as `[socket, typed]` keeps its socket, and an `mcp-inbox` word stays in the order so the walk
- * can report it unavailable (`src/send/walk-cascade.ts`).
+ * as `[socket, typed]` keeps its socket, and a retired `mcp-inbox` word changes nothing — it is
+ * dropped before the resolver and the walk never sees it (`src/settings/inherit.ts`).
  */
 function seatDefault(seat: Seat | undefined, wider: DeliveryChain): readonly DeliveryLeg[] | undefined {
   if (seat === undefined) return undefined;

@@ -31,7 +31,7 @@ import { registerDeclaredSeat } from '../registry/sync.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { getTeam, readTeams, teamIdOf, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
-import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, LEGACY_ORDER_WORDS, type DeliveryLeg } from '../settings/inherit.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 import {
   CONFIG_KEYS,
@@ -185,7 +185,11 @@ function settingValueProblem(key: ConfigKey, value: YamlValue | undefined): stri
       if (!Array.isArray(value) || value.length === 0) return 'must be a list of delivery legs';
       const seen = new Set<string>();
       for (const leg of value) {
-        if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
+        // A record an older build wrote may still carry the retired `mcp-inbox`: it reads as an
+        // alias and is dropped at resolution (`src/settings/resolve.ts`) — never an error here,
+        // where a failed source would take the level's whole signed word with it. A new write is
+        // refused with its own reason at the set path below.
+        if (typeof leg !== 'string' || !([...DELIVERY_LEGS, ...LEGACY_ORDER_WORDS] as readonly string[]).includes(leg)) {
           return `has an unknown delivery leg (expected: ${DELIVERY_LEGS.join(', ')})`;
         }
         if (seen.has(leg)) return `names leg "${leg}" twice`;
@@ -615,6 +619,11 @@ function normalizeSetting(
       const seen = new Set<string>();
       for (const leg of legs) {
         if (typeof leg !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(leg)) {
+          // The retired name is refused with its own reason, so a new write names it as a
+          // removal, not as an unknown word: a file that still holds it is read, never an error.
+          if (leg === 'mcp-inbox') {
+            return { ok: false, kind: 'value', why: `setting "${key}" names mcp-inbox, which is no longer a leg; remove it` };
+          }
           return { ok: false, kind: 'value', why: `setting "${key}" "${String(leg)}" must be one of: ${DELIVERY_LEGS.join(', ')}` };
         }
         if (seen.has(leg)) return { ok: false, kind: 'value', why: `setting "${key}" names leg "${leg}" twice` };

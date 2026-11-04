@@ -7,7 +7,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { CrossSessionInbound } from '../launch/declaration.ts';
-import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
+import type { LivenessThresholds, OrderWord, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
@@ -200,11 +200,13 @@ export type Seat = {
   reach?: SeatReach;
   /**
    * The seat's own word on the delivery order, when the file writes one: the legs a send to this
-   * seat may walk, in order. Absent otherwise, so a file that writes none keeps the digest it
-   * had. Only the word's shape is settled here; whether it drops or reorders the order in force,
-   * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
+   * seat may walk, in order, and the retired `mcp-inbox` alias, which is still read here and
+   * dropped before any walk (`src/settings/inherit.ts`). Absent otherwise, so a file that writes
+   * none keeps the digest it had. Only the word's shape is settled here; whether it drops or
+   * reorders the order in force, or would add a leg, is settled when a send resolves the chain
+   * (`src/settings/inherit.ts`).
    */
-  deliveryOrder?: DeliveryLeg[];
+  deliveryOrder?: OrderWord[];
   /**
    * The seat's own word on how a sender reads in its own headlines, when the file writes one:
    * the presentation word a command run for this seat prints senders with. Absent otherwise, so
@@ -255,10 +257,11 @@ export type TeamFile = {
   operator: string;
   /**
    * The file's own word on the delivery order, or null when it writes none: the order a send to
-   * any of its seats walks when the seat and the levels above say nothing. Non-owner and
+   * any of its seats walks when the seat and the levels above say nothing, with the retired
+   * `mcp-inbox` alias still read in the word and dropped before any walk. Non-owner and
    * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
    */
-  deliveryOrder: DeliveryLeg[] | null;
+  deliveryOrder: OrderWord[] | null;
   /**
    * The file's own word on how a sender reads in TeamCLI's headlines, or null when it writes
    * none. Non-owner and additive — it changes no approval fingerprint, so a file written before
