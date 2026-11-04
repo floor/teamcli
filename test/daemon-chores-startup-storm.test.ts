@@ -479,14 +479,15 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       why: 'the child has missed 2 heartbeats',
     });
 
-    // When the child exits, backoff was reset by its 2 beats so the replacement is scheduled 1000 ms later.
+    // When the child exits, the replacement waits the 60 s restart floor: a root that just lost
+    // a child is never restarted more than once a minute, however small its backoff step.
     child.leave(null, 'SIGTERM');
     await Promise.resolve();
     await Promise.resolve();
     expect(fleet.stateFor(root)).toMatchObject({
       state: 'restarting',
       restarts: 1,
-      nextStartAt: new Date(NOW + 20_000 + 1000).toISOString(),
+      nextStartAt: new Date(NOW + 20_000 + 60_000).toISOString(),
     });
   });
 });

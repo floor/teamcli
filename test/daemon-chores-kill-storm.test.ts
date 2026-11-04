@@ -519,4 +519,91 @@ describe('chores supervisor liveness by progress', () => {
     expect(child.kills).toHaveLength(1);
     expect(child.sends.length).toBeGreaterThan(0);
   });
+
+  test('8. a flat child is ended once, and the next start waits the 60 s floor', async () => {
+    const { home, roots } = makeWorld(['root-stuck']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 30_000 };
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(6900 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        queueMicrotask(() => {
+          if (!child.child.alive || child.kills.length > 0) return;
+          const iso = new Date(child.spawnedAtMs).toISOString();
+          child.emit({ type: 'ready', pid: child.pid, at: iso });
+          child.emit(beat(child.spawnedAtMs));
+        });
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+    const settle = async (): Promise<void> => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    // First child: two beats, then silence with a flat CPU. End at two missed beats.
+    tickAt(0);
+    await settle();
+    const first = spawned[0]!;
+    tickAt(5000);
+    first.emit(beat(NOW + 5000));
+    tickAt(10_000);
+    expect(first.kills).toEqual([]);
+    tickAt(15_000);
+    expect(first.kills).toEqual([]);
+    tickAt(20_000);
+    expect(first.kills).toEqual(['the child missed 2 heartbeats']);
+    first.leave(null, 'SIGTERM');
+    await settle();
+
+    // The replacement may not start within 60 s of the end: the next start is due at 80 s.
+    tickAt(21_000);
+    expect(spawned).toHaveLength(1);
+    expect(fleet.stateFor(root)).toMatchObject({ state: 'restarting' });
+    expect(fleet.stateFor(root)?.nextStartAt).toBe(new Date(NOW + 80_000).toISOString());
+    tickAt(79_000);
+    expect(spawned).toHaveLength(1);
+    tickAt(80_000);
+    await settle();
+    expect(spawned).toHaveLength(2);
+
+    // The second child repeats the cycle, and the floor holds again: the end at 100 s puts the
+    // next start at 160 s, never at 101 s.
+    const second = spawned[1]!;
+    tickAt(85_000);
+    second.emit(beat(NOW + 85_000));
+    tickAt(90_000);
+    tickAt(95_000);
+    tickAt(100_000);
+    expect(second.kills).toEqual(['the child missed 2 heartbeats']);
+    second.leave(null, 'SIGTERM');
+    await settle();
+    tickAt(101_000);
+    expect(spawned).toHaveLength(2);
+    expect(fleet.stateFor(root)?.nextStartAt).toBe(new Date(NOW + 160_000).toISOString());
+    tickAt(160_000);
+    await settle();
+    expect(spawned).toHaveLength(3);
+
+    // The pass mark at scene level: no two starts of this root are closer than 60 s.
+    const starts = spawned.map((child) => child.spawnedAtMs);
+    for (let index = 1; index < starts.length; index += 1) {
+      expect(starts[index]! - starts[index - 1]!).toBeGreaterThanOrEqual(60_000);
+    }
+  });
 });

@@ -128,6 +128,14 @@ const DEFAULT_PRESENCE_DEADLINE_MS = 10_000;
  *  either way. */
 const STARTUP_DEADLINE_MS = 60_000;
 
+/** The least time one group gets between a child's end and its replacement's start: at most one
+ *  restart a minute, whatever the backoff step works out to. A child ended again moments after
+ *  its replacement started is how a kill storm chains, and the backoff cap (30 s in the release
+ *  policy) sits below this floor, so without it every storm step is a fresh process. The doubling
+ *  is kept for a policy whose cap is above the floor; at the release cadence the floor binds and
+ *  is what an operator sees. A release constant, not a policy knob. */
+const RESTART_FLOOR_MS = 60_000;
+
 /** How long a child may go without a heartbeat while its CPU keeps advancing before it is ended
  *  anyway: ten minutes, 120 beats at the release cadence. Every pass this child runs is bounded
  *  by seconds (a two-second slice, a ten-second presence deadline), so a process that has been
@@ -485,7 +493,10 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
     group.startedOnce = true;
     group.restarts += 1;
     group.backoff += 1;
-    const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
+    const wait = Math.max(
+      Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
+      RESTART_FLOOR_MS,
+    );
     group.nextStartAtMs = at.getTime() + wait;
     group.why = `the child could not be started: ${error instanceof Error ? error.message : String(error)}`;
     input.log(`chores ${rootList(group)}: ${group.why}; starting again in ${String(wait)} ms`);
@@ -656,8 +667,14 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   if (group.stopping) return;
   group.restarts += 1;
   group.backoff += 1;
-  const wait = Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1));
-  group.nextStartAtMs = input.now().getTime() + wait;
+  // The floor is measured from the end, so a child that leaves early in its minute still gets a
+  // replacement at the first instant its root may start one.
+  const endedAtMs = input.now().getTime();
+  const wait = Math.max(
+    Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
+    RESTART_FLOOR_MS,
+  );
+  group.nextStartAtMs = endedAtMs + wait;
   const reason = exitReason(group.lastExit?.code ?? null, group.lastExit?.signal ?? null);
   group.why = `the child ${reason}`;
   input.log(`chores ${rootList(group)}: the child ${reason}; starting a replacement in ${String(wait)} ms`);

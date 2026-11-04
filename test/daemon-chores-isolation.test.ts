@@ -564,7 +564,7 @@ describe('the chores fleet', () => {
     expect(made2[0]!.sends).toEqual([{ type: 'tick', id: `${String(NOW + 1000)}-0`, at: new Date(NOW + 1000).toISOString() }]);
   });
 
-  test('two missed beats end a child that proved its run, and a failed start waits out a doubling, capped backoff', async () => {
+  test('two missed beats end a child that proved its run, and every replacement waits the 60 s restart floor', async () => {
     const made = world();
     const clock = { at: NOW };
     const made2: Fake[] = [];
@@ -613,48 +613,48 @@ describe('the chores fleet', () => {
     expect(made2[0]!.kills).toHaveLength(1);
     expect(made2[0]!.sends).toHaveLength(sendsBefore);
 
-    // The exit schedules the first replacement one second later; the row names when.
+    // The exit schedules the first replacement after the 60 s floor; the row names when.
     made2[0]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     expect(fleet.stateFor(made.root)).toMatchObject({
       restarts: 1,
       pid: null,
-      nextStartAt: new Date(NOW + 3500 + 1000).toISOString(),
+      nextStartAt: new Date(NOW + 3500 + 60_000).toISOString(),
     });
-    expect(log.some((line) => line.includes('starting a replacement in 1000 ms'))).toBe(true);
-    tickAt(4499);
+    expect(log.some((line) => line.includes('starting a replacement in 60000 ms'))).toBe(true);
+    tickAt(63_499);
     expect(made2).toHaveLength(1);
-    tickAt(4500);
+    tickAt(63_500);
     expect(made2).toHaveLength(2);
 
     // A replacement that has not been read beating twice is judged by the startup deadline, not
     // by beats: one heartbeat at its start, then silence, and the row counts nothing missed.
-    made2[1]!.emit({ type: 'ready', pid: 4201, at: new Date(NOW + 4500).toISOString() });
-    made2[1]!.emit({ type: 'heartbeat', at: new Date(NOW + 4500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
-    for (let offset = 5500; offset <= 63_500; offset += 1000) tickAt(offset);
+    made2[1]!.emit({ type: 'ready', pid: 4201, at: new Date(NOW + 63_500).toISOString() });
+    made2[1]!.emit({ type: 'heartbeat', at: new Date(NOW + 63_500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
+    for (let offset = 64_500; offset <= 122_500; offset += 1000) tickAt(offset);
     expect(made2[1]!.kills).toHaveLength(0);
     expect(fleet.stateFor(made.root)).toMatchObject({ state: 'ok', missed: 0, why: null });
-    tickAt(64_500);
+    tickAt(123_500);
     expect(made2[1]!.kills).toHaveLength(1);
     expect(made2[1]!.kills[0]).toContain('did not beat twice within 60000 ms');
     made2[1]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
-    // A start that never proved a run still doubles the wait.
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 64_500 + 2000).toISOString() });
-    expect(log.some((line) => line.includes('starting a replacement in 2000 ms'))).toBe(true);
-    tickAt(66_500);
+    // The backoff still doubles under the floor, but the floor dominates every step at this
+    // policy's cap: a start that never proved a run waits the same 60 s.
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 123_500 + 60_000).toISOString() });
+    expect(log.filter((line) => line.includes('starting a replacement in 60000 ms'))).toHaveLength(2);
+    tickAt(183_500);
     expect(made2).toHaveLength(3);
-    made2[2]!.emit({ type: 'ready', pid: 4202, at: new Date(NOW + 66_500).toISOString() });
-    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 66_500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
-    for (let offset = 67_500; offset <= 125_500; offset += 1000) tickAt(offset);
+    made2[2]!.emit({ type: 'ready', pid: 4202, at: new Date(NOW + 183_500).toISOString() });
+    made2[2]!.emit({ type: 'heartbeat', at: new Date(NOW + 183_500).toISOString(), rssBytes: 40 * 1024 * 1024, busy: null, markerCache: null });
+    for (let offset = 184_500; offset <= 242_500; offset += 1000) tickAt(offset);
     expect(made2[2]!.kills).toHaveLength(0);
-    tickAt(126_500);
+    tickAt(243_500);
     expect(made2[2]!.kills).toHaveLength(1);
     made2[2]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
-    // 4000 would be the uncapped wait; the policy's 3000 holds it.
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 126_500 + 3000).toISOString() });
-    expect(log.some((line) => line.includes('starting a replacement in 3000 ms'))).toBe(true);
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 3, nextStartAt: new Date(NOW + 243_500 + 60_000).toISOString() });
+    expect(log.filter((line) => line.includes('starting a replacement in 60000 ms'))).toHaveLength(3);
   });
 
   test('a start that takes 25 s is not silence: a child short of its second beat is never ended by beats', () => {
@@ -760,28 +760,27 @@ describe('the chores fleet', () => {
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     expect(fleet.stateFor(made.root)).toMatchObject({
       restarts: 1,
-      nextStartAt: new Date(NOW + 61_000 + 1000).toISOString(),
+      nextStartAt: new Date(NOW + 61_000 + 60_000).toISOString(),
     });
 
-    // The replacement proves its run and then fails: the wait is the first step again, never the
-    // second, so a deadline in the group's past cannot pin the next start higher than a healthy
-    // run earns.
-    tickAt(62_000);
+    // The replacement starts after the floor, proves its run and then fails: the next start is
+    // the floor after its own exit, never pinned by the earlier deadline.
+    tickAt(121_000);
     expect(made2).toHaveLength(2);
-    const iso = new Date(NOW + 62_000).toISOString();
+    const iso = new Date(NOW + 121_000).toISOString();
     made2[1]!.emit({ type: 'ready', pid: 4321, at: iso });
     made2[1]!.emit({ type: 'heartbeat', at: iso, rssBytes: rss, busy: null, markerCache: null });
     made2[1]!.emit({ type: 'heartbeat', at: iso, rssBytes: rss, busy: null, markerCache: null });
-    for (let offset = 63_000; offset <= 65_000; offset += 1000) tickAt(offset);
+    for (let offset = 122_000; offset <= 124_000; offset += 1000) tickAt(offset);
     expect(made2[1]!.kills).toHaveLength(1);
     expect(made2[1]!.kills[0]).toContain('missed 2 heartbeats');
     made2[1]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     expect(fleet.stateFor(made.root)).toMatchObject({
       restarts: 2,
-      nextStartAt: new Date(NOW + 65_000 + 1000).toISOString(),
+      nextStartAt: new Date(NOW + 124_000 + 60_000).toISOString(),
     });
-    expect(log.filter((line) => line.includes('starting a replacement in 1000 ms'))).toHaveLength(2);
+    expect(log.filter((line) => line.includes('starting a replacement in 60000 ms'))).toHaveLength(2);
   });
 
   test('a stall ends no child whose frames were still in the pipe when the daemon resumed', () => {
@@ -870,10 +869,11 @@ describe('the chores fleet', () => {
     expect(() => fleet.tick(new Date(clock.at))).not.toThrow();
     expect(made2[0]!.sends).toHaveLength(0);
 
-    // The exit is the restart's own trigger; the replacement starts on the beat after it.
+    // The exit is the restart's own trigger; the replacement starts at the first beat the
+    // restart floor allows.
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 1, pid: null });
-    clock.at = NOW + 2000;
+    clock.at = NOW + 61_000;
     expect(() => fleet.tick(new Date(clock.at))).not.toThrow();
     expect(made2).toHaveLength(2);
     expect(fleet.stateFor(made.root)).toMatchObject({ state: 'starting', pid: 4261 });
@@ -976,7 +976,7 @@ describe('the chores fleet', () => {
     expect(made2[0]!.kills).toHaveLength(1);
   });
 
-  test('a child that beats twice resets the doubling wait to its first step', async () => {
+  test('a replacement after a proved run waits the restart floor, and the beats still reset the wait', async () => {
     const made = world();
     const clock = { at: NOW };
     const made2: Fake[] = [];
@@ -1021,20 +1021,21 @@ describe('the chores fleet', () => {
     expect(made2[0]!.kills).toHaveLength(1);
     made2[0]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 1, nextStartAt: new Date(NOW + 4000).toISOString() });
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 1, nextStartAt: new Date(NOW + 3_000 + 60_000).toISOString() });
 
-    // The replacement proves its run before it fails: its two heartbeats start the exponent over,
-    // so the next failure waits the first step again instead of the doubled one.
-    tickAt(4000);
+    // The replacement proves its run before it fails. Its two heartbeats start the exponent over;
+    // the floor dominates that step at the release cadence, so the next start is the floor after
+    // this exit as well, and never a queued start the earlier failure earned.
+    tickAt(63_000);
     expect(made2).toHaveLength(2);
-    proofOfRun(made2[1]!, 4251, NOW + 4000);
-    tickAt(5000);
-    tickAt(6000);
-    tickAt(7000);
+    proofOfRun(made2[1]!, 4251, NOW + 63_000);
+    tickAt(64_000);
+    tickAt(65_000);
+    tickAt(66_000);
     expect(made2[1]!.kills).toHaveLength(1);
     made2[1]!.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
-    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 8000).toISOString() });
+    expect(fleet.stateFor(made.root)).toMatchObject({ restarts: 2, nextStartAt: new Date(NOW + 66_000 + 60_000).toISOString() });
   });
 
   test('inline starts no child at all, at any beat', () => {
@@ -1299,7 +1300,7 @@ describe('the fleet presence nudge', () => {
     first.leave(null, 'SIGTERM');
     await waitUntil(() => fleet.stateFor(made.root)?.state === 'restarting');
     expect(fleet.stateFor(made.root)).toMatchObject({ lastChore: null, presence: null, markerCache: null });
-    clock.at = NOW + 1000;
+    clock.at = NOW + 60_000;
     fleet.tick(new Date(clock.at));
     expect(made2).toHaveLength(2);
     expect(fleet.stateFor(made.root)).toMatchObject({
