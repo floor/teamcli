@@ -3,7 +3,10 @@
 // fixtures are a temporary checkout with a real team file and a home registry naming it; no
 // session, socket or CLI home is reached.
 import { afterEach, describe, expect, test } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
 import type { ReminderConfigEntry } from '../src/reminder/config.ts';
 import { resolveReminderEntries } from '../src/reminder/resolve.ts';
 import { world, type World } from './send-native-fixtures.ts';
@@ -39,6 +42,33 @@ function registered(withHuman = false): World {
     at: '2026-11-02T00:00:00.000Z',
   });
   return one;
+}
+
+/** A second checkout reachable by the same registry, whose team file and/or record declare
+ *  another entity: the address resolves, but not to a team of the reminder's entity. */
+function otherEntity(home: string, fileEntity: string | null, recordEntity: string | null): World {
+  const other = world();
+  made.push(other);
+  const path = join(other.root, '.agents', 'team.yaml');
+  // The copy is read with the first world's home, so its trust names that home's lobby: the
+  // scene's subject is the entity, not the lobby the second checkout was built for.
+  let text = readFileSync(path, 'utf8')
+    .replace('project: acme', 'project: beta')
+    .replace('session: acme', 'session: beta')
+    .replace(`  - ${lobbyDir(other.home)}`, `  - ${lobbyDir(home)}`);
+  // `lobby:` names the first world's machine-global lobby outright, so the entity line does not
+  // move the trust check's subject away from the entity this scene is about.
+  if (fileEntity !== null) text = `${text}entity: ${fileEntity}\nlobby: ${lobbyDir(home)}\n`;
+  writeFileSync(path, text);
+  upsertTeam(home, teamIdOf(other.root), {
+    project: 'beta',
+    entity: recordEntity,
+    session: 'beta',
+    root: other.root,
+    by: 'reminder-resolve-test',
+    at: '2026-11-02T00:00:00.000Z',
+  });
+  return other;
 }
 
 describe('resolving a reminder address', () => {
@@ -94,6 +124,34 @@ describe('resolving a reminder address', () => {
     expect(resolved.problems[0]?.why).toContain('person is a human seat');
     expect(resolved.problems[1]?.why).toContain('declares no seat or nickname "nobody"');
     expect(resolved.problems[2]?.why).toContain('no team registry record matches "ghost"');
+  });
+
+  test('a team whose file declares another entity refuses the reminder, named', () => {
+    const one = registered();
+    otherEntity(one.home, 'beta', 'beta');
+
+    const resolved = resolveReminderEntries(one.home, [
+      entry({ targets: [{ address: 'lead@beta', text: null }] }),
+    ]);
+
+    expect(resolved.specs).toEqual([]);
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]?.why).toContain('lead@beta');
+    expect(resolved.problems[0]?.why).toContain('entity "beta"');
+    expect(resolved.problems[0]?.why).toContain('"acme"');
+  });
+
+  test('a record that alone declares another entity refuses it too', () => {
+    const one = registered();
+    otherEntity(one.home, null, 'beta');
+
+    const resolved = resolveReminderEntries(one.home, [
+      entry({ targets: [{ address: 'lead@beta', text: null }] }),
+    ]);
+
+    expect(resolved.specs).toEqual([]);
+    expect(resolved.problems[0]?.why).toContain('lead@beta');
+    expect(resolved.problems[0]?.why).toContain('entity "beta"');
   });
 
   test('a target checkout the caller does not host refuses the reminder, naming the checkout', () => {

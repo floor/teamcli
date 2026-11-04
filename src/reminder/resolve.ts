@@ -4,6 +4,11 @@
 // text is filled per target, so `{team}` and `{seat}` say what the receiving seat reads rather
 // than the sender's own team.
 //
+// The team must also belong to the reminder's entity: a team file that declares another entity
+// (or, when the file declares none, a registry record that does) is refused at the read, the
+// same way an unresolvable seat is. A team that declares no entity anywhere is addressable from
+// any entity's reminders.
+//
 // A target that does not resolve refuses its whole reminder, named, and the other reminders
 // read: a reminder that could reach only some of the seats it names would deliver a partial
 // instruction with no sign that it was partial. The caller may pass the checkouts its daemon
@@ -97,6 +102,10 @@ function resolveAddress(home: string, entry: ReminderConfigEntry, address: strin
     return { why: `${address}: the team file at ${root} cannot be read${why === '' ? '' : ` (${why})`}` };
   }
   const team = loaded.team;
+  const declared = team.entity ?? record.entity;
+  if (declared !== null && declared !== entry.entity) {
+    return { why: `${address}: the team ${team.project} belongs to entity "${declared}", not "${entry.entity}"` };
+  }
   const seat = namedSeat(team.seats, parsed.target, team.orchestrator);
   if (seat === null) return { why: `${address}: ${team.project} declares no seat or nickname "${parsed.target}"` };
   if (seat.name === 'owner') return { why: `${address}: the daemon addresses a declared seat, never the owner` };
