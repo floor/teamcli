@@ -127,6 +127,18 @@ function makeFixture(session: string = 'beacon'): {
     ],
     at: NOW.toISOString(),
   });
+  // The entity's own team: a second registered team whose record carries the entity, so an
+  // entity-level word may place an alias on it (the beacon team belongs through its project).
+  const floorRoot = join(base, 'floor');
+  mkdirSync(floorRoot, { recursive: true });
+  upsertTeam(home, teamIdOf(floorRoot), {
+    project: 'floor',
+    session: 'floor',
+    entity: team.entity,
+    root: floorRoot,
+    roster: [],
+    at: NOW.toISOString(),
+  });
   upsertProject(home, 'beacon', {
     name: 'beacon',
     entity: team.entity,
@@ -232,6 +244,29 @@ describe('the mailbox router policy words', () => {
       ]);
     } finally {
       fx.cleanup();
+    }
+  });
+
+  test('an entity word names a team of the entity, never one outside it', () => {
+    const fx = makeFixture();
+    try {
+      setWord(fx, 'entity', 'router.aliases', 'pal=iris@foreign');
+      const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
+      expect(read.ok).toBe(false);
+      if (read.ok) return;
+      expect(read.why).toBe('router alias "pal" names "iris@foreign", which is not a team of this entity');
+    } finally {
+      fx.cleanup();
+    }
+    const fx2 = makeFixture();
+    try {
+      setWord(fx2, 'entity', 'router.fallback', 'atlas=iris@foreign');
+      const moved = readMailboxRouterPolicy(fx2.root, fx2.home, NOW);
+      expect(moved.ok).toBe(false);
+      if (moved.ok) return;
+      expect(moved.why).toBe('router fallback for "atlas" names "iris@foreign", which is not a team of this entity');
+    } finally {
+      fx2.cleanup();
     }
   });
 

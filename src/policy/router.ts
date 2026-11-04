@@ -8,7 +8,8 @@
 // synchronous 120 s cap) are constants of the child, not values here.
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { readProjects } from '../registry/projects.ts';
+import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { readEntityPolicySource, readTeamPolicySource } from './sources.ts';
 import {
   normalizePolicyName,
@@ -93,9 +94,9 @@ type RouterAssembly =
 
 /**
  * Walks both levels' signed sources by hand — the chain's resolver merges maps, but these rules
- * need to know which level placed which alias. An unreadable team config leaves the release
- * defaults in force (`team check` names the file through its own gates); an unreadable or
- * unverified policy source refuses the whole read, the way every policy read refuses.
+ * need to know which level placed which alias. An unreadable or unverified policy source refuses
+ * the whole read, the way every policy read refuses. A null team (the check path, where the
+ * chain's own gates name the file) leaves only the release defaults.
  */
 function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamFile | null): RouterAssembly {
   const problems: MailboxRouterProblem[] = [];
@@ -108,6 +109,39 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
   let entityReplyBound: number | null = null;
 
   const entity = team?.entity?.trim() || null;
+  // Every spelling an address may name one of the entity's teams by, built once an entity word
+  // first needs it: a team belongs to the entity when its own record says so or a project record
+  // of the entity lists it, and each member answers by its registry id, its name or its session —
+  // the same forms a send accepts. A registry that cannot be read refuses the whole read; an
+  // entity with no router words never asks.
+  let entityScopes: Set<string> | null = null;
+  let entityScopesRefusal: string | undefined;
+  const scopesOfEntityTeams = (): { ok: true; scopes: Set<string> } | { ok: false; why: string } => {
+    if (entityScopesRefusal !== undefined) return { ok: false, why: entityScopesRefusal };
+    if (entityScopes === null) {
+      try {
+        const viaProject = new Set<string>();
+        for (const project of Object.values(readProjects(home))) {
+          if (project.entity !== entity) continue;
+          for (const id of project.teams) viaProject.add(id);
+        }
+        const scopes = new Set<string>();
+        for (const record of Object.values(readTeams(home))) {
+          const id = record.id ?? teamIdOf(record.root);
+          if (record.entity !== entity && !viaProject.has(id)) continue;
+          scopes.add(id);
+          scopes.add(record.project);
+          scopes.add(record.session);
+        }
+        entityScopes = scopes;
+      } catch (error) {
+        entityScopesRefusal = `entity: the registry cannot be read (${(error as Error).message})`;
+        return { ok: false, why: entityScopesRefusal };
+      }
+    }
+    return { ok: true, scopes: entityScopes };
+  };
+
   if (team !== null && entity !== null) {
     const source = readEntityPolicySource(home, entity);
     if (!source.ok) {
@@ -132,6 +166,20 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
           continue;
         }
         for (const [alias, address] of entries) {
+          const parsed = parseSeatTeamAddress(address);
+          const answer = scopesOfEntityTeams();
+          if (!answer.ok) {
+            return { ok: false, why: answer.why, problems: [] };
+          }
+          if (parsed === null || !answer.scopes.has(parsed.team)) {
+            problems.push({
+              why: `router alias "${alias}" names "${address}", which is not a team of this entity`,
+              level: 'entity',
+              name: 'router.aliases',
+              kind: 'rule',
+            });
+            continue;
+          }
           entityAliases.set(alias, address);
           // An entity word that places an alias also owns its fallback from here on.
           if (!fallbackLevel.has(alias)) fallbackLevel.set(alias, 'entity');
@@ -148,6 +196,22 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
           continue;
         }
         for (const [alias, fallback] of entries) {
+          if (fallback !== null) {
+            const parsed = parseSeatTeamAddress(fallback);
+            const answer = scopesOfEntityTeams();
+            if (!answer.ok) {
+              return { ok: false, why: answer.why, problems: [] };
+            }
+            if (parsed === null || !answer.scopes.has(parsed.team)) {
+              problems.push({
+                why: `router fallback for "${alias}" names "${fallback}", which is not a team of this entity`,
+                level: 'entity',
+                name: 'router.fallback',
+                kind: 'rule',
+              });
+              continue;
+            }
+          }
           entityFallback.set(alias, fallback);
           fallbackLevel.set(alias, 'entity');
         }
