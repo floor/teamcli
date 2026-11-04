@@ -116,7 +116,9 @@ import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { busProblemNotes } from '../bus/notes.ts';
+import { EVENT_LOG_TOTAL_BYTES } from '../bus/kinds.ts';
+import { retainedLogBytes } from '../bus/log.ts';
+import { busLogSizeNotes, busProblemNotes } from '../bus/notes.ts';
 import { pingpongLegDifferences } from './pingpong-legs.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
@@ -583,6 +585,14 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       recorded: state.bus,
       autostart: team.bus?.autostart !== false,
     }),
+    // The retained event log at four fifths of its size cap: named so the team's lead sees the
+    // cap coming. A stat per retained slot, never a read of a segment.
+    ...(sources.home !== undefined
+      ? busLogSizeNotes({
+          bytes: retainedLogBytes(team.project, root, sources.home),
+          cap: EVENT_LOG_TOTAL_BYTES,
+        })
+      : []),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.

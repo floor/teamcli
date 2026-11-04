@@ -190,6 +190,27 @@ export function eventLogPath(project: string, root: string, home: string): strin
   return join(storePath(project, root, home), EVENT_LOG_FILE);
 }
 
+/** The bytes the retained set holds on disk: the live segment and every sealed slot inside the
+ *  reader's bound, the same files `readEvents` walks. A slot that is not a regular file of this
+ *  user's contributes nothing; the size is a stat, never a read, so a near-cap note costs one
+ *  stat per retained slot and never touches a segment's bytes. */
+export function retainedLogBytes(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): number {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = join(storePath(project, root, home), EVENT_LOG_FILE);
+  let total = 0;
+  for (let n = kept - 1; n >= 0; n--) {
+    const at = n === 0 ? path : `${path}.${String(n)}`;
+    if (heldAt(at).kind !== 'file') continue;
+    total += sizeOfFile(at);
+  }
+  return total;
+}
+
 function ladderProblem(at: string): string | null {
   const held = heldAt(at);
   if (held.kind === 'missing') return null;
@@ -2086,6 +2107,106 @@ export function* readEventsSteps(
   return result;
 }
 
+/** What a matching read may ask of one record before any sealed byte is read: the kind and the
+ *  record id, the two fields a sealed segment's index carries and its seal signs. A predicate
+ *  never sees a payload the reader has not verified. */
+export type EventBriefFilter = (entry: { kind: string; record_id: string }) => boolean;
+
+/** The retained records whose kind or record id satisfies `filter`, read through the sealed
+ *  segments' signed indexes: for every matching index entry only that entry's own line is read
+ *  and its signature verified, and the open segment is read whole, line by line, as every read
+ *  does. Nothing is appended and nothing is written.
+ *
+ *  The index is trusted only where `verifyEventLogSealsCached` trusts its seal: a signed index
+ *  triple, chained to the trusted segment before it. When no segment is sealed, a present
+ *  segment is unsealed or missing, there is no key to check a candidate line with, or a candidate
+ *  line no longer parses as the record the index named under the key's signature, the read falls
+ *  back to the ordinary verified read of the whole retained log and filters it, so no answer
+ *  rests on an index the seal does not vouch for. */
+export function readEventsMatching(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number } = {},
+): EventReadResult {
+  return drainSteps(readEventsMatchingSteps(project, root, home, filter, options));
+}
+
+function* readEventsMatchingSteps(
+  project: string,
+  root: string,
+  home: string,
+  filter: EventBriefFilter,
+  options: { kept?: number },
+): Generator<void, EventReadResult, void> {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
+  if (!checked.ok) return checked;
+
+  const keyState = messageKeyState(home);
+  // Every present segment must be trusted, seal and index both: a hole in the chain leaves a
+  // stretch of the retained history no index accounts for, so the whole read stays ordinary.
+  const trusted =
+    checked.segments.length > 0
+    && checked.segments.every((segment) => segment.state === 'sealed' && segment.entries !== undefined);
+  if (!trusted || keyState.kind !== 'key') {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const events: SignedEventRecord[] = [];
+  let checkedLines = 0;
+  let disagree = false;
+  for (const segment of checked.segments) {
+    if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+    for (const entry of segment.entries) {
+      if (!filter(entry)) continue;
+      checkedLines += 1;
+      const raw = readLineAt(segment.path, entry.offset);
+      const parsed = raw === null ? null : parseSignedEventLine(raw);
+      if (
+        parsed === null
+        || parsed.payload.seq !== entry.seq
+        || parsed.payload.kind !== entry.kind
+        || parsed.payload.record_id !== entry.record_id
+        || !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+      ) {
+        // The index named a line this segment no longer holds as that signed record: the sealed
+        // bytes and the index disagree, so the answer comes from the whole retained log instead.
+        disagree = true;
+        break;
+      }
+      events.push(parsed);
+    }
+    if (disagree) break;
+    yield;
+  }
+  if (disagree) {
+    const read = yield* readEventsSteps(project, root, home, { kept });
+    if (!read.ok) return read;
+    return { ...read, events: read.events.filter((record) => filter(record.payload)) };
+  }
+
+  const path = checked.open?.path ?? eventLogPath(project, root, home);
+  const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
+  if (open === null) return { ok: false, reason: 'the event log could not be read' };
+  for (const record of open.records) {
+    if (filter(record.payload)) events.push(record);
+  }
+  return {
+    ok: true,
+    events,
+    unverified: open.unverified,
+    checked: checkedLines + open.checked,
+    full: false,
+    oldestSeq: events.length > 0 ? events[0]!.payload.seq : null,
+    newestSeq: events.length > 0 ? events[events.length - 1]!.payload.seq : null,
+    path,
+  };
+}
+
 /** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
  *  Ranges may abut and overlap; together they must reach the whole missing window. */
 function declaredDropCovers(events: SignedEventRecord[], from: number, to: number): boolean {
@@ -2583,15 +2704,40 @@ function findIndexedRecord(
   return null;
 }
 
+/** The signed indexes of the retained segments whose seals verify, keyed by segment path. A
+ *  segment without a trusted seal is absent from the map, and the caller reads it whole exactly
+ *  as before: hydration is a saving over a sealed log, never a way around verification. */
+function sealedSegmentIndexes(
+  project: string,
+  root: string,
+  home: string,
+  kept: number,
+): Map<string, SegmentIndexEntry[]> {
+  const indexes = new Map<string, SegmentIndexEntry[]>();
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
+  if (!checked.ok) return indexes;
+  for (const segment of checked.segments) {
+    if (segment.state === 'sealed' && segment.entries !== undefined) indexes.set(segment.path, segment.entries);
+  }
+  return indexes;
+}
+
+/** The newest sequence a sealed segment carries: its last entry's, which the seal signs along
+ *  with the rest of the index, so it is known without reading a sealed byte. */
+function newestSealedSeq(entries: SegmentIndexEntry[]): number | null {
+  return entries.length === 0 ? null : entries[entries.length - 1]!.seq;
+}
+
 /** What `appendEvent` needs from the retained log, kept across appends: the first verified record
- *  for the key this append is about to write, and the last verified sequence. The first look reads
- *  each retained file once and verifies only the lines that can answer that key — plus the newest
- *  line of each file, for the sequence — so a fresh process appends to a log of any retained size
- *  without re-verifying every record it kept. Each later look reads only the bytes appended to
- *  `events.jsonl` since the last one, so a growing session costs O(bytes). A key this process has
- *  not searched for is searched when it is first appended; a caller that needs every key (the
- *  retention declaration) asks for the whole map and verifies everything once. A rotated or
- *  rewritten file — or a changed key — falls back to a fresh scan. */
+ *  for the key this append is about to write, and the last verified sequence. The first look
+ *  hydrates the id map and the newest sequence from the sealed segments' signed indexes and reads
+ *  only the open segment whole, verifying only the lines that can answer that key — so a fresh
+ *  process appends to a log of any retained size without reading a sealed segment's bytes. A
+ *  segment without a trusted seal is still read whole. Each later look reads only the bytes
+ *  appended to `events.jsonl` since the last one, so a growing session costs O(bytes). A key this
+ *  process has not searched for is searched when it is first appended; a caller that needs every
+ *  key (the retention declaration) asks for the whole map and verifies everything once. A rotated
+ *  or rewritten file — or a changed key — falls back to a fresh scan. */
 function appendIndexOf(
   project: string,
   root: string,
@@ -2664,9 +2810,12 @@ function appendIndexOf(
     }
   }
 
-  // No index this process can use: one walk over each retained file builds the id map (where
-  // every line starts), the newest verified sequence, and — for a whole-key request — the first
-  // verified record of every key. A key searched later reads only the lines its id starts.
+  // No index this process can use. A sealed segment's signed index already names every record it
+  // holds, and its seal vouches for both: the id map and the newest sequence hydrate from those
+  // indexes, so a fresh process reads only the open segment whole and the candidate lines the
+  // append's own key can start at. A retained segment without a trusted seal is read whole,
+  // exactly as before. A whole-key request (the retention declaration) keeps its one walk over
+  // every retained file: it needs the first verified record of every key, not one key's answer.
   const index: AppendIndex = {
     keyPrint,
     files: stamps,
@@ -2678,13 +2827,40 @@ function appendIndexOf(
     newestSeq: null,
     path,
   };
-  for (const [at, candidate] of files.entries()) {
-    if (heldAt(candidate).kind === 'missing') continue;
+  const sealed = wantAll ? new Map<string, SegmentIndexEntry[]>() : sealedSegmentIndexes(project, root, home, kept);
+  const named = new Set<string>();
+  const wholeBytes = (at: number, candidate: string): Buffer | null => {
     appendIndexFileReads += 1;
     const bytes = readBytesNoFollow(candidate);
-    if (bytes === null) return { ok: false, reason: 'the event log could not be read' };
+    if (bytes === null) return null;
     appendIndexBytesRead += bytes.length;
     indexRecordIds(bytes, at, 0, index.ids);
+    return bytes;
+  };
+  const noteOpen = (at: number, bytes: Buffer): void => {
+    if (at !== last) return;
+    // Only the live file can end in a line a writer is still finishing; the next tail read starts
+    // at the last complete line so that line comes back whole.
+    const complete = bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
+      ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
+      : bytes.length;
+    index.offset = Math.max(0, complete);
+  };
+  for (const [at, candidate] of files.entries()) {
+    // The open segment is never a sealed one: its bytes are read and verified line by line.
+    const entries = at === last ? undefined : sealed.get(candidate);
+    if (entries !== undefined) {
+      for (const entry of entries) {
+        addPlace(index.ids, entry.record_id, { file: at, offset: entry.offset });
+        named.add(`${entry.kind}\u0000${entry.record_id}\u0000${entry.session}`);
+      }
+      const newest = newestSealedSeq(entries);
+      if (newest !== null) index.newestSeq = newest;
+      continue;
+    }
+    if (heldAt(candidate).kind === 'missing') continue;
+    const bytes = wholeBytes(at, candidate);
+    if (bytes === null) return { ok: false, reason: 'the event log could not be read' };
     if (wantAll) {
       const verified = verifyInto(bytes.toString('utf8'), keyState, index.duplicates, index.covered);
       if (verified.length > 0) index.newestSeq = verified[verified.length - 1]!.payload.seq;
@@ -2692,17 +2868,36 @@ function appendIndexOf(
     }
     const newest = lastVerifiedLineOf(bytes, keyState);
     if (newest !== null) index.newestSeq = newest.payload.seq;
-    if (at === last) {
-      // Only the live file can end in a line a writer is still finishing; the next tail read
-      // starts at the last complete line so that line comes back whole.
-      const complete = bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
-        ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
-        : bytes.length;
-      index.offset = Math.max(0, complete);
+    noteOpen(at, bytes);
+  }
+  let found: SignedEventRecord | null = null;
+  let searched = false;
+  if (wantedKey !== null && !wantAll) {
+    found = findIndexedRecord(index, files, wantedKey, keyState);
+    searched = true;
+    if (found !== null) index.duplicates.set(wantedKey.key, found);
+    // The seal named this record, and its own line no longer verifies as the index says: the
+    // index disagrees with the segment, so no answer may rest on it. The ordinary verified walk
+    // over every retained file below answers as it always did.
+    else if (keyState.kind === 'key' && named.has(wantedKey.key)) {
+      index.ids.clear();
+      index.duplicates.clear();
+      index.covered.clear();
+      index.newestSeq = null;
+      index.offset = 0;
+      searched = false;
+      for (const [at, candidate] of files.entries()) {
+        if (heldAt(candidate).kind === 'missing') continue;
+        const bytes = wholeBytes(at, candidate);
+        if (bytes === null) return { ok: false, reason: 'the event log could not be read' };
+        const newest = lastVerifiedLineOf(bytes, keyState);
+        if (newest !== null) index.newestSeq = newest.payload.seq;
+        noteOpen(at, bytes);
+      }
     }
   }
   if (wantedKey !== null) {
-    const found = findIndexedRecord(index, files, wantedKey, keyState);
+    if (!searched) found = findIndexedRecord(index, files, wantedKey, keyState);
     if (found !== null) index.duplicates.set(wantedKey.key, found);
     index.covered.add(wantedKey.key);
   }

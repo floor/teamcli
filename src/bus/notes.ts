@@ -31,3 +31,15 @@ export function busStatusNotes(input: BusNoteInput): string[] {
   if (health.kind === 'running') return [`bus: running (pid ${health.pid}); seats follow it for new messages`];
   return busProblemNotes(input);
 }
+
+/** A retained set at 80% of its size cap or more: one note saying what it holds, the repair, and
+ *  whose repair it is. The threshold is an alert line, never a second cap — dropping still starts
+ *  only when the retained bytes would exceed the cap itself — and nothing is ever changed here. */
+export function busLogSizeNotes(input: { bytes: number; cap: number }): string[] {
+  if (input.bytes * 5 < input.cap * 4) return [];
+  const held = Math.floor(input.bytes / 1_000_000);
+  const cap = Math.floor(input.cap / 1_000_000);
+  return [
+    `bus: the bus log holds ${String(held)} MB of its ${String(cap)} MB retained-size cap; the team's lead: shorten bus.retain_days, or accept the oldest sealed segments dropping (each drop is declared in the log)`,
+  ];
+}
