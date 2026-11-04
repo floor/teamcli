@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runApprove } from '../src/approve/command.ts';
 import type { Caller } from '../src/caller.ts';
+import { runAdd, type AddSources } from '../src/commands/add.ts';
+import { runReload, type ReloadSources } from '../src/commands/reload.ts';
+import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -20,6 +23,7 @@ import {
   SidebarReloadsError,
 } from '../src/registry/sidebar-reloads.ts';
 import { noteTeam } from '../src/registry/teams.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { installKey } from '../src/store/keys.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
@@ -463,7 +467,7 @@ describe('sidebar step execution', () => {
         applySidebar: () => ({
           kind: 'refused',
           reason: 'the sidebar rows key is set as a dotted key at line 2; edit it by hand',
-          restored: false,
+          restored: 'untouched',
         }),
         reloadSidebar: (session) => {
           events.push(`reload:${session}`);
@@ -475,13 +479,87 @@ describe('sidebar step execution', () => {
       expect(report.held).toBe(true);
       expect(events).toEqual([]);
       expect(said).toEqual([
-        "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 2; edit it by hand (and the prior config could not be restored)\n",
+        "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 2; edit it by hand (the config was left untouched)\n",
       ]);
       expect(logged).toEqual([
-        "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 2; edit it by hand (and the prior config could not be restored)",
+        "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 2; edit it by hand (the config was left untouched)",
       ]);
     },
   );
+
+  test('a config-check refusal that restores the prior bytes says the prior config was restored', async () => {
+    const plan = upPlan({
+      root,
+      session: 'acme-web',
+      sessionRunning: false,
+      seats: [sampleSeat],
+      watchLabel: 'Watch · acme-web',
+      watchAlive: true,
+      sidebar: {
+        rows: DEFAULT_SIDEBAR_ROWS,
+        indicators: 'symbols',
+        sessions: ['acme-api'],
+      },
+    });
+    const { host, said, logged, events } = fakeHost({
+      applySidebar: () => ({
+        kind: 'refused',
+        reason: 'config: issues found',
+        restored: true,
+      }),
+      reloadSidebar: (session) => {
+        events.push(`reload:${session}`);
+        return { applied: true, text: 'applied' };
+      },
+    });
+
+    const report = await executePlan(plan, 'acme-web', host);
+    expect(report.held).toBe(true);
+    expect(events).toEqual([]);
+    expect(said).toEqual([
+      "sidebar: the terminal host's sidebar layout was refused: config: issues found (the prior config was restored)\n",
+    ]);
+    expect(logged).toEqual([
+      "sidebar: the terminal host's sidebar layout was refused: config: issues found (the prior config was restored)",
+    ]);
+  });
+
+  test('a config-check refusal whose rollback fails says the prior config could not be restored', async () => {
+    const plan = upPlan({
+      root,
+      session: 'acme-web',
+      sessionRunning: false,
+      seats: [sampleSeat],
+      watchLabel: 'Watch · acme-web',
+      watchAlive: true,
+      sidebar: {
+        rows: DEFAULT_SIDEBAR_ROWS,
+        indicators: 'symbols',
+        sessions: ['acme-api'],
+      },
+    });
+    const { host, said, logged, events } = fakeHost({
+      applySidebar: () => ({
+        kind: 'refused',
+        reason: 'config: issues found',
+        restored: false,
+      }),
+      reloadSidebar: (session) => {
+        events.push(`reload:${session}`);
+        return { applied: true, text: 'applied' };
+      },
+    });
+
+    const report = await executePlan(plan, 'acme-web', host);
+    expect(report.held).toBe(true);
+    expect(events).toEqual([]);
+    expect(said).toEqual([
+      "sidebar: the terminal host's sidebar layout was refused: config: issues found (and the prior config could not be restored)\n",
+    ]);
+    expect(logged).toEqual([
+      "sidebar: the terminal host's sidebar layout was refused: config: issues found (and the prior config could not be restored)",
+    ]);
+  });
 
   test('reloads every running session of the entity, records applied reloads, and names a single session failure without failing anything else', async () => {
     const plan = upPlan({
@@ -610,12 +688,27 @@ describe('sidebar step execution', () => {
       ).ok,
     ).toBe(true);
 
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: root,
+          teamRoot: root,
+          name: 'daemon.sidebar-ttl-ms',
+          value: 7_200_000,
+        },
+        { now: NOW },
+      ).ok,
+    ).toBe(true);
+
     const codexIdle = readFileSync(join(import.meta.dir, 'fixtures/codex/0.157.0/idle.txt'), 'utf8').replaceAll(
       'GPT-5.6-Terra',
       'GPT-6-Sol',
     );
     const reloaded: string[] = [];
     const created: string[] = [];
+    const displayCalls: { session: string; pane: string; text: string; ttlMs: number | undefined }[] = [];
     const panes = new Map<string, string>();
     const baseLaunch = (overrides: Partial<Launch> = {}): Launch => ({
       sessionState: () => 'running',
@@ -623,12 +716,16 @@ describe('sidebar step execution', () => {
       sessionUp: () => true,
       createWorkspace: (_session, _cwd, label) => {
         created.push(label);
-        const pane = `w${String(created.length)}:p1`;
+        const pane = `pane-${String(created.length)}`;
         panes.set(pane, label === 'codex-acme · implementer' ? codexIdle : CLAUDE_IDLE);
-        return { pane, workspace: `w${String(created.length)}` };
+        return { pane, workspace: `ws-${String(created.length)}` };
       },
       paneRun: () => true,
       renameAgent: () => true,
+      reportDisplayAgent: (session, pane, text, ttlMs) => {
+        displayCalls.push({ session, pane, text, ttlMs });
+        return true;
+      },
       closeWorkspace: () => true,
       agentPanes: () => [...panes.keys()],
       agents: () => [],
@@ -677,6 +774,12 @@ describe('sidebar step execution', () => {
     const code = await runUp(['--file', '.agents/team.yaml'], io, baseSources());
     expect(code).toBe(0);
     expect(reloaded).toEqual(['acme-api', 'acme-web-alt']);
+    expect(displayCalls).toEqual([
+      { session: 'acme-web', pane: 'pane-1', text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
+      { session: 'acme-web', pane: 'pane-2', text: 'GPT-6 Sol default', ttlMs: 7_200_000 },
+      { session: 'acme-web', pane: 'pane-3', text: 'DeepSeek V4.1 Flash default', ttlMs: 7_200_000 },
+      { session: 'acme-web', pane: 'pane-4', text: 'DeepSeek V4.1 Flash default', ttlMs: 7_200_000 },
+    ]);
     expect(readFileSync(hostConfigPath(home), 'utf8')).toBe(
       [
         '[ui.sidebar.agents] # managed by team',
@@ -700,7 +803,7 @@ describe('sidebar step execution', () => {
       },
     });
 
-    // Now write a dotted key into config.toml so the splice refuses, and verify runUp aborts before creating any workspace.
+    // 1. Pre-write splice refusal: config is left untouched.
     reloaded.length = 0;
     created.length = 0;
     writeFileSync(hostConfigPath(home), 'ui.sidebar.agents.rows = [["agent"]]\n');
@@ -710,7 +813,193 @@ describe('sidebar step execution', () => {
     expect(reloaded).toEqual([]);
     expect(created).toEqual([]);
     expect(refusedIo.err).toContain(
-      "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 1; edit it by hand",
+      "sidebar: the terminal host's sidebar layout was refused: the sidebar rows key is set as a dotted key at line 1; edit it by hand (the config was left untouched)",
     );
+
+    // 2. Post-write config-check refusal with successful rollback: prior config is restored.
+    writeFileSync(hostConfigPath(home), '[ui]\nfont_size = 14\n');
+    const restoredIo = testIo(root, OWNER);
+    const restoredCode = await runUp(
+      ['--no-launch', '--file', '.agents/team.yaml'],
+      restoredIo,
+      baseSources({
+        checkSidebarConfig: () => ({ ok: false, text: 'config: issues found' }),
+      }),
+    );
+    expect(restoredCode).toBe(1);
+    expect(readFileSync(hostConfigPath(home), 'utf8')).toBe('[ui]\nfont_size = 14\n');
+    expect(restoredIo.err).toContain(
+      "sidebar: the terminal host's sidebar layout was refused: config: issues found (the prior config was restored)",
+    );
+
+    // 3. Post-write config-check refusal where rollback throws: prior config could not be restored.
+    const configDir = dirname(hostConfigPath(home));
+    const unrestoredIo = testIo(root, OWNER);
+    try {
+      const unrestoredCode = await runUp(
+        ['--no-launch', '--file', '.agents/team.yaml'],
+        unrestoredIo,
+        baseSources({
+          checkSidebarConfig: () => {
+            chmodSync(configDir, 0o500);
+            return { ok: false, text: 'config: issues found' };
+          },
+        }),
+      );
+      expect(unrestoredCode).toBe(1);
+      expect(unrestoredIo.err).toContain(
+        "sidebar: the terminal host's sidebar layout was refused: config: issues found (and the prior config could not be restored)",
+      );
+    } finally {
+      chmodSync(configDir, 0o700);
+    }
+  });
+
+  test('add, restart, and reload pass the resolved daemon.sidebar-ttl-ms to reportDisplayAgent', async () => {
+    writeEntityFile();
+    await approveCurrentFile();
+    registerSampleTeams();
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: root,
+          teamRoot: root,
+          name: 'daemon.sidebar-ttl-ms',
+          value: 7_200_000,
+        },
+        { now: NOW },
+      ).ok,
+    ).toBe(true);
+
+    const codexIdle = readFileSync(join(import.meta.dir, 'fixtures/codex/0.157.0/idle.txt'), 'utf8').replaceAll(
+      'GPT-5.6-Terra',
+      'GPT-6-Sol',
+    );
+    const displayCalls: { session: string; pane: string; text: string; ttlMs: number | undefined }[] = [];
+    const panes = new Map<string, string>();
+    let n = 0;
+    const launch: Launch = {
+      sessionState: () => 'running',
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => {
+        n += 1;
+        const pane = `pane-${String(n)}`;
+        panes.set(pane, codexIdle);
+        return { pane, workspace: `ws-${String(n)}` };
+      },
+      paneRun: () => true,
+      renameAgent: () => true,
+      reportDisplayAgent: (session, pane, text, ttlMs) => {
+        displayCalls.push({ session, pane, text, ttlMs });
+        return true;
+      },
+      closeWorkspace: () => true,
+      agentPanes: () => [...panes.keys()],
+      agents: () => [],
+      paneText: (_session, pane) => panes.get(pane) ?? codexIdle,
+      foreground: () => ['codex'],
+      shellBack: () => false,
+      sleep: async () => {},
+      now: () => NOW,
+    };
+    const doctor = {
+      version: (bin: string) =>
+        bin === 'claude' ? '2.1.288 (Claude Code)' : bin === 'codex' ? 'codex-cli 0.157.0' : '0.9.5',
+      herdrVersion: () => '0.7.1',
+      sessionRunning: () => true,
+      loggedIn: () => true,
+      onPath: () => true,
+      now: () => NOW,
+      home,
+    };
+
+    // 1. team add codex-acme-temp --like codex-acme
+    const addIo = testIo(root, OWNER);
+    const addSources: AddSources = {
+      home,
+      sessionState: () => 'running',
+      agents: () => [],
+      workspaces: () => [],
+      doctor,
+      now: () => NOW,
+      launch,
+    };
+    expect(await runAdd(['codex-acme-temp', '--like', 'codex-acme', '--file', '.agents/team.yaml'], addIo, addSources)).toBe(0);
+    expect(displayCalls).toEqual([
+      { session: 'acme-web', pane: 'pane-1', text: 'GPT-6 Sol default', ttlMs: 7_200_000 },
+    ]);
+
+    // 2. team restart codex-acme
+    displayCalls.length = 0;
+    const restartIo = testIo(root, OWNER);
+    const restartSources: RestartSources = {
+      home,
+      sessionRunning: () => true,
+      sessionState: () => 'running',
+      agents: () => [],
+      alive: () => false,
+      screen: () => ({ kind: 'idle' }),
+      screenText: () => codexIdle,
+      status: () => 'idle',
+      foreground: () => [],
+      workspaces: () => [],
+      doctor,
+      now: () => NOW,
+      upLaunch: launch,
+      launch: {
+        typeText: () => true,
+        pressEnter: () => true,
+        sendKey: () => true,
+        agentPanes: () => [],
+        closeWorkspace: () => true,
+        stopSession: () => true,
+        deleteSession: () => true,
+        kill: () => true,
+        sleep: async () => {},
+        now: () => NOW,
+      },
+    };
+    expect(await runRestart(['codex-acme', '--file', '.agents/team.yaml'], restartIo, restartSources)).toBe(0);
+    expect(displayCalls).toEqual([
+      { session: 'acme-web', pane: 'pane-2', text: 'GPT-6 Sol default', ttlMs: 7_200_000 },
+    ]);
+
+    // 3. team reload codex-acme
+    displayCalls.length = 0;
+    updateState(join(root, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['codex-acme'] = {
+        stage: 'ready',
+        pane: 'pane-0',
+        workspace: 'ws-0',
+        rules: 'option',
+        model: 'GPT-5 Terra',
+        version: '5.6',
+        launch_line: 'codex -m gpt-5-old',
+        launched: { shell: 100, cli: [101] },
+      };
+    });
+    const reloadIo = testIo(root, OWNER);
+    const reloadSources: ReloadSources = {
+      home,
+      now: () => NOW,
+      version: () => 'codex-cli 0.157.0',
+      launch: {
+        ...launch,
+        agents: () => [
+          { name: 'codex-acme', agent: 'codex', pane: 'pane-0', workspace: 'ws-0', status: 'idle', cwd: root },
+        ],
+        workspacePanes: () => ['pane-0'],
+        processInfo: () => ({ shell: 100, foreground: [101] }),
+        shellBack: (_s, pane) => pane === 'pane-0',
+      },
+    };
+    expect(await runReload(['codex-acme', '--file', '.agents/team.yaml'], reloadIo, reloadSources)).toBe(0);
+    expect(displayCalls).toEqual([
+      { session: 'acme-web', pane: 'pane-3', text: 'GPT-6 Sol default', ttlMs: 7_200_000 },
+    ]);
   });
 });

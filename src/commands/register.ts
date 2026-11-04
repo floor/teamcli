@@ -27,7 +27,8 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, SIDEBAR_TTL_CAP_MS, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
@@ -88,7 +89,7 @@ export type RegisterSources = {
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
   /** Line 2, re-applied the same way: `displayAgent(seat)`, through the `pane report-metadata`
    *  call `add` reports it with. Left out, the real write runs over herdr. */
-  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  reportDisplayAgent?: (session: string, pane: string, text: string, ttlMs?: number) => boolean;
   /** Names the pane as the seat — the herdr rename a launch runs at its `rename` step. Left out,
    *  the real `herdr agent rename` runs. */
   renameAgent?: (session: string, pane: string, name: string) => boolean;
@@ -715,7 +716,16 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           };
         });
       }
-      relabel(out, sources, session, seat, pane, listed?.workspace, name);
+      relabel(
+        out,
+        sources,
+        session,
+        seat,
+        pane,
+        listed?.workspace,
+        name,
+        sidebarPolicy({ home: sources.home, root, team, now: refreshedAt }).ttlMs,
+      );
       // The audit lines a delegated and a granted act write, the same ones the launch path
       // writes below: this path is that act too, and its early return must not skip them.
       if (delegated !== null) logDelegated(dir, delegated, 'up', refreshedAt, 'register');
@@ -1006,7 +1016,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.
-  relabel(out, sources, session, seat, pane, workspace, name);
+  const sidebarTtlMs = sidebarPolicy({ home: sources.home, root, team, now }).ttlMs;
+  relabel(out, sources, session, seat, pane, workspace, name, sidebarTtlMs);
   noteLaunchedPane(sources.home, path, pane, session);
   // The audit line a delegated act writes, naming the authority (`up`) it was run under; a
   // granted seat writes the grant's own line.
@@ -1052,6 +1063,7 @@ function relabel(
   pane: string,
   workspace: string | undefined,
   name: string,
+  ttlMs = SIDEBAR_TTL_CAP_MS,
 ): void {
   if (workspace !== undefined) {
     const title = workspaceLabel(seat);
@@ -1063,10 +1075,8 @@ function relabel(
     if (!renamed) out.stdout(`${plainLine(name)}: its title was not reported\n`);
   }
   const display = displayAgent(seat);
-  const reported = (sources.reportDisplayAgent ?? ((s, pane, text) => reportDisplayAgent(pane, text, s)))(
-    session,
-    pane,
-    display,
-  );
+  const reported = (
+    sources.reportDisplayAgent ?? ((s, p, text, ttl = SIDEBAR_TTL_CAP_MS) => reportDisplayAgent(p, text, s, ttl))
+  )(session, pane, display, ttlMs);
   if (!reported) out.stdout(`${plainLine(name)}: its display was not reported\n`);
 }

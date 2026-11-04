@@ -41,6 +41,7 @@ import {
   paneRun,
   reloadConfig,
   reportDisplayAgent,
+  SIDEBAR_TTL_CAP_MS,
   workspaceRename,
   paneShellBack,
   sessionDelete,
@@ -64,6 +65,7 @@ import {
   type SidebarApply,
 } from '../herdr.ts';
 import { sidebarConfigText, sidebarStepOf } from '../launch/sidebar-step.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import { sidebarRowsWord } from '../policy/types.ts';
 import { recordSidebarReloads } from '../registry/sidebar-reloads.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -231,7 +233,7 @@ export type Launch = {
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
@@ -351,7 +353,8 @@ const realLaunch: Launch = {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -3297,7 +3300,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
-        ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        ? {
+            reportDisplayAgent: (session: string, pane: string, text: string) =>
+              launch.reportDisplayAgent!(
+                session,
+                pane,
+                text,
+                sidebarPolicy({ home: sources.home, root, team, now: now() }).ttlMs,
+              ),
+          }
         : {}),
       ...(launch.renameWorkspace
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }

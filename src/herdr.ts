@@ -969,12 +969,13 @@ function isAbsent(error: unknown): boolean {
  *  given: the file already reads equal, but a session that never reloaded since an older file
  *  holds the older layout in memory. `failed` names the sessions whose reload refused — the
  *  edit stands (a restore cannot un-reload the sessions that applied); check names them and
- *  `--repair` retries. A `refused` edit either wrote nothing or restored the prior bytes
- *  (`restored`). */
+ *  `--repair` retries. A `refused` edit either wrote nothing (`restored: 'untouched'`), restored
+ *  the prior bytes (`restored: true`), or replaced the file and could not restore the prior bytes
+ *  (`restored: false`). */
 export type SidebarApply =
   | { kind: 'unchanged'; reloaded: string[]; failed: { session: string; text: string }[] }
   | { kind: 'applied'; reloaded: string[]; failed: { session: string; text: string }[] }
-  | { kind: 'refused'; reason: string; restored: boolean };
+  | { kind: 'refused'; reason: string; restored: boolean | 'untouched' };
 
 /** The host calls the apply makes, injectable for tests. */
 export type SidebarApplyDeps = {
@@ -1019,11 +1020,11 @@ export function applySidebarLayout(
       priorText = null;
     }
   } catch (error) {
-    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: false };
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
   const spliced = spliceSidebarRows(priorText ?? '', rows, indicators);
-  if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: false };
+  if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: 'untouched' };
   if (!spliced.changed) {
     const { reloaded, failed } = reloads();
     return { kind: 'unchanged', reloaded, failed };
@@ -1035,7 +1036,7 @@ export function applySidebarLayout(
   } catch (error) {
     // The replace is atomic: a throw here is before the rename, so the config still holds the
     // prior bytes (or is still absent) and nothing needs restoring.
-    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: true };
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
   const check = deps.checkConfig();

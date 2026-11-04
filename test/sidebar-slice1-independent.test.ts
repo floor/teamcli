@@ -184,7 +184,7 @@ describe('sidebar slice 1 independent verification', () => {
 
         expect(outcome.kind).toBe('refused');
         if (outcome.kind === 'refused') {
-          expect(outcome.restored).toBe(false);
+          expect(outcome.restored).toBe('untouched');
         }
         expect(checkCalled).toBe(false);
         expect(reloadCalled).toBe(false);

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   applySidebarLayout,
   DEFAULT_SIDEBAR_ROWS,
@@ -360,8 +360,27 @@ describe('applySidebarLayout', () => {
     expect(out.kind).toBe('refused');
     if (out.kind !== 'refused') return;
     expect(out.reason).toContain('a symbolic link');
-    expect(out.restored).toBe(false);
+    expect(out.restored).toBe('untouched');
     expect(reloads).toEqual([]);
     unlinkSync(file);
+  });
+
+  test('a refused check whose rollback throws reports restored: false', () => {
+    const prior = '[ui]\nfont_size = 14\n';
+    writeConfig(prior, 0o600);
+    const dir = dirname(file);
+    try {
+      const out = applySidebarLayout(home, ROWS, 'symbols', ['one'], {
+        checkConfig: () => {
+          chmodSync(dir, 0o500);
+          return { ok: false, text: 'config: issues found' };
+        },
+        reload: deps.reload,
+      });
+      expect(out).toEqual({ kind: 'refused', reason: 'config: issues found', restored: false });
+      expect(reloads).toEqual([]);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 });

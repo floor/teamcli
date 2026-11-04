@@ -52,6 +52,7 @@ import {
   reportDisplayAgent,
   sessionRunning,
   sessionState,
+  SIDEBAR_TTL_CAP_MS,
   startServer,
   typeText,
   workspaceClose,
@@ -148,7 +149,8 @@ const realUpLaunch: Launch = {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -1859,7 +1861,15 @@ function hostOf(input: {
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
-      ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
+      ? {
+          reportDisplayAgent: (s: string, pane: string, text: string) =>
+            launch.reportDisplayAgent!(
+              s,
+              pane,
+              text,
+              sidebarPolicy({ home: input.home, root: input.root, team: input.team, now: input.now() }).ttlMs,
+            ),
+        }
       : {}),
     typeLine: () => false,
     deliverRules: async (s, pane, cli, file, seconds) => {

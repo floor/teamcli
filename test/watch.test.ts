@@ -1166,6 +1166,7 @@ describe('team watch', () => {
   test('a status line changed between passes reaches line 2 on the sweep, once per change', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const pushed: string[] = [];
+    const ttls: (number | undefined)[] = [];
     // Nobody idle: no ring, so the pane text the sweep reads is only what this test sets.
     const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
     let waits = 0;
@@ -1173,7 +1174,7 @@ describe('team watch', () => {
       live: () => working,
       // The pane as the owner's /model and /effort left it, some seconds after the pass.
       screen: () => '  main · Sonnet 4.5\nwith high effort\n',
-      reportDisplayAgent: (_session, pane, text) => { pushed.push(`${pane} ${text}`); return true; },
+      reportDisplayAgent: (_session, pane, text, ttlMs) => { pushed.push(`${pane} ${text}`); ttls.push(ttlMs); return true; },
       wait: async (_seconds, onTick) => { waits += 1; onTick?.(); onTick?.(); return false; },
     }));
     expect(code).toBe(0);
@@ -1183,6 +1184,75 @@ describe('team watch', () => {
     expect(pushed.filter((line) => line.startsWith('w1:p1 '))).toEqual([
       'w1:p1 Claude Opus 5.5 default',
       'w1:p1 Claude Sonnet 4.5 high',
+    ]);
+    expect(ttls.length).toBeGreaterThanOrEqual(2);
+    expect(ttls.every((t) => t === 86_400_000)).toBe(true);
+  });
+
+  test('an unchanged status line is re-reported on the sweep once the refresh window has elapsed, carrying the resolved TTL', async () => {
+    const home = join(dir, 'home');
+    const now = new Date(clock);
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: teamIdOf(dir),
+          teamRoot: dir,
+          name: 'daemon.sidebar-ttl-ms',
+          value: 7_200_000,
+        },
+        { now },
+      ).ok,
+    ).toBe(true);
+    expect(
+      writePolicySet(
+        home,
+        {
+          level: 'team',
+          target: teamIdOf(dir),
+          teamRoot: dir,
+          name: 'daemon.sidebar-refresh-ms',
+          value: 600_000,
+        },
+        { now },
+      ).ok,
+    ).toBe(true);
+
+    const io = testIo(dir, { kind: 'owner' });
+    const pushed: { at: number; text: string; ttlMs: number | undefined }[] = [];
+    const working = live({ 'deepseek-acme': { status: 'working', screen: busy }, 'deepseek-acme-2': { status: 'working', screen: busy } });
+    const coordinatorPane = working.agents[0]?.pane;
+    const start = clock;
+    const code = await runWatch(['--file', file], io, sources(1, {
+      home,
+      live: () => working,
+      // The screen never changes: it stays on the file's own Opus 5.5 default.
+      screen: () => '  main · Opus 5.5\n',
+      reportDisplayAgent: (_session, pane, text, ttlMs) => {
+        if (pane === coordinatorPane) {
+          pushed.push({ at: clock - start, text, ttlMs });
+        }
+        return true;
+      },
+      wait: async (_seconds, onTick) => {
+        // Immediate tick and a tick 1 ms before the 600_000 ms refresh window: silent.
+        onTick?.();
+        clock = start + 599_999;
+        onTick?.();
+        // At the 600_000 ms mark the unchanged line is re-reported once, updating reportedAt.
+        clock = start + 600_000;
+        onTick?.();
+        // Another tick inside the new window is silent again.
+        clock = start + 601_000;
+        onTick?.();
+        return false;
+      },
+    }));
+    expect(code).toBe(0);
+    expect(pushed).toEqual([
+      { at: 0, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
+      { at: 600_000, text: 'Claude Opus 5.5 default', ttlMs: 7_200_000 },
     ]);
   });
 

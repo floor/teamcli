@@ -137,6 +137,7 @@ describe('the pane display', () => {
 
   test('a failed report is one line and the seat stays', async () => {
     const said: string[] = [];
+    const ttls: (number | undefined)[] = [];
     let runs = 0;
     const host: Host = {
       startServer: () => true,
@@ -146,7 +147,10 @@ describe('the pane display', () => {
         runs += 1;
         return true;
       },
-      reportDisplayAgent: () => false,
+      reportDisplayAgent: (_session, _pane, _text, ttlMs) => {
+        ttls.push(ttlMs);
+        return false;
+      },
       typeLine: () => false,
       renameAgent: () => true,
       closeWorkspace: () => true,
@@ -171,6 +175,7 @@ describe('the pane display', () => {
     ];
     await executePlan(steps, 'acme', host);
     expect(said).toEqual(['lead: its display was not reported\n']);
+    expect(ttls).toEqual([86_400_000]);
     expect(runs).toBe(1);
   });
 });
@@ -225,6 +230,7 @@ describe('a seat left ready', () => {
 
   test('a failed repaint is one line each and the seat stays ready', async () => {
     const said: string[] = [];
+    const ttls: (number | undefined)[] = [];
     let typed = 0;
     const host: Host = {
       startServer: () => true,
@@ -234,7 +240,10 @@ describe('a seat left ready', () => {
         typed += 1;
         return true;
       },
-      reportDisplayAgent: () => false,
+      reportDisplayAgent: (_session, _pane, _text, ttlMs) => {
+        ttls.push(ttlMs);
+        return false;
+      },
       renameWorkspace: () => false,
       typeLine: () => {
         typed += 1;
@@ -273,6 +282,7 @@ describe('a seat left ready', () => {
       'lead: its display was not reported\n',
       'lead: ready\n  already ready; left as it is\n',
     ]);
+    expect(ttls).toEqual([86_400_000]);
     expect(typed).toBe(0);
   });
 });
