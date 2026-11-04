@@ -1381,6 +1381,52 @@ export function verifyEventLogSeals(
   return { ok: true, segments, open, problems };
 }
 
+type SealSetCache = { stamp: string; value: SealCheckResult };
+
+const sealSetChecks = new Map<string, SealSetCache>();
+
+function stampText(stamp: LogFileStamp | null): string {
+  return stamp === null ? '-' : `${String(stamp.ino)}:${String(stamp.size)}:${String(stamp.mtimeMs)}:${String(stamp.ctimeMs)}`;
+}
+
+/** A stamp of every file the seal check reads or stats: each retained segment, its seal and its
+ *  index, then the open segment. Any change to one of them makes the check run again, and nothing
+ *  else does. */
+function sealSetStamp(project: string, root: string, home: string, kept: number): string {
+  const path = eventLogPath(project, root, home);
+  const parts: string[] = [];
+  for (let n = kept - 1; n >= 1; n--) {
+    const segment = `${path}.${String(n)}`;
+    parts.push(stampText(fileStamp(segment)));
+    parts.push(stampText(fileStamp(sealPathOf(segment))));
+    parts.push(stampText(fileStamp(indexPathOf(segment))));
+  }
+  parts.push(stampText(fileStamp(path)));
+  return parts.join('|');
+}
+
+/**
+ * `verifyEventLogSeals` for a caller that asks repeatedly over an unchanged set: the answer is
+ * kept until a segment, a seal or an index changes. The check itself never reads a segment's
+ * bytes, so its stamp is those files' own identity — rotation, a re-seal, a prune or a tampered
+ * sidecar all move it.
+ */
+export function verifyEventLogSealsCached(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): SealCheckResult {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}\u0000${keyPrintOf(home)}`;
+  const stamp = sealSetStamp(project, root, home, kept);
+  const cached = sealSetChecks.get(cacheKey);
+  if (cached !== undefined && cached.stamp === stamp) return cached.value;
+  const value = verifyEventLogSeals(project, root, home, { kept });
+  sealSetChecks.set(cacheKey, { stamp, value });
+  return value;
+}
+
 /** Whether every line of one closed segment parses as a signed event and verifies under the
  *  message key, sliced so a large segment never holds the event loop: the parse and signature
  *  check give a turn every `sliceLines` lines. A segment that is empty, has no trailing newline,
@@ -1527,6 +1573,9 @@ export type EventIndexReadResult =
       /** Present retained segments this read could not trust a seal for. The caller seals them
        *  once its verified read is done; zero on a fully sealed store. */
       unsealed: number;
+      /** The newest sequence the sealed set vouches for, or null when a present segment is not
+       *  sealed. A cursor at or above it can be answered from the open segment alone. */
+      sealedNewestSeq: number | null;
     }
   | { ok: false; reason: string };
 
@@ -1565,17 +1614,68 @@ type HydratedStore = {
   seals: string;
   openStamp: LogFileStamp | null;
   result: Extract<EventIndexReadResult, { ok: true }>;
+  /** The sealed segments' briefs alone, kept so an append to the open segment re-reads only it. */
+  sealedEntries: EventBrief[];
+  sealedNewestSeq: number | null;
+  /** The verified open records behind this hydration, for a caller that needs whole records. */
+  openRecords: SignedEventRecord[];
 };
 
 const hydratedStores = new Map<string, HydratedStore>();
 
+type OpenRecords = { records: SignedEventRecord[]; checked: number; unverified: number };
+
+/** The open segment parsed and verified line by line, sliced: the one segment of a sealed store
+ *  whose bytes a reader still reads. A line whose signature does not verify is counted, never
+ *  returned. A missing or empty file contributes nothing; a file that exists and cannot be read
+ *  answers null. */
+function* openRecordsSteps(
+  path: string,
+  keyState: ReturnType<typeof messageKeyState>,
+  sliceLines: number,
+): Generator<void, OpenRecords | null, void> {
+  if (heldAt(path).kind !== 'file' || sizeOfFile(path) === 0) {
+    return { records: [], checked: 0, unverified: 0 };
+  }
+  const text = readNoFollow(path);
+  if (text === null) return null;
+  const slice = Math.max(1, Math.floor(sliceLines));
+  const records: SignedEventRecord[] = [];
+  let checked = 0;
+  let unverified = 0;
+  let position = 0;
+  let seen = 0;
+  while (position < text.length) {
+    const newline = text.indexOf('\n', position);
+    const end = newline < 0 ? text.length : newline;
+    const raw = text.slice(position, end);
+    position = newline < 0 ? text.length : newline + 1;
+    if (raw.trim() === '') continue;
+    seen += 1;
+    if (seen % slice === 0) yield;
+    const parsed = parseSignedEventLine(raw);
+    checked += 1;
+    if (
+      parsed === null ||
+      keyState.kind !== 'key' ||
+      !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
+    ) {
+      unverified += 1;
+      continue;
+    }
+    records.push(parsed);
+  }
+  return { records, checked, unverified };
+}
+
 /**
  * The dedupe view of the retained log for the reconcile pass: every sealed segment contributes
  * its signed index, and only the open segment's bytes are read and checked line by line. The
- * sealed set is verified by `verifyEventLogSeals` first; a segment that is present but unsealed
- * sends the whole read through the ordinary verified path, so hydration is a saving over a sealed
- * log, never a way around verification. The result is cached per store until a seal, a segment or
- * the open file changes.
+ * sealed set is verified by `verifyEventLogSealsCached` first; a segment that is present but
+ * unsealed sends the whole read through the ordinary verified path, so hydration is a saving over
+ * a sealed log, never a way around verification. The result is cached per store until a seal, a
+ * segment or the open file changes; an append to an unchanged sealed set re-reads only the open
+ * segment.
  */
 export function hydrateEventLog(
   project: string,
@@ -1593,7 +1693,7 @@ export function* hydrateEventLogSteps(
   options: { kept?: number } = {},
 ): Generator<void, EventIndexReadResult, void> {
   const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
-  const checked = verifyEventLogSeals(project, root, home, { kept });
+  const checked = verifyEventLogSealsCached(project, root, home, { kept });
   if (!checked.ok) return checked;
 
   const keyState = messageKeyState(home);
@@ -1605,13 +1705,12 @@ export function* hydrateEventLogSteps(
     .join('|');
   const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}`;
   const cached = hydratedStores.get(cacheKey);
-  if (
+  const sameSeals =
     cached !== undefined &&
     cached.keyPrint === keyPrint &&
     cached.kept === kept &&
-    cached.seals === sealKey &&
-    sameStamp(cached.openStamp, openStamp)
-  ) {
+    cached.seals === sealKey;
+  if (sameSeals && sameStamp(cached.openStamp, openStamp)) {
     // No seal and no retained byte moved since this process hydrated them.
     return { ...cached.result, checked: 0, full: false };
   }
@@ -1633,58 +1732,53 @@ export function* hydrateEventLogSteps(
       newestSeq: read.newestSeq,
       unverified: read.unverified,
       unsealed,
+      sealedNewestSeq: null,
     };
   }
 
-  const entries: EventBrief[] = [];
-  for (const segment of checked.segments) {
-    if (segment.state !== 'sealed' || segment.entries === undefined) continue;
-    for (const entry of segment.entries) entries.push(briefOfEntry(entry));
-    yield;
-  }
-
-  let checkedOpen = 0;
-  let unverified = 0;
-  if (checked.open !== null && checked.open.size > 0) {
-    const text = readNoFollow(path);
-    if (text === null) return { ok: false, reason: 'the event log could not be read' };
-    let position = 0;
-    let seen = 0;
-    while (position < text.length) {
-      const newline = text.indexOf('\n', position);
-      const end = newline < 0 ? text.length : newline;
-      const raw = text.slice(position, end);
-      position = newline < 0 ? text.length : newline + 1;
-      if (raw.trim() === '') continue;
-      seen += 1;
-      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
-      const parsed = parseSignedEventLine(raw);
-      checkedOpen += 1;
-      if (
-        parsed === null ||
-        keyState.kind !== 'key' ||
-        !verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)
-      ) {
-        unverified += 1;
-        continue;
-      }
-      entries.push(briefOfRecord(parsed));
+  let sealedEntries: EventBrief[];
+  let sealedNewestSeq: number | null;
+  if (sameSeals) {
+    sealedEntries = cached.sealedEntries;
+    sealedNewestSeq = cached.sealedNewestSeq;
+  } else {
+    sealedEntries = [];
+    sealedNewestSeq = null;
+    for (const segment of checked.segments) {
+      if (segment.state !== 'sealed' || segment.entries === undefined) continue;
+      for (const entry of segment.entries) sealedEntries.push(briefOfEntry(entry));
+      sealedNewestSeq = segment.seal?.lastSeq ?? sealedNewestSeq;
+      yield;
     }
   }
+
+  const open = yield* openRecordsSteps(path, keyState, READ_EVENTS_SLICE_LINES);
+  if (open === null) return { ok: false, reason: 'the event log could not be read' };
+  const entries = [...sealedEntries, ...open.records.map((record) => briefOfRecord(record))];
 
   const result: Extract<EventIndexReadResult, { ok: true }> = {
     ok: true,
     entries,
-    checked: checkedOpen,
+    checked: open.checked,
     full: false,
     path,
     oldestSeq: entries.length > 0 ? entries[0]!.seq : null,
     newestSeq: entries.length > 0 ? entries[entries.length - 1]!.seq : null,
-    unverified,
+    unverified: open.unverified,
     unsealed: 0,
+    sealedNewestSeq,
   };
-  if (keyState.kind === 'key' && unverified === 0) {
-    hydratedStores.set(cacheKey, { keyPrint, kept, seals: sealKey, openStamp, result });
+  if (keyState.kind === 'key' && open.unverified === 0) {
+    hydratedStores.set(cacheKey, {
+      keyPrint,
+      kept,
+      seals: sealKey,
+      openStamp,
+      result,
+      sealedEntries,
+      sealedNewestSeq,
+      openRecords: open.records,
+    });
   } else {
     hydratedStores.delete(cacheKey);
   }
@@ -2038,6 +2132,36 @@ export async function readEventsFromCursorSliced(
   return driveSteps(readEventsFromCursorSteps(project, root, home, cursor, options));
 }
 
+/** The cursor answer built from the open segment's verified records: only records past the cursor
+ *  are returned, and a cursor past every record stays where it is. `newestSeq` falls back to the
+ *  sealed set's newest when the open file is empty. */
+function tailCursorResult(
+  records: SignedEventRecord[],
+  hydrated: Extract<EventIndexReadResult, { ok: true }>,
+  cursor: number,
+  checked: number,
+  unverified: number,
+): CursorReadResult {
+  const events = records.filter((record) => record.payload.seq > cursor);
+  const newestSeq = records.length > 0
+    ? records[records.length - 1]!.payload.seq
+    : hydrated.sealedNewestSeq;
+  const nextCursor = events.length > 0
+    ? events[events.length - 1]!.payload.seq
+    : (newestSeq !== null && newestSeq > cursor ? newestSeq : cursor);
+  return {
+    ok: true,
+    kind: 'events',
+    events,
+    cursor: nextCursor,
+    oldestSeq: hydrated.oldestSeq,
+    newestSeq,
+    checked,
+    full: false,
+    unverified,
+  };
+}
+
 export function* readEventsFromCursorSteps(
   project: string,
   root: string,
@@ -2045,7 +2169,47 @@ export function* readEventsFromCursorSteps(
   cursor: number,
   options: { kept?: number } = {},
 ): Generator<void, CursorReadResult, void> {
-  const read = yield* readEventsSteps(project, root, home, options);
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = eventLogPath(project, root, home);
+  let anySeal = false;
+  for (let n = kept - 1; n >= 1; n--) {
+    if (heldAt(sealPathOf(`${path}.${String(n)}`)).kind === 'file') {
+      anySeal = true;
+      break;
+    }
+  }
+  // A cursor at or past the sealed set's newest record needs no sealed byte: the seals vouch for
+  // that history, and only the open segment can hold what the cursor has not seen. A cursor
+  // inside the history, an unsealed segment or a store with no seal takes the ordinary verified
+  // read below, with its gap and retention rules unchanged.
+  if (cursor > 0 && anySeal) {
+    const hydrated = yield* hydrateEventLogSteps(project, root, home, { kept });
+    if (!hydrated.ok) return hydrated;
+    if (
+      hydrated.unsealed === 0 &&
+      hydrated.sealedNewestSeq !== null &&
+      hydrated.oldestSeq !== null &&
+      cursor >= hydrated.sealedNewestSeq
+    ) {
+      // The hydration just parsed the open segment (or answered from its cache while that file
+      // was unchanged): those verified records answer this cursor without a second read.
+      const cacheKey = `${storePath(project, root, home)}\u0000${String(kept)}`;
+      const entry = hydratedStores.get(cacheKey);
+      if (
+        entry !== undefined &&
+        entry.keyPrint === keyPrintOf(home) &&
+        entry.sealedNewestSeq === hydrated.sealedNewestSeq &&
+        entry.result.oldestSeq === hydrated.oldestSeq &&
+        sameStamp(entry.openStamp, fileStamp(path))
+      ) {
+        return tailCursorResult(entry.openRecords, hydrated, cursor, hydrated.checked, hydrated.unverified);
+      }
+      const open = yield* openRecordsSteps(path, messageKeyState(home), READ_EVENTS_SLICE_LINES);
+      if (open === null) return { ok: false, reason: 'the event log could not be read' };
+      return tailCursorResult(open.records, hydrated, cursor, open.checked, open.unverified);
+    }
+  }
+  const read = yield* readEventsSteps(project, root, home, { kept });
   if (!read.ok) return read;
   const { events, oldestSeq, newestSeq } = read;
   if (cursor > 0 && oldestSeq !== null && cursor + 1 < oldestSeq) {
