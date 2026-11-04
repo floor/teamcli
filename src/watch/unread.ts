@@ -55,6 +55,8 @@ import {
   readdirSync,
   realpathSync,
   readFileSync,
+  statSync,
+  truncateSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -71,7 +73,7 @@ import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
-import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
+import { appendHistory, historyPath, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
@@ -936,10 +938,62 @@ function reportBlockedScreenToLead(
       for (const one of reserved) release(wakePath(dropDir, one.message.id));
       return;
     }
+    const alreadyTold = activeReportId !== null || leadOutcome.existing === true;
 
-    const reason = reserved.length === 1
-      ? `${seat.name}: blocked by a dialog (${kind}) — a message from ${reserved[0]!.payload.from} is delivered-but-blocked (id ${reserved[0]!.message.id}); reported to ${leadName}`
-      : `${seat.name}: blocked by a dialog (${kind}) — ${String(reserved.length)} messages are delivered-but-blocked (ids ${ids.join(', ')}); reported to ${leadName}`;
+    const historyFile = historyPath(scene.team.project, scene.root, home);
+    let historyPrior: { existed: false } | { existed: true; ino: number; size: number } | null = null;
+    try {
+      if (!existsSync(historyFile)) {
+        historyPrior = { existed: false };
+      } else {
+        const st = statSync(historyFile);
+        if (st.isFile()) historyPrior = { existed: true, ino: st.ino, size: st.size };
+      }
+    } catch {
+      historyPrior = null;
+    }
+
+    const historyRead = readHistory(scene.team.project, scene.root, home);
+    const alreadyRecorded = new Set(
+      historyRead.ok
+        ? historyRead.entries.filter((entry) => entry.outcome === 'delivered-but-blocked').map((entry) => entry.id)
+        : [],
+    );
+
+    const recorded: { index: number; one: (typeof reserved)[number] }[] = [];
+    let wroteHistory = false;
+    for (const [index, one] of reserved.entries()) {
+      if (!alreadyRecorded.has(one.message.id)) {
+        const wrote = appendHistory(scene.team.project, scene.root, home, {
+          ts: at,
+          from: one.payload.from,
+          to: seat.name,
+          body: one.payload.body,
+          id: one.message.id,
+          thread: one.payload.thread,
+          outcome: 'delivered-but-blocked',
+          via: 'lead-report',
+          note: `blocked by a dialog (${kind}); reported to ${leadName}`,
+          ...failedLeg(one.message.id),
+        });
+        if (!wrote.ok) {
+          release(wakePath(dropDir, one.message.id));
+          continue;
+        }
+        wroteHistory = true;
+      }
+      recorded.push({ index, one });
+    }
+
+    if (recorded.length === 0) {
+      if (leadOutcome.existing !== true) release(leadOutcome.path);
+      return;
+    }
+
+    const recordedIds = recorded.map(({ one }) => one.message.id);
+    const reason = recorded.length === 1
+      ? `${seat.name}: blocked by a dialog (${kind}) — a message from ${recorded[0]!.one.payload.from} is delivered-but-blocked (id ${recorded[0]!.one.message.id}); reported to ${leadName}`
+      : `${seat.name}: blocked by a dialog (${kind}) — ${String(recorded.length)} messages are delivered-but-blocked (ids ${recordedIds.join(', ')}); reported to ${leadName}`;
     const kindSlug = kind.replace(/[^A-Za-z0-9._-]/g, '-');
     const appended = appendEvent(
       scene.team.project,
@@ -960,38 +1014,27 @@ function reportBlockedScreenToLead(
       { deduplicate: true },
     );
     if (!appended.ok) {
+      if (wroteHistory && historyPrior !== null) {
+        try {
+          if (!historyPrior.existed) {
+            unlinkSync(historyFile);
+          } else {
+            const st = statSync(historyFile);
+            if (st.isFile() && st.ino === historyPrior.ino && st.size > historyPrior.size) {
+              truncateSync(historyFile, historyPrior.size);
+            }
+          }
+        } catch {
+          // Best-effort rollback when the event append fails after the history write; reconcile
+          // still repairs message.delivered from a surviving history line.
+        }
+      }
       if (leadOutcome.existing !== true) release(leadOutcome.path);
-      for (const one of reserved) release(wakePath(dropDir, one.message.id));
+      for (const { one } of recorded) release(wakePath(dropDir, one.message.id));
       return;
     }
 
-    const historyRead = readHistory(scene.team.project, scene.root, home);
-    const alreadyRecorded = new Set(
-      historyRead.ok
-        ? historyRead.entries.filter((entry) => entry.outcome === 'delivered-but-blocked').map((entry) => entry.id)
-        : [],
-    );
-
-    let claimed = 0;
-    for (const [index, one] of reserved.entries()) {
-      if (!alreadyRecorded.has(one.message.id)) {
-        const wrote = appendHistory(scene.team.project, scene.root, home, {
-          ts: at,
-          from: one.payload.from,
-          to: seat.name,
-          body: one.payload.body,
-          id: one.message.id,
-          thread: one.payload.thread,
-          outcome: 'delivered-but-blocked',
-          via: 'lead-report',
-          note: `blocked by a dialog (${kind}); reported to ${leadName}`,
-          ...failedLeg(one.message.id),
-        });
-        if (!wrote.ok) {
-          release(wakePath(dropDir, one.message.id));
-          continue;
-        }
-      }
+    for (const { index, one } of recorded) {
       const text = lines[index]!;
       const { targets } = reportTargets(scene, one.payload, home);
       const senders = targets.filter(
@@ -1019,14 +1062,9 @@ function reportBlockedScreenToLead(
         to: leadName,
         report: leadOutcome.id,
       });
-      claimed += 1;
     }
 
-    if (claimed === 0) {
-      if (leadOutcome.existing !== true) release(leadOutcome.path);
-      return;
-    }
-    if (!appended.duplicate) {
+    if (!alreadyTold) {
       scene.say(reason, true);
     }
   } finally {

@@ -2441,7 +2441,7 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     }
   });
 
-  test('a failing history write leaves no blocked marker and the 2N queued, not woken loss report still fires', async () => {
+  test('a failing history write leaves no blocked marker or seat.blocked event, a retry within 2N speaks once, and an unrecovered failure still reports queued, not woken at 2N', async () => {
     const made = world();
     const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'antigravity'));
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nhistory fails', new Date(NOW.getTime() - 11 * MIN));
@@ -2455,12 +2455,16 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     const live = liveWith('helper', 'helper-pane', 'done');
     const said: string[] = [];
 
-    // Within 2N (11 min): history write fails, so no `.wake` blocked marker is written and no scene line claims delivery.
+    // Within 2N (11 min): history write fails, so no `.wake` blocked marker, no lead drop, no `seat.blocked` event, and no scene line claim delivery.
     await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live, now: NOW }), { unreadAfter: N });
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    expect(existsSync(leadDir) ? readdirSync(leadDir) : []).toEqual([]);
+    const eventsAfterFail = readEvents('acme', made.root, made.home);
+    expect(eventsAfterFail.ok && eventsAfterFail.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
 
-    // At 2N (21 min): the loss report still fires because the message was never recorded in history as delivered-but-blocked.
+    // At 2N (21 min) if history is still broken: the loss report fires (`queued, not woken`) and the bus still holds no `seat.blocked` claim.
     const at2N = new Date(NOW.getTime() + 10 * MIN);
     const reportSaid: string[] = [];
     reportUnreadDrops(sceneOf(made, team, one, reportSaid, { sources, live, now: at2N }), { unreadAfter: N });
@@ -2469,6 +2473,43 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(toOwner.body).toContain('queued, not woken - unread for 21 min');
     expect(toOwner.body).not.toContain('delivered-but-blocked');
+    const eventsAt2N = readEvents('acme', made.root, made.home);
+    expect(eventsAt2N.ok && eventsAt2N.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
+    made.cleanup();
+    base = '';
+
+    // Now test recovery within 2N: first try fails on history, then history is restored within 2N and the retry speaks once.
+    const madeRetry = world();
+    const teamRetry = teamOf(typedTeamText(madeRetry.root, lobbyDir(madeRetry.home), 'antigravity'));
+    const dropDirRetry = seedMessage(madeRetry, 'acme', 'helper', UNREAD_A, 'from the owner\n\nhistory fails then retries', new Date(NOW.getTime() - 11 * MIN));
+    const historyDirRetry = join(storePath('acme', madeRetry.root, madeRetry.home), 'messages.jsonl');
+    mkdirSync(historyDirRetry, { recursive: true });
+    const firstSaid: string[] = [];
+
+    await wakeUnreadDrops(sceneOf(madeRetry, teamRetry, one, firstSaid, { sources, live, now: NOW }), { unreadAfter: N });
+    expect(existsSync(wakePath(dropDirRetry, UNREAD_A))).toBe(false);
+    expect(firstSaid).toEqual([]);
+    const eventsBeforeRetry = readEvents('acme', madeRetry.root, madeRetry.home);
+    expect(eventsBeforeRetry.ok && eventsBeforeRetry.events.filter((e) => e.payload.kind === 'seat.blocked')).toEqual([]);
+
+    rmSync(historyDirRetry, { recursive: true });
+    const retrySaid: string[] = [];
+    await wakeUnreadDrops(
+      sceneOf(madeRetry, teamRetry, one, retrySaid, { sources, live, now: new Date(NOW.getTime() + 4 * MIN) }),
+      { unreadAfter: N },
+    );
+    expect(existsSync(wakePath(dropDirRetry, UNREAD_A))).toBe(true);
+    expect(retrySaid).toHaveLength(1);
+    expect(retrySaid[0]).toContain('blocked by a dialog (unknown)');
+    expect(retrySaid[0]).toContain('delivered-but-blocked');
+    const eventsAfterRetry = readEvents('acme', madeRetry.root, madeRetry.home);
+    expect(eventsAfterRetry.ok && eventsAfterRetry.events.filter((e) => e.payload.kind === 'seat.blocked')).toHaveLength(1);
+    const historyAfterRetry = readHistory('acme', madeRetry.root, madeRetry.home);
+    expect(historyAfterRetry.ok && historyAfterRetry.entries).toHaveLength(1);
+    if (historyAfterRetry.ok) {
+      expect(historyAfterRetry.entries[0]?.outcome).toBe('delivered-but-blocked');
+      expect(historyAfterRetry.entries[0]?.via).toBe('lead-report');
+    }
   });
 
   test('a failed event append leaves nothing claimed and the retry within 2N speaks the scene line once', async () => {
