@@ -4,7 +4,7 @@
 // A parent swapped for a link during the unlink never deletes outside the archive.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TeamFile } from '../src/file/types.ts';
@@ -12,14 +12,15 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
-import { receiptFile, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { receiptFile, signClose, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import {
   DROP_ARCHIVE_DIR,
+  DROP_ARCHIVE_DOMAIN,
   getRelativeDirOps,
   retireDropsSliced,
   verifyDropArchive,
 } from '../src/send/drop-retention.ts';
-import { messageKeyOf } from '../src/store/keys.ts';
+import { messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 
 const TEAM_YAML = `format: 1
@@ -245,6 +246,112 @@ describe('drop-retention slice 3', () => {
     expect(raced.reclaimed).toEqual([]);
     expect(readFileSync(victim, 'utf8')).toBe('stay\n');
     expect(existsSync(join(outside, `${GONE}.read.json`))).toBe(false);
+    expect(existsSync(join(aside, GONE))).toBe(true);
     expect(existsSync(join(aside, `${GONE}.read.json`))).toBe(true);
+  });
+
+  test('a later unlink failure restores the record, and the next pass reclaims the family', async () => {
+    await archive(GONE);
+    const ops = getRelativeDirOps();
+    expect(ops).not.toBeNull();
+    if (ops === null) throw new Error('relative directory operations are unavailable');
+
+    const mid = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: PAST,
+      atFfi: {
+        ...ops,
+        unlinkat: (dirfd, name) => name === `${GONE}.read.json` ? { ok: false, errno: 13 } : ops.unlinkat(dirfd, name),
+      },
+      slices: slices(),
+    });
+    expect(mid.reclaimed).toEqual([]);
+    expect(mid.refused).toContain(`${GONE}.read.json`);
+    expect(existsSync(archived(GONE))).toBe(true);
+    expect(existsSync(archived(`${GONE}.read.json`))).toBe(true);
+
+    const recovered = await retireDropsSliced({ root, home, team, at: PAST, slices: slices() });
+    expect(recovered.refused).toBeNull();
+    expect(recovered.reclaimed.map((family) => family.id)).toEqual([GONE]);
+    expect(existsSync(archived(GONE))).toBe(false);
+    expect(existsSync(archived(`${GONE}.read.json`))).toBe(false);
+  });
+
+  test('a restore that cannot rewrite the record stops the pass', async () => {
+    await archive(GONE);
+    const ops = getRelativeDirOps();
+    expect(ops).not.toBeNull();
+    if (ops === null) throw new Error('relative directory operations are unavailable');
+
+    const failed = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: PAST,
+      atFfi: {
+        ...ops,
+        unlinkat: (dirfd, name) => name === `${GONE}.read.json` ? { ok: false, errno: 13 } : ops.unlinkat(dirfd, name),
+        openat: (dirfd, name, flags, mode) => {
+          if (name === GONE && (flags & constants.O_CREAT) !== 0) return { fd: -1, errno: 13 };
+          return ops.openat(dirfd, name, flags, mode);
+        },
+      },
+      slices: slices(),
+    });
+    expect(failed.reclaimed).toEqual([]);
+    expect(failed.refused).toContain('restore failed');
+  }, 20_000);
+
+  test('an unverified replied receipt keeps the family whole', async () => {
+    plantRead(HELD);
+    writeFileSync(live(`${HELD}.replied.json`), 'not a receipt\n');
+    const archivedReport = await retireDropsSliced({ root, home, team, at: NOW, slices: slices() });
+    expect(archivedReport.refused).toBeNull();
+    expect(archivedReport.archived.map((family) => family.id)).toEqual([HELD]);
+
+    const reclaimed = await retireDropsSliced({ root, home, team, at: PAST, slices: slices() });
+    expect(reclaimed.reclaimed).toEqual([]);
+    expect(reclaimed.refused).toContain(`${HELD}.replied.json`);
+    expect(existsSync(archived(HELD))).toBe(true);
+    expect(existsSync(archived(`${HELD}.read.json`))).toBe(true);
+    expect(existsSync(archived(`${HELD}.replied.json`))).toBe(true);
+  });
+
+  test('a close newer than the cutoff keeps the family whole', async () => {
+    const closeAt = new Date(NOW.getTime() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    plantRead(HELD);
+    const closed = signClose(
+      { kind: 'thread-close', id: HELD, thread: HELD, by: 'worker', root, session: 'acme', at: closeAt },
+      home,
+    );
+    writeFileSync(live(`${HELD}.closed.json`), `${JSON.stringify(closed, null, 2)}\n`);
+    const archivedReport = await retireDropsSliced({ root, home, team, at: NOW, slices: slices() });
+    expect(archivedReport.refused).toBeNull();
+    expect(archivedReport.archived.map((family) => family.id)).toEqual([HELD]);
+
+    const manifestDir = join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR, DATE);
+    const manifestName = readdirSync(manifestDir).find((name) => name.startsWith('manifest-'));
+    expect(manifestName).toBeDefined();
+    if (manifestName === undefined) throw new Error('the archive pass wrote no manifest');
+    const manifestPath = join(manifestDir, manifestName);
+    const document = JSON.parse(readFileSync(manifestPath, 'utf8')) as { payload: { at: string }; signature: string };
+    document.payload.at = OLD_ISO;
+    document.signature = signDomain(DROP_ARCHIVE_DOMAIN, document.payload as never, messageKeyOf(home));
+    writeFileSync(manifestPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const kept = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: PAST,
+      archiveOlderThanMs: 128 * 24 * 60 * 60 * 1000,
+      slices: slices(),
+    });
+    expect(kept.refused).toBeNull();
+    expect(kept.reclaimed).toEqual([]);
+    expect(existsSync(archived(HELD))).toBe(true);
+    expect(existsSync(archived(`${HELD}.closed.json`))).toBe(true);
   });
 });
