@@ -18,7 +18,7 @@
 //    own token file and descriptor 3 is refused and spends nothing.
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { claimOneUseToken } from '../one-use-token.ts';
+import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 import { systemServiceManager, type ServiceManager } from '../service.ts';
 
@@ -84,7 +84,7 @@ export function restoreClaimsProblem(raw: unknown): string | null {
 
 /** Writes the on-disk hash + claims file (mode 0600, exclusive) and returns the `{ nonce, secret }`
  *  pair that the daemon passes on inherited descriptor 3. */
-export function writeRestoreDoor(input: RestoreDoorMint): { nonce: string; secret: string } {
+export function writeRestoreDoor(input: RestoreDoorMint, options: WriteTokenOptions = {}): { nonce: string; secret: string } {
   const nonce = randomBytes(16).toString('hex');
   const secret = randomBytes(32).toString('hex');
   const now = input.now ?? new Date();
@@ -99,6 +99,7 @@ export function writeRestoreDoor(input: RestoreDoorMint): { nonce: string; secre
   };
   const dir = machineConfigDir(input.home);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  sweepSpentClaims(dir, options.isAlive ?? pidAlive);
   const path = restoreInheritPath(input.home, nonce);
   writeFileSync(path, `${JSON.stringify(claims)}\n`, { flag: 'wx', mode: 0o600 });
   chmodSync(path, 0o600);

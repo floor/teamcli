@@ -88,8 +88,9 @@ a failed seat is retried by the next apply with no duplicate.
 ## Retry sidecars, and prune
 
 A held delivery leaves a retry marker — `<id>.pending` beside the record — and the marker is the
-send walk's, not the delivery's: the mcp-inbox and drop legs write one so `team watch` can retry
-the wake, the retry types nothing in this build, and a delivery that types leaves none. Two rules
+send walk's, not the delivery's: the drop leg writes one so `team watch` can retry
+the wake (a record an older build left on the retired mcp-inbox name carries one too), the
+retry types nothing in this build, and a delivery that types leaves none. Two rules
 retire a launch-brief marker, in the watch's retry pass and in `team brief prune` alike. A marker
 whose id is not the seat's current claim is superseded: the seat's reader refuses that older
 delivery by name, and a retry would hand the seat a record it cannot read. A marker whose id is

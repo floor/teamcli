@@ -28,8 +28,9 @@ A caller the placement cannot resolve reads nothing at all: no row, no body, no 
 `team send` writes the record: one signed message per send, into the recipient's folder
 `<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The
 record reaches the seat by one of its own event adapters — the channel push, the socket frame or
-its runtime's queue — by the drop leg, which leaves the record for its seat, or by the mcp-inbox
-leg, which puts the same record in the seat's inbox. No leg types into a seat. The watch types
+its runtime's queue — or by the drop leg, which leaves the record for its seat; the retired
+mcp-inbox name no longer carries one (a record an older build left in the seat's inbox is read
+the same way). No leg types into a seat. The watch types
 nothing for a record that is already there: this build reaches no seat by typing, so the record
 waits for the seat's turn-start read or a reader running `team messages`, and the watch never
 writes one. A message a

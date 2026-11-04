@@ -481,6 +481,7 @@ describe('the seat record', () => {
     // The write-side refusals stay.
     for (const [key, value, needle] of [
       ['delivery_order', 'typed,typed', 'names leg "typed" twice'],
+      ['delivery_order', 'mcp-inbox,typed', 'setting "delivery_order" names mcp-inbox, which is no longer a leg; remove it'],
       ['nickname', 'lead', 'may not be "lead"'],
       ['nickname', 'sk-live-abc123', 'looks like a credential'],
     ] as const) {
@@ -488,6 +489,25 @@ describe('the seat record', () => {
       expect(refused.ok).toBe(false);
       if (!refused.ok) expect(refused.why).toContain(needle);
     }
+  });
+
+  test('a record an older build wrote still names mcp-inbox: it reads, never errors', () => {
+    // The retired name is refused as a NEW write above; a stored record that still carries it
+    // is read back as written — the word is dropped at resolution, not at the source, where a
+    // failed read would take the level's whole signed word with it.
+    const agentId = seatAgent('worker');
+    injectSeatRecord(agentId, { key: 'delivery_order', value: ['mcp-inbox', 'typed'] });
+    const read = readSeatConfigSource(home, agentId, 'worker');
+    expect(read.ok).toBe(true);
+    if (read.ok) {
+      expect(read.settings).toHaveLength(1);
+      expect(read.settings[0]).toMatchObject({ key: 'delivery_order', value: ['mcp-inbox', 'typed'] });
+    }
+    // Removing the record again leaves the source clean for the scenes after this one.
+    const agent = getAgent(home, agentId);
+    const settings = { ...(agent?.settings ?? {}) };
+    delete settings.delivery_order;
+    updateAgent(home, agentId, { settings });
   });
 
   test('a target with no registered agent is refused by the plan, and nothing is written', () => {

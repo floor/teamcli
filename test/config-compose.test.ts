@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { composeSeatConfig } from '../src/config/compose.ts';
 import type { ConfigSeatInput } from '../src/config/compose.ts';
-import type { DeliveryLeg } from '../src/settings/inherit.ts';
+import type { DeliveryLeg, OrderWord } from '../src/settings/inherit.ts';
 import { DELIVERY_ORDER } from '../src/settings/inherit.ts';
 
 const BARE: ConfigSeatInput = { model: 'claude-opus-5-5' };
 
-function row(seat: ConfigSeatInput, teamOrder: readonly DeliveryLeg[] | null, key: string) {
+function row(seat: ConfigSeatInput, teamOrder: readonly OrderWord[] | null, key: string) {
   const found = composeSeatConfig(seat, teamOrder).find((entry) => entry.key === key);
   if (found === undefined) throw new Error(`no row for ${key}`);
   return found;
@@ -109,7 +109,7 @@ describe('the model the file decides', () => {
 describe('the order arrays', () => {
   test('are copies, never the source arrays by reference', () => {
     const seatOrder: DeliveryLeg[] = ['typed'];
-    const teamOrder: DeliveryLeg[] = ['mcp-inbox', 'typed'];
+    const teamOrder: OrderWord[] = ['mcp-inbox', 'typed'];
     const own = composeSeatConfig({ model: 'claude-opus-5-5', deliveryOrder: seatOrder }, teamOrder);
     const inherited = composeSeatConfig({ model: 'claude-opus-5-5' }, teamOrder);
     const fallback = composeSeatConfig({ model: 'claude-opus-5-5' }, null);

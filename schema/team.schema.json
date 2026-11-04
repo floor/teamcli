@@ -115,7 +115,8 @@
         },
         "swap_free_min": {
           "type": "string",
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$"
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$",
+          "deprecated": true
         },
         "swap_growth_max": {
           "type": "string",
@@ -477,15 +478,15 @@
               "load",
               "memory",
               "disk",
-              "swap-free",
               "swap-growth",
-              "budget"
+              "budget",
+              "swap-free"
             ]
           },
           "additionalProperties": {
             "const": "off"
           },
-          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too"
+          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated"
         }
       }
     },
@@ -572,14 +573,13 @@
               "enum": [
                 "socket",
                 "native",
-                "mcp-inbox",
                 "typed",
                 "drop",
                 "headless-resume",
                 "session"
               ]
             },
-            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame"
+            "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
           },
           "sender_name": {
             "enum": [
@@ -761,14 +761,13 @@
         "enum": [
           "socket",
           "native",
-          "mcp-inbox",
           "typed",
           "drop",
           "headless-resume",
           "session"
         ]
       },
-      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is read but not walked in this build — the inbox is the store's reader"
+      "$comment": "the legs a send may walk: socket, native, typed, drop, headless-resume, session; the order in force when nothing declares one is typed, drop, and a level may drop or reorder those legs and may add socket, native, headless-resume or session; mcp-inbox is a retired name this schema no longer accepts for new words — a file that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal"
     },
     "sender_name": {
       "enum": [

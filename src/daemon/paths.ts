@@ -39,14 +39,31 @@ export function daemonLockPath(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon.lock');
 }
 
+/** The one-use token families: a child's token file is `<kind>.inherit.<nonce>.json`. */
+export const INHERIT_KINDS = ['chores', 'restore'] as const;
+export type InheritKind = (typeof INHERIT_KINDS)[number];
+
+/** The nonce spelling every token writer uses: 16 random bytes as lowercase hex. */
+export const INHERIT_NONCE_PATTERN = '[0-9a-f]{32}';
+
+/** The token file's name, the one spelling both the writers and the claim sweep build on. */
+export function inheritTokenName(kind: InheritKind, nonce: string): string {
+  return `${kind}.inherit.${nonce}.json`;
+}
+
+/** The claimed copy's path: a claim renames the token to `<token>.claim.<pid>`. */
+export function claimedTokenPath(path: string, pid: number): string {
+  return `${path}.claim.${pid}`;
+}
+
 /** One chores child's one-use token: the configuration it serves from. The child unlinks it as it
  *  starts, so one token starts one child. */
 export function choresInheritPath(home: string, nonce: string): string {
-  return join(machineConfigDir(home), `chores.inherit.${nonce}.json`);
+  return join(machineConfigDir(home), inheritTokenName('chores', nonce));
 }
 
 /** One restore child's one-use token: the one route its pass may act on. Written 0600 under the
  *  machine folder and unlinked by the child as it starts, so one token starts one pass. */
 export function restoreInheritPath(home: string, nonce: string): string {
-  return join(machineConfigDir(home), `restore.inherit.${nonce}.json`);
+  return join(machineConfigDir(home), inheritTokenName('restore', nonce));
 }

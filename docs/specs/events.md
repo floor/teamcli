@@ -200,15 +200,16 @@ reply tool writes the reply record. Nothing is typed into the pane.
 
 ### The delivery order, with `drop`
 
-`DELIVERY_LEGS` at the tip: `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+`DELIVERY_LEGS` at the tip: `socket`, `native`, `typed`, `drop`, `headless-resume`,
 `session`; `channel` is the seat's own server push, implied by its launch rather than named by an
 order. The fallback order (`src/settings/inherit.ts`): `typed`, then `drop`. The walk that uses the
 order is the owner's cascade (ADR `zeus-message-path`, D1): channel-class legs first — a serving
 `channel` ahead of them, then the ones the chain names, in its own order — then the sender-posted
 webhook where the seat declares an adapter row, then the typed leg, then the mailbox.
 
-- `mcp-inbox` is not a delivery leg in this build: the MCP inbox is the store's reader, and the
-  walk reports the word `unavailable` rather than attempting it.
+- `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the store's reader. A word
+  that still names it is read as an alias and dropped from the order, never an error, and the
+  walk never sees it.
 - `typed` is the leg that wakes an idle seat, and only a profile that declares a typed wake has
   it: one trigger line into a box the wake read twice as the empty idle prompt, then the seat's
   own drop read. The profile's working screen after that Enter is `delivered (typed wake)`; the

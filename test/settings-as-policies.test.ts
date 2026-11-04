@@ -8,6 +8,7 @@ import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
   DELIVERY_ORDER,
+  LEGACY_ORDER_WORDS,
   SEATS_CROSS_TEAMS,
   STATE_THRESHOLDS,
   type NumberDeclaration,
@@ -54,15 +55,21 @@ describe('the settings are catalogue policies', () => {
 
   test('the delivery order ships typed, then drop', () => {
     // The literal the release ships. The catalogue default and the setting's fallback are both
-    // this value, so comparing them to each other would pin nothing. The `mcp-inbox` name is in
-    // the vocabulary a word may keep, and no longer in the default: the inbox is the store's
-    // reader, not a leg (`src/send/walk-cascade.ts`).
+    // this value, so comparing them to each other would pin nothing.
     expect(DELIVERY_ORDER.fallback).toEqual(['typed', 'drop']);
   });
 
   test('the delivery legs are the full vocabulary, wider than the default order', () => {
-    expect(DELIVERY_LEGS).toEqual(['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session']);
+    expect(DELIVERY_LEGS).toEqual(['socket', 'native', 'typed', 'drop', 'headless-resume', 'session']);
     for (const leg of DELIVERY_ORDER.fallback) expect(DELIVERY_LEGS).toContain(leg);
+  });
+
+  test('the retired mcp-inbox name is an alias, not a leg', () => {
+    // The name stays only in the read model (`LEGACY_ORDER_WORDS`, `src/settings/inherit.ts`):
+    // a file that still writes it is read, the word is dropped from the order, and no vocabulary
+    // a level may widen with contains it (`src/send/walk-cascade.ts`).
+    expect(LEGACY_ORDER_WORDS).toEqual(['mcp-inbox']);
+    for (const leg of DELIVERY_LEGS) expect(LEGACY_ORDER_WORDS).not.toContain(leg);
   });
 
   test('the five liveness windows are all in scope', () => {

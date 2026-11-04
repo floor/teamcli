@@ -5234,7 +5234,7 @@
       "code": 0,
       "command": "send",
       "id": "send.sent-unconfirmed",
-      "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
+      "meaning": "the record is written and left in the seat's own folder — its drop folder on the drop leg, its inbox on a word an older build wrote — and no signed read receipt has come back",
       "trigger": "team send worker hello"
     },
     {

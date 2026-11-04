@@ -75,7 +75,7 @@ export const seats: Section = {
           minItems: 1,
           uniqueItems: true,
           items: { enum: DELIVERY_LEGS },
-          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame',
+          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal',
         },
         sender_name: {
           enum: [...SENDER_NAME_MODES],

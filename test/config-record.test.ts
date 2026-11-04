@@ -8,7 +8,7 @@ import {
   type ConfigRecordInput,
   type SignedConfigRecord,
 } from '../src/config/record.ts';
-import type { DeliveryLeg } from '../src/settings/inherit.ts';
+import type { OrderWord } from '../src/settings/inherit.ts';
 import { POLICY_DOMAIN } from '../src/policy/index.ts';
 import { signDomain } from '../src/store/keys.ts';
 
@@ -55,7 +55,7 @@ describe('signing a settings record', () => {
   });
 
   test('the array in the payload is a copy: changing the caller\'s array changes no payload already built', () => {
-    const value: DeliveryLeg[] = ['mcp-inbox', 'typed'];
+    const value: OrderWord[] = ['mcp-inbox', 'typed'];
     const payload = configSignaturePayload({ ...ENTRY, value });
     value.push('drop');
     expect(payload).toEqual({

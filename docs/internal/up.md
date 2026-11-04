@@ -627,7 +627,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
-| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `memory pressure is critical` — the OS's own level, where the platform reports one; free swap is the watch's reading and never refuses a launch on its own |
+| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `memory pressure is critical` — the OS's own level, where the platform reports one; free swap never refuses a launch and is not reported; swap growth over its window refuses |
 | `herdr doesn't answer` |
 | `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |

@@ -14,6 +14,7 @@ import {
   declarationsOf,
   DELIVERY_ORDER,
   isLivenessSeconds,
+  liveOrderRecord,
   LIVENESS_KEYS,
   LIVENESS_RULE,
   orderDeclarationsOf,
@@ -27,6 +28,7 @@ import {
   type NumberDeclaration,
   type NumberSettingSpec,
   type OrderDeclaration,
+  type OrderWord,
   type OrderSettingSpec,
   type SettingLevel,
   type SettingSpec,
@@ -317,10 +319,15 @@ export function resolveOrderSetting<L extends string>(
   return { value, source, refused };
 }
 
-/** The one call a send makes: the receiving seat's chain in, the order its delivery walks out. */
+/**
+ * The one call a send makes: the receiving seat's chain in, the order its delivery walks out.
+ * The chain may still carry the retired `mcp-inbox` alias in its words — it is dropped here,
+ * before the resolver, so a level whose word is aliases only declares nothing and never shows
+ * up as a set-aside (`liveOrderRecord`).
+ */
 export function deliveryOrder(
-  declared: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>,
+  declared: Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>,
   options?: ResolveOptions,
 ): readonly DeliveryLeg[] {
-  return resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(declared), options).value;
+  return resolveOrderSetting(DELIVERY_ORDER, orderDeclarationsOf(liveOrderRecord(declared)), options).value;
 }

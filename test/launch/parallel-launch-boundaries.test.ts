@@ -104,9 +104,10 @@ describe('launchConcurrency edges', () => {
     expect(launchConcurrency({ ...ample, memoryFree: 24 }, limits)).toBe(1);
   });
 
-  test('swap at exactly 1.5 × swap_free_min still launches in parallel; just under it holds serial', () => {
+  test('free swap at any level still launches in parallel: the figure gates nothing', () => {
     expect(launchConcurrency({ ...ample, swapFree: 3e9 }, limits)).toBe(8);
-    expect(launchConcurrency({ ...ample, swapFree: 2.9e9 }, limits)).toBe(1);
+    expect(launchConcurrency({ ...ample, swapFree: 2.9e9 }, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: 0 }, limits)).toBe(8);
   });
 
   test('a machine whose swap figures cannot be read is gated by load and memory alone', () => {

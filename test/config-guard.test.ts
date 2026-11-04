@@ -6,7 +6,8 @@ import { resolvePolicyChain } from '../src/policy/index.ts';
 /** An empty chain: every catalogue policy at its release default. */
 const OPEN = resolvePolicyChain({});
 
-/** One team declaration of the delivery order, tightening it to two legs. */
+/** One team declaration of the delivery order, a signed word an older build wrote: the retired
+ *  name still reads, and the order in force is the word's live legs (`typed`). */
 const TIGHT = resolvePolicyChain({
   team: {
     ok: true,
@@ -76,8 +77,9 @@ describe('the delivery order under its policy', () => {
   });
 
   test('a leg the order in force does not have is refused, naming the policy and its level', () => {
+    // Both words still name the retired `mcp-inbox`; the guard judges and prints the live legs.
     expect(why(checkConfigValue('delivery_order', ['mcp-inbox', 'drop', 'typed'], TIGHT))).toBe(
-      'the value "mcp-inbox, drop, typed" loosens policy "delivery-order" in force at level team ("mcp-inbox, typed")',
+      'the value "drop, typed" loosens policy "delivery-order" in force at level team ("typed")',
     );
   });
 
@@ -92,8 +94,15 @@ describe('the delivery order under its policy', () => {
   });
 
   test('a duplicate leg is not a word the policy knows', () => {
-    expect(why(checkConfigValue('delivery_order', ['mcp-inbox', 'mcp-inbox'], OPEN))).toBe(
+    expect(why(checkConfigValue('delivery_order', ['drop', 'drop'], OPEN))).toBe(
       'the value is not one policy "delivery-order" admits',
+    );
+  });
+
+  test('a word the retired name emptied is not a word the policy admits', () => {
+    // `mcp-inbox` parses to no live leg, so the word names nothing to be within anything.
+    expect(why(checkConfigValue('delivery_order', ['mcp-inbox'], OPEN))).toBe(
+      'the value "" loosens policy "delivery-order" in force at level default ("typed, drop")',
     );
   });
 
