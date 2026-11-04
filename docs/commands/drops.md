@@ -29,7 +29,11 @@ is skipped without a receipt and without a refusal.
 `team drops --read` is the same folder served to the launch's own turn-start hook: the launch
 line names the seat and session, each waiting record is verified with the checkout's message
 key, its signed `<id>.read.json` receipt is written before its body is printed, and at most ten
-bodies are handed over a run, newest first. A plain-text drop an earlier build wrote cannot be
+bodies are handed over a run, newest first. A served body whose sender claim does not verify —
+every record but the seat's current general seat brief — is printed with that claim marked: its
+`from … — admitted by: …` line gains `[unverified sender — shared checkout key only]` and
+`(unverified claim)`, and a body with no such line opens with `[unverified sender: claimed
+<sender>]`. The words of the message itself are never rewritten. A plain-text drop an earlier build wrote cannot be
 verified at all: the read skips it, reports it by count on stderr, and leaves it in place, and it
 does not use one of the ten. A signed record an earlier build wrote under the `unread-<uuid>`
 name it gave a runtime report to the team's lead is served and receipted like any other record:
