@@ -630,6 +630,121 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     expect(tokenFiles(home)).toEqual([]);
   }, 20_000);
 
+  test('frame-limit exact boundary (64 KiB + 1 byte) and the two reported paths (ok:true and ok:false) with and without child token claim', async () => {
+    const { base, root, home } = scratch();
+    const tokenModule = fileURLToPath(new URL('../src/daemon/restore/token.ts', import.meta.url));
+
+    // 1. Exact boundary: 64 * 1024 + 1 bytes without newline triggers the oversized-frame path,
+    // ends the child via SIGTERM, and discards the unclaimed token.
+    const exactOverMark = join(base, 'exact-over-ended');
+    const exactOverEntry = join(base, 'exact-over-entry.ts');
+    writeFileSync(
+      exactOverEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(exactOverMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write('a'.repeat(64 * 1024 + 1));`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: exactOverEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child wrote a line over the frame limit and was not understood');
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(exactOverMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(exactOverMark)).toBe(true);
+
+    // 2. Reported path A (`{ ok: true, result }`) and Reported path B (`{ ok: false, reason }` and
+    // `{ ok: false }` with empty reason) when the child claims the token as `entry.ts` does:
+    // both end the child via `endReported()`, discard is a safe no-op, and leave no token file.
+    const okClaimedMark = join(base, 'ok-claimed-ended');
+    const okClaimedEntry = join(base, 'ok-claimed-entry.ts');
+    writeFileSync(
+      okClaimedEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `import { readRestoreInherit } from ${JSON.stringify(tokenModule)};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(okClaimedMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    const okResult = await runRestoreSweepInChild({ home, root, entry: okClaimedEntry, timeoutMs: 5_000 });
+    expect(okResult).toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(okClaimedMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(okClaimedMark)).toBe(true);
+
+    const failEmptyReasonMark = join(base, 'fail-empty-ended');
+    const failEmptyReasonEntry = join(base, 'fail-empty-entry.ts');
+    writeFileSync(
+      failEmptyReasonEntry,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `import { readRestoreInherit } from ${JSON.stringify(tokenModule)};`,
+        `const at = process.argv.indexOf('--inherited');`,
+        `readRestoreInherit(process.env.HOME ?? '', process.argv[at + 1] ?? '');`,
+        `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(failEmptyReasonMark)}, 'ended\\n'); process.exit(0); });`,
+        `process.stdout.write(JSON.stringify({ ok: false, reason: '' }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry: failEmptyReasonEntry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child reported: the restore child reported a failure without a reason');
+    expect(tokenFiles(home)).toEqual([]);
+    for (let waited = 0; !existsSync(failEmptyReasonMark) && waited < 2_000; waited += 25) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(failEmptyReasonMark)).toBe(true);
+
+    // 3. Probe the two reported paths (`ok: true` and `ok: false`) when a child reports and exits
+    // immediately WITHOUT claiming its token: both now discard the token on the spawner side so
+    // neither reported path depends on the child entry having consumed it first.
+    const { home: homeUnclaimedOk } = scratch();
+    const okUnclaimedEntry = join(base, 'ok-unclaimed-entry.ts');
+    writeFileSync(
+      okUnclaimedEntry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `process.exit(0);`,
+      ].join('\n'),
+    );
+    const unclaimedOkResult = await runRestoreSweepInChild({
+      home: homeUnclaimedOk,
+      root,
+      entry: okUnclaimedEntry,
+      timeoutMs: 5_000,
+    });
+    expect(unclaimedOkResult).toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(homeUnclaimedOk)).toEqual([]);
+
+    const { home: homeUnclaimedFail } = scratch();
+    const failUnclaimedEntry = join(base, 'fail-unclaimed-entry.ts');
+    writeFileSync(
+      failUnclaimedEntry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: false, reason: 'unclaimed failure' }) + '\\n');`,
+        `process.exit(0);`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({
+        home: homeUnclaimedFail,
+        root,
+        entry: failUnclaimedEntry,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow('the restore child reported: unclaimed failure');
+    expect(tokenFiles(homeUnclaimedFail)).toEqual([]);
+  }, 30_000);
+
   test.skipIf(offDarwin)('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
     const { base, root: rootA, home } = scratch();
     const rootB = join(base, 'repo-b');
