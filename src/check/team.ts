@@ -84,6 +84,7 @@ import { overridesInForceOf } from '../profiles/overrides.ts';
 import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
+  mailboxRouterPolicyProblems,
   readProjectPolicySource,
   readSeatPolicySource,
   readTeamPolicySource,
@@ -101,7 +102,7 @@ import { deliveryChainOf } from '../send/delivery.ts';
 import { launchWords, socketEligible } from '../send/inbound.ts';
 import { SOCKET_SEND } from '../send/uds.ts';
 import { messagingStoreChainOf } from '../send/store.ts';
-import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg, type MessagingStore, type SettingLevel } from '../settings/inherit.ts';
+import { DELIVERY_ORDER, liveOrderRecord, liveOrderWords, orderDeclarationsOf, type DeliveryLeg, type OrderWord, type MessagingStore, type SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
@@ -116,6 +117,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
 import { busProblemNotes } from '../bus/notes.ts';
+import { pingpongLegDifferences } from './pingpong-legs.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -494,6 +496,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...hostedWatch,
     ...policyChecked.differences,
     ...modelRule.differences,
+    // The nightly harness's latest per-leg result: a class over its send-to-read target, a lost
+    // message, or a result older than a day. A team that has not run draws nothing.
+    ...pingpongLegDifferences(dir, sources.now()),
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same rows `status` prints: a legacy record or one the verification refused still says
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
@@ -594,8 +599,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // names, so the owner sees the old and the new session before the next launch.
     ...sessionDefaultMoveNotes(standing, team),
     ...lobbyNotes(team, root, sources.home, session),
-    // A delivery_order word still naming `mcp-inbox`: the inbox is the store's reader, not a leg
-    // (ADR D1), and the word is read so the walk can report it unavailable.
+    // A delivery_order word still naming `mcp-inbox`: the name is retired — the inbox is the
+    // store's reader, not a leg (ADR D1) — and the word is read as an alias that is dropped from
+    // every order, with this note asking for its removal.
     ...deliveryOrderInboxNotes(team),
     // A seat whose chain declares `messaging.store: none`: what its sends stop keeping, named
     // once per seat where the word is in force.
@@ -1846,12 +1852,14 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
  * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
  * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
- * `native`, `socket`, `headless-resume` and `session` are legs a word may add, and `mcp-inbox` is
- * a name this build reads but never walks, so a declaration naming any of them is no difference;
- * a word naming `mcp-inbox` is named in a note instead (`deliveryOrderInboxNotes`).
+ * `native`, `socket`, `headless-resume` and `session` are legs a word may add, so a declaration
+ * naming any of them is no difference. The retired `mcp-inbox` alias is dropped before the
+ * resolver ever judges a word (`liveOrderRecord`), so a word naming it — alone or beside live
+ * legs — is never a set-aside; the word is named in a note instead
+ * (`deliveryOrderInboxNotes`).
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
-  let projectOrder: readonly DeliveryLeg[] | undefined;
+  let projectOrder: readonly OrderWord[] | undefined;
   let signedTeamOrder = false;
   if (home !== undefined) {
     try {
@@ -1868,13 +1876,13 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   if (team.deliveryOrder !== null && !signedTeamOrder) {
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
-      orderDeclarationsOf<DeliveryLeg>({
+      orderDeclarationsOf(liveOrderRecord({
         ...(projectOrder !== undefined ? { project: projectOrder } : {}),
         team: team.deliveryOrder,
-      }),
+      })),
     );
     if (res.refused.some((r) => r.level === 'team')) {
-      const extra = team.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
+      const extra = liveOrderWords(team.deliveryOrder).filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `delivery_order [${team.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in team config`,
@@ -1888,14 +1896,14 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
     if (seat.human === true) continue;
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
-      orderDeclarationsOf<DeliveryLeg>({
+      orderDeclarationsOf(liveOrderRecord({
         ...(projectOrder !== undefined ? { project: projectOrder } : {}),
         ...(!signedTeamOrder && team.deliveryOrder ? { team: team.deliveryOrder } : {}),
         seat: seat.deliveryOrder,
-      }),
+      })),
     );
     if (res.refused.some((r) => r.level === 'seat')) {
-      const extra = seat.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
+      const extra = liveOrderWords(seat.deliveryOrder).filter((leg) => !res.value.includes(leg)).length;
       out.push({
         what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
         repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in team config`,
@@ -1925,25 +1933,25 @@ function wrapperLaunch(cli: string, launch: string): boolean {
 
 /**
  * A `delivery_order` word in `.agents/team.yaml` — the team's own, or a seat's — that names
- * `mcp-inbox`. The name is read rather than set aside (a word may add it, `src/policy/types.ts`),
- * and the walk registers it as unavailable instead of travelling it: the MCP inbox is the store's
- * reader, like `team drops --read`, and a push from its server is not a wake (ADR D1,
- * `src/send/walk-cascade.ts`). The note names the word so the owner can drop it when the file is
- * next edited; the word changes no leg the walk travels, so it is not a difference and the exit
- * stays as it is. A human seat's word is named too: the walk reports the name unavailable for
- * every seat, whatever the human ruling otherwise spares.
+ * `mcp-inbox`, once per team and once per seat that names it. The name is no longer a leg: the
+ * MCP inbox is the store's reader, like `team drops --read`, and a push from its server is not a
+ * wake (ADR D1, `src/send/walk-cascade.ts`). A word that still names it is read as an alias and
+ * dropped from the order — never an error, never a set-aside, and the walk never sees it
+ * (`liveOrderRecord` drops it before the resolver). The note asks for the word's removal, so
+ * the name can leave the files; the word changes no leg the walk travels, so it is not a
+ * difference and the exit stays as it is.
  */
 function deliveryOrderInboxNotes(team: TeamFile): string[] {
   const notes: string[] = [];
   if (team.deliveryOrder !== null && team.deliveryOrder.includes('mcp-inbox')) {
     notes.push(
-      `delivery_order [${team.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it when the file is next edited`,
+      `delivery_order [${team.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is no longer a leg; remove it`,
     );
   }
   for (const seat of team.seats) {
     if (seat.deliveryOrder === undefined || !seat.deliveryOrder.includes('mcp-inbox')) continue;
     notes.push(
-      `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited`,
+      `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config names mcp-inbox, which is no longer a leg; remove it`,
     );
   }
   return notes;
@@ -2368,7 +2376,7 @@ function policyCheck(
   const machine = readDevelopmentMode(home);
 
   let projectId: string | null = null;
-  let legacyProjectDeliveryOrder: readonly DeliveryLeg[] | undefined;
+  let legacyProjectDeliveryOrder: readonly OrderWord[] | undefined;
   try {
     const byTeam = ofTeam(home, teamIdOf(root));
     if (byTeam) {
@@ -2434,6 +2442,13 @@ function policyCheck(
       ) {
         continue;
       }
+      if (
+        (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') &&
+        refusal.policy.startsWith('router.')
+      ) {
+        // The router's own reader re-judges its words below, naming the rule each one broke.
+        continue;
+      }
       const isUnsigned =
         (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true;
       differences.push({
@@ -2442,6 +2457,20 @@ function policyCheck(
         ...(isUnsigned ? {} : { owner: true }),
       });
     }
+  }
+
+  // The router's three words are re-read by their own reader: their rules span words (a team may
+  // add an alias for its own seats but never retarget one the entity places, and an entity
+  // alias's fallback belongs to the entity alone), which the chain's ordering cannot name. Each
+  // problem names the level whose word broke the rule, so each difference carries its own
+  // `team policy unset` repair. A seat may not set these words at all, so the seat chains above
+  // keep refusing one found there.
+  for (const problem of mailboxRouterPolicyProblems(root, home, now, team)) {
+    differences.push({
+      what: problem.why,
+      repair: `team policy unset ${problem.level} ${problem.name}`,
+      owner: true,
+    });
   }
 
   const teamId = teamIdOf(root);

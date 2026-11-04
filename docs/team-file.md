@@ -540,22 +540,27 @@ because the signed record is stored before the walk begins.
 delivery_order: [typed]
 ```
 
-- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`
+- The word is one or more of `socket`, `native`, `typed`, `drop`, `headless-resume`
   and `session`, each at most once, in the order a send tries them. A written key with no
   legs is `delivery_order needs at least one leg:
-  socket, native, mcp-inbox, typed, drop, headless-resume, session` — the default order is the
+  socket, native, typed, drop, headless-resume, session` — the default order is the
   absence of
   the key. A word outside
-  the seven is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session`; a
-  repeated one is `delivery_order names "<word>" twice`.
+  the six is `delivery_order "<word>" must be one of: socket, native, typed, drop, headless-resume, session`; a
+  repeated one is `delivery_order names "<word>" twice`. A file that still names the retired
+  `mcp-inbox` word is read, never an error: the word is dropped from the order, and
+  `team check` says `delivery_order [...] in team config names mcp-inbox, which is no longer
+  a leg; remove it` once per team and per seat. A new write of the word through `team config`
+  is refused with that reason.
 - The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
   explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
   by its launch; `native` is the sender's own cross-session SendMessage, recorded by the sender
-  with `--confirm`; `mcp-inbox` is a name this build reads and never walks — the MCP inbox is
-  the store's reader, and the walk reports the word `unavailable` rather than attempting the
-  leg; `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
+  with `--confirm`; `mcp-inbox` is no longer one of the legs — the MCP inbox is
+  the store's reader, so the name is retired: a word that still names it is read as an alias
+  and dropped from the order, and the walk never sees it;
+  `typed` is the 0600 drop file and one composer trigger line; `drop` is the same 0600
   drop file and nothing typed into the pane at all — no trigger line and no socket frame, its
   run ending `queued, not woken` until the seat's own read writes the receipt;
   `headless-resume` is the seat's own CLI resumed for one turn without a TUI pane, which no

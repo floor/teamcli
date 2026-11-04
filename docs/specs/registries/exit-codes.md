@@ -623,7 +623,7 @@ All 569 contract entries are retained in source order, including success and ref
 | `reply.usage` | the invocation can't be read | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `reply`; exit `2` |
 | `send.confirmed` | a native handoff was recorded to the history and its pending record cleared | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
 | `send.native` | a native handoff was printed for the sender's own SendMessage, and nothing was delivered | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
-| `send.sent-unconfirmed` | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
+| `send.sent-unconfirmed` | the record is written and left in the seat's own folder — its drop folder on the drop leg, its inbox on a word an older build wrote — and no signed read receipt has come back | 0.5.1 unreleased | `contract/exit-codes.json` at int/0.5.1 8acb470b | command `send`; exit `0` |
 
 The integration supplement preserves 31 additional ids; baseline rows keep the release-tag behavior even if the integration implementation changes their meaning.
 

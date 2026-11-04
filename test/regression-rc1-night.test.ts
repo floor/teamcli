@@ -271,10 +271,8 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    // The fixture order names only legs the cascade never walks as event legs (the inbox
-    // word it reads as unavailable, and the typed leg set aside), so the walk had no event
-    // adapter at all: the reason is the no-pane-messaging word, not the took-it word a walk
-    // with event legs ends with.
+    // The walk's first named refusal is the typed leg's now that the retired inbox word names
+    // no leg: the summary carries the legs the walk actually walked.
     expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);

@@ -273,9 +273,7 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 /**
  * The legs a send may walk, in the words the delivery order is written in: `socket`, the frame on
  * the receiving seat's cross-session socket (a signed copy is written first); `native`, the
- * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
- * a name this build still reads but never walks: the MCP inbox is the store's reader, so a word
- * naming it is reported unavailable with a `team check` note (`src/send/walk-cascade.ts`);
+ * sender's own cross-session SendMessage, recorded by the sender with `--confirm`;
  * `typed`, the 0600 drop file and one composer trigger line; `drop`, the
  * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
  * or a pane that must not be typed into; `headless-resume`, the receiving seat's own CLI resumed
@@ -293,9 +291,47 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * the session line it prints. A seat whose profile declares one walks it first while no level
  * of its chain declares an order, and no fallback adds it.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
+export type DeliveryLeg = 'socket' | 'native' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed', 'drop', 'headless-resume', 'session'];
+
+/**
+ * A word a team file or policy may still carry where a delivery order is written: a live leg,
+ * or `mcp-inbox`, a retired name. The MCP inbox is the store's reader, not a leg, so the name
+ * is an alias that is simply dropped from every parsed order (`src/policy/types.ts`) — reading
+ * it is never an error, `team check` names it for removal once per team and seat
+ * (`src/check/team.ts`), and writing it anew through `team config` is refused with that reason.
+ * The model keeps the word only so the note can see it; every walk and every resolver filters
+ * it out with `liveOrderWords`.
+ */
+export type OrderWord = DeliveryLeg | 'mcp-inbox';
+
+/** The retired order words: read as aliases and dropped, never walked and never written anew. */
+export const LEGACY_ORDER_WORDS: readonly OrderWord[] = ['mcp-inbox'];
+
+/** Drops every retired alias word, leaving only the legs a walk may attempt. */
+export function liveOrderWords(words: readonly OrderWord[]): DeliveryLeg[] {
+  return words.filter((word): word is DeliveryLeg => !LEGACY_ORDER_WORDS.includes(word));
+}
+
+/**
+ * A declared-order record with the retired alias words dropped, ready for the resolver: a level
+ * whose word is aliases only declares NOTHING here — it is left out entirely, not passed as an
+ * empty word, because an empty word is a set-aside the resolver would report. A level whose word
+ * mixes the alias with live legs keeps those legs, exactly as the alias had never been written.
+ */
+export function liveOrderRecord(
+  declared: Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>,
+): Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>> {
+  const live: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>> = {};
+  for (const level of SETTING_LEVELS) {
+    const words = declared[level];
+    if (words === undefined) continue;
+    const legs = liveOrderWords(words);
+    if (legs.length > 0) live[level] = legs;
+  }
+  return live;
+}
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: typed, then
@@ -308,8 +344,9 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * where its CLI has an MCP front, the launch's start-of-turn read where it has a hook — takes
  * the message there, but nothing wakes a seat that is idle. A seat that watches nothing never
  * walks this leg (`src/send/delivery.ts` leaves it out of that seat's order). The `mcp-inbox`
- * name is not in this fallback: the MCP inbox is the store's reader, not a leg, and a word that
- * names it is read as unavailable rather than walked. The `native` leg is not in the
+ * name is not in this fallback and no word can add it: the MCP inbox is the store's reader,
+ * not a leg — the name is retired, read in a word only as an alias that is dropped
+ * (`OrderWord`). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
  * recording the delivery itself, so `native` is a leg a declared word may add
  * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default

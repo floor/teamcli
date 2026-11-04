@@ -103,6 +103,28 @@ describe('watch.checks, the section', () => {
     expect(teamFile('  checks: { disk: off }\n').watch.checks).toEqual(['disk']);
   });
 
+  test('the retired swap-free check loads carried and deprecated, never dropped or refused', () => {
+    // Free swap no longer pages the owner (ruling D8), so the check is gone — but the name
+    // stays in the file's checks list exactly as written. The canonical record and the
+    // `watch.checks` fingerprint digest that list, so dropping the name would move signed
+    // approvals; carrying it moves nothing, and no check runs for it.
+    const tail = '  checks:\n    swap-free: off\n';
+    const result = validateTeamFile(source(tail));
+    if (!result.ok) throw new Error(JSON.stringify(result.errors));
+    expect(result.team.watch.checks).toEqual(['swap-free']);
+    expect(result.deprecations).toEqual([{
+      line: lineOf(tail, '    swap-free: off'),
+      message: '`swap-free` is not a check any more: free swap is not reported',
+      repair: 'remove swap-free from watch.checks in {file}',
+    }]);
+    // Carried is not accepted-anyhow: only `off` ever was a setting, and still is.
+    const on = '  checks:\n    swap-free: on\n';
+    expect(refused(on)).toEqual([{
+      line: lineOf(on, '    swap-free: on'),
+      message: 'watch.checks.swap-free must be off: the only setting is off',
+    }]);
+  });
+
   test('a name that is not a check is refused, with its line', () => {
     const tail = '  checks:\n    disks: off\n';
     expect(refused(tail)).toEqual([
@@ -149,18 +171,15 @@ describe('a pass with checks turned off', () => {
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
       'free disk is 5.0 GB, below 10.0 GB',
-      'free swap is 0.3 GB, below 2.0 GB',
     ]);
     const off = teamFile('  checks:\n    disk: off\n');
     expect(texts(pass({ team: off, watch: off.watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(), approval: APPROVED }))).toEqual([
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
-      'free swap is 0.3 GB, below 2.0 GB',
     ]);
     const both = teamFile('  checks:\n    disk: off\n    memory: off\n');
     expect(texts(pass({ team: both, watch: both.watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory(), approval: APPROVED }))).toEqual([
       'the load is 6.5 per core, above 6',
-      'free swap is 0.3 GB, below 2.0 GB',
     ]);
   });
 

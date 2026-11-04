@@ -51,7 +51,7 @@ import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
-import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf, type WalkLeg } from '../send/walk-cascade.ts';
+import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { webhookRefusal } from '../send/webhook.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
@@ -142,9 +142,10 @@ the typed wake leads. A receiving CLI whose profile declares its own session cal
 that call first while no level declares an order. Nothing declared leaves typed, then drop.
 A declared order names the legs the seat accepts, and the cascade sets the order they are
 tried in — a word placing the drop first still walks it last, because the channel classes
-and the typed leg are tried before it. The mcp-inbox name is not a leg in this build: the
-MCP inbox is the store's reader, and a push from an MCP server is not a wake; a word naming
-it is read and reported unavailable. A level of that seat's own
+and the typed leg are tried before it. The mcp-inbox name is retired — no longer a leg: the
+MCP inbox is the store's reader, and a push from an MCP server is not a wake; a word that
+still names it is read as an alias and dropped, never an error, and \`team check\` names the
+word for removal. A level of that seat's own
 chain, entity, project, team, seat, may drop legs from the order or put the legs it keeps in a
 different order, and may add
 native, the sender's own frame, headless-resume, a headless runtime's own turn,
@@ -166,8 +167,9 @@ the channel the send went by and the legs that failed before it.
 The MCP inbox is the store's reader, not a delivery leg (\`src/send/walk-cascade.ts\`):
 the signed record every leg writes is what its server reads, the same records \`team drops
 --read\` reads, and a push from an MCP server is not a wake. A \`delivery_order\` that still
-names \`mcp-inbox\` keeps the word — the catalogue reads it — and the walk reports it as
-skipped with its reason; \`team check\` notes the word. A receipt the inbox's \`inbox_read\`
+names \`mcp-inbox\` keeps the word — the catalogue reads it as an alias — and the word is
+dropped from the order before the walk; \`team check\` names the word for removal. A receipt
+the inbox's \`inbox_read\`
 call leaves on a record the drop leg stored is still the read the watch promotes; the drop
 leg itself waits for no receipt and ends the walk.
 
@@ -417,7 +419,7 @@ export type SendHost = {
    *  to exercise the thread wait without sleeping. */
   waitMs?: number;
   /** The build this process runs, compared against a live inbox listener's marker. Left out
-   *  (a test's host), the mcp-inbox leg keeps the liveness-only check. */
+   *  (a test's host), the retired inbox name's receipt wait keeps the liveness-only check. */
   build?: () => BuildIdentity;
   /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
    *  reported once. The watch's idle dispatch is its caller. */
@@ -914,7 +916,6 @@ type WalkOrderPlan = {
   typingSetAside: DeliveryLeg[];
   noEventAdapter: boolean;
   chosen: readonly WalkLeg[];
-  unavailable: DeliveryLeg[];
 };
 
 type WalkOrderInput = {
@@ -1062,11 +1063,10 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The owner's cascade (src/send/walk-cascade.ts): whatever order the chain declared, the
   // walk tries the channel-class legs first, then the sender-posted webhook, then typed, then
   // the mailbox — and it stops at the first leg taken. The webhook leg exists exactly when the
-  // receiving team file declares an adapter row for the seat; no order names it. An `mcp-inbox`
-  // word is read as unavailable: the leg is never attempted, and the report says why. The
+  // receiving team file declares an adapter row for the seat; no order names it. A retired
+  // `mcp-inbox` word never arrives here: it is dropped before the chain resolves. The
   // mailbox sits under all the classes because the signed record is stored before the walk
   // begins.
-  const unavailable = unavailableLegsOf(ordered);
   // The human ruling keeps every pane route out of a person's walk, and the webhook is not a
   // pane route: a person with an adapter row keeps it where the cascade puts it, before the
   // drop file. Without one the walk is the drop leg alone.
@@ -1108,7 +1108,6 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     typingSetAside,
     noEventAdapter,
     chosen,
-    unavailable,
   };
 }
 
@@ -1540,7 +1539,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const {
     dropDir, order, inbound, socketWord, heldStanding, socketNow, declaredOrder,
     staleChannel, human, typedWake, walkingTyped, webhookWalked, webhookReason,
-    typingSetAside, noEventAdapter, chosen, unavailable,
+    typingSetAside, noEventAdapter, chosen,
   } = plan;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
   // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
@@ -1589,10 +1588,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     : null;
   report.delivery = [
     ...(impliedSocketReason === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocketReason }]),
-    // A word this build reads but never walks is reported first, with its reason: it is not a
-    // leg of the walk, and the states that follow are. A human's plan lists it among the legs
-    // the ruling spared instead, with the human reason.
-    ...(human ? [] : unavailable.map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE }))),
     ...planLegs.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
 
@@ -1751,9 +1746,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     for (const leg of order) {
       const reason = humanSkipReason(leg);
       if (reason === null) continue;
-      // The history line's failure list keeps its shipped four; the report names every leg the
+      // The history line's failure list keeps its shipped three; the report names every leg the
       // ruling set aside, including a resume route the order may carry.
-      if (leg === 'typed' || leg === 'native' || leg === 'socket' || leg === 'mcp-inbox') {
+      if (leg === 'typed' || leg === 'native' || leg === 'socket') {
         failures.push(`${leg}: ${reason}`);
       }
       markLeg(leg, 'skipped', reason);
@@ -2750,13 +2745,12 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
 }
 
 /** The human ruling's reason for one leg, or null for the drop file. These are the same words
- *  the history line records, without the leg prefix the report entry already carries.
- *  `mcp-inbox` is not a leg at all (ADR D1): whatever the seat's pane is, the word is reported
- *  as the store's reader, never as a leg the human ruling spared. */
+ *  the history line records, without the leg prefix the report entry already carries. The
+ *  retired `mcp-inbox` name never reaches here (ADR D1): it is dropped from every order before
+ *  the walk, so no human ruling ever spares it. */
 function humanSkipReason(leg: DeliveryLeg): string | null {
   if (leg === 'typed') return "the pane is a human's, and nothing is typed into it";
   if (leg === 'native' || leg === 'socket') return "the pane is a human's, and no frame is sent";
-  if (leg === 'mcp-inbox') return MCP_INBOX_UNAVAILABLE;
   if (leg === 'channel') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'headless-resume') return "the pane is a human's, and the drop leg is the only one walked";
   if (leg === 'session') return "the pane is a human's, and no session is created for it";
@@ -2808,13 +2802,6 @@ function dryDeliveryPlan(input: {
   ) {
     entries.push(candidate('socket'));
   }
-  // A word this build reads but never walks is named with its reason, ahead of the walk, the
-  // same way the real send's report names it.
-  if (!input.human) {
-    for (const leg of unavailableLegsOf(input.order)) {
-      entries.push({ leg, state: 'skipped', eligible: false, reason: MCP_INBOX_UNAVAILABLE });
-    }
-  }
   const legs: readonly WalkLeg[] = input.human
     ? [
         ...(input.walk.includes('webhook') ? ['webhook' as const] : []),
@@ -2835,7 +2822,8 @@ function human0(overrides: { human?: boolean }, declared: { human?: boolean } | 
  *  (src/send/uds.ts's SOCKET_SEND is off) or a seat whose CLI has no cross-session socket — is
  *  not a channel a run would take, and neither is named. The handoff counts as the native leg
  *  only for a sender whose own file declares Claude Code, since only that sender makes the call
- *  the leg is. A name this build only reads (`mcp-inbox`) is no channel and is never named here.
+ *  the leg is. The retired `mcp-inbox` name is no channel, is dropped from every order, and is
+ *  never named here.
  *  The where-nothing-is-carried phrase is unreachable by the default order of any seat — its
  *  legs are typed and drop, and each is either named or passed over for a reason — and only an
  *  order that holds none of them prints it. */
@@ -3003,16 +2991,16 @@ function stampHandoffNonce(body: string, nonce: string): string {
 /** The legs of the recipient's `delivery_order` that stand after `native`: when a handoff is
  *  not confirmed within the 10m window, `team watch` walks these legs in order. The socket leg is
  *  not one of them: a frame is written by the send that walks it, and a handoff's pending record
- *  names only the legs the watcher itself can take. An `mcp-inbox` word is no leg in this build
- *  (src/send/walk-cascade.ts), so no new record names it; the watcher still reads a record an
- *  older build wrote. */
+ *  names only the legs the watcher itself can take. The retired `mcp-inbox` name never reaches
+ *  the walk (src/settings/inherit.ts), so no new record names it; the watcher still reads a
+ *  record an older build wrote (`src/send/pending.ts`). */
 function fallbackAfterNative(
   walk: readonly WalkLeg[],
   at: number,
 ): readonly PendingNativeFallbackLeg[] {
   return walk
     .slice(at + 1)
-    .filter((leg): leg is PendingNativeFallbackLeg => leg === 'typed' || leg === 'drop');
+    .filter((leg): leg is 'typed' | 'drop' => leg === 'typed' || leg === 'drop');
 }
 
 /** The registry id the sender's record carries, when it has one: the owner and the watch are
@@ -4639,7 +4627,7 @@ export type BriefWalkResult = {
  * walked by no leg at all — routing on a declaration the store disowns could type into a human's
  * pane — and the record the launch already wrote stands as the delivery. This build's native leg
  * is a socket write it does not make and a SendMessage a launch cannot send, so it is recorded
- * and passed; the mcp-inbox, typed and drop legs are the same functions `team send` walks.
+ * and passed; the typed and drop legs are the same functions `team send` walks.
  */
 export async function walkBriefDelivery(input: {
   io: Io;
@@ -4713,10 +4701,7 @@ export async function walkBriefDelivery(input: {
     for (const leg of order) {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
-      else if (leg === 'mcp-inbox') failures.push(`mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`);
     }
-  } else {
-    for (const leg of unavailableLegsOf(order)) failures.push(`${leg}: ${MCP_INBOX_UNAVAILABLE}`);
   }
   for (const leg of walk) {
     if (leg === 'native') {
@@ -4790,8 +4775,8 @@ const CLIENT_FRAME_HEADER = `Message from ${CLIENT_SLICE_DISPLAY_NAME} (owner)`;
 /** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
  *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
  *  transport that reaches a live receiver — the cross-session socket and the typed trigger — in
- *  the cascade's order, or socket, then typed. An `mcp-inbox` word is no leg in this build
- *  (src/send/walk-cascade.ts), so a declared order's word for it is not walked. */
+ *  the cascade's order, or socket, then typed. The retired `mcp-inbox` name is dropped from a
+ *  declared order before this walk, so no word for it exists to walk. */
 const CLIENT_LEGS: readonly DeliveryLeg[] = ['socket', 'typed'];
 
 /**
@@ -4927,12 +4912,10 @@ async function deliverClientRecord(
     ? cascadeOrder(order.filter((leg) => CLIENT_LEGS.includes(leg)))
     : defaultWalk;
   // The implied socket default's omission is named when the walk does not carry it, the same
-  // way an ordinary send's report explains the socket it did not dial. A declared word this
-  // build only reads is named the same way, with its own reason.
+  // way an ordinary send's report explains the socket it did not dial.
   const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
   report.delivery = [
     ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
-    ...unavailableLegsOf(order).map((leg) => ({ leg, state: 'skipped' as const, reason: MCP_INBOX_UNAVAILABLE })),
     ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
   ];
   const aim: Aim = {
@@ -5209,14 +5192,13 @@ export async function walkReplyDelivery(input: {
   const { human, ordered, typingSetAside, typedWake, walkingTyped, socketWord, inbound, heldStanding, chosen } = plan;
   if (!human) {
     for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
-    for (const leg of unavailableLegsOf(ordered)) failures.push(`${leg}: ${MCP_INBOX_UNAVAILABLE}`);
   } else {
     // The history line's failure list keeps the shipped four a send's walk records; the legs
     // the ruling spared beyond them are not this line's to name.
     for (const leg of ordered) {
       const reason = humanSkipReason(leg);
       if (reason === null) continue;
-      if (leg === 'typed' || leg === 'native' || leg === 'socket' || leg === 'mcp-inbox') {
+      if (leg === 'typed' || leg === 'native' || leg === 'socket') {
         failures.push(`${leg}: ${reason}`);
       }
     }

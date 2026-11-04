@@ -196,7 +196,6 @@
                 "enum": [
                   "socket",
                   "native",
-                  "mcp-inbox",
                   "typed",
                   "drop",
                   "headless-resume",

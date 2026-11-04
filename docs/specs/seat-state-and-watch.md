@@ -157,9 +157,8 @@ switch off.
 | 11 | `load` | team | no | load per core past `machine.load_max` |
 | 12 | `memory` | team | no | free memory under `machine.memory_min` |
 | 13 | `disk` | team | no | free disk under `machine.disk_min` |
-| 14 | `swap-free` | team | no | free swap under `machine.swap_free_min` |
-| 15 | `swap-growth` | team | no | swap growth past `machine.swap_growth_max` inside its window |
-| 16 | `budget` | team | no | an account past a mark, inside its reserve, at its floor, or unknown while a seat runs on it |
+| 14 | `swap-growth` | team | no | swap growth past `machine.swap_growth_max` inside its window |
+| 15 | `budget` | team | no | an account past a mark, inside its reserve, at its floor, or unknown while a seat runs on it |
 
 A file switches a check off under `watch.checks`; the four always-on checks ignore that switch.
 
@@ -171,14 +170,15 @@ The `unread_after` figure is the section's: the unread window in
 force for a seat is the file's word when it moved the section, else the seat's delivery-class
 default — 30 s for a seat a message can wake while it is idle, 60 s for a typed or pull-only
 seat (ADR `zeus-message-path`, D2). The machine's
-readings, checks 11 to 15, are logged every ten minutes: `READINGS_EVERY` is 600 s
+readings, checks 11 to 14, are logged every ten minutes: `READINGS_EVERY` is 600 s
 (`src/commands/watch.ts`).
 
 The same figures are the machine's limit contract, and this section is its home:
-`machine.load_max`, `machine.memory_min`, `machine.disk_min`, `machine.swap_free_min` and
+`machine.load_max`, `machine.memory_min`, `machine.disk_min` and
 `machine.swap_growth_max` are read by the launch gate of `up` and `add`, which refuses a launch
-past a limit and writes the figures it decided on into the log, and by checks 11 to 15 against the
-readings they log. A change to a figure changes both.
+past a limit and writes the figures it decided on into the log, and by checks 11 to 14 against the
+readings they log. Free swap is in neither set: it never refuses a launch, never serializes one
+and is never reported — swap growth and memory pressure are the swap-side limits. A change to a figure changes both.
 
 ### 3.4 The report rule
 
@@ -224,7 +224,6 @@ the pass.
 | `the load is <n> per core, above <n>` | over `machine.load_max` |
 | `free memory is <n>%, below <n>%` | under `machine.memory_min` |
 | `free disk is <n> GB, below <n> GB` | under `machine.disk_min` |
-| `free swap is <n> GB, below <n> GB` | under `machine.swap_free_min` |
 | `swap grew by <n> GB in <n> minutes, above <n> GB` | over `machine.swap_growth_max` inside its window |
 | `<account> <window> is <n>% used, past the <n>% mark` | an account at or past a mark, once per window |
 | `<account> <window> left <n>%, inside its <n>% reserve` | a subscription account inside its reserve |

@@ -18,7 +18,7 @@
 //      escalation event goes to the orchestrator (addressed), the sender and the receiver team's
 //      lead, by the same routing.
 //
-// Every attempt is appended whole to a durable ledger in the project's state store
+// Every attempt is appended whole to a durable ledger in the receiving team's state store
 // (`fallback-attempts-<key>.jsonl`, one JSON line per fact, never rotated). The marker beside the
 // message record (`<root>/.agents/send-drops/<session>/<seat>/<id>.fallback.json`) keeps a
 // bounded summary of recent attempts plus the lifecycle: `allFailedAt`, `dueAt`, `escalatedAt`,
@@ -71,7 +71,7 @@
 // episodes. Routing and delay are TeamCLI's, resolved from the signed chain; the transport
 // receives neither.
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -527,9 +527,10 @@ function noteLocked(
   };
 
   // Every attempt is recorded whole, before any state moves. A ledger that cannot be written
-  // refuses the call; the host may retry the same fact.
+  // refuses the call; the host may retry the same fact. The store is the receiving team's, so
+  // the ledger is where the receiver's own pass archives it from.
   const ledger = appendStoreLine(
-    ctx.team.project,
+    fact.recipient.team,
     fact.recipient.root,
     ctx.home,
     attemptLedgerFileName(fact.recipient, fact.messageId),
@@ -1380,9 +1381,12 @@ export function* reclaimSteps(
   return { reclaimed, kept, scanned };
 }
 
-/** The store of episodes whose record lives under `recipient.root`. */
+/** The episode's store, keyed by the RECEIVING team's project over the receiving root — the
+ *  same folder the receiver-side watch and sweep resolve. `CanonicalRecipient.team` is fixed to
+ *  the receiver's project when the send begins, so a cross-root episode has one lock folder, one
+ *  pair of ledgers and one archive whichever side acts. */
 function storeDirOf(ctx: EscalationContext, recipient: CanonicalRecipient): string {
-  return dirname(historyPath(ctx.team.project, recipient.root, ctx.home));
+  return dirname(historyPath(recipient.team, recipient.root, ctx.home));
 }
 
 function escalateOne(
@@ -1551,7 +1555,7 @@ function flushOutbox(
     duplicate = true;
   } else {
     const result = appendEvent(
-      ctx.team.project,
+      marker.recipient.team,
       marker.recipient.root,
       ctx.home,
       input,
@@ -1602,7 +1606,7 @@ type PublicationRead =
 
 function publicationPathOf(ctx: EscalationContext, recipient: CanonicalRecipient, messageId: string): string {
   return join(
-    dirname(historyPath(ctx.team.project, recipient.root, ctx.home)),
+    dirname(historyPath(recipient.team, recipient.root, ctx.home)),
     publicationLedgerFileName(recipient, messageId),
   );
 }
@@ -1616,6 +1620,45 @@ function publicationOf(
   recordId: string,
 ): PublicationRead {
   const path = publicationPathOf(ctx, recipient, messageId);
+  const direct = publicationAt(path, recordId, ctx.home);
+  // One release before the store key was made canonical, a cross-root episode filed this ledger
+  // under the SENDING team's project over the receiving root. An episode straddling the release
+  // may therefore have published under that sibling store, and honoring it is the difference
+  // between one escalation and two. The canonical ledger still decides alone; only its quiet
+  // `none` consults the sibling stores over the same root hash, and the bridge never refuses —
+  // it can only turn `none` into the published record. It reads, never writes, and one release
+  // after the key became canonical no new episode can leave a publication behind in a sibling.
+  if (direct.kind !== 'none') return direct;
+  // Every sibling is consulted in folder order until one holds a record that verifies for
+  // this recordId: an earlier sibling holding junk, an unrelated ledger or a foreign-signed
+  // record must not shadow the store that holds the real publication, or the replay would
+  // publish the escalation a second time. A sibling that does not verify is passed over,
+  // never a refusal — the bridge keeps its word either way.
+  for (const legacy of legacyPublicationCandidates(recipient, messageId, path)) {
+    const bridged = publicationAt(legacy, recordId, ctx.home);
+    if (bridged.kind === 'ok') return bridged;
+  }
+  return direct;
+}
+
+/** The one-release bridge's candidates, in stable folder order: the episode's publication
+ *  ledger under each sibling store folder of the same receiving root (the pre-fix,
+ *  sender-keyed ones) that holds the file. */
+function legacyPublicationCandidates(recipient: CanonicalRecipient, messageId: string, canonicalPath: string): string[] {
+  const canonicalDir = dirname(canonicalPath);
+  const suffix = basename(canonicalDir).match(/[0-9a-f]{12}$/);
+  if (suffix === null) return [];
+  const fileName = publicationLedgerFileName(recipient, messageId);
+  const candidates: string[] = [];
+  for (const name of folderNames(dirname(canonicalDir))) {
+    if (!name.endsWith(`-${suffix[0]}`) || name === basename(canonicalDir)) continue;
+    const candidate = join(dirname(canonicalDir), name, fileName);
+    if (existsSync(candidate)) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function publicationAt(path: string, recordId: string, home: string): PublicationRead {
   const text = readNoFollow(path);
   if (text === null) return { kind: 'unreadable', reason: `${path}: the publication ledger could not be read` };
   let found: SignedEventRecord | null = null;
@@ -1633,7 +1676,7 @@ function publicationOf(
     const entry = parsed as Record<string, unknown>;
     if (entry.recordId !== recordId) continue;
     const record = signedRecordOf(entry.record);
-    if (record === null || !verifies(record, ctx.home)) {
+    if (record === null || !verifies(record, home)) {
       return { kind: 'unreadable', reason: `${path}: the published record is not a verified event` };
     }
     found = record;
@@ -1648,7 +1691,7 @@ function recordPublication(
   record: SignedEventRecord,
 ): { ok: true } | { ok: false; reason: string } {
   const wrote = appendStoreLine(
-    ctx.team.project,
+    marker.recipient.team,
     marker.recipient.root,
     ctx.home,
     publicationLedgerFileName(marker.recipient, marker.messageId),
