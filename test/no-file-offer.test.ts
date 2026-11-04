@@ -96,6 +96,7 @@ const REACHED = [
   'revoke grant',
   'route',
   'tempo',
+  'trace',
   'unlock',
 ];
 
