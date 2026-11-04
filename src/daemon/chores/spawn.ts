@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { processCpuTimeOf, type ProcessCpuTimeReader } from '../../watch/process-adapter.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -52,10 +53,22 @@ export type SpawnChoresInput = {
   entry?: string;
   /** Extra environment for the child. `HOME` is always the config's home. */
   env?: Record<string, string>;
+  /** Reads the CPU time the machine has charged a process, in milliseconds. The handle re-reads
+   *  it at each grace before it forces an end; a test injects a fake because its fixture child's
+   *  own CPU would make the decision depend on the machine. */
+  cpuTimeOf?: ProcessCpuTimeReader;
 };
 
 /** How long a terminated child gets before it is forced. */
 const DEFAULT_KILL_GRACE_MS = 2_000;
+
+/** The smallest CPU rise that counts as the child still working. The probe prints hundredths of
+ *  a second, so the smallest visible rise is above one millisecond: a child charged at least
+ *  that much across a grace got work done, and one charged nothing got no time at all. A release
+ *  constant, not a policy knob: under load a silent child is common, and the difference between
+ *  starved and stuck is the fact of any work at all, not an amount to tune. Shared with the
+ *  supervisor, which asks the same question of a child that has not been ended yet. */
+export const CPU_PROGRESS_EPSILON_MS = 1;
 
 /** The child's program entry: the `entry.ts` (source) or `entry.js` (installed build) beside this
  *  module. It loads the child loop and the token reader only, never the command table, so a
@@ -140,7 +153,12 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   }
 
   let killed = false;
-  const kill = (why: string, graceMs: number = DEFAULT_KILL_GRACE_MS): void => {
+  const cpuTimeOf = input.cpuTimeOf ?? processCpuTimeOf;
+  const kill = (
+    why: string,
+    graceMs: number = DEFAULT_KILL_GRACE_MS,
+    options?: { evenIfWorking?: boolean },
+  ): void => {
     if (killed || settled) return;
     killed = true;
     try {
@@ -148,15 +166,41 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     } catch {
       // Already gone; the exit below settles the handle.
     }
-    const forced = setTimeout(() => {
+    // The forced end is the last resort, not the first: a child the machine is still charging CPU
+    // time is working, however silent it is, and forcing it is what turns a loaded machine into a
+    // storm of replacements. Each grace re-reads that one fact, and only a child charged nothing
+    // across a grace is forced. A reading that cannot be taken is no evidence either way, so the
+    // handle keeps its ordinary behaviour there and forces when the grace expires. The hung
+    // ceiling is the one caller that asks for a forced end while the child is still working.
+    const pid = child.pid ?? null;
+    let baseline = pid === null ? null : cpuTimeOf(pid);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const decide = (): void => {
+      if (settled) return;
+      const now = pid === null ? null : cpuTimeOf(pid);
+      const working =
+        options?.evenIfWorking !== true &&
+        baseline !== null &&
+        now !== null &&
+        now - baseline > CPU_PROGRESS_EPSILON_MS;
+      if (working) {
+        baseline = now;
+        emit({ kind: 'note', text: `the child is still consuming CPU; not forcing it: ${why}` });
+        timer = setTimeout(decide, Math.max(1, graceMs));
+        timer.unref();
+        return;
+      }
       try {
         child.kill('SIGKILL');
       } catch {
         // Already gone.
       }
-    }, Math.max(1, graceMs));
-    forced.unref();
-    void exited.then(() => clearTimeout(forced));
+    };
+    timer = setTimeout(decide, Math.max(1, graceMs));
+    timer.unref();
+    void exited.then(() => {
+      if (timer !== null) clearTimeout(timer);
+    });
     emit({ kind: 'note', text: `the child was ended: ${why}` });
   };
 

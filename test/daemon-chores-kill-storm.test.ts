@@ -469,4 +469,54 @@ describe('chores supervisor liveness by progress', () => {
     expect(fleet.presence({ root, at: new Date(NOW + 25_000), readings: [] })).toBeNull();
     expect(fleet.stateFor(root)?.state).toBe('restarting');
   });
+
+  test('7. a child that answers after its end was asked is taken back into service, not left out forever', async () => {
+    const { home, roots } = makeWorld(['root-answers-late']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 20_000 };
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(6800 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000));
+    tickAt(10_000);
+    tickAt(15_000);
+    tickAt(20_000);
+    expect(child.kills).toEqual(['the child missed 2 heartbeats']);
+    expect(fleet.stateFor(root)?.state).toBe('late');
+
+    // The handle's guard withheld the forced end because the process was still consuming CPU; the
+    // child itself answers next. The end request is withdrawn and the group serves the root again,
+    // rather than holding a live child out of service until the daemon restarts.
+    clock.at = NOW + 25_000;
+    child.emit(beat(NOW + 25_000));
+    tickAt(30_000);
+    expect(fleet.stateFor(root)).toMatchObject({ state: 'ok', restarts: 0, missed: 0 });
+    expect(fleet.stateFor(root)?.why).toBeNull();
+    expect(child.kills).toHaveLength(1);
+    expect(child.sends.length).toBeGreaterThan(0);
+  });
 });

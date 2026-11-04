@@ -22,7 +22,13 @@ import type { DaemonChoresState } from '../state.ts';
 import type { HostedWatch } from '../watch.ts';
 import type { ChoresPolicy } from './policy.ts';
 import { tightestPolicy } from './policy.ts';
-import { spawnChoresChild, type ChoresChild, type ChoresChildEvent, type SpawnChoresInput } from './spawn.ts';
+import {
+  CPU_PROGRESS_EPSILON_MS,
+  spawnChoresChild,
+  type ChoresChild,
+  type ChoresChildEvent,
+  type SpawnChoresInput,
+} from './spawn.ts';
 import type {
   ChoresChildConfig,
   ChoresMarkerCache,
@@ -121,13 +127,6 @@ const DEFAULT_PRESENCE_DEADLINE_MS = 10_000;
  *  when this deadline passes is ended on its own reason, so a child that never beats is replaced
  *  either way. */
 const STARTUP_DEADLINE_MS = 60_000;
-
-/** The smallest CPU rise this supervisor will call progress. The probe prints hundredths of a
- *  second, so the smallest visible rise is above one millisecond: a child charged at least that
- *  much between two readings got work done, and one charged nothing got no time at all. A
- *  release constant, not a policy knob: under load a late child is common, and the difference
- *  between "starved" and "stuck" is the fact of any work at all, not an amount to tune. */
-const CPU_PROGRESS_EPSILON_MS = 1;
 
 /** How long a child may go without a heartbeat while its CPU keeps advancing before it is ended
  *  anyway: ten minutes, 120 beats at the release cadence. Every pass this child runs is bounded
@@ -477,7 +476,10 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   };
   let child: ChoresChild;
   try {
-    child = (input.factory ?? spawnChoresChild)({ config });
+    child = (input.factory ?? spawnChoresChild)({
+      config,
+      ...(input.cpuTimeOf === undefined ? {} : { cpuTimeOf: input.cpuTimeOf }),
+    });
   } catch (error) {
     // A factory that throws is this start's failure: the restart path decides the next one.
     group.startedOnce = true;
@@ -537,6 +539,15 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       // now. A frame written while this loop was held must not be charged to the child's own
       // cadence, which is what reading the child's `at` as the reference did.
       const readAt = input.now().getTime();
+      // A child the daemon asked to end that answers with a beat is still working: the handle's
+      // guard withholds the forced end from a child that keeps consuming CPU, and the supervisor
+      // must not leave a live child out of service forever. The end request is withdrawn and the
+      // next late window is judged afresh. A child that was in teardown anyway exits on its own,
+      // and that exit still schedules the replacement exactly as before.
+      if (group.killing) {
+        group.killing = false;
+        group.why = null;
+      }
       group.lastBeatReadMs = readAt;
       group.lastBeatMs = Date.parse(message.at);
       if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
@@ -890,7 +901,9 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         settlePresence(group, 'the daemon is stopping this child');
         const child = group.child;
         if (child === null) continue;
-        child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+        // A stop is a deliberate end, not a liveness judgement: the daemon must not leave a child
+        // behind, so this is one of the two ends that may force a child still consuming CPU.
+        child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS, { evenIfWorking: true });
         // A child that never leaves must not hold the daemon's close: the forced signal above
         // is what ends it, and this bound only keeps the close from waiting past it.
         const bound = input.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
