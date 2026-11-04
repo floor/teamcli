@@ -51,6 +51,18 @@ import {
   type EventKind,
 } from './kinds.ts';
 import { eventLogSettingsFor } from './log-settings.ts';
+import {
+  INDEX_SUFFIX,
+  SEAL_DOMAIN,
+  SEAL_SUFFIX,
+  keyPrintOfKey,
+  readSeal,
+  sealDigestOf,
+  sealPayloadOf,
+  sealPathOf,
+  sealSegment,
+  type SealFields,
+} from './seal.ts';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
@@ -196,7 +208,86 @@ function fileProblem(at: string): string | null {
   return null;
 }
 
-function rotateEventLog(path: string, kept: number = EVENT_LOG_KEPT): string | null {
+/** Removes a dropped segment's sidecars with it: a seal whose segment is gone must not outlive it
+ *  and be mistaken for the next segment's. */
+function unlinkSidecars(segment: string): void {
+  for (const suffix of [SEAL_SUFFIX, INDEX_SUFFIX]) {
+    try {
+      unlinkSync(`${segment}${suffix}`);
+    } catch {
+      // Missing is the ordinary case for a segment sealed by an older build.
+    }
+  }
+}
+
+/** What a rotation needs to re-sign a seal for the slot its segment just moved to. */
+type SealSigner = { storeDir: string; key: KeyObject; keyPrint: string };
+
+/** Carries one moved seal to its new slot. A seal names its segment, so a shifted segment needs
+ *  its seal re-signed for the new name and for its predecessor's new `sealDigest`; `previous`
+ *  undefined keeps the seal's own predecessor, a digest names the predecessor re-signed in this
+ *  pass, and null moves the sidecar untouched — a predecessor that is present but unsealed
+ *  blocks this seal and every later one, and the moved file fails its name check beside the new
+ *  segment, which is what "unsealed" means. Returns the seal's digest at the new slot, or null
+ *  when it was not re-signed. */
+function moveSeal(
+  from: string,
+  to: string,
+  fromSlot: number,
+  toSlot: number,
+  signer: SealSigner | undefined,
+  previous: string | null | undefined,
+): string | null {
+  const movedVerbatim = (): string | null => {
+    if (existsSync(sealPathOf(from))) {
+      renameSync(sealPathOf(from), sealPathOf(to));
+      try {
+        chmodSync(sealPathOf(to), 0o600);
+      } catch {
+        // The reader refuses a file it cannot hold; the move stands.
+      }
+    }
+    return null;
+  };
+  if (signer === undefined || previous === null) return movedVerbatim();
+  const seal = readSeal(
+    from,
+    `${EVENT_LOG_FILE}.${String(fromSlot)}`,
+    signer.storeDir,
+    signer.keyPrint,
+    signer.key,
+  );
+  if (seal === null) return movedVerbatim();
+  const fields: SealFields = {
+    format: seal.format,
+    keyPrint: seal.keyPrint,
+    store: seal.store,
+    segment: `${EVENT_LOG_FILE}.${String(toSlot)}`,
+    firstSeq: seal.firstSeq,
+    lastSeq: seal.lastSeq,
+    lines: seal.lines,
+    bytes: seal.bytes,
+    digest: seal.digest,
+    previous: previous === undefined ? seal.previous : previous,
+    sealedAt: seal.sealedAt,
+    index: seal.index,
+  };
+  const sealDigest = sealDigestOf(fields);
+  const signature = signDomain(SEAL_DOMAIN, sealPayloadOf(fields), signer.key);
+  writeAtomic(sealPathOf(to), `${JSON.stringify({ ...sealPayloadOf(fields), sealDigest, signature })}\n`);
+  try {
+    unlinkSync(sealPathOf(from));
+  } catch {
+    // The stale name beside the old slot fails its own name check; an orphan is not trusted.
+  }
+  return sealDigest;
+}
+
+function rotateEventLog(
+  path: string,
+  kept: number = EVENT_LOG_KEPT,
+  signer?: SealSigner,
+): string | null {
   for (let n = 1; n < kept; n++) {
     const slot = `${path}.${String(n)}`;
     const problem = fileProblem(slot);
@@ -204,21 +295,124 @@ function rotateEventLog(path: string, kept: number = EVENT_LOG_KEPT): string | n
   }
   const oldest = `${path}.${String(kept - 1)}`;
   if (existsSync(oldest)) {
+    unlinkSidecars(oldest);
     unlinkSync(oldest);
   }
+  // A moved seal names its predecessor at the new slot: the seal re-signed in the previous
+  // iteration. The oldest retained slot's predecessor was just dropped, so its seal keeps the
+  // predecessor it already names — a break a retained drop record declares.
+  let predecessor: string | null | undefined = undefined;
   for (let n = kept - 2; n >= 1; n--) {
     const from = `${path}.${String(n)}`;
     const to = `${path}.${String(n + 1)}`;
-    if (existsSync(from)) {
-      renameSync(from, to);
-      chmodSync(to, 0o600);
+    if (!existsSync(from)) {
+      predecessor = undefined;
+      continue;
     }
+    renameSync(from, to);
+    chmodSync(to, 0o600);
+    // The index holds no name of its own; it travels with the segment untouched.
+    if (existsSync(`${from}${INDEX_SUFFIX}`)) {
+      renameSync(`${from}${INDEX_SUFFIX}`, `${to}${INDEX_SUFFIX}`);
+      try {
+        chmodSync(`${to}${INDEX_SUFFIX}`, 0o600);
+      } catch {
+        // The reader's triple check refuses a file it cannot read; the move stands.
+      }
+    }
+    predecessor = moveSeal(from, to, n, n + 1, signer, predecessor);
   }
   if (existsSync(path)) {
     renameSync(path, `${path}.1`);
     chmodSync(`${path}.1`, 0o600);
   }
   return null;
+}
+
+/** A predecessor segment's seal digest, read before a rotation can move or drop it. */
+function sealDigestOfSlot(
+  path: string,
+  slot: number,
+  storeDir: string,
+  home: string,
+): { existed: boolean; sealDigest: string | null } {
+  const segmentPath = `${path}.${String(slot)}`;
+  if (heldAt(segmentPath).kind !== 'file') return { existed: false, sealDigest: null };
+  const state = messageKeyState(home);
+  if (state.kind !== 'key') return { existed: true, sealDigest: null };
+  const seal = readSeal(
+    segmentPath,
+    `${EVENT_LOG_FILE}.${String(slot)}`,
+    storeDir,
+    keyPrintOfKey(state.key),
+    state.key,
+  );
+  return { existed: true, sealDigest: seal?.sealDigest ?? null };
+}
+
+/** Seals the segment a rotation just closed, leaving it unsealed when the chain cannot carry it:
+ *  a predecessor segment that carries no valid seal blocks this seal and every later one, and a
+ *  drop with no sealed predecessor breaks the chain the same way. Best effort by construction —
+ *  rotation never fails over a seal. */
+function sealRotatedSegment(
+  path: string,
+  kept: number,
+  storeDir: string,
+  home: string,
+  droppedPredecessor: { existed: boolean; sealDigest: string | null } | null,
+): void {
+  const state = messageKeyState(home);
+  if (state.kind !== 'key') return;
+  const keyPrint = keyPrintOfKey(state.key);
+  let previous: string | null;
+  if (kept > 2) {
+    const predecessor = `${path}.2`;
+    if (heldAt(predecessor).kind === 'file') {
+      const seal = readSeal(predecessor, `${EVENT_LOG_FILE}.2`, storeDir, keyPrint, state.key);
+      if (seal === null) return;
+      previous = seal.sealDigest;
+    } else {
+      // No `.2` is the chain root only when nothing older survived the rotation; a surviving
+      // segment below a hole means the chain is already broken.
+      for (let n = 3; n < kept; n++) {
+        if (heldAt(`${path}.${String(n)}`).kind === 'file') return;
+      }
+      previous = null;
+    }
+  } else {
+    // The oldest slot this rotation dropped: its seal carries the chain across a declared drop.
+    if (droppedPredecessor === null) return;
+    if (droppedPredecessor.existed && droppedPredecessor.sealDigest === null) return;
+    previous = droppedPredecessor.sealDigest;
+  }
+  sealSegment(`${path}.1`, `${EVENT_LOG_FILE}.1`, storeDir, keyPrint, state.key, previous);
+}
+
+/** Rotates the live file once, dropping the oldest slot and sealing the segment just closed. The
+ *  dropped slot's verified range is captured before it is unlinked; a rotation problem is
+ *  returned to the caller, a seal failure is not. */
+function rotateLive(
+  path: string,
+  kept: number,
+  storeDir: string,
+  home: string,
+  cause: 'age' | 'rotation',
+): { dropped: DroppedSegment | null; problem: string | null } {
+  const predecessor = kept === 2 ? sealDigestOfSlot(path, 1, storeDir, home) : null;
+  const dropped = captureOldestSlot(path, kept, home, cause);
+  const keyState = messageKeyState(home);
+  const signer =
+    keyState.kind === 'key'
+      ? { storeDir, key: keyState.key, keyPrint: keyPrintOfKey(keyState.key) }
+      : undefined;
+  const problem = rotateEventLog(path, kept, signer);
+  if (problem !== null) return { dropped: null, problem };
+  try {
+    sealRotatedSegment(path, kept, storeDir, home, predecessor);
+  } catch {
+    // The segment stays unsealed and is read and verified in full, as before seals existed.
+  }
+  return { dropped, problem: null };
 }
 
 /** The retention window a pass applies: the age a segment is kept after its last write, and the
@@ -316,13 +510,18 @@ function captureOldestSlot(
 /** Seals the live file when its last write is older than the window: every record it holds was
  *  written before the window too, so the prune that follows may drop it as one segment. Returns
  *  the oldest sealed slot the rotation dropped, if any. */
-function sealIdleLiveFile(path: string, home: string, kept: number, cutoffMs: number): DroppedSegment | null {
+function sealIdleLiveFile(
+  path: string,
+  home: string,
+  kept: number,
+  cutoffMs: number,
+  storeDir: string,
+): DroppedSegment | null {
   const writtenAt = writtenAtFile(path);
   if (writtenAt === null || writtenAt >= cutoffMs || sizeOfFile(path) === 0) return null;
-  const dropped = captureOldestSlot(path, kept, home, 'age');
-  const problem = rotateEventLog(path, kept);
-  if (problem !== null) throw new Error(problem);
-  return dropped;
+  const rotated = rotateLive(path, kept, storeDir, home, 'age');
+  if (rotated.problem !== null) throw new Error(rotated.problem);
+  return rotated.dropped;
 }
 
 /** Drops the oldest sealed segment while the retained bytes are over the cap or the segment was
@@ -351,6 +550,7 @@ function pruneSealed(path: string, home: string, kept: number, options: EventLog
     if (!overCap && !tooOld) break;
     const range = verifiedRangeOf(segment.path, home);
     try {
+      unlinkSidecars(segment.path);
       unlinkSync(segment.path);
     } catch {
       break;
@@ -492,7 +692,7 @@ export function pruneEventLog(
       const drops: DroppedSegment[] = [];
       // Under keep-all there is no age to seal against; the live segment is bounded by its size.
       if (retentionSeconds > 0) {
-        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+        const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
         if (sealed !== null) drops.push(sealed);
       }
       drops.push(...pruneSealed(path, home, kept, retention));
@@ -1468,7 +1668,7 @@ function sameStamp(a: LogFileStamp | null, b: LogFileStamp | null): boolean {
 function keyPrintOf(home: string): string {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return 'none';
-  return createHash('sha256').update(state.key.export({ type: 'pkcs8', format: 'pem' })).digest('hex');
+  return keyPrintOfKey(state.key);
 }
 
 /** Reads the bytes after `from` without following a link. Null when the file cannot be read that
@@ -1991,10 +2191,9 @@ export function appendEvent(
       if (current.kind === 'file') {
         const size = statSync(path).size;
         if (size > 0 && size >= maxBytes) {
-          const captured = captureOldestSlot(path, kept, home, 'rotation');
-          const rotateErr = rotateEventLog(path, kept);
-          if (rotateErr !== null) return { ok: false, reason: rotateErr };
-          if (captured !== null) drops.push(captured);
+          const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
+          if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
+          if (rotated.dropped !== null) drops.push(rotated.dropped);
           // Leave the new live segment in place, empty. The index built below then reads the set
           // it will keep answering for; its next look reads only this file's appended bytes
           // instead of re-reading the segment the rotation just sealed.
@@ -2055,7 +2254,7 @@ export function appendEvent(
       // old one holds are dropped by the prune below as one past-the-window segment.
       try {
         if (retentionSeconds > 0) {
-          const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+          const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000, storeDir);
           if (sealed !== null) drops.push(sealed);
         }
       } catch {
@@ -2065,10 +2264,9 @@ export function appendEvent(
       if (current.kind === 'file') {
         const size = statSync(path).size;
         if (size > 0 && size + bytes.length > maxBytes) {
-          const captured = captureOldestSlot(path, kept, home, 'rotation');
-          const rotateErr = rotateEventLog(path, kept);
-          if (rotateErr !== null) return { ok: false, reason: rotateErr };
-          if (captured !== null) drops.push(captured);
+          const rotated = rotateLive(path, kept, storeDir, home, 'rotation');
+          if (rotated.problem !== null) return { ok: false, reason: rotated.problem };
+          if (rotated.dropped !== null) drops.push(rotated.dropped);
         }
       }
     }
