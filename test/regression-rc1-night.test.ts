@@ -1,4 +1,4 @@
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { NO_PANE_MESSAGING, queuedLine } from '../src/send/no-pane-messaging.ts';
 // Five failures the RC1 night run found, pinned so they never return: a pane whose session
 // holds a cross-session frame is never a delivered send; no send path dials a session's socket;
 // a provider error the pane has scrolled past does not make an idle seat unreachable; a failed
@@ -271,7 +271,11 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    // The fixture order names only legs the cascade never walks as event legs (the inbox
+    // word it reads as unavailable, and the typed leg set aside), so the walk had no event
+    // adapter at all: the reason is the no-pane-messaging word, not the took-it word a walk
+    // with event legs ends with.
+    expect(withoutSendId(io.err)).toBe(queuedLine('lead', NO_PANE_MESSAGING) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     expect(host.typed).toHaveLength(0);
