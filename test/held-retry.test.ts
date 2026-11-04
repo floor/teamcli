@@ -1392,7 +1392,13 @@ describe('the turn-start read, end to end', () => {
     });
     const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
     expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
-    expect(envelope.hookSpecificOutput.additionalContext).toBe(body);
+    // The record's own bytes carry the attribution line; the reader serves it marked, because
+    // nothing attests the sender's claim yet.
+    const served = body.replace(
+      'from the owner — admitted by: the owner\n\n',
+      'from the owner [unverified sender — shared checkout key only] — admitted by: the owner (unverified claim)\n\n',
+    );
+    expect(envelope.hookSpecificOutput.additionalContext).toBe(served);
 
     // The receipt is the seat's proof, at the name, mode and shape the promotion reads: the same
     // signed status receipt the inbox server writes, not a marker of the hook's own.
