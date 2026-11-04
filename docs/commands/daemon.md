@@ -237,8 +237,15 @@ a start that names `service-manager` without the manager's record to back it is 
 source checkout, and an install that changes the version or the packaged commit is a new daemon
 identity. `heartbeatSeconds` is the whole seconds of the `daemon.heartbeat` word the daemon runs;
 `null` when no word is known, as for a daemon on an injected test beat or an older record.
+An install that the new daemon answers also moves the known kit folders still standing in
+the machine lobby into the runtime home under the machine folder (`runtime/kits/`), one
+line per folder moved, held (a unit still loaded names it), refused, or left for a later
+lane. A moved guard folder prints the exact `guard_dir` line to re-approve and the
+migration is reported moved, not complete until `team check` shows the new path. A dry
+run prints the same lines as would-move and moves nothing.
+
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
-`installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
+`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
 plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
 prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run

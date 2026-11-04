@@ -635,6 +635,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(io.out).toContain('the previous daemon, if the service manager holds one, is stopped before the new one is offered');
     expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses');
     expect(io.out).toContain('if it still cannot start, the previous unit is put back and its daemon started again');
+    expect(io.out).toContain('once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it');
     expect(io.out).toContain('nothing was written');
     expect(io.out).not.toContain('launchd');
   });
@@ -653,6 +654,7 @@ describe('the dry run shows the steps a refresh takes', () => {
       'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
       'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
       'if it still cannot start, the previous unit is put back and its daemon started again',
+      'once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it',
     ]);
   });
 });
