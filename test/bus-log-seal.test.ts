@@ -241,6 +241,55 @@ describe('a rotation seals the segment it closes', () => {
     expect(sealOf(world, 1)).toBeNull();
   });
 
+  test('a shift re-signs a segment only while its seal, size and index still agree', () => {
+    // A sealing act must only sign what it has verified: a shift that re-signed a tampered
+    // segment would turn stale evidence into a fresh signature at the new slot.
+    const sized = makeWorld('resign-size');
+    appendUntilSealed(sized, 1, 'r');
+    appendFileSync(`${livePath(sized)}.1`, 'x');
+    appendUntilSealed(sized, 2, 's');
+    expect(sealOf(sized, 2)).toBeNull();
+    expect(sealOf(sized, 1)).toBeNull();
+
+    const indexed = makeWorld('resign-index');
+    appendUntilSealed(indexed, 1, 'r');
+    const indexPath = indexPathOf(`${livePath(indexed)}.1`);
+    const text = readFileSync(indexPath, 'utf8');
+    expect(text).toContain('message.arrived');
+    // One letter changed inside the same byte count: only the signed digest catches this.
+    writeFileSync(indexPath, text.replace('message.arrived', 'message.arrivex'));
+    appendUntilSealed(indexed, 2, 's');
+    expect(sealOf(indexed, 2)).toBeNull();
+    expect(sealOf(indexed, 1)).toBeNull();
+  });
+
+  test('a same-size edit survives the shift only as far as its carried digest, never past a read', () => {
+    const world = makeWorld('resign-same-size');
+    appendUntilSealed(world, 1, 'r');
+    const segmentPath = `${livePath(world)}.1`;
+    const bytes = readFileSync(segmentPath);
+    const reasonAt = bytes.indexOf('"reason":"');
+    expect(reasonAt).toBeGreaterThanOrEqual(0);
+    bytes[reasonAt + '"reason":"'.length] = 'y'.charCodeAt(0);
+    writeFileSync(segmentPath, bytes);
+
+    const before = sealOf(world, 1);
+    if (before === null) throw new Error('the first rotation wrote no seal');
+    appendUntilSealed(world, 2, 's');
+    const after = sealOf(world, 2);
+    expect(after).not.toBeNull();
+    if (after === null) return;
+    // The re-sign names its new slot and carries the old signed claim forward; recomputing the
+    // digest from the current bytes would launder this edit into a fresh promise.
+    expect(after.digest).toBe(before.digest);
+    expect(after.lines).toBe(before.lines);
+    expect(after.bytes).toBe(before.bytes);
+    expect(after.firstSeq).toBe(before.firstSeq);
+    expect(after.lastSeq).toBe(before.lastSeq);
+    // The next whole-segment read compares these bytes with the carried digest and sees the edit.
+    expect(createHash('sha256').update(readFileSync(`${livePath(world)}.2`)).digest('hex')).not.toBe(after.digest);
+  });
+
   test('the index builder refuses a segment with a line it cannot spell', () => {
     const good = Buffer.from(`${JSON.stringify({
       payload: { v: 1, seq: 1, ts: NOW.toISOString(), kind: 'message.arrived', session: 'acme', record_id: 'r-1' },

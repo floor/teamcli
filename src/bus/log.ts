@@ -55,6 +55,7 @@ import {
   INDEX_SUFFIX,
   SEAL_DOMAIN,
   SEAL_SUFFIX,
+  indexPathOf,
   keyPrintOfKey,
   readSeal,
   sealDigestOf,
@@ -62,6 +63,7 @@ import {
   sealPathOf,
   sealSegment,
   type SealFields,
+  type StoredSeal,
 } from './seal.ts';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
@@ -223,13 +225,30 @@ function unlinkSidecars(segment: string): void {
 /** What a rotation needs to re-sign a seal for the slot its segment just moved to. */
 type SealSigner = { storeDir: string; key: KeyObject; keyPrint: string };
 
+/** Whether a sealed segment still agrees with its own seal as far as the start check may look
+ *  without reading sealed bytes: the file is there at the sealed size, and its index matches the
+ *  signed triple — byte count, line count and SHA-256 digest. A re-sign is a sealing act, so it
+ *  signs only a segment this check still holds for; a same-length in-place edit of the segment
+ *  itself stays undetected until its bytes are next read, as the design states. */
+function sealedSegmentAgrees(segmentPath: string, seal: StoredSeal): boolean {
+  if (heldAt(segmentPath).kind !== 'file') return false;
+  if (sizeOfFile(segmentPath) !== seal.bytes) return false;
+  const text = readNoFollow(indexPathOf(segmentPath));
+  if (text === null) return false;
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length !== seal.index.bytes) return false;
+  if (createHash('sha256').update(bytes).digest('hex') !== seal.index.digest) return false;
+  return text.split('\n').length - 1 === seal.index.lines;
+}
+
 /** Carries one moved seal to its new slot. A seal names its segment, so a shifted segment needs
  *  its seal re-signed for the new name and for its predecessor's new `sealDigest`; `previous`
  *  undefined keeps the seal's own predecessor, a digest names the predecessor re-signed in this
  *  pass, and null moves the sidecar untouched — a predecessor that is present but unsealed
  *  blocks this seal and every later one, and the moved file fails its name check beside the new
- *  segment, which is what "unsealed" means. Returns the seal's digest at the new slot, or null
- *  when it was not re-signed. */
+ *  segment, which is what "unsealed" means. A seal whose segment no longer matches its own
+ *  signed claim is never re-signed; it moves untouched for the same reason. Returns the seal's
+ *  digest at the new slot, or null when it was not re-signed. */
 function moveSeal(
   from: string,
   to: string,
@@ -258,6 +277,9 @@ function moveSeal(
     signer.key,
   );
   if (seal === null) return movedVerbatim();
+  // The segment and its index already sit at the new slot when this runs; both are checked
+  // against the seal's own signed claim before it is carried to a fresh signature.
+  if (!sealedSegmentAgrees(to, seal)) return movedVerbatim();
   const fields: SealFields = {
     format: seal.format,
     keyPrint: seal.keyPrint,
