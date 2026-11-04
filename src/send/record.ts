@@ -21,7 +21,7 @@
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
 import { type KeyObject } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -961,6 +961,46 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
+const RECEIPT_STAMP_CACHE_LIMIT = 8192;
+const receiptStampCache = new Map<string, { stamp: string; scope: string }>();
+const keyPrintMemo = new WeakMap<KeyObject, string>();
+
+/** Stable fingerprint of a key's public half for in-memory stamp caches. */
+export function keyPrintForCache(key: KeyObject): string {
+  const hit = keyPrintMemo.get(key);
+  if (hit !== undefined) return hit;
+  let print = '';
+  try {
+    const jwk = key.export({ format: 'jwk' }) as { x?: string };
+    print = typeof jwk.x === 'string' ? jwk.x : '';
+  } catch {
+    print = '';
+  }
+  keyPrintMemo.set(key, print);
+  return print;
+}
+
+/** Stat stamp (`ino:size:mtimeMs:ctimeMs`) of a regular file owned by this user, or null when
+ *  missing, not a regular file, foreign-owned, or backed by a partial test stub without stat numbers. */
+export function fileStatStamp(path: string): string | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) return null;
+    if (
+      typeof stat.ino !== 'number' ||
+      typeof stat.size !== 'number' ||
+      typeof stat.mtimeMs !== 'number' ||
+      typeof stat.ctimeMs !== 'number'
+    ) {
+      return null;
+    }
+    return `${String(stat.ino)}:${String(stat.size)}:${String(stat.mtimeMs)}:${String(stat.ctimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether the receipt at `path` is this message's `status` receipt: the id, seat, checkout and
  * session on it match, and the message key signed it. A receipt for another message or checkout
@@ -980,6 +1020,23 @@ export function receiptHolds(
   const held = heldAt(path);
   if (held.kind !== 'file') return false;
   if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
+  const stamp = fileStatStamp(path);
+  const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
+  const rootReal = (() => {
+    try {
+      return realpathSync(context.root);
+    } catch {
+      return context.root;
+    }
+  })();
+  const briefScope = brief === undefined ? '' : `${brief.incarnation}\0${brief.sha256}\0${brief.epoch}`;
+  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootReal}\0${briefScope}`;
+  if (stamp !== null && keyPrint !== '') {
+    const cached = receiptStampCache.get(path);
+    if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+      return true;
+    }
+  }
   const text = readNoFollow(path);
   if (text === null) return false;
   let parsed: unknown;
@@ -998,6 +1055,10 @@ export function receiptHolds(
     if (payload.incarnation !== brief.incarnation) return false;
     if (payload.brief_sha256 !== brief.sha256) return false;
     if (payload.brief_epoch !== brief.epoch) return false;
+  }
+  if (stamp !== null && keyPrint !== '') {
+    if (receiptStampCache.size >= RECEIPT_STAMP_CACHE_LIMIT) receiptStampCache.clear();
+    receiptStampCache.set(path, { stamp, scope });
   }
   return true;
 }

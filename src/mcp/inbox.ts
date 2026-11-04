@@ -34,7 +34,10 @@ import { dropMessage } from '../send/native.ts';
 import { unverifiedBody, verifySenderClaim } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
+  fileStatStamp,
   isRead,
+  keyPrintForCache,
+  readRecord,
   readSealedRecord,
   receiptFile,
   recordAuthOfSealed,
@@ -331,20 +334,64 @@ export function removeListener(dropDir: string, pid: number): void {
   }
 }
 
+const INBOX_STAMP_CACHE_LIMIT = 4096;
+const pendingMarkerCache = new Map<string, { stamp: string; marker: { from?: string; ts?: string } }>();
+const verifiedRecordCache = new Map<string, { stamp: string; keyPrint: string; id: string; payload: RecordPayload | null }>();
+
 /** The sender and time `team send` left beside the drop, when a marker is there and names it. */
 function markerOf(dropDir: string, id: string): { from?: string; ts?: string } {
-  const text = readNoFollow(join(dropDir, `${id}.pending`));
+  const pendingPath = join(dropDir, `${id}.pending`);
+  const stamp = fileStatStamp(pendingPath);
+  if (stamp !== null) {
+    const cached = pendingMarkerCache.get(pendingPath);
+    if (cached !== undefined && cached.stamp === stamp) return cached.marker;
+  }
+  const text = readNoFollow(pendingPath);
   if (text === null || text === '') return {};
   try {
     const parsed = JSON.parse(text) as { id?: unknown; from?: unknown; ts?: unknown };
     if (parsed.id !== id) return {};
-    return {
+    const marker = {
       ...(typeof parsed.from === 'string' ? { from: parsed.from } : {}),
       ...(typeof parsed.ts === 'string' ? { ts: parsed.ts } : {}),
     };
+    if (stamp !== null) {
+      if (pendingMarkerCache.size >= INBOX_STAMP_CACHE_LIMIT) pendingMarkerCache.clear();
+      pendingMarkerCache.set(pendingPath, { stamp, marker });
+    }
+    return marker;
   } catch {
     return {};
   }
+}
+
+function verifiedPayloadAt(path: string, id: string, key: KeyObject): RecordPayload | null {
+  const stamp = fileStatStamp(path);
+  const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
+  if (stamp !== null && keyPrint !== '') {
+    const cached = verifiedRecordCache.get(path);
+    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint && cached.id === id) {
+      return cached.payload;
+    }
+  }
+  const looked = readRecord(path, id);
+  const payload =
+    looked.ok && looked.record !== null && verifyRecord(looked.record, key) ? looked.record.payload : null;
+  if (stamp !== null && keyPrint !== '') {
+    if (verifiedRecordCache.size >= INBOX_STAMP_CACHE_LIMIT) verifiedRecordCache.clear();
+    verifiedRecordCache.set(path, { stamp, keyPrint, id, payload });
+  }
+  return payload;
+}
+
+/** The time a message's own record names when that record verifies with this checkout's key, and
+ *  null otherwise. The `.pending` marker beside a message is unsigned, and a file's mtime is the
+ *  filesystem's: neither may date a record the key signed, so a listing counts from this when it
+ *  is there and falls back only for a record this key cannot vouch for. */
+function signedTimeOfPayload(payload: RecordPayload | null): string | null {
+  if (payload === null) return null;
+  const at = payload.at;
+  return typeof at === 'string' && Number.isFinite(Date.parse(at)) ? at : null;
 }
 
 /** The current claim of one seat's general seat brief, read from the checkout's state; null when
@@ -426,10 +473,11 @@ export function listUnread(
   // is not a message, and a caller that shares one pass's reading takes its presence from here
   // rather than opening the folder again. A folder that could not be listed is never reported.
   listed?.(names);
+  const nameSet = new Set(names);
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
-    : records ?? ((path, id) => verifiedRecordAt(path, id, key.key));
+    : records ?? ((path, id) => verifiedPayloadAt(path, id, key.key));
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
@@ -439,7 +487,8 @@ export function listUnread(
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    if (key.kind === 'key' && isRead(dropDir, name, context, key.key, binding)) continue;
+    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+    if (key.kind === 'key' && hasReceiptFile && isRead(dropDir, name, context, key.key, binding)) continue;
     const payload = readRecordAt === null ? null : readRecordAt(at, name);
     if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
     let size = 0;
@@ -452,7 +501,7 @@ export function listUnread(
     } catch {
       continue;
     }
-    const marker = markerOf(dropDir, name);
+    const marker = nameSet.has(`${name}.pending`) ? markerOf(dropDir, name) : {};
     // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
     // dates only a record the key cannot vouch for. The sender follows the same rule: the
     // record's own signed claim when it verifies, the marker's word only when it does not — and

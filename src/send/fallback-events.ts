@@ -1844,7 +1844,7 @@ function markersUnder(root: string): ({ kind: 'ok'; path: string; marker: Fallba
 function folderNames(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
       .sort();
   } catch {
