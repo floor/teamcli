@@ -6,7 +6,7 @@
 // Every receiver here is a synthetic listener on a loopback port. No real URL, no real secret, no
 // live seat.
 import { afterEach, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
@@ -624,6 +624,22 @@ test('the default wait between attempts runs under the plain runtime', async () 
   expect(built.success, built.logs.map((log) => log.message).join('\n')).toBe(true);
   const entry = built.outputs.find((output) => output.kind === 'entry-point');
   expect(entry).toBeDefined();
+  // The policy word the delivery now reads pulls the profile module into the bundle, and a
+  // bundle carries its profiles beside itself — the yaml files `build` copies beside the
+  // installed CLI and the profile modules it compiles there — so the plain runtime reads and
+  // loads the same profiles the field does.
+  const profiles = join(import.meta.dir, '..', 'src', 'profiles');
+  for (const name of readdirSync(profiles)) {
+    if (name.endsWith('.yaml')) copyFileSync(join(profiles, name), join(outdir, name));
+  }
+  const modules = await Bun.build({
+    entrypoints: [join(profiles, 'jules-compose.ts'), join(profiles, 'jules-screen.ts')],
+    target: 'node',
+    format: 'cjs',
+    outdir,
+    naming: '[name].[ext]',
+  });
+  expect(modules.success, modules.logs.map((log) => log.message).join('\n')).toBe(true);
   const proc = Bun.spawn(['node', entry!.path], {
     cwd: new URL('..', import.meta.url).pathname,
     stdout: 'pipe',
