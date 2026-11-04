@@ -9,6 +9,7 @@
 import { bundlePolicyWithin, formatBundlePolicy, parseBundlePolicy } from '../client/bundle-ops.ts';
 import { durationPolicyWithin, formatDurationPolicy, inheritDurationPolicy, parseDurationPolicy } from '../client/duration-policy.ts';
 import { DURATION, parseMeasure } from '../file/sections/units.ts';
+import { DEFAULT_SIDEBAR_ROWS, SIDEBAR_TOKENS, STATUS_INDICATOR_VALUES } from '../herdr.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
@@ -138,6 +139,11 @@ export const ENFORCED_POLICY_NAMES = [
   'daemon.chores-slice-ms',
   'daemon.chores-missed-beats',
   'daemon.chores-backoff-cap-ms',
+  'workspace.sidebar.rows',
+  'workspace.sidebar.manage',
+  'workspace.sidebar.status_indicators',
+  'daemon.sidebar-ttl-ms',
+  'daemon.sidebar-refresh-ms',
   'watch-rhythm',
   'grant-emission',
   'owner-signers',
@@ -234,6 +240,26 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'daemon-chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
   chores_backoff_cap_ms: 'daemon.chores-backoff-cap-ms',
   'chores-backoff-cap-ms': 'daemon.chores-backoff-cap-ms',
+  workspace_sidebar_rows: 'workspace.sidebar.rows',
+  'workspace-sidebar-rows': 'workspace.sidebar.rows',
+  sidebar_rows: 'workspace.sidebar.rows',
+  'sidebar-rows': 'workspace.sidebar.rows',
+  workspace_sidebar_manage: 'workspace.sidebar.manage',
+  'workspace-sidebar-manage': 'workspace.sidebar.manage',
+  sidebar_manage: 'workspace.sidebar.manage',
+  'sidebar-manage': 'workspace.sidebar.manage',
+  workspace_sidebar_status_indicators: 'workspace.sidebar.status_indicators',
+  'workspace-sidebar-status-indicators': 'workspace.sidebar.status_indicators',
+  sidebar_status_indicators: 'workspace.sidebar.status_indicators',
+  'sidebar-status-indicators': 'workspace.sidebar.status_indicators',
+  daemon_sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
+  'daemon-sidebar-ttl-ms': 'daemon.sidebar-ttl-ms',
+  sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
+  'sidebar-ttl-ms': 'daemon.sidebar-ttl-ms',
+  daemon_sidebar_refresh_ms: 'daemon.sidebar-refresh-ms',
+  'daemon-sidebar-refresh-ms': 'daemon.sidebar-refresh-ms',
+  sidebar_refresh_ms: 'daemon.sidebar-refresh-ms',
+  'sidebar-refresh-ms': 'daemon.sidebar-refresh-ms',
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
@@ -1077,6 +1103,107 @@ function backoffCapProblem(name: string, raw: unknown): string | null {
   return `policy "${name}" needs a whole number of milliseconds from 1000 to 600000, such as 30000`;
 }
 
+// ---- The sidebar words (the sidebar-metadata design of 2026-11-04) -------------------------------------
+//
+// Five enforced words carry what the 0.5.13 sidebar work reads: the rows layout of the terminal
+// host's sidebar, whether team may touch the host's config at all, which status indicator the
+// host draws, how long a pane's reported metadata lives, and how often it is re-reported. The
+// token and indicator vocabularies are the adapter's (`src/herdr.ts`), because the host is what
+// refuses a word it does not know; the reader that consumes the resolved chain is
+// `sidebarPolicy` in `src/settings/sidebar-policy.ts`.
+
+/** The rows layout as one canonical word: rows separated by `;`, a row's tokens by `,` —
+ *  `state_icon,machine,workspace,tab;state_text,agent`. At load the YAML natural form (a list
+ *  of token lists) and a list of row strings read the same way. */
+const SIDEBAR_ROWS_DEFAULT_VALUE = DEFAULT_SIDEBAR_ROWS.map((row) => [...row].join(',')).join(';');
+
+function parseSidebarRowsValue(raw: unknown): string | null {
+  const rowsRaw: unknown[] = [];
+  if (typeof raw === 'string') {
+    rowsRaw.push(...raw.split(';'));
+  } else if (Array.isArray(raw)) {
+    rowsRaw.push(...raw);
+  } else {
+    return null;
+  }
+  if (rowsRaw.length === 0) return null;
+  const rows: string[] = [];
+  for (const row of rowsRaw) {
+    const tokens = typeof row === 'string' ? row.split(',') : Array.isArray(row) ? row : null;
+    if (tokens === null) return null;
+    const clean = tokens.map((token) => (typeof token === 'string' ? token.trim() : ''));
+    if (clean.some((token) => token === '')) return null;
+    if (clean.some((token) => !(SIDEBAR_TOKENS as readonly string[]).includes(token))) return null;
+    if (new Set(clean).size !== clean.length) return null;
+    rows.push(clean.join(','));
+  }
+  return rows.join(';');
+}
+
+/** A canonical rows word as its rows, or null for a word this build cannot read. */
+export function sidebarRowsOf(value: unknown): readonly (readonly string[])[] | null {
+  if (typeof value !== 'string') return null;
+  const canonical = parseSidebarRowsValue(value);
+  return canonical === null ? null : canonical.split(';').map((row) => row.split(','));
+}
+
+function sidebarRowsProblem(raw: unknown): string | null {
+  const items: unknown[] = typeof raw === 'string'
+    ? raw.split(';')
+    : Array.isArray(raw) ? raw : [];
+  for (const row of items) {
+    const tokens = typeof row === 'string' ? row.split(',') : Array.isArray(row) ? row : [];
+    for (const token of tokens) {
+      if (typeof token === 'string' && token.trim() !== '' && !(SIDEBAR_TOKENS as readonly string[]).includes(token.trim())) {
+        return `policy "workspace.sidebar.rows" has no sidebar token "${token.trim()}": expected ${SIDEBAR_TOKENS.join(', ')}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** The status indicator the host draws: the closed vocabulary `config check` enforces on the
+ *  host's own `[ui] status_indicators` key (`dots` or `symbols`, probed 2026-11-04). */
+function parseSidebarIndicators(raw: unknown): string | null {
+  return typeof raw === 'string' && (STATUS_INDICATOR_VALUES as readonly string[]).includes(raw.trim())
+    ? raw.trim()
+    : null;
+}
+
+function sidebarIndicatorsProblem(raw: unknown): string | null {
+  if (parseSidebarIndicators(raw) !== null) return null;
+  return `policy "workspace.sidebar.status_indicators" needs one of ${STATUS_INDICATOR_VALUES.join(' or ')}, such as symbols`;
+}
+
+/** Whole milliseconds from 1000 up (`daemon.sidebar-ttl-ms`): no ceiling is enforced here — the
+ *  host caps what it is sent at its own 86400000, and the reader clamps to that cap rather than
+ *  refusing a stored word a future host might accept. */
+const SIDEBAR_TTL_MS_DEFAULT = 86_400_000;
+
+function parseSidebarMillis(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1000 ? n : null;
+}
+
+function sidebarMillisProblem(name: string, raw: unknown): string | null {
+  if (parseSidebarMillis(raw) !== null) return null;
+  return `policy "${name}" needs a whole number of milliseconds from 1000 up, such as 86400000`;
+}
+
+/** The refresh interval's own bounds: whole milliseconds from one minute to seven days
+ *  (`daemon.sidebar-refresh-ms`), 6 h when nothing declares it. */
+const SIDEBAR_REFRESH_MS = { min: 60_000, max: 604_800_000, release: 21_600_000 } as const;
+
+function parseSidebarRefreshMs(raw: unknown): number | null {
+  const n = parseSidebarMillis(raw);
+  return n !== null && n >= SIDEBAR_REFRESH_MS.min && n <= SIDEBAR_REFRESH_MS.max ? n : null;
+}
+
+function sidebarRefreshProblem(raw: unknown): string | null {
+  if (parseSidebarRefreshMs(raw) !== null) return null;
+  return `policy "daemon.sidebar-refresh-ms" needs a whole number of milliseconds from ${String(SIDEBAR_REFRESH_MS.min)} to ${String(SIDEBAR_REFRESH_MS.max)}, such as ${String(SIDEBAR_REFRESH_MS.release)}`;
+}
+
 /**
  * Catalogue of policies known to TeamCLI 0.5.0 (amendment 02 `catalogue.md`), with defaults
  * sourced directly from `src/settings/inherit.ts`.
@@ -1660,6 +1787,82 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseBackoffCapMs,
     valueProblem: (raw: unknown) => backoffCapProblem('daemon.chores-backoff-cap-ms', raw),
     // A smaller cap is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // The sidebar rows layout the terminal host draws for agents: which tokens each line carries,
+  // in order, from the host's own closed vocabulary. One word holds every row — rows separated
+  // by `;`, a row's tokens by `,` — and the YAML natural form (a list of token lists) reads the
+  // same way. The layout is presentation: any parsed layout is as strict as any other, so the
+  // nearest level chooses. `workspace.` names a policy namespace here, never the team file's
+  // owner section: this word is set at the entity, project or team level of the policy chain
+  // and nothing in this release writes it into a team file.
+  'workspace.sidebar.rows': {
+    name: 'workspace.sidebar.rows',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: SIDEBAR_ROWS_DEFAULT_VALUE,
+    gateLifting: false,
+    parseValue: parseSidebarRowsValue,
+    valueProblem: sidebarRowsProblem,
+    isWithin: () => true,
+  },
+  // Whether team may touch the terminal host's config for the sidebar at all. `on`, the
+  // release default, lets `team up` splice the marked block and the marked key, back up first
+  // and roll back on a refused check; `off` prints the TOML it would write and never writes —
+  // check reports the drift, and the owner applies it by hand. Off is explicit and absolute, the
+  // same shape as `daemon.broker`: a lower level may switch managing off but cannot switch it
+  // back on against a level that said off.
+  'workspace.sidebar.manage': {
+    name: 'workspace.sidebar.manage',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'on',
+    gateLifting: false,
+    parseValue: parseOnOff,
+    // 'off' is tighter than 'on': off is within on, on is not within off.
+    isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
+  },
+  // Which status indicator the host draws beside an agent: the host's own closed vocabulary
+  // (`dots` or `symbols`, the word its config check refuses any other value for). The owner
+  // wants the distinct symbols, so `symbols` is the release default. Presentation again: any
+  // parsed word is as strict as any other and the nearest level chooses.
+  'workspace.sidebar.status_indicators': {
+    name: 'workspace.sidebar.status_indicators',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'symbols',
+    gateLifting: false,
+    parseValue: parseSidebarIndicators,
+    valueProblem: sidebarIndicatorsProblem,
+    isWithin: () => true,
+  },
+  // How long a pane's reported sidebar metadata lives before it lapses: whole milliseconds,
+  // one day (the host's own cap) when nothing declares it. The host refuses a ttl above its cap
+  // outright, so the reader clamps the word to the cap instead of refusing it — a stored word
+  // stays readable when a future host raises the cap. A shorter ttl is the tighter word.
+  'daemon.sidebar-ttl-ms': {
+    name: 'daemon.sidebar-ttl-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: SIDEBAR_TTL_MS_DEFAULT,
+    gateLifting: false,
+    parseValue: parseSidebarMillis,
+    valueProblem: (raw: unknown) => sidebarMillisProblem('daemon.sidebar-ttl-ms', raw),
+    // A shorter or equal ttl is tighter.
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // How often the sidebar line is re-reported to keep the metadata inside its ttl: whole
+  // milliseconds from one minute to seven days, six hours when nothing declares it. A shorter
+  // interval is the tighter word (the line is refreshed sooner, so a lapse is less likely).
+  'daemon.sidebar-refresh-ms': {
+    name: 'daemon.sidebar-refresh-ms',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: SIDEBAR_REFRESH_MS.release,
+    gateLifting: false,
+    parseValue: parseSidebarRefreshMs,
+    valueProblem: sidebarRefreshProblem,
+    // A shorter or equal interval is tighter.
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   // The watch's own pace: how often a pass sweeps and how long its six waits run. One value
