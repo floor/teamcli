@@ -231,6 +231,12 @@ stands. Everything else keeps its advice — a model drift's relaunch, a blind s
 pane — because those are decisions, not writes the file settles, and `--repair` never starts,
 stops or relaunches a seat.
 
+While dev mode is on for the team, a pending owner card is a difference of its own when it asks
+for anything but the two acts still carded there — a general grant change, or loosening the
+development-mode record itself: `owner card <id> asks for <actions> under dev mode: policy drift`,
+repaired by answering the card or letting it expire. Under the lift a seat, CLI or label change
+needs no card, so one still waiting means the card and the policy in force disagree.
+
 ## A leftover team file
 
 When the team is in the registry and a `.agents/team.yaml` is still in the project, the run
