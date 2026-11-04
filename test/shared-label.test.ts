@@ -235,7 +235,7 @@ describe('down and remove with one label on two seats', () => {
       launch: {
         typeText: (_session, pane, text) => { typed.push(text); panes.push(pane); boxes.set(pane, claudeBox(text)); return true; },
         sendKey: () => true,
-        pressEnter: () => true,
+        pressEnter: (_session, pane) => { boxes.set(pane, claudeBox('')); return true; },
         agentPanes: () => [],
         closeWorkspace: () => true,
         stopSession: () => false,
@@ -288,7 +288,7 @@ describe('down and remove with one label on two seats', () => {
       launch: {
         typeText: (_session, pane, text) => { panes.push(`${pane}:${text}`); box = claudeBox(text); return true; },
         sendKey: () => true,
-        pressEnter: () => true,
+        pressEnter: () => { box = claudeBox(''); return true; },
         agentPanes: () => [],
         closeWorkspace: () => true,
         stopSession: () => false,

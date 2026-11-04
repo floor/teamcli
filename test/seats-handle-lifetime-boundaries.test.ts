@@ -228,7 +228,7 @@ function removeSources(agents: HerdrAgent[]): RemoveSources {
 }
 
 // One screen per recorded pane and a clock that moves when the command sleeps: the exit
-// flow polls, and a pane leaves when its Enter lands.
+// flow polls, and a pane leaves and its box empties when its Enter lands.
 function downSources(): DownSources {
   const IDLE_BOX = CLAUDE_IDLE;
   const boxes = new Map<string, string>();
@@ -247,6 +247,7 @@ function downSources(): DownSources {
     },
     pressEnter(_session: string, pane: string) {
       gone.add(pane);
+      boxes.set(pane, claudeBox(''));
       return true;
     },
     agentPanes: () => people().map((one) => one.pane).filter((pane) => !gone.has(pane)),
