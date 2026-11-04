@@ -1,9 +1,12 @@
-// Automatic transport-drop archive pass for the chores child (slice 1: archive, never delete).
+// Automatic transport-drop archive and reclamation pass for the chores child.
 //
-// Retired drops and their companion sidecars move from `<root>/.agents/send-drops/<session>/<seat>/`
+// Slice 1 moves retired drops and their companion sidecars from `<root>/.agents/send-drops/<session>/<seat>/`
 // into `<root>/.agents/send-drops/.archive/<YYYY-MM-DD>/<session>/<seat>/`, accompanied by a signed
 // manifest record under `<root>/.agents/send-drops/.archive/<YYYY-MM-DD>/manifest-<stamp>.json`.
-// Nothing is deleted in slice 1.
+// Slice 3 reclaims archived drop families inside `<root>/.agents/send-drops/.archive/<YYYY-MM-DD>/<session>/<seat>/`
+// once they pass the long archive window, verifying the signed manifest and every file's SHA-256
+// digest and byte length before unlinking via held directory descriptors while keeping the signed
+// manifest record intact.
 //
 // Safety rules:
 // 1. Only a verified message record with a verified read or replied receipt (`isRead`) and no
@@ -66,6 +69,12 @@ export const DROP_ARCHIVE_DIR = '.archive';
 /** Default steady-state limit per pass, matching `FALLBACK_STORE_PASS_LIMIT`. */
 export const DROP_ARCHIVE_PASS_LIMIT = 256;
 
+/** Multiplier applied to the live retention window to compute the long archive window. */
+export const DROP_ARCHIVE_LONG_WINDOW_MULTIPLIER = 3;
+
+/** Minimum long archive window (90 days) before archived drops are eligible for reclamation. */
+export const DROP_ARCHIVE_MIN_LONG_WINDOW_MS = 90 * 86_400_000;
+
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0x0100;
 const DIRECTORY = constants.O_DIRECTORY ?? 0x100000;
 const EEXIST = 17;
@@ -73,6 +82,7 @@ const ENOTDIR = 20;
 const ELOOP = process.platform === 'linux' ? 40 : 62;
 const RENAME_EXCL = 0x00000004;
 const RENAME_NOREPLACE = 1;
+const AT_REMOVEDIR = process.platform === 'linux' ? 0x200 : 0x0080;
 
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const WORK_PREFIX = 'work-';
@@ -144,6 +154,7 @@ export type RelativeDirOps = {
   renameatExcl: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
   renameatReplace: (fromfd: number, fromName: string, tofd: number, toName: string) => { ok: boolean; errno: number };
   unlinkat: (dirfd: number, name: string) => { ok: boolean; errno: number };
+  rmdirat?: (dirfd: number, name: string) => { ok: boolean; errno: number };
 };
 
 export type DropRetirementInput = {
@@ -153,6 +164,8 @@ export type DropRetirementInput = {
   at: Date;
   /** Override the retention window in ms; absent, resolves `event-retention-days` for the root. */
   olderThanMs?: number;
+  /** Override the long archive window in ms before archived drops are reclaimed; absent, uses `max(retentionMs * 3, 90d)`. */
+  archiveOlderThanMs?: number;
   limit?: number;
   backlogAbove?: number;
   backlogLimit?: number;
@@ -163,6 +176,7 @@ export type DropRetirementInput = {
 export type DropRetirementReport = {
   at: string;
   archived: DropArchiveFamily[];
+  reclaimed: DropArchiveFamily[];
   manifestPath: string | null;
   scanned: number;
   stayed: number;
@@ -291,6 +305,10 @@ function loadBunDirOps(req: NodeRequire): RelativeDirOps {
       const rc = lib.symbols.unlinkat(dirfd, cstr(name), 0);
       return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
     },
+    rmdirat: (dirfd, name) => {
+      const rc = lib.symbols.unlinkat(dirfd, cstr(name), AT_REMOVEDIR);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
   };
 }
 
@@ -337,6 +355,10 @@ function loadNodeDirOps(req: NodeRequire): RelativeDirOps {
     },
     unlinkat: (dirfd, name) => {
       const rc = lib.functions.unlinkat(dirfd, name, 0);
+      return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
+    },
+    rmdirat: (dirfd, name) => {
+      const rc = lib.functions.unlinkat(dirfd, name, AT_REMOVEDIR);
       return { ok: rc === 0, errno: rc < 0 ? readErrno() : 0 };
     },
   };
@@ -653,6 +675,114 @@ function unlinkInHeldDir(atFfi: RelativeDirOps, dirHeld: HeldDir, fileName: stri
   atFfi.unlinkat(dirHeld.fd, fileName);
 }
 
+function unlinkFileInHeldDir(
+  atFfi: RelativeDirOps,
+  baseHeld: HeldDir,
+  dirHeld: HeldDir,
+  fileName: string,
+  root: string,
+): { ok: true } | { ok: false; reason: string } {
+  const fullPath = join(dirHeld.path, fileName);
+  const preProblem = verifyHeldDirChain(atFfi, baseHeld, dirHeld);
+  if (preProblem !== null) return { ok: false, reason: preProblem };
+
+  const held = heldAt(fullPath);
+  if (held.kind === 'link') {
+    return { ok: false, reason: `${fullPath}: a symbolic link was found and not followed` };
+  }
+  if (held.kind !== 'file') {
+    return { ok: false, reason: `${fullPath}: unexpected ${held.kind}` };
+  }
+
+  const unlinked = atFfi.unlinkat(dirHeld.fd, fileName);
+  if (!unlinked.ok) {
+    const postProblem = verifyHeldDirChain(atFfi, baseHeld, dirHeld);
+    if (postProblem !== null) return { ok: false, reason: postProblem };
+    if (heldAt(fullPath).kind === 'link') {
+      return { ok: false, reason: `${fullPath}: a symbolic link was found and not followed` };
+    }
+    return {
+      ok: false,
+      reason: `cannot unlink ${relative(root, fullPath)}: errno ${String(unlinked.errno)}`,
+    };
+  }
+
+  const postProblem = verifyHeldDirChain(atFfi, baseHeld, dirHeld);
+  if (postProblem !== null) {
+    return { ok: false, reason: postProblem };
+  }
+  return { ok: true };
+}
+
+function restoreUnlinkedInHeldDir(
+  atFfi: RelativeDirOps,
+  dirHeld: HeldDir,
+  fileName: string,
+  bytes: Buffer,
+): { ok: true } | { ok: false; reason: string } {
+  const existing = atFfi.openat(dirHeld.fd, fileName, constants.O_RDONLY | NOFOLLOW, 0);
+  if (existing.fd >= 0) {
+    let matches = false;
+    try {
+      const stat = fstatSync(existing.fd);
+      if (stat.isFile()) {
+        const current = readFileSync(existing.fd);
+        matches = current.byteLength === bytes.byteLength && current.equals(bytes);
+      }
+    } catch {}
+    try {
+      closeSync(existing.fd);
+    } catch {}
+    if (matches) return { ok: true };
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: existing file does not match verified bytes`,
+    };
+  }
+
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW;
+  const opened = atFfi.openat(dirHeld.fd, fileName, flags, 0o600);
+  if (opened.fd < 0) {
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: openat errno ${String(opened.errno)}`,
+    };
+  }
+  const fd = opened.fd;
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      return { ok: false, reason: `cannot restore ${fileName}: not a regular file` };
+    }
+    fchmodSync(fd, 0o600);
+    for (let wrote = 0; wrote < bytes.length;) {
+      const n = writeSync(fd, bytes, wrote, bytes.length - wrote);
+      if (n <= 0) {
+        throw new Error('short write');
+      }
+      wrote += n;
+    }
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {}
+    atFfi.unlinkat(dirHeld.fd, fileName);
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  try {
+    closeSync(fd);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return { ok: true };
+}
+
 /**
  * Creates a new file with `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW` relative to `dirHeld.fd`,
  * sets mode `0600` on the descriptor before writing (`openat`'s 4th parameter is variadic in the
@@ -821,17 +951,17 @@ function resolveRetentionMs(
   team: TeamFile | undefined,
   at: Date,
   explicitMs: number | undefined,
-): { ms: number; refusal: null } | { ms: null; refusal: string } {
+): { ms: number; keepAll: boolean; refusal: null } | { ms: null; keepAll: false; refusal: string } {
   if (explicitMs !== undefined) {
     return Number.isFinite(explicitMs) && explicitMs >= 0
-      ? { ms: explicitMs, refusal: null }
-      : { ms: null, refusal: 'the drop retention window is not a valid duration' };
+      ? { ms: explicitMs, keepAll: explicitMs === 0, refusal: null }
+      : { ms: null, keepAll: false, refusal: 'the drop retention window is not a valid duration' };
   }
   let resolvedTeam = team;
   if (resolvedTeam === undefined) {
     const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) {
-      return { ms: null, refusal: loaded.errors[0]?.message ?? 'the team file cannot be read' };
+      return { ms: null, keepAll: false, refusal: loaded.errors[0]?.message ?? 'the team file cannot be read' };
     }
     resolvedTeam = loaded.team;
   }
@@ -846,9 +976,10 @@ function resolveRetentionMs(
   });
   if (!inForce.ok) {
     const why = inForce.refusals.map((r) => r.message).join('; ');
-    return { ms: null, refusal: why === '' ? 'the retention policy could not be read' : why };
+    return { ms: null, keepAll: false, refusal: why === '' ? 'the retention policy could not be read' : why };
   }
-  return { ms: inForce.thresholds.retention_days * 86_400_000, refusal: null };
+  const days = inForce.thresholds.retention_days;
+  return { ms: days * 86_400_000, keepAll: days === 0, refusal: null };
 }
 
 function isClientRecord(payload: RecordPayload): boolean {
@@ -1046,6 +1177,7 @@ export function* dropRetirementSteps(
 
   const openedFds: number[] = [];
   const archived: DropArchiveFamily[] = [];
+  const reclaimed: DropArchiveFamily[] = [];
   const movedRecords: { srcHeld: HeldDir; destHeld: HeldDir; files: string[] }[] = [];
   const archivedBySeatDir = new Map<string, { seatHeld: HeldDir; ids: Set<string> }>();
   let manifestPath: string | null = null;
@@ -1063,6 +1195,7 @@ export function* dropRetirementSteps(
     const report: DropRetirementReport = {
       at: atIso,
       archived: [...archived],
+      reclaimed: [...reclaimed],
       manifestPath,
       scanned,
       stayed,
@@ -1091,7 +1224,10 @@ export function* dropRetirementSteps(
   };
 
   const finalizeMoved = (): void => {
-    if (finalized) return;
+    if (finalized) {
+      snapshot();
+      return;
+    }
     finalized = true;
     if (
       atFfi === null ||
@@ -1191,7 +1327,16 @@ export function* dropRetirementSteps(
 
     const retention = resolveRetentionMs(root, home, input.team, at, input.olderThanMs);
     if (retention.ms === null) return fail(retention.refusal);
+    if (retention.keepAll) return snapshot();
     const cutoff = at.getTime() - retention.ms;
+    const archiveWindowMs =
+      input.archiveOlderThanMs !== undefined
+        ? input.archiveOlderThanMs
+        : Math.max(retention.ms * DROP_ARCHIVE_LONG_WINDOW_MULTIPLIER, DROP_ARCHIVE_MIN_LONG_WINDOW_MS);
+    if (!Number.isFinite(archiveWindowMs) || archiveWindowMs < 0) {
+      return fail('the drop archive retention window is not a valid duration');
+    }
+    const archiveCutoff = at.getTime() - archiveWindowMs;
 
     const keyState = messageKeyState(home);
     if (keyState.kind === 'missing') return snapshot();
@@ -1389,143 +1534,575 @@ export function* dropRetirementSteps(
       }
     }
 
-    if (candidates.length === 0) return snapshot();
-
-    candidates.sort((a, b) =>
-      a.newestMs - b.newestMs ||
-      a.session.localeCompare(b.session) ||
-      a.seat.localeCompare(b.seat) ||
-      a.id.localeCompare(b.id),
-    );
-
     const steadyLimit = input.limit ?? DROP_ARCHIVE_PASS_LIMIT;
     const backlogAbove = input.backlogAbove ?? DAEMON_BACKLOG_DEFAULTS.above;
     const backlogLimit = input.backlogLimit ?? DAEMON_BACKLOG_DEFAULTS.limit;
-    const passLimit = candidates.length > backlogAbove ? Math.max(steadyLimit, backlogLimit) : steadyLimit;
-    const selected = candidates.slice(0, passLimit);
 
-    // Phase 2: Open and hold destination archive directories (`O_RDONLY | O_DIRECTORY | O_NOFOLLOW`)
-    // and hash every source file before moving anything.
-    const openedDateDir = openSubdirChain(atFfi, sendDropsHeld, [DROP_ARCHIVE_DIR, date], true, openedFds);
-    if (!openedDateDir.ok) return fail(openedDateDir.reason);
-    archiveDateHeld = openedDateDir.dir;
-
-    const destHeldBySeat = new Map<string, HeldDir>();
-    for (const item of selected) {
-      const seatKey = `${item.session}/${item.seat}`;
-      if (destHeldBySeat.has(seatKey)) continue;
-      const absDest = join(sendDropsDir, DROP_ARCHIVE_DIR, date, item.session, item.seat);
-      if (!insideSendDrops(sendDropsDir, absDest)) {
-        return fail(`${absDest}: destination escapes send-drops`);
-      }
-      const openedDest = openSubdirChain(
-        atFfi,
-        sendDropsHeld,
-        [DROP_ARCHIVE_DIR, date, item.session, item.seat],
-        true,
-        openedFds,
+    if (candidates.length > 0) {
+      candidates.sort((a, b) =>
+        a.newestMs - b.newestMs ||
+        a.session.localeCompare(b.session) ||
+        a.seat.localeCompare(b.seat) ||
+        a.id.localeCompare(b.id),
       );
-      if (!openedDest.ok) return fail(openedDest.reason);
-      destHeldBySeat.set(seatKey, openedDest.dir);
+
+      const passLimit = candidates.length > backlogAbove ? Math.max(steadyLimit, backlogLimit) : steadyLimit;
+      const selected = candidates.slice(0, passLimit);
+
+      // Phase 2: Open and hold destination archive directories (`O_RDONLY | O_DIRECTORY | O_NOFOLLOW`)
+      // and hash every source file before moving anything.
+      const openedDateDir = openSubdirChain(atFfi, sendDropsHeld, [DROP_ARCHIVE_DIR, date], true, openedFds);
+      if (!openedDateDir.ok) return fail(openedDateDir.reason);
+      archiveDateHeld = openedDateDir.dir;
+
+      const destHeldBySeat = new Map<string, HeldDir>();
+      for (const item of selected) {
+        const seatKey = `${item.session}/${item.seat}`;
+        if (destHeldBySeat.has(seatKey)) continue;
+        const absDest = join(sendDropsDir, DROP_ARCHIVE_DIR, date, item.session, item.seat);
+        if (!insideSendDrops(sendDropsDir, absDest)) {
+          return fail(`${absDest}: destination escapes send-drops`);
+        }
+        const openedDest = openSubdirChain(
+          atFfi,
+          sendDropsHeld,
+          [DROP_ARCHIVE_DIR, date, item.session, item.seat],
+          true,
+          openedFds,
+        );
+        if (!openedDest.ok) return fail(openedDest.reason);
+        destHeldBySeat.set(seatKey, openedDest.dir);
+      }
+
+      type PreparedFamily = {
+        candidate: CandidateFamily;
+        destHeld: HeldDir;
+        hashed: { name: string; digest: string; bytes: number }[];
+      };
+      const prepared: PreparedFamily[] = [];
+
+      for (const item of selected) {
+        yield;
+        const destHeld = destHeldBySeat.get(`${item.session}/${item.seat}`)!;
+        for (const file of item.files) {
+          const destPath = join(destHeld.path, file);
+          const existing = heldAt(destPath);
+          if (existing.kind === 'link') {
+            return fail(`${destPath}: a symbolic link was found and not followed`);
+          }
+          if (existing.kind !== 'missing') {
+            return fail(`${destPath}: destination already holds ${file}`);
+          }
+        }
+        const hashed: { name: string; digest: string; bytes: number }[] = [];
+        for (const file of item.files) {
+          try {
+            const data = readRegularNoFollowInDir(atFfi, item.seatHeld, file);
+            hashed.push({
+              name: file,
+              digest: createHash('sha256').update(data).digest('hex'),
+              bytes: data.byteLength,
+            });
+          } catch (error) {
+            return fail(error instanceof Error ? error.message : String(error));
+          }
+        }
+        prepared.push({ candidate: item, destHeld, hashed });
+      }
+
+      // Phase 3: Move each family relative to the held `seatHeld.fd` and `destHeld.fd` descriptors
+      // (record and non-receipt sidecars first, receipts last). If the pass stops at a slice boundary
+      // or fails on a later family, `finalizeMoved()` in `finally` updates `.unread.json` and writes
+      // the signed manifest for every family that completed its move.
+      for (const item of prepared) {
+        yield;
+        const { candidate, destHeld, hashed } = item;
+        const movedFiles: MovedFile[] = [];
+        const movedNames: string[] = [];
+        let familyFailed: string | null = null;
+        for (const file of hashed) {
+          const source = join(candidate.seatHeld.path, file.name);
+          const dest = join(destHeld.path, file.name);
+          if (!insideSendDrops(sendDropsDir, source) || !insideSendDrops(sendDropsDir, dest)) {
+            familyFailed = 'archive move path escapes send-drops';
+            break;
+          }
+          const moveRes = moveFileBetweenHeldDirs(
+            atFfi,
+            sendDropsHeld,
+            candidate.seatHeld,
+            destHeld,
+            file.name,
+            root,
+          );
+          if (!moveRes.ok) {
+            familyFailed = moveRes.reason;
+            break;
+          }
+          movedNames.push(file.name);
+          movedFiles.push({
+            digest: file.digest,
+            bytes: file.bytes,
+            source: relative(root, source).split(sep).join('/'),
+            dest: relative(root, dest).split(sep).join('/'),
+          });
+        }
+        if (familyFailed !== null) {
+          for (let i = movedNames.length - 1; i >= 0; i -= 1) {
+            undoMovedFile(atFfi, destHeld, candidate.seatHeld, movedNames[i]!);
+          }
+          refused = familyFailed;
+          break;
+        }
+        movedRecords.push({ srcHeld: candidate.seatHeld, destHeld, files: movedNames });
+        archived.push({
+          session: candidate.session,
+          seat: candidate.seat,
+          id: candidate.id,
+          files: movedFiles,
+        });
+        let seatEntry = archivedBySeatDir.get(candidate.seatHeld.path);
+        if (seatEntry === undefined) {
+          seatEntry = { seatHeld: candidate.seatHeld, ids: new Set<string>() };
+          archivedBySeatDir.set(candidate.seatHeld.path, seatEntry);
+        }
+        seatEntry.ids.add(candidate.id);
+        snapshot();
+      }
+
+      finalizeMoved();
+      if (refused !== null) return snapshot();
     }
 
-    type PreparedFamily = {
-      candidate: CandidateFamily;
-      destHeld: HeldDir;
-      hashed: { name: string; digest: string; bytes: number }[];
-    };
-    const prepared: PreparedFamily[] = [];
+    // Phase 4 (Slice 3): Reclaim archived drop families inside `.archive/<YYYY-MM-DD>/<session>/<seat>/`
+    // once they pass the long archive window, verifying the signed manifest and every file's SHA-256
+    // digest and byte length before unlinking via held directory descriptors while keeping the signed
+    // manifest intact.
+    const archiveRootHeld = heldAt(archiveRoot);
+    if (archiveRootHeld.kind === 'missing') return snapshot();
+    if (archiveRootHeld.kind === 'link') {
+      return fail(`${archiveRoot}: a symbolic link was found and not followed`);
+    }
+    const archiveRootProblem = folderProblem(archiveRootHeld);
+    if (archiveRootProblem !== null) return fail(`${archiveRoot}: ${archiveRootProblem}`);
+    if (archiveRootHeld.kind !== 'folder') {
+      return fail(`${archiveRoot}: unexpected ${archiveRootHeld.kind}`);
+    }
 
-    for (const item of selected) {
+    const openedArchiveBase = openSubdirChain(atFfi, sendDropsHeld, [DROP_ARCHIVE_DIR], false, openedFds);
+    if (!openedArchiveBase.ok) return fail(openedArchiveBase.reason);
+    const archiveBaseHeld = openedArchiveBase.dir;
+
+    let dateEntries: string[];
+    try {
+      dateEntries = readdirSync(archiveBaseHeld.path).sort();
+    } catch (error) {
+      return fail(`${archiveBaseHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    for (const dateEntry of dateEntries) {
       yield;
-      const destHeld = destHeldBySeat.get(`${item.session}/${item.seat}`)!;
-      for (const file of item.files) {
-        const destPath = join(destHeld.path, file);
-        const existing = heldAt(destPath);
-        if (existing.kind === 'link') {
-          return fail(`${destPath}: a symbolic link was found and not followed`);
+      const dateDirPath = join(archiveBaseHeld.path, dateEntry);
+      if (!insideSendDrops(sendDropsDir, dateDirPath) || !/^\d{4}-\d{2}-\d{2}$/.test(dateEntry)) {
+        return fail(`${dateDirPath}: unexpected entry in send-drops archive`);
+      }
+      const dateDirHeldCheck = heldAt(dateDirPath);
+      if (dateDirHeldCheck.kind === 'link') {
+        return fail(`${dateDirPath}: a symbolic link was found and not followed`);
+      }
+      if (dateDirHeldCheck.kind !== 'folder') {
+        return fail(`${dateDirPath}: unexpected ${dateDirHeldCheck.kind} in send-drops archive`);
+      }
+      const dateDirProblem = folderProblemAt(dateDirPath);
+      if (dateDirProblem !== null) return fail(`${dateDirPath}: ${dateDirProblem}`);
+
+      const openedDate = openSubdirChain(
+        atFfi,
+        sendDropsHeld,
+        [DROP_ARCHIVE_DIR, dateEntry],
+        false,
+        openedFds,
+      );
+      if (!openedDate.ok) return fail(openedDate.reason);
+      const dateHeld = openedDate.dir;
+
+      let dateChildren: string[];
+      try {
+        dateChildren = readdirSync(dateHeld.path).sort();
+      } catch (error) {
+        return fail(`${dateHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const manifestNames: string[] = [];
+      const archiveSessionNames: string[] = [];
+      for (const child of dateChildren) {
+        const childPath = join(dateHeld.path, child);
+        if (!insideSendDrops(sendDropsDir, childPath)) {
+          return fail(`${childPath}: path escapes send-drops`);
         }
-        if (existing.kind !== 'missing') {
-          return fail(`${destPath}: destination already holds ${file}`);
+        if (/^manifest-[A-Za-z0-9_-]+\.json$/.test(child)) {
+          manifestNames.push(child);
+        } else if (RECORD_NAME.test(child)) {
+          archiveSessionNames.push(child);
+        } else {
+          return fail(`${childPath}: unexpected entry in archive date folder`);
         }
       }
-      const hashed: { name: string; digest: string; bytes: number }[] = [];
-      for (const file of item.files) {
+
+      const verifiedManifests: { name: string; payload: DropArchivePayload; atMs: number }[] = [];
+      const manifestedFileSet = new Set<string>();
+
+      for (const manifestName of manifestNames) {
+        yield;
+        const manifestFullPath = join(dateHeld.path, manifestName);
+        const mHeld = heldAt(manifestFullPath);
+        if (mHeld.kind === 'link') {
+          return fail(`${manifestFullPath}: a symbolic link was found and not followed`);
+        }
+        if (mHeld.kind !== 'file') {
+          return fail(`${manifestFullPath}: unexpected ${mHeld.kind} in archive date folder`);
+        }
+        if (process.getuid !== undefined && mHeld.uid !== process.getuid()) {
+          return fail(`${manifestFullPath}: another user's file`);
+        }
+        let manifestBytes: Buffer;
         try {
-          const data = readRegularNoFollowInDir(atFfi, item.seatHeld, file);
-          hashed.push({
-            name: file,
-            digest: createHash('sha256').update(data).digest('hex'),
-            bytes: data.byteLength,
-          });
+          manifestBytes = readRegularNoFollowInDir(atFfi, dateHeld, manifestName);
         } catch (error) {
           return fail(error instanceof Error ? error.message : String(error));
         }
-      }
-      prepared.push({ candidate: item, destHeld, hashed });
-    }
-
-    // Phase 3: Move each family relative to the held `seatHeld.fd` and `destHeld.fd` descriptors
-    // (record and non-receipt sidecars first, receipts last). If the pass stops at a slice boundary
-    // or fails on a later family, `finalizeMoved()` in `finally` updates `.unread.json` and writes
-    // the signed manifest for every family that completed its move.
-    for (const item of prepared) {
-      yield;
-      const { candidate, destHeld, hashed } = item;
-      const movedFiles: MovedFile[] = [];
-      const movedNames: string[] = [];
-      let familyFailed: string | null = null;
-      for (const file of hashed) {
-        const source = join(candidate.seatHeld.path, file.name);
-        const dest = join(destHeld.path, file.name);
-        if (!insideSendDrops(sendDropsDir, source) || !insideSendDrops(sendDropsDir, dest)) {
-          familyFailed = 'archive move path escapes send-drops';
-          break;
+        let parsedManifest: unknown;
+        try {
+          parsedManifest = JSON.parse(manifestBytes.toString('utf8')) as unknown;
+        } catch {
+          return fail(`${manifestFullPath}: archive manifest is not valid JSON`);
         }
-        const moveRes = moveFileBetweenHeldDirs(
-          atFfi,
-          sendDropsHeld,
-          candidate.seatHeld,
-          destHeld,
-          file.name,
-          root,
-        );
-        if (!moveRes.ok) {
-          familyFailed = moveRes.reason;
-          break;
+        const verified = verifyDropArchive(parsedManifest, key);
+        if (
+          verified === null ||
+          !sameFolder(verified.root, root) ||
+          verified.date !== dateEntry
+        ) {
+          return fail(`${manifestFullPath}: archive manifest did not verify`);
         }
-        movedNames.push(file.name);
-        movedFiles.push({
-          digest: file.digest,
-          bytes: file.bytes,
-          source: relative(root, source).split(sep).join('/'),
-          dest: relative(root, dest).split(sep).join('/'),
+        for (const family of verified.families) {
+          const expectedPrefix = `.agents/send-drops/${DROP_ARCHIVE_DIR}/${dateEntry}/${family.session}/${family.seat}/`;
+          for (const mf of family.files) {
+            if (!mf.dest.startsWith(expectedPrefix)) {
+              return fail(`${manifestFullPath}: archive manifest destination path is invalid`);
+            }
+            const fileName = mf.dest.slice(expectedPrefix.length);
+            if (!validSegment(fileName) || !isExpectedSeatDropFile(fileName)) {
+              return fail(`${manifestFullPath}: archive manifest file name is invalid`);
+            }
+            manifestedFileSet.add(`${family.session}/${family.seat}/${fileName}`);
+          }
+        }
+        verifiedManifests.push({
+          name: manifestName,
+          payload: verified,
+          atMs: Date.parse(verified.at),
         });
       }
-      if (familyFailed !== null) {
-        for (let i = movedNames.length - 1; i >= 0; i -= 1) {
-          undoMovedFile(atFfi, destHeld, candidate.seatHeld, movedNames[i]!);
+
+      const archiveSessionHelds = new Map<string, HeldDir>();
+      const archiveSeatHelds = new Map<string, HeldDir>();
+      const presentFilesBySeat = new Map<string, Set<string>>();
+
+      for (const session of archiveSessionNames) {
+        yield;
+        const sessionPath = join(dateHeld.path, session);
+        const sHeldCheck = heldAt(sessionPath);
+        if (sHeldCheck.kind === 'link') {
+          return fail(`${sessionPath}: a symbolic link was found and not followed`);
         }
-        refused = familyFailed;
-        break;
+        if (sHeldCheck.kind !== 'folder') {
+          return fail(`${sessionPath}: unexpected ${sHeldCheck.kind} in archive date folder`);
+        }
+        const sProblem = folderProblemAt(sessionPath);
+        if (sProblem !== null) return fail(`${sessionPath}: ${sProblem}`);
+
+        const openedSession = openSubdirChain(
+          atFfi,
+          sendDropsHeld,
+          [DROP_ARCHIVE_DIR, dateEntry, session],
+          false,
+          openedFds,
+        );
+        if (!openedSession.ok) return fail(openedSession.reason);
+        const sessionHeld = openedSession.dir;
+        archiveSessionHelds.set(session, sessionHeld);
+
+        let seatNames: string[];
+        try {
+          seatNames = readdirSync(sessionHeld.path).sort();
+        } catch (error) {
+          return fail(`${sessionHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        for (const seat of seatNames) {
+          yield;
+          const seatPath = join(sessionHeld.path, seat);
+          if (!insideSendDrops(sendDropsDir, seatPath) || !RECORD_NAME.test(seat)) {
+            return fail(`${seatPath}: unexpected entry in archive session folder`);
+          }
+          const seatCheck = heldAt(seatPath);
+          if (seatCheck.kind === 'link') {
+            return fail(`${seatPath}: a symbolic link was found and not followed`);
+          }
+          if (seatCheck.kind !== 'folder') {
+            return fail(`${seatPath}: unexpected ${seatCheck.kind} in archive session folder`);
+          }
+          const seatProb = folderProblemAt(seatPath);
+          if (seatProb !== null) return fail(`${seatPath}: ${seatProb}`);
+
+          const openedSeat = openSubdirChain(
+            atFfi,
+            sendDropsHeld,
+            [DROP_ARCHIVE_DIR, dateEntry, session, seat],
+            false,
+            openedFds,
+          );
+          if (!openedSeat.ok) return fail(openedSeat.reason);
+          const seatHeld = openedSeat.dir;
+          const seatKey = `${session}/${seat}`;
+          archiveSeatHelds.set(seatKey, seatHeld);
+
+          let archivedFiles: string[];
+          try {
+            archivedFiles = readdirSync(seatHeld.path).sort();
+          } catch (error) {
+            return fail(`${seatHeld.path}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+
+          const presentSet = new Set<string>();
+          for (const fileName of archivedFiles) {
+            yield;
+            const filePath = join(seatHeld.path, fileName);
+            if (!insideSendDrops(sendDropsDir, filePath)) {
+              return fail(`${filePath}: path escapes send-drops`);
+            }
+            const fHeld = heldAt(filePath);
+            if (fHeld.kind === 'link') {
+              return fail(`${filePath}: a symbolic link was found and not followed`);
+            }
+            if (fHeld.kind !== 'file') {
+              return fail(`${filePath}: unexpected ${fHeld.kind} in archive seat folder`);
+            }
+            if (process.getuid !== undefined && fHeld.uid !== process.getuid()) {
+              return fail(`${filePath}: another user's file`);
+            }
+            if (!isExpectedSeatDropFile(fileName)) {
+              return fail(`${filePath}: unexpected file in archive seat folder`);
+            }
+            if (!manifestedFileSet.has(`${session}/${seat}/${fileName}`)) {
+              return fail(`${filePath}: archived file is not listed in a verified archive manifest`);
+            }
+            presentSet.add(fileName);
+          }
+          presentFilesBySeat.set(seatKey, presentSet);
+        }
       }
-      movedRecords.push({ srcHeld: candidate.seatHeld, destHeld, files: movedNames });
-      archived.push({
-        session: candidate.session,
-        seat: candidate.seat,
-        id: candidate.id,
-        files: movedFiles,
-      });
-      let seatEntry = archivedBySeatDir.get(candidate.seatHeld.path);
-      if (seatEntry === undefined) {
-        seatEntry = { seatHeld: candidate.seatHeld, ids: new Set<string>() };
-        archivedBySeatDir.set(candidate.seatHeld.path, seatEntry);
+
+      for (const manifest of verifiedManifests) {
+        if (manifest.atMs > archiveCutoff) continue;
+        for (const family of manifest.payload.families) {
+          yield;
+          const seatKey = `${family.session}/${family.seat}`;
+          const presentSet = presentFilesBySeat.get(seatKey);
+          if (presentSet === undefined || presentSet.size === 0) continue;
+
+          const expectedPrefix = `.agents/send-drops/${DROP_ARCHIVE_DIR}/${dateEntry}/${family.session}/${family.seat}/`;
+          const familyEntries = family.files.map((mf) => ({
+            name: mf.dest.slice(expectedPrefix.length),
+            mf,
+          }));
+          const presentCount = familyEntries.filter((e) => presentSet.has(e.name)).length;
+          if (presentCount === 0) continue;
+
+          const seatHeld = archiveSeatHelds.get(seatKey);
+          if (presentCount !== familyEntries.length || seatHeld === undefined) {
+            return fail(
+              `${join(dateHeld.path, family.session, family.seat, family.id)}: archived family is incomplete against its signed manifest`,
+            );
+          }
+
+          const verifiedBytes = new Map<string, Buffer>();
+          for (const entry of familyEntries) {
+            const validFamilySidecar =
+              entry.name === family.id ||
+              (entry.name.startsWith(`${family.id}.`) &&
+                (PRE_RECEIPT_SUFFIXES.includes(entry.name.slice(family.id.length)) ||
+                  RECEIPT_SUFFIXES.includes(entry.name.slice(family.id.length))));
+            if (!validFamilySidecar) {
+              return fail(
+                `${join(seatHeld.path, entry.name)}: unexpected file name in archived family ${family.id}`,
+              );
+            }
+            let data: Buffer;
+            try {
+              data = readRegularNoFollowInDir(atFfi, seatHeld, entry.name);
+            } catch (error) {
+              return fail(error instanceof Error ? error.message : String(error));
+            }
+            const digest = createHash('sha256').update(data).digest('hex');
+            if (data.byteLength !== entry.mf.bytes || digest !== entry.mf.digest) {
+              return fail(
+                `${join(seatHeld.path, entry.name)}: archived file digest or size does not match the signed manifest`,
+              );
+            }
+            verifiedBytes.set(entry.name, data);
+          }
+
+          // Every signed file in the family (record, read/replied/held/delivered receipts, and
+          // thread-close) must verify, at least one of read or replied must be present, and every
+          // verified timestamp in the family must precede `archiveCutoff` or the family is kept whole.
+          const recBytes = verifiedBytes.get(family.id);
+          if (recBytes === undefined) {
+            return fail(
+              `${join(seatHeld.path, family.id)}: archived family is missing its message record in the signed manifest`,
+            );
+          }
+          let parsedRecord: unknown;
+          try {
+            parsedRecord = JSON.parse(recBytes.toString('utf8')) as unknown;
+          } catch {
+            return fail(`${join(seatHeld.path, family.id)}: archived record is not valid JSON`);
+          }
+          const recAuth = recordAuthOf(parsedRecord, key);
+          if (
+            recAuth.kind !== 'ok' ||
+            recAuth.value.payload.id !== family.id ||
+            recAuth.value.payload.to !== family.seat ||
+            recAuth.value.payload.session !== family.session ||
+            !sameFolder(recAuth.value.payload.root, root)
+          ) {
+            return fail(`${join(seatHeld.path, family.id)}: archived record did not verify`);
+          }
+          const recAtMs = Date.parse(recAuth.value.payload.at);
+          if (!Number.isFinite(recAtMs)) {
+            return fail(`${join(seatHeld.path, family.id)}: archived record timestamp is not valid`);
+          }
+          let newestFamilyMs = recAtMs;
+
+          const context = { to: family.seat, root, session: family.session };
+          let hasTerminalReceipt = false;
+          for (const status of ['read', 'replied', 'held', 'delivered'] as const) {
+            const receiptFileName = `${family.id}.${status}.json`;
+            if (!verifiedBytes.has(receiptFileName)) continue;
+            const receiptMs = verifiedReceiptAtMs(atFfi, seatHeld, family.id, status, context, key);
+            if (receiptMs === null) {
+              return fail(
+                `${join(seatHeld.path, receiptFileName)}: archived receipt did not verify`,
+              );
+            }
+            if (status === 'read' || status === 'replied') {
+              hasTerminalReceipt = true;
+            }
+            if (receiptMs > newestFamilyMs) newestFamilyMs = receiptMs;
+          }
+          if (!hasTerminalReceipt) {
+            return fail(
+              `${join(seatHeld.path, family.id)}: archived family has no verified read or replied receipt`,
+            );
+          }
+          const closeFileName = `${family.id}.closed.json`;
+          if (verifiedBytes.has(closeFileName)) {
+            const closeMs = verifiedCloseAtMs(atFfi, seatHeld, family.id, context, key);
+            if (closeMs === null) {
+              return fail(
+                `${join(seatHeld.path, closeFileName)}: archived close record did not verify`,
+              );
+            }
+            if (closeMs > newestFamilyMs) newestFamilyMs = closeMs;
+          }
+
+          if (newestFamilyMs > archiveCutoff) {
+            continue;
+          }
+
+          // Unlink in crash-safe order: record and non-receipt sidecars first, terminal receipts last.
+          // Each file name is recorded before its unlink so a swap detected after `unlinkat` removes
+          // the entry still restores that file from `verifiedBytes`; any restore error stops the pass
+          // and is reported in `refused`.
+          const orderedNames = [
+            ...familyEntries
+              .map((e) => e.name)
+              .filter((n) => !RECEIPT_SUFFIXES.some((s) => n === `${family.id}${s}`)),
+            ...familyEntries
+              .map((e) => e.name)
+              .filter((n) => RECEIPT_SUFFIXES.some((s) => n === `${family.id}${s}`)),
+          ];
+
+          const unlinkedNames: string[] = [];
+          let unlinkFailed: string | null = null;
+          for (const fileName of orderedNames) {
+            unlinkedNames.push(fileName);
+            const unlinkRes = unlinkFileInHeldDir(atFfi, sendDropsHeld, seatHeld, fileName, root);
+            if (!unlinkRes.ok) {
+              unlinkFailed = unlinkRes.reason;
+              break;
+            }
+          }
+          if (unlinkFailed !== null) {
+            const restoreErrors: string[] = [];
+            for (let i = unlinkedNames.length - 1; i >= 0; i -= 1) {
+              const name = unlinkedNames[i]!;
+              const data = verifiedBytes.get(name);
+              if (data === undefined) {
+                restoreErrors.push(`cannot restore ${name}: missing verified bytes`);
+                continue;
+              }
+              const restored = restoreUnlinkedInHeldDir(atFfi, seatHeld, name, data);
+              if (!restored.ok) {
+                restoreErrors.push(restored.reason);
+              }
+            }
+            const reason =
+              restoreErrors.length > 0
+                ? `${unlinkFailed} (restore failed: ${restoreErrors.join('; ')})`
+                : unlinkFailed;
+            return fail(reason);
+          }
+
+          for (const fileName of orderedNames) {
+            presentSet.delete(fileName);
+          }
+          reclaimed.push(family);
+          snapshot();
+        }
       }
-      seatEntry.ids.add(candidate.id);
-      snapshot();
+
+      if (atFfi.rmdirat !== undefined) {
+        for (const [seatKey, presentSet] of presentFilesBySeat.entries()) {
+          if (presentSet.size > 0) continue;
+          const [session, seat] = seatKey.split('/') as [string, string];
+          const sessionHeld = archiveSessionHelds.get(session);
+          const seatHeld = archiveSeatHelds.get(seatKey);
+          if (
+            sessionHeld !== undefined &&
+            seatHeld !== undefined &&
+            verifyHeldDirChain(atFfi, sendDropsHeld, sessionHeld) === null &&
+            heldAt(seatHeld.path).kind === 'folder'
+          ) {
+            atFfi.rmdirat(sessionHeld.fd, seat);
+          }
+        }
+        for (const [session, sessionHeld] of archiveSessionHelds.entries()) {
+          if (
+            verifyHeldDirChain(atFfi, sendDropsHeld, dateHeld) === null &&
+            heldAt(sessionHeld.path).kind === 'folder'
+          ) {
+            try {
+              if (readdirSync(sessionHeld.path).length === 0) {
+                atFfi.rmdirat(dateHeld.fd, session);
+              }
+            } catch {}
+          }
+        }
+      }
     }
 
-    finalizeMoved();
     return snapshot();
   } finally {
     finalizeMoved();
@@ -1550,6 +2127,7 @@ export async function retireDropsSliced(
     report: {
       at: input.at.toISOString(),
       archived: [],
+      reclaimed: [],
       manifestPath: null,
       scanned: 0,
       stayed: 0,

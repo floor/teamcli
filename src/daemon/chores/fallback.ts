@@ -54,6 +54,10 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
   if (drops !== null) {
     if (drops.refused !== null) {
       notes.push(`drop store: refused (${drops.refused})`);
+    } else if (drops.reclaimed.length > 0) {
+      notes.push(
+        `drop store: archived ${String(drops.archived.length)}, reclaimed ${String(drops.reclaimed.length)}`,
+      );
     } else if (drops.archived.length > 0) {
       notes.push(`drop store: archived ${String(drops.archived.length)}`);
     }
