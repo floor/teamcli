@@ -1007,5 +1007,19 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
       }
       return { ok: true, unitPath: path, undo };
     },
+    retireUnit(home, label) {
+      const path = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
+      run('launchctl', ['bootout', `${domain}/${label}`]);
+      try {
+        if (existsSync(path)) unlinkSync(path);
+      } catch (error) {
+        return {
+          ok: false as const,
+          why: error instanceof Error ? error.message : 'the shuttle unit could not be removed',
+        };
+      }
+      if (existsSync(path)) return { ok: false as const, why: 'the shuttle unit is still on disk' };
+      return { ok: true as const };
+    },
   };
 }

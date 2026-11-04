@@ -2987,12 +2987,24 @@ async function postArrivalNow(
  * The event is a record, never a delivery fact: an append that cannot be written is logged and
  * changes nothing about the send.
  */
-async function stageSendRecord(dropDir: string, payload: RecordPayload, home: string, now: () => Date, project: string): Promise<RecordWritten> {
+async function stageSendRecord(
+  dropDir: string,
+  payload: RecordPayload,
+  home: string,
+  now: () => Date,
+  project: string,
+  alreadySigned?: SignedRecord,
+): Promise<RecordWritten> {
   let signed: SignedRecord;
-  try {
-    signed = signRecord(payload, home);
-  } catch {
-    return { ok: false, reason: 'the record could not be signed' };
+  if (alreadySigned !== undefined) {
+    // The asking principal's own process signed this. The checkout message key is not used.
+    signed = alreadySigned;
+  } else {
+    try {
+      signed = signRecord(payload, home);
+    } catch {
+      return { ok: false, reason: 'the record could not be signed' };
+    }
   }
   const record = `${JSON.stringify(signed, null, 2)}\n`;
   const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
@@ -3023,6 +3035,18 @@ async function stageSendRecord(dropDir: string, payload: RecordPayload, home: st
   // hint that cannot be written never changes what this send did.
   noteUnread(dropDir, payload.from, payload.id, payload.at);
   return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
+}
+
+/** Stages a record the asking principal already signed, through the same durable copy the
+ *  command's send uses. It does not call the checkout message key. */
+export async function stageSignedDrop(
+  dropDir: string,
+  signed: SignedRecord,
+  home: string,
+  now: () => Date,
+  project: string,
+): Promise<RecordWritten> {
+  return stageSendRecord(dropDir, signed.payload, home, now, project, signed);
 }
 
 /**

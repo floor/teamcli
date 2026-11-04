@@ -653,6 +653,7 @@ describe('the dry run shows the steps a refresh takes', () => {
       'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
       'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
       'if it still cannot start, the previous unit is put back and its daemon started again',
+      'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
     ]);
   });
 });

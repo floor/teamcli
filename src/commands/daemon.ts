@@ -27,6 +27,8 @@ import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
+import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
+import { mailboxHeartbeatFresh, retireShuttles } from '../daemon/mailbox/retire.ts';
 import { readChoresInherit } from '../daemon/chores/token.ts';
 import {
   FAULT_POLL_MS,
@@ -120,6 +122,10 @@ export type DaemonCommandSources = {
   faultPollMs?: number;
   /** Injected for tests: the wait between result reads, so a scene never sleeps for real. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injected for tests: the mailbox router child. The real start uses the router entry. */
+  mailboxFactory?: Parameters<typeof startMachineDaemon>[0]['mailboxFactory'];
+  /** Injected for tests: retires one shuttle unit. The real install uses the service manager. */
+  retireShuttle?: (label: string) => { ok: true } | { ok: false; why: string };
 };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
@@ -694,6 +700,7 @@ const INSTALL_STEPS: readonly string[] = [
   'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
   'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
   'if it still cannot start, the previous unit is put back and its daemon started again',
+  'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
 ];
 
 /**
@@ -739,6 +746,17 @@ type DaemonAnswer = { answered: true } | { answered: false; starting: boolean };
  * job it started is the evidence that the start is still in progress. An unreadable record
  * answers "not alive": the install then rolls back, which is the safe answer.
  */
+function retireShuttleUnit(
+  manager: ServiceManager,
+  home: string,
+  label: string,
+): { ok: true } | { ok: false; why: string } {
+  if (manager.retireUnit === undefined) {
+    return { ok: false, why: 'this service manager does not retire a shuttle unit' };
+  }
+  return manager.retireUnit(home, label);
+}
+
 function managerProcessAlive(manager: ServiceManager, home: string): boolean {
   try {
     const job = manager.job(home);
@@ -1076,6 +1094,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // hosted root on its own event loop and built no fleet, while the policy page already
       // promised the per-root default.
       choresHosting: true,
+      // One mailbox router for every root. The beat nudges it; the start does not wait on it.
+      mailboxHosting: true,
+      mailboxFactory: sources.mailboxFactory ?? spawnMailboxChild,
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);
@@ -1278,6 +1299,18 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     entry: fullProgram.entry,
     root: fullProgram.runtime?.root ?? dirname(fullProgram.entry),
   });
+  // The shuttle units come out only after the router has answered. A daemon that has not
+  // reported that heartbeat keeps them, and a unit that stays is named. The child is left up.
+  if (mailboxHeartbeatFresh(home)) {
+    const retired = retireShuttles({
+      heartbeatFresh: true,
+      retire: (label) => sources.retireShuttle?.(label) ?? retireShuttleUnit(manager, home, label),
+    });
+    for (const one of retired.failed) {
+      appendDaemonLog(home, `install: ${one.label} was not retired: ${one.why}`, sources.now?.() ?? new Date());
+      io.stderr(`team daemon: ${one.label} was not retired: ${one.why}\n`);
+    }
+  }
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,
