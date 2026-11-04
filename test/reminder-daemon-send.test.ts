@@ -22,7 +22,7 @@ import { dropDir, fake, NOW, owner, scripted, world, type World } from './send-n
 const AT = new Date('2026-11-02T18:00:00.000Z');
 const BODY = 'Please update the Linear activity before the next cycle.';
 const SESSION = 'acme';
-const PANE = 'w1:p1';
+const PANE = 'fixture-pane-1';
 const daemonCaller: Caller = { kind: 'daemon' };
 
 const homes: string[] = [];
