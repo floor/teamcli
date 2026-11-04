@@ -620,6 +620,7 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
       teamFile: entry.team,
       ...(entry.watch === undefined ? {} : { watch: entry.watch }),
     })),
+    ...(group.routes.length > 0 ? { seatHealth: true } : {}),
     // Only the machine group carries the machine chores; a route's child never does, because
     // its policy word is about that route's work and these subjects span roots.
     ...(group.mode === 'machine' && input.machine !== undefined

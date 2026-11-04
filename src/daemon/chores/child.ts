@@ -23,6 +23,8 @@ import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
 import type { WatchSources } from '../../commands/watch.ts';
+import { runWatchdogSlice, watchdogState, type WatchdogSeat, type WatchdogState } from '../../seat-health/pass.ts';
+import type { RestartReady } from '../../seat-health/restart.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -73,6 +75,9 @@ export type ServeChoresChildInput = {
   watchFactory?: (input: ChoresWatchInput) => ChoresWatch;
   /** Test seam: the read sources the injected or real watches run over. */
   watchBase?: WatchSources;
+  /** The seat-health watchdog. A test injects one. When the token asks for it and nothing is
+   *  injected, the child builds the real one after its first heartbeat. */
+  watchdog?: SeatHealthPorts;
   /** The marker cache whose counts ride the heartbeat. The default is this process's own, which
    *  is the cache the fallback sweep fills; a test injects a quiet reading so its scene never
    *  depends on another test's files. */
@@ -82,6 +87,14 @@ export type ServeChoresChildInput = {
    *  child that does not leave within its kill grace. The program entry sets this; a test does
    *  not, because a test process must not install handlers it cannot take back. */
   signals?: boolean;
+};
+
+/** One root's watchdog: the seats it sees, the restart it starts, and the lead message it sends.
+ *  The restart's promise is not awaited by the slice. */
+export type SeatHealthPorts = {
+  seats(route: ChoresChildRoute): Promise<readonly WatchdogSeat[]>;
+  restart(route: ChoresChildRoute, seat: string, args: readonly string[]): Promise<RestartReady | { kind: 'failed' }>;
+  lead(route: ChoresChildRoute, text: string): void;
 };
 
 /** The chore the child's pass runs. The one implementation is the fallback sweep (`fallback.ts`);
@@ -415,6 +428,43 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
     });
   }
 
+  const healthStates = new Map<string, WatchdogState>();
+  const healthRuns = new Set<string>();
+  let health = input.watchdog ?? null;
+  if (health === null && config.seatHealth === true) {
+    try {
+      const live = await import('../../seat-health/live.ts');
+      health = live.liveSeatHealth(config);
+    } catch (error) {
+      write({ type: 'note', text: `seat health could not start: ${error instanceof Error ? error.message : 'the reader failed'}` });
+    }
+  }
+  const runHealth = (route: ChoresChildRoute): void => {
+    if (health === null || stopping || healthRuns.has(route.root)) return;
+    const ports = health;
+    healthRuns.add(route.root);
+    void (async (): Promise<void> => {
+      try {
+        const seats = await ports.seats(route);
+        let state = healthStates.get(route.root);
+        if (state === undefined) {
+          state = watchdogState();
+          healthStates.set(route.root, state);
+        }
+        await runWatchdogSlice(state, {
+          seats,
+          now: now().getTime(),
+          restart: (seat, args) => ports.restart(route, seat, args),
+          lead: (text) => ports.lead(route, text),
+        });
+      } catch (error) {
+        write({ type: 'note', text: `seat health: ${error instanceof Error ? error.message : 'the slice failed'}` });
+      } finally {
+        healthRuns.delete(route.root);
+      }
+    })();
+  };
+
   let buffer = '';
   let overflow = false;
   stdin.setEncoding('utf8');
@@ -444,7 +494,11 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
         enqueue();
         // The machine chores ride the same nudge: through a whole daemon stall the child was
         // never asked, and the tick after it is where the reminder notices what is still due.
-        if (!stopping) reminderBeat?.();
+        // The seat-health slice starts here and returns while a restart is still running.
+        if (!stopping) {
+          reminderBeat?.();
+          for (const route of config.routes) runHealth(route);
+        }
       } else if (message.type === 'presence') {
         runPresence(message);
       } else if (message.type === 'watch-beat') {
