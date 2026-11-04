@@ -10,7 +10,7 @@ import {
   checkedMailboxRelative,
   verifiedArrival,
 } from '../src/bus/arrival.ts';
-import { readSealedRelative } from '../src/bus/relative-read.ts';
+import { nodeFolderChain, readSealedRelative, readThrough } from '../src/bus/relative-read.ts';
 import { signRecord, type ReceiptPayload, type RecordPayload } from '../src/send/record.ts';
 import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 
@@ -175,4 +175,54 @@ test('refuses path traversal segments, symlinked leaf records, non-directory int
     key,
   );
   expect(linkedReceipt).toEqual({ ok: false, reason: 'a symbolic link was found and not followed' });
+});
+
+test('the node prefix walk, what the built CLI runs, holds the same contract as the dirfd chain', () => {
+  const { base, root, home } = world();
+  const folders = ['.agents', 'send-drops', 'acme', 'iris'] as const;
+  const chain = nodeFolderChain(root);
+
+  // A record is read through the prefix chain.
+  const id = 'node-1';
+  writeFileSync(
+    join(root, '.agents', 'send-drops', 'acme', 'iris', id),
+    JSON.stringify(signRecord(payload(root, id, 'lead'), home)),
+  );
+  const good = readThrough(chain, root, folders, id);
+  expect(good.ok).toBe(true);
+  if (good.ok) expect(good.sealed?.payload.body).toBe('fixture');
+
+  // A missing leaf, and a missing folder anywhere in the chain, are a missing record.
+  expect(readThrough(chain, root, folders, 'no-such-id')).toEqual({ ok: true, sealed: null });
+  expect(readThrough(chain, root, ['.agents', 'send-drops', 'gone', 'iris'], id)).toEqual({ ok: true, sealed: null });
+
+  // A linked folder in the chain is not followed.
+  const elsewhere = join(base, 'node-elsewhere');
+  mkdirSync(elsewhere);
+  rmSync(join(root, '.agents', 'send-drops', 'acme'), { recursive: true });
+  symlinkSync(elsewhere, join(root, '.agents', 'send-drops', 'acme'));
+  const linkedFolder = readThrough(chain, root, folders, id);
+  expect(linkedFolder.ok).toBe(false);
+  if (!linkedFolder.ok) expect(linkedFolder.reason).toBe('a symbolic link was found and not followed');
+  rmSync(join(root, '.agents', 'send-drops', 'acme'));
+  mkdirSync(join(root, '.agents', 'send-drops', 'acme', 'iris'), { recursive: true });
+  writeFileSync(
+    join(root, '.agents', 'send-drops', 'acme', 'iris', id),
+    JSON.stringify(signRecord(payload(root, id, 'lead'), home)),
+  );
+
+  // A symlinked leaf is refused.
+  const targetFile = join(base, 'node-target.json');
+  writeFileSync(targetFile, JSON.stringify(signRecord(payload(root, 'node-link', 'other'), home)));
+  symlinkSync(targetFile, join(root, '.agents', 'send-drops', 'acme', 'iris', 'node-link'));
+  const linkedLeaf = readThrough(chain, root, folders, 'node-link');
+  expect(linkedLeaf.ok).toBe(false);
+  if (!linkedLeaf.ok) expect(linkedLeaf.reason).toBe('a symbolic link was found and not followed');
+
+  // A directory at the leaf is not a regular file; a bad segment is refused before any open.
+  mkdirSync(join(root, '.agents', 'send-drops', 'acme', 'iris', 'node-dir'));
+  const dirLeaf = readThrough(chain, root, folders, 'node-dir');
+  expect(dirLeaf).toEqual({ ok: false, reason: 'the record is not a regular file' });
+  expect(readThrough(chain, root, folders, '..')).toEqual({ ok: false, reason: 'the record could not be read' });
+  expect(readThrough(chain, root, folders, 'a/b')).toEqual({ ok: false, reason: 'the record could not be read' });
 });
