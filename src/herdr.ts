@@ -1,10 +1,11 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
 import { resolveForgeShim } from './settings/forge-shim.ts';
+import { assertNoLink, tomlString, writePrivate } from './launch/private-file.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -366,12 +367,24 @@ export function sessionRunning(name: string): boolean | null {
   return state === null ? null : state === 'running';
 }
 
+// The process call behind the metadata calls, injectable for tests (the paneExec shape): it
+// returns the call's stdout and throws when herdr exits non-zero or the call times out.
+export type CaptureExec = (args: string[]) => string;
+const shellCaptureExec: CaptureExec = (args) =>
+  execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+let captureExec: CaptureExec = shellCaptureExec;
+
+/** Swaps the process call the metadata calls make; null restores the real one. */
+export function setCaptureExec(exec: CaptureExec | null): void {
+  captureExec = exec ?? shellCaptureExec;
+}
+
 // What a herdr command printed, or null when it did not run. Exit status is not the answer: a
 // command aimed at a session that does not exist can print an error and exit 0.
 function capture(args: string[], session?: string): string | null {
   const full = [...(session ? ['--session', session] : []), ...args];
   try {
-    return execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+    return captureExec(full);
   } catch {
     return null;
   }
@@ -642,14 +655,402 @@ export const DISPLAY_AGENT_SOURCE = 'team';
 // Sets the pane's display_agent (sidebar line 2). Herdr 0.7.1, scratch session title-help-b1:
 // `pane report-metadata --help` exits 2 with `missing required --source`. The flags used here
 // are the ones `herdr pane --help` names for this call: `--source` and `--display-agent`.
-export function reportDisplayAgent(pane: string, text: string, session?: string): boolean {
-  const out = capture(
-    ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text],
-    session,
-  );
+// Herdr 0.9.5 added `--ttl-ms`: a display line reported once lapses when its TTL does, so
+// callers pass one (capped below) and the chores pass re-reports before it runs out.
+export const SIDEBAR_TTL_CAP_MS = 86_400_000;
+
+// A TTL above the cap is not sent: herdr answers `invalid_metadata_ttl` one above it (probed
+// 2026-11-04, scratch session). The policy layer clamps before this, and the adapter still
+// refuses what the host would refuse.
+export function reportDisplayAgent(pane: string, text: string, session?: string, ttlMs?: number): boolean {
+  if (ttlMs !== undefined && (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS)) {
+    return false;
+  }
+  const args = ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text];
+  if (ttlMs !== undefined) args.push('--ttl-ms', String(ttlMs));
+  const out = capture(args, session);
   if (out === null) return false;
   const body = parsed(out);
   return body === null || !isHerdrError(body);
+}
+
+// ── The sidebar layout keys team owns in the host's config ──────────────────────────────────
+//
+// Two keys, one edit: the sidebar table `ui.sidebar.agents.rows` — a block team owns whole once
+// marked — and the `[ui]` key `status_indicators`, owned at the assignment line because `[ui]`
+// is a table the owner fills with other keys. Ownership is marked by the same trailing comment
+// in both places. Everything else in the owner's file is preserved byte-for-byte, and the write
+// is validated through the host and rolled back from bytes held in memory before the rename.
+
+/** The closed token vocabulary the sidebar layout accepts (probed 2026-11-04, herdr 0.9.5). */
+export const SIDEBAR_TOKENS = ['state_icon', 'machine', 'workspace', 'tab', 'state_text', 'agent'] as const;
+
+/** Today's layout: the release default for `workspace.sidebar.rows`. */
+export const DEFAULT_SIDEBAR_ROWS: readonly (readonly string[])[] = [
+  ['state_icon', 'machine', 'workspace', 'tab'],
+  ['state_text', 'agent'],
+];
+
+/** The status-indicator vocabulary the host enforces: `config check` on any other word answers
+ *  `unknown variant ... expected 'dots' or 'symbols'` (probed 2026-11-04, scratch HOME). */
+export const STATUS_INDICATOR_VALUES = ['dots', 'symbols'] as const;
+
+/** The trailing comment that marks what team owns: the sidebar table's header, and the
+ *  `status_indicators` assignment line inside `[ui]`. */
+export const SIDEBAR_BLOCK_MARKER = '# managed by team';
+
+const SIDEBAR_TABLE = 'ui.sidebar.agents';
+const UI_TABLE = 'ui';
+
+/** The config file (poison-file-probed 2026-11-04): XDG — `$XDG_CONFIG_HOME/herdr/config.toml`,
+ *  else `~/.config/herdr/config.toml`. */
+export function hostConfigPath(home: string = homedir()): string {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && isAbsolute(xdg) ? xdg : join(home, '.config');
+  return join(base, 'herdr', 'config.toml');
+}
+
+// A table header line: `[name]` with, at most, a trailing comment. A value line can also start
+// with `[` — a multiline array's continuation — but carries quotes, commas or spaces inside the
+// brackets, which a plain table name never does. A commented line never matches: it starts with
+// `#`, not `[`. (A table name with quoted segments would read as content, not a header; the
+// host's own check then refuses the result and the write rolls back.)
+type HeaderLine = { name: string; comment: string | null };
+
+function headerOf(line: string): HeaderLine | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('[')) return null;
+  const close = trimmed.indexOf(']');
+  if (close < 0) return null;
+  const name = trimmed.slice(1, close);
+  if (name.length === 0 || /[\[\]"',\s]/.test(name)) return null;
+  const rest = trimmed.slice(close + 1).trim();
+  if (rest !== '' && !rest.startsWith('#')) return null;
+  return { name, comment: rest === '' ? null : rest };
+}
+
+// An uncommented `key =` line between from (inclusive) and until (exclusive), by the anchored
+// pattern the pretrust splice already uses: `# key = ...` trims to a `#` and cannot match.
+function assignmentAt(lines: string[], from: number, until: number, key: string): number {
+  const pattern = new RegExp(`^${key}\\s*=`);
+  for (let index = from; index < until; index++) {
+    if (pattern.test((lines[index] ?? '').trim())) return index;
+  }
+  return -1;
+}
+
+// An uncommented dotted `a.b = ` line anywhere in the file: the same key written without its
+// table. Splicing a table in beside it would define the key twice, so it is refused.
+function dottedKeyAt(lines: string[], key: string): number {
+  const pattern = new RegExp(`^${key.replace(/\./g, '\\.')}\\s*=`);
+  for (let index = 0; index < lines.length; index++) {
+    if (pattern.test((lines[index] ?? '').trim())) return index;
+  }
+  return -1;
+}
+
+// The table's span: from its header to the next header line, ending at the last non-blank line
+// before it — trailing blank lines belong to the file, not the table.
+function tableSpan(lines: string[], headerAt: number): { start: number; end: number } {
+  let next = lines.length;
+  for (let index = headerAt + 1; index < lines.length; index++) {
+    if (headerOf(lines[index] ?? '') !== null) {
+      next = index;
+      break;
+    }
+  }
+  let end = headerAt;
+  while (end + 1 < next && (lines[end + 1] ?? '').trim() !== '') end++;
+  return { start: headerAt, end };
+}
+
+// Where an assignment's value ends: balanced brackets from the `=`, within the table's span.
+// Null when the brackets never close or the value opens an inline table: that value is not ours
+// to bound, and the write refuses it for the owner to edit by hand. (Bracket characters inside
+// quoted strings would miscount; the host's own check refuses a misdelimited result and the
+// write rolls back, so the worst case is a refused edit, never a silent corruption.)
+function valueSpan(lines: string[], at: number, until: number): { start: number; end: number } | null {
+  const first = (lines[at] ?? '').trim();
+  const remainder = first.slice(first.indexOf('=') + 1).trim();
+  if (remainder.startsWith('{')) return null;
+  if (!remainder.startsWith('[')) return { start: at, end: at };
+  let depth = 0;
+  for (let index = at; index < until; index++) {
+    const line = index === at ? remainder : (lines[index] ?? '').trim();
+    for (const ch of line) {
+      if (ch === '[') depth++;
+      else if (ch === ']') depth--;
+    }
+    if (depth <= 0) return { start: at, end: index };
+  }
+  return null;
+}
+
+// Appends a table at end-of-file. A file that ends mid-line gets one blank line before the
+// table; a file that already ends with a newline reuses that trailing element as the
+// separation; and a file with blank lines of its own at the end keeps them as they stand.
+// (A text ending `x\n` splits with one trailing `''` that already reads as the blank line —
+// pushing another would double it.)
+function appendLines(lines: string[], added: readonly string[]): void {
+  if (lines.length === 0) {
+    lines.push(...added, '');
+    return;
+  }
+  let blanks = 0;
+  while (blanks < lines.length && lines[lines.length - 1 - blanks] === '') blanks++;
+  if (blanks === lines.length) {
+    lines.length = 0;
+    lines.push(...added, '');
+    return;
+  }
+  if (blanks === 0) lines.push('', ...added, '');
+  else lines.push(...added, '');
+}
+
+/** The pure splice: the marked sidebar table and the marked `[ui]` key, one pass. A table or
+ *  key whose marker is present is replaced whole; one without it is adopted — the value is
+ *  spliced in place and the marker is added — never clobbered. Anchors match uncommented lines
+ *  only, and everything outside the spliced span is preserved byte-for-byte; a splice that
+ *  changes nothing reads back equal (`changed: false`). */
+export type SidebarSplice =
+  | { ok: true; text: string; changed: boolean }
+  | { ok: false; reason: string };
+
+export function spliceSidebarRows(
+  text: string,
+  rows: readonly (readonly string[])[],
+  indicators: string,
+): SidebarSplice {
+  const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
+  const markedTable = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, `rows = ${rowsValue}`];
+  const uiLine = `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`;
+  const lines = text === '' ? [] : text.split('\n');
+
+  // The anchors are located before anything moves, and both dotted refusals are settled before
+  // a single line is appended: a splice that refuses never rewrote the text it was handed.
+  const tableAt = lines.findIndex((line) => headerOf(line)?.name === SIDEBAR_TABLE);
+  const uiAt = lines.findIndex((line) => headerOf(line)?.name === UI_TABLE);
+  if (tableAt < 0) {
+    const dotted = dottedKeyAt(lines, 'ui.sidebar.agents.rows');
+    if (dotted >= 0) {
+      return { ok: false, reason: `the sidebar rows key is set as a dotted key at line ${String(dotted + 1)}; edit it by hand` };
+    }
+  }
+  if (uiAt < 0) {
+    const dotted = dottedKeyAt(lines, 'ui.status_indicators');
+    if (dotted >= 0) {
+      return { ok: false, reason: `the status indicators key is set as a dotted key at line ${String(dotted + 1)}; edit it by hand` };
+    }
+  }
+
+  if (tableAt < 0 && uiAt < 0) {
+    // Both keys are appended in one pass, one blank line between the two tables.
+    appendLines(lines, [...markedTable, '', `[${UI_TABLE}]`, uiLine]);
+  } else {
+    // The sidebar table.
+    if (tableAt < 0) {
+      appendLines(lines, markedTable);
+    } else {
+      const header = headerOf(lines[tableAt] ?? '') as HeaderLine;
+      const span = tableSpan(lines, tableAt);
+      if (header.comment !== null && header.comment.includes(SIDEBAR_BLOCK_MARKER)) {
+        lines.splice(span.start, span.end - span.start + 1, ...markedTable);
+      } else {
+        lines[tableAt] = `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`;
+        const at = assignmentAt(lines, span.start + 1, span.end + 1, 'rows');
+        if (at >= 0) {
+          const spanned = valueSpan(lines, at, span.end + 1);
+          if (spanned === null) {
+            return { ok: false, reason: 'the rows value cannot be bounded; edit it by hand' };
+          }
+          lines.splice(spanned.start, spanned.end - spanned.start + 1, `rows = ${rowsValue}`);
+        } else {
+          lines.splice(tableAt + 1, 0, `rows = ${rowsValue}`);
+        }
+      }
+    }
+
+    // The status indicators, in the shared [ui] table — its anchor is found again here,
+    // because the sidebar work above may have shifted every line below it.
+    const uiNow = lines.findIndex((line) => headerOf(line)?.name === UI_TABLE);
+    if (uiNow < 0) {
+      appendLines(lines, [`[${UI_TABLE}]`, uiLine]);
+    } else {
+      const span = tableSpan(lines, uiNow);
+      const at = assignmentAt(lines, span.start + 1, span.end + 1, 'status_indicators');
+      if (at >= 0) {
+        lines[at] = uiLine;
+      } else {
+        lines.splice(uiNow + 1, 0, uiLine);
+      }
+    }
+  }
+
+  const next = lines.join('\n');
+  return { ok: true, text: next, changed: next !== text };
+}
+
+/** `herdr config check` (probed 2026-11-04): exit 0 with `config: ok` on a file the host
+ *  accepts, exit 1 with `config: issues found` and the diagnostics in the text otherwise. A
+ *  timeout, or an answer with no text at all, is a failure too. */
+export function hostConfigCheck(): { ok: boolean; text: string } {
+  let out = '';
+  try {
+    out = captureExec(['config', 'check']);
+  } catch (error) {
+    const thrown = error as { stdout?: unknown; message?: unknown };
+    const printed = [thrown.stdout, thrown.message]
+      .filter((part): part is string => typeof part === 'string' && part !== '')
+      .join('\n');
+    return { ok: false, text: printed.trim() || 'config check did not answer' };
+  }
+  return { ok: true, text: out.trim() };
+}
+
+/** `server reload-config` is session-scoped: each session runs its own server behind its own
+ *  socket, so the reload reaches only the session it names (Atlas, measured live 2026-11-04).
+ *  `status: applied` with no diagnostics is the only applied answer; diagnostics, a non-zero
+ *  exit, invalid JSON or a timeout are a refusal whose text the caller names. */
+export type ConfigReload = { applied: boolean; text: string };
+
+export function reloadConfig(session: string): ConfigReload {
+  let result: unknown;
+  try {
+    result = run(['server', 'reload-config'], session);
+  } catch (error) {
+    return { applied: false, text: error instanceof Error ? error.message : String(error) };
+  }
+  if (result === null || typeof result !== 'object') return { applied: false, text: 'reload-config did not answer' };
+  const diagnostics = (result as { diagnostics?: unknown }).diagnostics;
+  const applied =
+    (result as { status?: unknown }).status === 'applied' &&
+    (!Array.isArray(diagnostics) || diagnostics.length === 0);
+  return { applied, text: applied ? 'applied' : JSON.stringify(result) };
+}
+
+// The atomic replace the config edit lands through: an exclusive private temporary in the
+// config's own folder, every byte written and synced, then renamed over the original — the
+// writeForgeShim shape at the mode the owner's file already had (0600 on create). The rename
+// unlinks the original's inode, so the caller holds the prior bytes in memory before this runs.
+function replaceConfigAtomic(file: string, text: string, mode: number): void {
+  const folder = dirname(file);
+  mkdirSync(folder, { recursive: true });
+  const temp = join(folder, `.${basename(file)}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`);
+  let handle: number | null = null;
+  try {
+    handle = openSync(temp, 'wx', 0o600);
+    writeFileSync(handle, text);
+    fchmodSync(handle, mode);
+    fsyncSync(handle);
+    closeSync(handle);
+    handle = null;
+    renameSync(temp, file);
+  } finally {
+    if (handle !== null) {
+      try {
+        closeSync(handle);
+      } catch {
+        // the descriptor is already gone
+      }
+    }
+    try {
+      unlinkSync(temp);
+    } catch {
+      // renamed away, or never made
+    }
+  }
+}
+
+function isAbsent(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT';
+}
+
+/** What one apply of the sidebar layout did. `unchanged` still reloads the sessions it was
+ *  given: the file already reads equal, but a session that never reloaded since an older file
+ *  holds the older layout in memory. `failed` names the sessions whose reload refused — the
+ *  edit stands (a restore cannot un-reload the sessions that applied); check names them and
+ *  `--repair` retries. A `refused` edit either wrote nothing or restored the prior bytes
+ *  (`restored`). */
+export type SidebarApply =
+  | { kind: 'unchanged'; reloaded: string[]; failed: { session: string; text: string }[] }
+  | { kind: 'applied'; reloaded: string[]; failed: { session: string; text: string }[] }
+  | { kind: 'refused'; reason: string; restored: boolean };
+
+/** The host calls the apply makes, injectable for tests. */
+export type SidebarApplyDeps = {
+  checkConfig: () => { ok: boolean; text: string };
+  reload: (session: string) => ConfigReload;
+};
+
+/** Applies the sidebar layout to the terminal host's config: back up, splice both keys in one
+ *  pass, validate through the host, roll back from the bytes held in memory, then reload each
+ *  given session (the caller passes running sessions only — a session that is not running
+ *  reads the config when it starts). The rolling backup beside the config
+ *  (`config.toml.team-backup`, one deep, 0600, never through a link) holds the exact pre-edit
+ *  bytes for the owner to diff or restore by hand. */
+export function applySidebarLayout(
+  home: string,
+  rows: readonly (readonly string[])[],
+  indicators: string,
+  sessions: readonly string[],
+  deps: SidebarApplyDeps,
+): SidebarApply {
+  const file = hostConfigPath(home);
+  const reloads = (): { reloaded: string[]; failed: { session: string; text: string }[] } => {
+    const reloaded: string[] = [];
+    const failed: { session: string; text: string }[] = [];
+    for (const session of sessions) {
+      const outcome = deps.reload(session);
+      if (outcome.applied) reloaded.push(session);
+      else failed.push({ session, text: outcome.text });
+    }
+    return { reloaded, failed };
+  };
+
+  let priorText: string | null;
+  let mode = 0o600;
+  try {
+    assertNoLink(file, home);
+    try {
+      priorText = readFileSync(file, 'utf8');
+      mode = statSync(file).mode & 0o777;
+    } catch (error) {
+      if (!isAbsent(error)) throw error;
+      priorText = null;
+    }
+  } catch (error) {
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: false };
+  }
+
+  const spliced = spliceSidebarRows(priorText ?? '', rows, indicators);
+  if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: false };
+  if (!spliced.changed) {
+    const { reloaded, failed } = reloads();
+    return { kind: 'unchanged', reloaded, failed };
+  }
+
+  try {
+    if (priorText !== null) writePrivate(`${file}.team-backup`, priorText, home);
+    replaceConfigAtomic(file, spliced.text, mode);
+  } catch (error) {
+    // The replace is atomic: a throw here is before the rename, so the config still holds the
+    // prior bytes (or is still absent) and nothing needs restoring.
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: true };
+  }
+
+  const check = deps.checkConfig();
+  if (!check.ok) {
+    let restored = true;
+    try {
+      if (priorText === null) unlinkSync(file);
+      else replaceConfigAtomic(file, priorText, mode);
+    } catch {
+      restored = false;
+    }
+    return { kind: 'refused', reason: check.text, restored };
+  }
+  const { reloaded, failed } = reloads();
+  return { kind: 'applied', reloaded, failed };
 }
 
 // Not proof an agent is there: herdr answers with agent_info for a pane that has none.
