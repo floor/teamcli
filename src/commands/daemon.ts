@@ -27,6 +27,7 @@ import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
+import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
 import { readChoresInherit } from '../daemon/chores/token.ts';
 import {
   FAULT_POLL_MS,
@@ -120,6 +121,8 @@ export type DaemonCommandSources = {
   faultPollMs?: number;
   /** Injected for tests: the wait between result reads, so a scene never sleeps for real. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injected for tests: the mailbox router child. The real start uses the router entry. */
+  mailboxFactory?: Parameters<typeof startMachineDaemon>[0]['mailboxFactory'];
 };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
@@ -1076,6 +1079,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // hosted root on its own event loop and built no fleet, while the policy page already
       // promised the per-root default.
       choresHosting: true,
+      // One mailbox router for every root. The beat nudges it; the start does not wait on it.
+      mailboxHosting: true,
+      mailboxFactory: sources.mailboxFactory ?? spawnMailboxChild,
     });
     if (started.kind === 'already-running') {
       io.stdout(`team daemon: already running${started.pid === null ? '' : ` (pid ${String(started.pid)})`}\n`);
