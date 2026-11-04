@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { deliverTypedWake } from '../src/send/typed-wake.ts';
 import { listUnacked } from '../src/commands/messages.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { runAck } from '../src/commands/ack.ts';
@@ -943,6 +944,35 @@ describe("the watch's typed wake retry", () => {
     expect(calls).toEqual([]);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(existsSync(wakeTryPath(dropDir, UNREAD_A))).toBe(false);
+  });
+
+  test('a seat that is working, then idle on a grey listed placeholder, is woken by the typed wake', async () => {
+    const { made, team } = typedWorld('muse');
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const goal = '/goal pins a session objective with a progress bar';
+    const grey = MUSE_IDLE.replace('❯\n', `❯ \x1b[90m${goal}\x1b[0m\n`);
+    const working = readFileSync(new URL('./fixtures/muse/1.4.11/working-synthetic.txt', import.meta.url), 'utf8');
+    const one = pane(working, 'working');
+    const live = liveWith('helper', 'helper-pane', 'working');
+    let typedLine = false;
+    const sources = typedSources(one, (paneId, line, cli) => deliverTypedWake({
+      read: () => (typedLine ? working : grey),
+      type: () => {
+        typedLine = true;
+        return true;
+      },
+      enter: () => true,
+      wait: async () => {},
+    }, paneId, line, cli, { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 }));
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(typedLine).toBe(false);
+
+    one.status = 'idle';
+    one.screen = grey;
+    live.agents = live.agents.map((agent) => ({ ...agent, status: 'idle' as const }));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(typedLine).toBe(true);
   });
 
   test('a profile the terminal host cannot read faithfully retries on its own screen', async () => {
@@ -1895,11 +1925,35 @@ describe('the cascade re-wake below a channel leg', () => {
     expect(lines[1]?.ms).toBeGreaterThanOrEqual(0);
   });
 
-  test('a line that already names the webhook is never posted again, and the typed leg keeps its turn', async () => {
+  test('a webhook delivery the seat has not read is posted once more, and the typed leg does not run', async () => {
     const seen = hookReceiver();
     const { made, team } = hookWorld(seen.url);
-    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
     seedSendLine(made, 'helper', UNREAD_A, { via: 'webhook' });
+    writeFileSync(join(dropDir, `${UNREAD_A}.posted`), `${NOW.toISOString()}\n`);
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+    expect(seen.hits).toHaveLength(1);
+    expect(seen.hits[0]?.body).toContain(UNREAD_A);
+    expect(calls).toEqual([]);
+    expect(wakeMark(made, 'helper', UNREAD_A)).toMatchObject({ state: 'sent', evidence: 'webhook' });
+
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(seen.hits).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  test('a webhook claim left sent is not posted again', async () => {
+    const seen = hookReceiver();
+    const { made, team } = hookWorld(seen.url);
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    seedSendLine(made, 'helper', UNREAD_A, { via: 'webhook' });
+    writeFileSync(join(dropDir, `${UNREAD_A}.posting`), JSON.stringify({ state: 'sent' }));
     const one = pane(MUSE_IDLE);
     const calls: { pane: string; line: string; cli: string; session: string }[] = [];
     const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
@@ -1908,10 +1962,8 @@ describe('the cascade re-wake below a channel leg', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
 
     expect(seen.hits).toEqual([]);
-    expect(calls).toHaveLength(1);
-    const lines = linesFor(made, UNREAD_A);
-    expect(lines[1]).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
-    expect(lines[1]?.failed).toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(wakeMark(made, 'helper', UNREAD_A)).toBeNull();
   });
 
   test('a failed webhook already on the line is not retried either', async () => {
@@ -2052,7 +2104,7 @@ describe('the cascade re-wake below a channel leg', () => {
     expect(existsSync(reportedPath(leadDir, UNREAD_A))).toBe(false);
   });
 
-  test('every declared channel-class leg walks the webhook at N, while webhook, typed, drop, and mcp-inbox skip straight to typed', async () => {
+  test('every declared channel-class leg walks the webhook at N, a webhook delivery is posted once more, and typed, drop, and mcp-inbox skip straight to typed', async () => {
     for (const via of ['socket', 'native', 'headless-resume', 'session'] as const) {
       const seen = hookReceiver();
       const { made, team } = hookWorld(seen.url);
@@ -2071,7 +2123,26 @@ describe('the cascade re-wake below a channel leg', () => {
       base = '';
     }
 
-    for (const via of ['webhook', 'typed', 'drop', 'mcp-inbox'] as const) {
+    {
+      const seen = hookReceiver();
+      const { made, team } = hookWorld(seen.url);
+      seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+      seedSendLine(made, 'helper', UNREAD_A, { via: 'webhook' });
+      const one = pane(MUSE_IDLE);
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+      const live = liveWith('helper', 'helper-pane');
+
+      await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+
+      expect({ via: 'webhook', hits: seen.hits.length, typed: calls.length }).toEqual({ via: 'webhook', hits: 1, typed: 0 });
+      expect(seen.hits[0]?.body).toContain(UNREAD_A);
+      expect(linesFor(made, UNREAD_A)[1]).toMatchObject({ via: 'webhook', outcome: 'delivered', id: UNREAD_A });
+      made.cleanup();
+      base = '';
+    }
+
+    for (const via of ['typed', 'drop', 'mcp-inbox'] as const) {
       const seen = hookReceiver();
       const { made, team } = hookWorld(seen.url);
       seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));

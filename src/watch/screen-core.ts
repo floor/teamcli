@@ -1,7 +1,7 @@
 // The screen core. Stage order, dialog primitives, the four composer modes and the
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
-import { allDimAfter, hasSgr, stripSgr } from '../ansi.ts';
+import { allDimAfter, hasSgr, oneColourAfter, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -1495,12 +1495,15 @@ function stripTyped(line: string, composer: { prompt: RegExp; stripSuffix?: RegE
 }
 
 // A placeholder, not text. When the composer says its suggestions render dim and the input
-// line carries any styling at all, a row that is not all faint past the prompt is text. An
-// all-faint row is the suggestion, unless the composer names `slash-hint`: then the faint row
-// must also be a listed placeholder or a `/command …` hint, so a faint row of other words is
-// text. A line without styling (a plain read, an old herdr) leaves the list to decide, as does
-// a composer without the style. The slash shape is not asked on that plain read: a draft that
-// starts with `/` stays text.
+// line carries any styling at all, a row that is not all faint past the prompt is text, except
+// an exact listed equals line whose own text is one non-bold colour: grey with no faint
+// attribute is still that placeholder. A second colour, a bold word, or a cursor cell inside
+// the text stays text. An all-faint row is
+// the suggestion, unless the composer names `slash-hint`: then the faint row must also be a
+// listed placeholder or a `/command …` hint, so a faint row of other words is text. A line
+// without styling (a plain read) leaves the list to decide, as does a composer
+// without the style. The slash shape is not asked on that plain read: a draft that starts
+// with `/` stays text.
 function placeholder(
   typed: string,
   composer: { prompt: RegExp; placeholders: ScreenData['composer']['placeholders']; placeholderStyle?: ScreenData['composer']['placeholderStyle'] },
@@ -1508,9 +1511,13 @@ function placeholder(
   styledLine: string | undefined,
 ): boolean {
   const listed = composer.placeholders.some((entry) => ('equals' in entry ? typed === entry.equals : 'prefix' in entry ? typed.startsWith(entry.prefix) : false));
+  const equalsListed = composer.placeholders.some((entry) => 'equals' in entry && entry.equals !== '' && typed === entry.equals);
   if (composer.placeholderStyle === 'dim' && styledLine !== undefined && hasSgr(styledLine)) {
     const hit = composer.prompt.exec(plainLine);
     const skip = hit === null ? 0 : plainLine.slice(0, hit.index + hit[0].length).replace(/\s/g, '').length;
+    // An exact listed placeholder in one non-bold colour is the empty box. A mix of colours,
+    // a cursor cell, a bold word, or a draft that only starts like the line stays text.
+    if (equalsListed && oneColourAfter(styledLine, skip)) return true;
     if (!allDimAfter(styledLine, skip)) return false;
     // A composer that names slash-hint keeps a dim row only when it is a known placeholder or
     // that hint shape. Every other dim composer still takes any faint row as the suggestion.
