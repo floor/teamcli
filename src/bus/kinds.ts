@@ -213,6 +213,12 @@ export function isOwnerAtOnce(
   return true;
 }
 
+/** The most the team's retained event log may hold, across its segments. */
+export const EVENT_LOG_TOTAL_BYTES = 100_000_000;
+/** The fewest retained files a store may keep: the live segment and one sealed segment. It is
+ *  the default a root with no team file reads, and the floor under a policy-resolved slot count. */
+export const EVENT_LOG_KEPT = 2;
+
 // Owner-sovereign threshold and bus constants sourced from `EVENT_THRESHOLDS` (`src/policy/events.ts`).
 export const DEFAULT_RECONCILE_INTERVAL_SECONDS = EVENT_THRESHOLDS.reconcile_interval_seconds;
 export const DEFAULT_EVENT_RETENTION_SECONDS = EVENT_THRESHOLDS.retention_days * 86_400;

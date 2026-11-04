@@ -177,6 +177,23 @@ export const EVENT_THRESHOLDS = {
 export type EventThreshold = keyof typeof EVENT_THRESHOLDS;
 
 /**
+ * The bus log's segment size: one open segment reaches this many megabytes before it rotates, so
+ * a reader never has more than one segment's worth of open bytes to verify. The policy catalogue
+ * carries the setting as `event-segment-mb` (the bus setting group spells it `bus.segment_mb`);
+ * the default is the release number, and the parser's ceiling is half the retained-size cap
+ * (`EVENT_LOG_TOTAL_BYTES` in `src/bus/log.ts`), so a full live segment and its predecessor can
+ * both sit under the cap. A segment at or above the cap could never leave room for the one it
+ * replaces.
+ */
+export const EVENT_SEGMENT_MB = 8;
+
+/** The segment size's upper bound: half of the 100 MB retained-size cap. */
+export const EVENT_SEGMENT_MB_MAX = 50;
+
+/** The segment size in the bytes the append path compares against. */
+export const EVENT_SEGMENT_BYTES = EVENT_SEGMENT_MB * 1_000_000;
+
+/**
  * The threshold set's descriptor, in the shape the other two settings carry: the name a policy
  * surface writes, the levels that may declare a word, and owner sovereignty over the numbers
  * shipped here. It is a set, not one scalar: each field resolves on its own, and a level's word

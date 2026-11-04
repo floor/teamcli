@@ -52,11 +52,13 @@ import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
   EVENT_LOG_KEPT,
-  readEventsSteps,
+  hydrateEventLogSteps,
+  sealUnsealedSegmentsSteps,
   type EventAppendInput,
-  type EventReadResult,
+  type EventIndexReadResult,
   type SignedEventRecord,
 } from './log.ts';
+import { eventLogSettingsFor } from './log-settings.ts';
 import { isOwnerDigestRecord } from './owner.ts';
 
 export type ReconcileOptions = {
@@ -67,6 +69,9 @@ export type ReconcileOptions = {
   now?: Date;
   maxBytes?: number;
   kept?: number;
+  /** The age window the log retention applies; absent, the team's `bus.retain_days` word is read
+   *  once for the pass (keep-all included). */
+  retentionSeconds?: number;
   heldThresholdSeconds?: number;
   onEvent?: (record: SignedEventRecord) => void;
   /** The caches and counters a sequence of passes shares. Absent, every pass starts empty, which
@@ -192,6 +197,10 @@ export type ReconcileState = {
   refused: Set<string>;
   /** The refusal paths this pass met. Cleared at the start of the pass and used to prune. */
   refusedNow: Set<string>;
+  /** Whether this process has already attempted the one-time seal migration of a store written
+   *  before seals. One attempt per process: a segment that cannot be sealed keeps the ordinary
+   *  verified read, and a retry would re-verify it on every pass. */
+  sealAttempted: boolean;
   stats: ReconcileStats;
 };
 
@@ -205,6 +214,7 @@ export function createReconcileState(): ReconcileState {
     deferred: [],
     refused: new Set(),
     refusedNow: new Set(),
+    sealAttempted: false,
     stats: { passes: 0, filesRead: 0, filesReused: 0, verifies: 0, verifiesReused: 0, yields: 0 },
   };
 }
@@ -392,6 +402,28 @@ function keyPrintOf(keyState: ReturnType<typeof messageKeyState>): string {
  * The pass as a sequence of steps. Every `yield` is a point where the caller may give the event
  * loop a turn; the caller's pacing never changes what the pass reads or raises.
  */
+/**
+ * The log's policy words, read once per pass. The stamp that decides whether the retained log is
+ * re-read must count the same files the read used, so the set bound cannot be one value here and
+ * another inside the hydrated log read; the appends the pass raises reuse the same three values.
+ */
+function withLogSettings(options: ReconcileOptions): ReconcileOptions {
+  if (
+    options.kept !== undefined &&
+    options.maxBytes !== undefined &&
+    options.retentionSeconds !== undefined
+  ) {
+    return options;
+  }
+  const settings = eventLogSettingsFor(options.root, options.home, options.now ?? new Date());
+  return {
+    ...options,
+    kept: options.kept ?? settings.kept,
+    maxBytes: options.maxBytes ?? settings.segmentBytes,
+    retentionSeconds: options.retentionSeconds ?? settings.retentionSeconds,
+  };
+}
+
 export function* reconcileSteps(options: ReconcileOptions): Generator<void, ReconcileResult, void> {
   const { project, root, session, home } = options;
   const state = options.state ?? createReconcileState();
@@ -403,6 +435,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   stats.verifies = 0;
   stats.verifiesReused = 0;
   stats.yields = 0;
+  options = withLogSettings(options);
+  const kept = options.kept ?? EVENT_LOG_KEPT;
   // Deferred appends belong to the previous pass's async retry; a new pass starts its own list.
   state.deferred = [];
   const visited = new Set<string>();
@@ -414,18 +448,22 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // The retained log is read as a whole only when one of its files changed. Until then the
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
   // every retained line — is skipped.
-  let existing: EventReadResult;
+  let existing: EventIndexReadResult;
   let cachedLog = state.log;
+  // A segment-size word that changed since the cached read moved the set's bound: the cached
+  // stamp counted a different set of files, so it cannot answer for this one.
+  if (cachedLog !== null && cachedLog.kept !== kept) cachedLog = null;
   if (cachedLog !== null) {
     const stamp = retainedStamp(cachedLog.path, cachedLog.kept);
     if (stamp !== cachedLog.stamp) cachedLog = null;
   }
   if (cachedLog === null) {
     // The read is drained here, in slices: a large cold log gives the caller's driver a turn
-    // between slices instead of holding the loop for the whole verification.
-    existing = yield* readEventsSteps(project, root, home, { kept: options.kept });
+    // between slices instead of holding the loop for the whole verification. A log whose retained
+    // segments are all sealed hydrates its dedupe sets from their signed indexes; only the open
+    // segment's bytes are read.
+    existing = yield* hydrateEventLogSteps(project, root, home, { kept });
     if (!existing.ok) return existing;
-    const kept = options.kept ?? EVENT_LOG_KEPT;
     cachedLog = {
       path: existing.path,
       kept,
@@ -437,25 +475,28 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
       lastSeatEventTs: new Map<string, string>(),
       arrivedFrom: new Map<string, string>(),
     };
-    for (const entry of existing.events) {
-      if (entry.payload.kind === 'config.changed') cachedLog.configSeen.add(entry.payload.record_id);
-      if (entry.payload.session !== session) continue;
-      cachedLog.seen.add(`${entry.payload.kind}\0${entry.payload.record_id}`);
-      if (
-        entry.payload.kind === 'message.arrived' &&
-        entry.payload.to !== undefined &&
-        entry.payload.from !== undefined
-      ) {
-        cachedLog.arrivedFrom.set(`${entry.payload.to}\0${entry.payload.record_id}`, entry.payload.from);
+    for (const entry of existing.entries) {
+      if (entry.kind === 'config.changed') cachedLog.configSeen.add(entry.record_id);
+      if (entry.session !== session) continue;
+      cachedLog.seen.add(`${entry.kind}\0${entry.record_id}`);
+      if (entry.kind === 'message.arrived' && entry.to !== undefined && entry.from !== undefined) {
+        cachedLog.arrivedFrom.set(`${entry.to}\0${entry.record_id}`, entry.from);
       }
-      if (entry.payload.seat !== undefined) {
-        const prev = cachedLog.lastSeatEventTs.get(entry.payload.seat);
-        if (prev === undefined || Date.parse(entry.payload.ts) >= Date.parse(prev)) {
-          cachedLog.lastSeatEventTs.set(entry.payload.seat, entry.payload.ts);
+      if (entry.seat !== undefined && entry.ts !== undefined) {
+        const prev = cachedLog.lastSeatEventTs.get(entry.seat);
+        if (prev === undefined || Date.parse(entry.ts) >= Date.parse(prev)) {
+          cachedLog.lastSeatEventTs.set(entry.seat, entry.ts);
         }
       }
     }
     state.log = cachedLog;
+    if (existing.unsealed > 0 && !state.sealAttempted) {
+      // The one-time migration of a store written before seals: each segment is verified in
+      // slices and the append lock is held only for the seal write itself, so the bus keeps
+      // serving while an old log is sealed.
+      state.sealAttempted = true;
+      yield* sealUnsealedSegmentsSteps(project, root, home, { kept, signal: options.signal });
+    }
   }
 
   // A seat whose declaration is gone keeps its record and every signed setting: the bootstrap
@@ -486,7 +527,8 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
     if (seen.has(key)) return true;
     const res = appendEvent(project, root, home, input, {
       maxBytes: options.maxBytes,
-      kept: options.kept,
+      kept,
+      retentionSeconds: options.retentionSeconds,
       deduplicate: true,
       ...(options.appendWaitMs !== undefined ? { lockWaitMs: options.appendWaitMs } : {}),
     });
@@ -1094,6 +1136,7 @@ function tryDeferredAppend(options: ReconcileOptions, item: DeferredAppend): Def
       ? appendEvent(options.project, options.root, options.home, item.input, {
           maxBytes: options.maxBytes,
           kept: options.kept,
+          retentionSeconds: options.retentionSeconds,
           deduplicate: true,
           lockWaitMs: 0,
         })
@@ -1179,8 +1222,11 @@ async function retryDeferredAppends(
  */
 export async function reconcilePassAsync(options: ReconcileOptions): Promise<ReconcileResult> {
   const state = options.state ?? createReconcileState();
+  // Read once for the pass and its deferred drain, so neither re-reads the policy store per
+  // append and both count the same retained files.
+  const resolved = withLogSettings(options);
   const sliceMs = options.sliceMs ?? DEFAULT_RECONCILE_SLICE_MS;
-  const steps = reconcileSteps({ ...options, state, appendWaitMs: 0 });
+  const steps = reconcileSteps({ ...resolved, state, appendWaitMs: 0 });
   let since = performance.now();
   for (;;) {
     // The slice boundary is also the cancellation point: the caller's abort (a closing bus)
@@ -1190,7 +1236,7 @@ export async function reconcilePassAsync(options: ReconcileOptions): Promise<Rec
     if (next.done) {
       const result = next.value;
       if (result.ok) {
-        await retryDeferredAppends(options, state, result.raised);
+        await retryDeferredAppends(resolved, state, result.raised);
       }
       return result;
     }
