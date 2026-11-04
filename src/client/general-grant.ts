@@ -13,16 +13,16 @@ export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here
-// (test/general-door.test.ts holds this list to the command table). `fallback` and `waits` joined
-// with the 0.5.12 routes and have no release row yet: test/general-grant-widened.test.ts declares
-// them unshipped until a release measures them.
+// (test/general-door.test.ts holds this list to the command table). `fallback`, `waits`, `order`
+// and `trace` joined with the 0.5.12 routes and have no release row yet:
+// test/general-grant-widened.test.ts declares them unshipped until a release measures them.
 export const GENERAL_OPS = [
   'config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply', 'init',
   'ack', 'add', 'agents', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'client',
   'commits', 'daemon', 'delegate', 'development-mode', 'doctor', 'drops', 'fallback', 'feed', 'forget', 'grant', 'hold', 'import',
-  'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'owner-seat', 'pause', 'peek', 'plan', 'policy', 'pr', 'proc', 'projects',
+  'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'order', 'owner-seat', 'pause', 'peek', 'plan', 'policy', 'pr', 'proc', 'projects',
   'queue', 'raise', 'register', 'release', 'reload', 'remove', 'rename', 'resume', 'revoke', 'route', 'seat', 'seats',
-  'sessions', 'settings', 'setup', 'status', 'swap', 'tempo', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
+  'sessions', 'settings', 'setup', 'status', 'swap', 'tempo', 'trace', 'unlock', 'usage', 'waits', 'watch', 'workflow', 'worktree',
 ] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
 /** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */
