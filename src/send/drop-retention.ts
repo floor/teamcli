@@ -719,20 +719,68 @@ function restoreUnlinkedInHeldDir(
   dirHeld: HeldDir,
   fileName: string,
   bytes: Buffer,
-): void {
+): { ok: true } | { ok: false; reason: string } {
+  const existing = atFfi.openat(dirHeld.fd, fileName, constants.O_RDONLY | NOFOLLOW, 0);
+  if (existing.fd >= 0) {
+    let matches = false;
+    try {
+      const stat = fstatSync(existing.fd);
+      if (stat.isFile()) {
+        const current = readFileSync(existing.fd);
+        matches = current.byteLength === bytes.byteLength && current.equals(bytes);
+      }
+    } catch {}
+    try {
+      closeSync(existing.fd);
+    } catch {}
+    if (matches) return { ok: true };
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: existing file does not match verified bytes`,
+    };
+  }
+
   const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW;
   const opened = atFfi.openat(dirHeld.fd, fileName, flags, 0o600);
-  if (opened.fd < 0) return;
+  if (opened.fd < 0) {
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: openat errno ${String(opened.errno)}`,
+    };
+  }
   const fd = opened.fd;
   try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      return { ok: false, reason: `cannot restore ${fileName}: not a regular file` };
+    }
     fchmodSync(fd, 0o600);
     for (let wrote = 0; wrote < bytes.length;) {
-      wrote += writeSync(fd, bytes, wrote, bytes.length - wrote);
+      const n = writeSync(fd, bytes, wrote, bytes.length - wrote);
+      if (n <= 0) {
+        throw new Error('short write');
+      }
+      wrote += n;
     }
-  } catch {}
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {}
+    atFfi.unlinkat(dirHeld.fd, fileName);
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   try {
     closeSync(fd);
-  } catch {}
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `cannot restore ${fileName}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return { ok: true };
 }
 
 /**
@@ -1881,6 +1929,16 @@ export function* dropRetirementSteps(
 
           const verifiedBytes = new Map<string, Buffer>();
           for (const entry of familyEntries) {
+            const validFamilySidecar =
+              entry.name === family.id ||
+              (entry.name.startsWith(`${family.id}.`) &&
+                (PRE_RECEIPT_SUFFIXES.includes(entry.name.slice(family.id.length)) ||
+                  RECEIPT_SUFFIXES.includes(entry.name.slice(family.id.length))));
+            if (!validFamilySidecar) {
+              return fail(
+                `${join(seatHeld.path, entry.name)}: unexpected file name in archived family ${family.id}`,
+              );
+            }
             let data: Buffer;
             try {
               data = readRegularNoFollowInDir(atFfi, seatHeld, entry.name);
@@ -1896,7 +1954,9 @@ export function* dropRetirementSteps(
             verifiedBytes.set(entry.name, data);
           }
 
-          // Confirm the archived record and its read/replied receipt verify and precede `archiveCutoff`.
+          // Every signed file in the family (record, read/replied/held/delivered receipts, and
+          // thread-close) must verify, at least one of read or replied must be present, and every
+          // verified timestamp in the family must precede `archiveCutoff` or the family is kept whole.
           const recBytes = verifiedBytes.get(family.id);
           if (recBytes === undefined) {
             return fail(
@@ -1920,26 +1980,51 @@ export function* dropRetirementSteps(
             return fail(`${join(seatHeld.path, family.id)}: archived record did not verify`);
           }
           const recAtMs = Date.parse(recAuth.value.payload.at);
+          if (!Number.isFinite(recAtMs)) {
+            return fail(`${join(seatHeld.path, family.id)}: archived record timestamp is not valid`);
+          }
+          let newestFamilyMs = recAtMs;
+
           const context = { to: family.seat, root, session: family.session };
-          const readMs = verifiedBytes.has(`${family.id}.read.json`)
-            ? verifiedReceiptAtMs(atFfi, seatHeld, family.id, 'read', context, key)
-            : null;
-          const repliedMs = verifiedBytes.has(`${family.id}.replied.json`)
-            ? verifiedReceiptAtMs(atFfi, seatHeld, family.id, 'replied', context, key)
-            : null;
-          if (
-            !Number.isFinite(recAtMs) ||
-            recAtMs > archiveCutoff ||
-            (readMs === null && repliedMs === null) ||
-            (readMs !== null && readMs > archiveCutoff) ||
-            (repliedMs !== null && repliedMs > archiveCutoff)
-          ) {
+          let hasTerminalReceipt = false;
+          for (const status of ['read', 'replied', 'held', 'delivered'] as const) {
+            const receiptFileName = `${family.id}.${status}.json`;
+            if (!verifiedBytes.has(receiptFileName)) continue;
+            const receiptMs = verifiedReceiptAtMs(atFfi, seatHeld, family.id, status, context, key);
+            if (receiptMs === null) {
+              return fail(
+                `${join(seatHeld.path, receiptFileName)}: archived receipt did not verify`,
+              );
+            }
+            if (status === 'read' || status === 'replied') {
+              hasTerminalReceipt = true;
+            }
+            if (receiptMs > newestFamilyMs) newestFamilyMs = receiptMs;
+          }
+          if (!hasTerminalReceipt) {
             return fail(
-              `${join(seatHeld.path, family.id)}: archived record or receipt did not verify for reclamation`,
+              `${join(seatHeld.path, family.id)}: archived family has no verified read or replied receipt`,
             );
+          }
+          const closeFileName = `${family.id}.closed.json`;
+          if (verifiedBytes.has(closeFileName)) {
+            const closeMs = verifiedCloseAtMs(atFfi, seatHeld, family.id, context, key);
+            if (closeMs === null) {
+              return fail(
+                `${join(seatHeld.path, closeFileName)}: archived close record did not verify`,
+              );
+            }
+            if (closeMs > newestFamilyMs) newestFamilyMs = closeMs;
+          }
+
+          if (newestFamilyMs > archiveCutoff) {
+            continue;
           }
 
           // Unlink in crash-safe order: record and non-receipt sidecars first, terminal receipts last.
+          // Each file name is recorded before its unlink so a swap detected after `unlinkat` removes
+          // the entry still restores that file from `verifiedBytes`; any restore error stops the pass
+          // and is reported in `refused`.
           const orderedNames = [
             ...familyEntries
               .map((e) => e.name)
@@ -1952,22 +2037,32 @@ export function* dropRetirementSteps(
           const unlinkedNames: string[] = [];
           let unlinkFailed: string | null = null;
           for (const fileName of orderedNames) {
+            unlinkedNames.push(fileName);
             const unlinkRes = unlinkFileInHeldDir(atFfi, sendDropsHeld, seatHeld, fileName, root);
             if (!unlinkRes.ok) {
               unlinkFailed = unlinkRes.reason;
               break;
             }
-            unlinkedNames.push(fileName);
           }
           if (unlinkFailed !== null) {
+            const restoreErrors: string[] = [];
             for (let i = unlinkedNames.length - 1; i >= 0; i -= 1) {
               const name = unlinkedNames[i]!;
               const data = verifiedBytes.get(name);
-              if (data !== undefined) {
-                restoreUnlinkedInHeldDir(atFfi, seatHeld, name, data);
+              if (data === undefined) {
+                restoreErrors.push(`cannot restore ${name}: missing verified bytes`);
+                continue;
+              }
+              const restored = restoreUnlinkedInHeldDir(atFfi, seatHeld, name, data);
+              if (!restored.ok) {
+                restoreErrors.push(restored.reason);
               }
             }
-            return fail(unlinkFailed);
+            const reason =
+              restoreErrors.length > 0
+                ? `${unlinkFailed} (restore failed: ${restoreErrors.join('; ')})`
+                : unlinkFailed;
+            return fail(reason);
           }
 
           for (const fileName of orderedNames) {

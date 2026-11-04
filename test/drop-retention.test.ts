@@ -44,7 +44,7 @@ import {
   verifyDropArchive,
 } from '../src/send/drop-retention.ts';
 import { markPending } from '../src/send/pending.ts';
-import { receiptFile, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { receiptFile, signClose, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 
 const TEAM_YAML = `format: 1
@@ -1300,6 +1300,245 @@ describe('slice 3: deletes archived drops past the long window while keeping the
     expect(raced.reclaimed).toEqual([]);
     // The outside victim file is completely untouched because unlinks use the held fd and verify the parent chain.
     expect(existsSync(outsideVictim)).toBe(true);
+    // The record that unlinkat removed before the swap was caught is restored into the held directory
+    // descriptor (movedAsideSeatDir), so the family stays complete and the next pass after undoing the
+    // symlink swap reclaims it cleanly instead of refusing the date as incomplete.
+    expect(existsSync(join(movedAsideSeatDir, READ_ID_1))).toBe(true);
+    expect(existsSync(join(movedAsideSeatDir, `${READ_ID_1}.read.json`))).toBe(true);
+    rmSync(destSeatDir, { force: true });
+    renameSync(movedAsideSeatDir, destSeatDir);
+
+    // If a mid-family unlink fails on the receipt AND restoring the record fails, the pass stops and
+    // reports the restore failure loudly.
+    const failRestore = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      atFfi: {
+        ...realOps,
+        unlinkat: (dirfd, name) => {
+          if (name === `${READ_ID_1}.read.json`) {
+            return { ok: false, errno: 13 };
+          }
+          return realOps.unlinkat(dirfd, name);
+        },
+        openat: (dirfd, name, flags, mode) => {
+          if (name === READ_ID_1 && (flags & fs.constants.O_CREAT) !== 0) {
+            return { fd: -1, errno: 13 };
+          }
+          return realOps.openat(dirfd, name, flags, mode);
+        },
+      },
+      slices: defaultSlices(),
+    });
+    expect(failRestore.refused).toContain('restore failed');
+    expect(failRestore.reclaimed).toEqual([]);
+
+    // Restore READ_ID_1 cannot have run in failRestore because openat(O_CREAT) was stubbed to fail;
+    // re-plant via normal flow by restoring from a fresh archive pass or verifying clean recovery when restore succeeds.
+    const cleanAfterRestore = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      atFfi: {
+        ...realOps,
+        unlinkat: (dirfd, name) => {
+          if (name === `${READ_ID_1}.read.json`) {
+            return { ok: false, errno: 13 };
+          }
+          return realOps.unlinkat(dirfd, name);
+        },
+      },
+      slices: defaultSlices(),
+    });
+    // Because failRestore left READ_ID_1 missing when its stubbed restore failed, cleanAfterRestore refuses as incomplete.
+    expect(cleanAfterRestore.refused).toContain('incomplete');
+  });
+
+  test('restores mid-family unlinks when a later file unlink fails so the next pass reclaims cleanly', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+
+    const realOps = getRelativeDirOps();
+    expect(realOps).not.toBeNull();
+    if (!realOps) return;
+
+    // Fail unlinkat on READ_ID_1.read.json after READ_ID_1 has already been unlinked.
+    const midFail = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      atFfi: {
+        ...realOps,
+        unlinkat: (dirfd, name) => {
+          if (name === `${READ_ID_1}.read.json`) {
+            return { ok: false, errno: 13 };
+          }
+          return realOps.unlinkat(dirfd, name);
+        },
+      },
+      slices: defaultSlices(),
+    });
+    expect(midFail.refused).toContain(`${READ_ID_1}.read.json`);
+    expect(midFail.reclaimed).toEqual([]);
+    // READ_ID_1 was restored from verified bytes, so the family remains whole on disk.
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(true);
+
+    // Next pass with working unlinkat succeeds cleanly and reclaims READ_ID_1.
+    const recovered = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(recovered.refused).toBeNull();
+    expect(recovered.reclaimed.map((f) => f.id)).toEqual([READ_ID_1]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(false);
+  });
+
+  test('keeps a family whole when a companion receipt (.replied.json, .held.json, .delivered.json) or .closed.json fails verification or is newer than the archive cutoff', async () => {
+    // Scene A: Valid .read.json alongside an unverified .replied.json (archived together in Slice 1).
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    writeFileSync(livePath('worker', `${READ_ID_1}.replied.json`), '{"payload":{},"signature":"bad"}\n');
+    ageFamily('worker', READ_ID_1, OLD);
+
+    const archivedA = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+    expect(archivedA.archived.map((f) => f.id)).toEqual([READ_ID_1]);
+
+    const reclaimA = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(reclaimA.refused).toContain(`${READ_ID_1}.replied.json`);
+    expect(reclaimA.reclaimed).toEqual([]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.replied.json`))).toBe(true);
+
+    // Reset archive for Scene B: Valid .read.json alongside an unverified .closed.json.
+    rmSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR), { recursive: true, force: true });
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    writeFileSync(livePath('worker', `${READ_ID_1}.closed.json`), '{"payload":{},"signature":"bad"}\n');
+    ageFamily('worker', READ_ID_1, OLD);
+
+    await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+
+    const reclaimB = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(reclaimB.refused).toContain(`${READ_ID_1}.closed.json`);
+    expect(reclaimB.reclaimed).toEqual([]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.read.json`))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.closed.json`))).toBe(true);
+
+    // Reset archive for Scene C: Valid .read.json, .held.json, .delivered.json, and .closed.json where
+    // .closed.json has a verified timestamp after the archive cutoff (kept whole until clock passes it).
+    rmSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR), { recursive: true, force: true });
+    const closeAtIso = new Date(NOW.getTime() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    const heldReceipt = signReceiptPayload(
+      { kind: 'receipt', status: 'held', id: READ_ID_1, to: 'worker', root, session: 'acme', at: OLD_ISO },
+      home,
+    );
+    writeReceipt(recordDir(root, 'acme', 'worker'), heldReceipt, home);
+    const deliveredReceipt = signReceiptPayload(
+      { kind: 'receipt', status: 'delivered', id: READ_ID_1, to: 'worker', root, session: 'acme', at: OLD_ISO },
+      home,
+    );
+    writeReceipt(recordDir(root, 'acme', 'worker'), deliveredReceipt, home);
+    const closedRecord = signClose(
+      { kind: 'thread-close', id: READ_ID_1, thread: READ_ID_1, by: 'worker', root, session: 'acme', at: closeAtIso },
+      home,
+    );
+    writeFileSync(livePath('worker', `${READ_ID_1}.closed.json`), `${JSON.stringify(closedRecord, null, 2)}\n`);
+    ageFamily('worker', READ_ID_1, OLD);
+
+    await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: NOW,
+      slices: defaultSlices(),
+    });
+
+    // Run at LONG_FUTURE with archiveOlderThanMs = 122 days: manifest.at (NOW, 95d ago) is overridden by
+    // testing a cutoff between OLD (130d before LONG_FUTURE) and closeAtIso (126d before LONG_FUTURE).
+    // Specifically, at LONG_FUTURE with archiveOlderThanMs = 95d (cutoff = NOW), closeAtIso < NOW;
+    // to place cutoff between OLD (NOW - 35d) and closeAtIso (NOW - 31d), pass archiveOlderThanMs = 128d
+    // after re-signing the manifest at OLD_ISO so manifest.at <= cutoff while closeAtIso > cutoff.
+    const manifestDir = join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR, DATE);
+    const mName = readdirSync(manifestDir).find((n) => n.startsWith('manifest-'))!;
+    const mPath = join(manifestDir, mName);
+    const mDoc = JSON.parse(readFileSync(mPath, 'utf8')) as { payload: { at: string }; signature: string };
+    mDoc.payload.at = OLD_ISO;
+    const { signDomain } = await import('../src/store/keys.ts');
+    const { DROP_ARCHIVE_DOMAIN } = await import('../src/send/drop-retention.ts');
+    mDoc.signature = signDomain(DROP_ARCHIVE_DOMAIN, mDoc.payload as never, messageKeyOf(home));
+    writeFileSync(mPath, `${JSON.stringify(mDoc, null, 2)}\n`);
+
+    const beforeCloseCutoff = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      archiveOlderThanMs: 128 * 24 * 60 * 60 * 1000,
+      slices: defaultSlices(),
+    });
+    expect(beforeCloseCutoff.refused).toBeNull();
+    expect(beforeCloseCutoff.reclaimed).toEqual([]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(true);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.closed.json`))).toBe(true);
+
+    // Once the cutoff passes closeAtIso as well (archiveOlderThanMs = 95d), the family is reclaimed.
+    const afterCloseCutoff = await retireDropsSliced({
+      root,
+      home,
+      team,
+      at: LONG_FUTURE,
+      slices: defaultSlices(),
+    });
+    expect(afterCloseCutoff.refused).toBeNull();
+    expect(afterCloseCutoff.reclaimed.map((f) => f.id)).toEqual([READ_ID_1]);
+    expect(existsSync(join(archiveSeatDir('worker'), READ_ID_1))).toBe(false);
+    expect(existsSync(join(archiveSeatDir('worker'), `${READ_ID_1}.closed.json`))).toBe(false);
   });
 
   test('chores child housekeeping logs reclaimed count and slices across archive reclamation', async () => {
