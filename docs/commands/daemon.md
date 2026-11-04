@@ -36,7 +36,11 @@ silently dropped, because a unit that hosts nothing must not be written in its p
   `daemon.heartbeat` word its hosted checkouts resolved (omitted when no word is known); a
   process that exists but does not answer adds
   `probe unanswered (<reason>)` (or `probe refused (<code>)`) and is still reported running,
-  never healthy and never not running; stuck requests are counted on the same line;
+  never healthy and never not running; stuck requests are counted on the same line. The daemon
+  answers as soon as it is bound, and each hosted root's first store scan runs behind that: while
+  it runs the line carries `first pass running for <root> (<n> files scanned)`, then
+  `first pass done at <time> for <root>` — or `first pass ended with errors at <time>`, with the
+  count it reached, never a clean finish it did not make;
 - `team daemon: unknown (<why>); socket <path>` — the state record or the socket cannot be read,
   so the reading cannot tell;
 - `team daemon: not running; socket <path>` — there is neither a live state record nor a socket.

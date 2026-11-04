@@ -207,7 +207,7 @@ Claude receiver, a walk from the owner, or from a sender whose own file does not
 [the native handoff](#the-native-channel) instead — one pending record, the exact target, the
 body and the `--confirm` line — and makes the call itself.
 The typed leg is the profile-gated typed wake: only a profile that declares `typed_wake` — the
-shipped `cursor` and `muse` profiles do — lets the walk reach it; a `typed` word in any other
+shipped `antigravity`, `codex`, `cursor`, `grok` and `muse` profiles do — lets the walk reach it; a `typed` word in any other
 profile's order is set aside before any leg runs, and the seat's own event adapters stand in its
 place, so a send no adapter takes ends at the drop leg with the record in the bus inbox. The drop
 leg never types: there the run ends `queued, not woken` once the signed record and its marker are

@@ -57,13 +57,13 @@ limit are the tighter words. The daemon reads both for each hosted root; a chain
 read keeps the release defaults and says which word it could not read.
 
 `daemon.heartbeat` (alias `daemon-heartbeat-seconds`) is the machine daemon's loop heartbeat, in
-whole seconds from 1 to 60 — 5 by default: how often the daemon refreshes its state record,
-probes its hosted endpoints and runs the fallback sweep, which still rides the beat in this
-release. The daemon reads it for each hosted root when it starts and again on its housekeeping
+whole seconds from 1 to 60 — 5 by default: how often the daemon refreshes its state record
+and probes its hosted endpoints. The fallback sweep rides the beat only under
+`daemon.chores: inline`; otherwise it is the chores child's pass (below). The daemon reads it for each hosted root when it starts and again on its housekeeping
 pass, and runs the shortest word any hosted root declares, so no hosted team loosens another's
 beat; a longer beat has to be declared at a level every hosted checkout shares. A shorter beat is
 the tighter word. `team daemon status` prints the beat it runs (`heartbeat <time> (every
-<seconds>s)`). While the sweep still rides the beat, a shorter beat makes a backlog stall more
+<seconds>s)`). Where the sweep does ride the beat, a shorter beat makes a backlog stall more
 often, not less.
 
 `daemon.chores` decides where the machine daemon runs its heavy per-checkout chores: `per-root`
@@ -130,6 +130,20 @@ send's; `memory` is an experiment no runtime in this build proves zero-persisten
 `memory` policy delivers nothing, refuses every seat and every `team send --brief`, and falls
 back to nothing. `message` is within `file`; `memory` is comparable only to itself. It takes the
 entity, project and team levels.
+
+Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
+power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,
+project and team levels) print, for a lead seat, the lines that a lead may type or choose in a
+seat's pane when a send cannot reach it or a dialog blocks it, and that a lead in development
+mode may bring back a stopped seat; `off` drops the line. `entity.main-orchestrator.relays-owner`
+(entity level alone) prints, inside an entity, the line that a decision the main orchestrator
+relays from the owner is quoted, cited, and acted on without asking again; it is `off` until an
+entity turns it on, because a relayed decision carries the owner's authority and a sender's
+claim to relay one does not yet verify. `owner.reserved-scope` is the list the owner's reserved
+scope line names — public releases, spending, credentials, and the owner's machine (its system
+settings, accounts and logins, keychain and hardware) unless a level names its own list — and
+that line always prints, with its second sentence: checkouts, seats and team config belong to
+the teams. A chain that cannot be read leaves the defaults in force.
 
 ## Who may run it
 

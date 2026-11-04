@@ -27,7 +27,11 @@ Each `<id>` is `tc_…` for a team-create rule or `oa_…` for an owner-action r
 Anyone may list or read details. Revoking is the owner's, from a terminal outside the terminal host, or an
 owner-seat answer for that revoke: `--request` records every id as one request (`--reason <text>` is
 the short reason the card shows) and the owner answers on the owner page; `--approval` runs it once. A signed always rule for
-`team-revoke-approval` covering the folder of every rule named admits the revoke with no request.
+`team-revoke-approval` covering the folder of every rule named admits the revoke with no request —
+to its subject: the lead of the team the rule was signed for, placed in that team's session, or
+that team's entity's main orchestrator (the owner as ever). The rule spent is the one naming the
+caller's team, so two teams sharing a folder cannot spend each other's rules; a plain seat, a lead
+of another team and another entity's orchestrator keep the refusal.
 The rule covers the rules' folders, not the caller's; a rule whose file does not verify has no
 folder that can be checked, so it admits nothing. A run with no terminal and no such answer is
 refused: `team approvals: only the owner runs this, from a terminal outside the terminal host`.
