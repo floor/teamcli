@@ -145,8 +145,9 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
 - **The mailbox `team messages` lists**: the record lands in `.agents/messages/owner/`, the
   mailbox the owner's `team messages` run already reads, so his list is one list. Its payload is a
   message addressed to `owner` whose writer is `runtime`; it is written at mode `0600` by renaming
-  a temporary file into place, and the run lists it, shows it and writes its receipt with the
-  rest.
+  a temporary file into place, and the owner's run lists it, shows it and writes its receipt with
+  the rest of that mailbox. It is the owner's own mailbox, so a seat's run lists it as a `waiting`
+  row and writes no receipt for it.
 - **The watch is the owner's delivery path only as itself**: the process delivers when the owner
   check that admits owner-only actions admits it, when it runs in the agentless pane `up` starts
   it in, or when it is the watch this session recorded. A watch a seat starts in its own pane runs

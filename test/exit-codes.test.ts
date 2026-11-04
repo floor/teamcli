@@ -149,6 +149,10 @@ const owner = { kind: 'owner' } as const;
 const detachedCaller = { kind: 'owner-no-tty' } as const;
 const other = { kind: 'seat', name: 'other', pane: 'w9:p1' } as const;
 const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
+/** The seat the `team messages` scenes read as: its own mailbox, in this team's session. */
+const mailboxSeat = { kind: 'seat', name: 'lead', pane: 'pane-messages', session: 'acme' } as const;
+/** A seat of the same team whose mailbox is not the one the messages scenes serve. */
+const otherMailboxSeat = { kind: 'seat', name: 'worker', pane: 'pane-messages-worker', session: 'acme' } as const;
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 const hot: Machine = { ...fine, loadPerCore: 9 };
 const quiet: Live = { running: false, agents: [], workspaces: [], screens: {} };
@@ -4144,8 +4148,8 @@ function messageRecord(place: Place, over: Partial<MessagePayload> = {}): Messag
   };
 }
 
-async function messaged(place: Place, argv: string[] = []): Promise<Ran> {
-  const io = testIo(place.root, owner);
+async function messaged(place: Place, argv: string[] = [], caller: Caller = mailboxSeat): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runMessages(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
 }
 
@@ -4184,7 +4188,15 @@ scene('messages.seat', async (place) => {
   write(place, TEAM);
   const record = messageRecord(place);
   plantMessage(place.home, record.root, 'worker', 'm1', record);
-  return show(await messaged(place), 'addressed to lead');
+  // A record in the worker's folder is the worker's to verify: judged from its own mailbox, it
+  // is bound to `lead` and refused. Any other caller only lists it as waiting.
+  return show(await messaged(place, [], otherMailboxSeat), 'addressed to lead');
+});
+scene('messages.caller', async (place) => {
+  write(place, TEAM);
+  const record = messageRecord(place);
+  plantMessage(place.home, record.root, 'lead', 'm1', record);
+  return show(await messaged(place, [], detachedCaller), 'only the owner or a seat of this session reads a mailbox');
 });
 scene('messages.session', async (place) => {
   write(place, TEAM);

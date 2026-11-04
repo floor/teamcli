@@ -194,9 +194,10 @@ function stateBytes(): string {
   return readFileSync(join(dir, STATE_FILE), 'utf8');
 }
 
-/** The product's own reader: `team messages` over a checkout, with the synthetic home's key. */
-async function readMail(where = root): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(where, { kind: 'owner' });
+/** The product's own reader: `team messages` over a checkout, reading the coordinator seat mailbox as that seat. */
+async function readMail(where = root, seat = where === entityRoot ? 'head-lead' : 'crew-lead'): Promise<{ code: number; out: string; err: string }> {
+  const session = where === entityRoot ? 'acme' : SESSION;
+  const io = testIo(where, { kind: 'seat', name: seat, pane: `pane-${seat}`, session });
   const code = await runMessages([], io, { home, now: () => new Date(clock) });
   return { code, out: io.out, err: io.err };
 }

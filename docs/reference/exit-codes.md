@@ -436,6 +436,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.client-shown` | `messages` | 0 | a client reading completed, and an acknowledged reply's receipt was written when it was asked for | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
+| `messages.caller` | `messages` | 1 | the caller is not placed as the owner or a seat of the team's session | `team messages` |
 | `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `messages.client-pane` | `messages` | 1 | a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team messages --client client-grant.json --key client.key` |
 | `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |

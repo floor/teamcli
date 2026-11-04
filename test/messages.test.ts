@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readEvents } from '../src/bus/log.ts';
+import type { Caller } from '../src/caller.ts';
 import { findRoot } from '../src/file/load.ts';
 import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
@@ -47,6 +48,11 @@ const NOW = new Date('2026-10-04T09:00:00.000Z');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const moduleUrl = (relative: string): string => pathToFileURL(join(HERE, '..', relative)).href;
 
+/** The seats the scenes read as. A reading serves one mailbox: the caller's own, placed as one of
+ *  the fixture team's seats in its session, so every scene names the seat whose mail it reads. */
+const LEAD: Caller = { kind: 'seat', name: 'lead', pane: 'pane-messages-lead', session: 'acme' };
+const WORKER: Caller = { kind: 'seat', name: 'worker', pane: 'pane-messages-worker', session: 'acme' };
+
 /** The one waiting record of the fixture, at the pinned instant, as the reading prints it. */
 const SHOWN = `team acme, session "acme"
   ID  FROM     TO    SENT    STATUS
@@ -78,8 +84,8 @@ function payload(over: Partial<MessagePayload> = {}): MessagePayload {
   };
 }
 
-async function run(argv: string[] = []): Promise<{ code: number; out: string; err: string }> {
-  const io = testIo(root, { kind: 'owner' });
+async function run(argv: string[] = [], caller: Caller = LEAD): Promise<{ code: number; out: string; err: string }> {
+  const io = testIo(root, caller);
   const code = await runMessages(argv, io, { home, now: () => NOW });
   return { code, out: io.out, err: io.err };
 }
@@ -129,7 +135,7 @@ describe('team messages', () => {
     project();
     const record = payload();
     plantMessage(home, record.root, 'lead', 'm1', record);
-    const io = testIo(root, { kind: 'owner' });
+    const io = testIo(root, LEAD);
     io.stdout = () => { throw new Error('stdout failed'); };
     await expect(runMessages([], io, { home, now: () => new Date('2026-10-04T09:00:00.000Z') })).rejects.toThrow('stdout failed');
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(false);
@@ -169,7 +175,7 @@ describe('team messages', () => {
     mkdirSync(join(plain, '.agents'), { recursive: true });
     writeFileSync(join(plain, '.agents', 'team.yaml'), TEAM);
     plantRecord(home, plain, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
-    const io = testIo(plain, { kind: 'owner' });
+    const io = testIo(plain, LEAD);
     expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(SHOWN);
     expect(io.err).toBe('');
@@ -247,8 +253,10 @@ difference: lead/m2 does not verify: its id is m1, and the filename is the id
   test('a copy into another seat\'s directory does not verify', async () => {
     project();
     const record = payload();
+    // The worker reads its own mailbox: the copy waiting there is its record to refuse, and the
+    // refusal names the mailbox the record's own payload asks for.
     plantMessage(home, record.root, 'worker', 'm1', record);
-    const result = await run();
+    const result = await run([], WORKER);
     expect(result.code).toBe(1);
     expect(result.out).toBe(`team acme, session "acme"
   ID  FROM     TO    SENT    STATUS
@@ -348,22 +356,32 @@ difference: lead/m1 does not verify: the record is not a message
     for (const suffix of ['.wake', '.reported']) expect(existsSync(join(dropDir, `${id}${suffix}`))).toBe(true);
   });
 
-  test('seats print in seat order: builder-2, builder-9, builder-10, builder-100', async () => {
+  test('seats print in seat order: builder-2, builder-9, builder-10, builder-100, and only the caller\'s record is served', async () => {
     project();
     // Planted in a deliberately wrong order: the filesystem's string order would print
-    // builder-100 and builder-10 before builder-2 and builder-9.
+    // builder-100 and builder-10 before builder-2 and builder-9. One record per seat; the run
+    // reads as `builder`, so its own record is served and the other four list as waiting.
     for (const seat of ['builder-100', 'builder-10', 'builder-2', 'builder-9', 'builder']) {
       plantMessage(home, root, seat, 'm1', payload({ to: seat, body: `body from ${seat}` }));
     }
-    const result = await run();
+    const caller: Caller = { kind: 'seat', name: 'builder', pane: 'pane-messages-builder', session: 'acme' };
+    const result = await run([], caller);
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
     const seats = ['builder', 'builder-2', 'builder-9', 'builder-10', 'builder-100'];
-    const rows = seats.map((seat) => `  m1  harness  ${seat.padEnd(11)}  0s ago  shown`).join('\n');
-    const bodies = seats.map((seat) => `${seat}/m1:\nbody from ${seat}\n`).join('\n');
+    const rows = seats
+      .map((seat) => `  m1  harness  ${seat.padEnd(11)}  0s ago  ${seat === 'builder' ? 'shown' : 'waiting'}`)
+      .join('\n');
     expect(result.out).toBe(
-      `team acme, session "acme"\n  ID  FROM     TO           SENT    STATUS\n${rows}\n\n${bodies}\n5 messages\n`,
+      `team acme, session "acme"\n  ID  FROM     TO           SENT    STATUS\n${rows}\n\nbuilder/m1:\nbody from builder\n\n` +
+        'note: 4 messages addressed to another mailbox are waiting; they are listed without their bodies, and no receipts are written for them.\n\n' +
+        '5 messages\n',
     );
+    // Only the caller's id is spent; the other four wait for their own seats' readers.
+    for (const seat of seats) {
+      const receipt = receiptFile(root, seat, 'm1');
+      expect(existsSync(receipt)).toBe(seat === 'builder');
+    }
   });
 
   test('a waiting record and no message key shows nothing and creates no key', async () => {
@@ -378,8 +396,8 @@ difference: lead/m1 does not verify: the record is not a message
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
   });
 
-  async function runJson(argv: string[] = ['--json'], cwd = root): Promise<{ code: number; out: string; err: string }> {
-    const io = testIo(cwd, { kind: 'owner' });
+  async function runJson(argv: string[] = ['--json'], cwd = root, caller: Caller = LEAD): Promise<{ code: number; out: string; err: string }> {
+    const io = testIo(cwd, caller);
     const code = await runMessages(argv, io, { home, now: () => NOW });
     return { code, out: io.out, err: io.err };
   }
@@ -393,7 +411,7 @@ difference: lead/m1 does not verify: the record is not a message
     notes: string[];
     differences: { what: string; repair: string; who: string }[];
     summary: { differences: number; owner_differences: number };
-    counts: { messages: number; shown: number; refused: number };
+    counts: { messages: number; shown: number; refused: number; waiting: number };
   };
 
   test('--json prints the empty inbox as one document, registered as team.messages', async () => {
@@ -411,7 +429,7 @@ difference: lead/m1 does not verify: the record is not a message
       notes: ['nothing is waiting'],
       differences: [],
       summary: { differences: 0, owner_differences: 0 },
-      counts: { messages: 0, shown: 0, refused: 0 },
+      counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
     });
   });
 
@@ -433,7 +451,7 @@ difference: lead/m1 does not verify: the record is not a message
       body: BODY,
     }]);
     expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
-    expect(doc.counts).toEqual({ messages: 1, shown: 1, refused: 0 });
+    expect(doc.counts).toEqual({ messages: 1, shown: 1, refused: 0, waiting: 0 });
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(true);
   });
 
@@ -459,7 +477,7 @@ difference: lead/m1 does not verify: the record is not a message
       who: 'any seat',
     }]);
     expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
-    expect(doc.counts).toEqual({ messages: 1, shown: 0, refused: 1 });
+    expect(doc.counts).toEqual({ messages: 1, shown: 0, refused: 1, waiting: 0 });
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(false);
   });
 
@@ -715,7 +733,7 @@ difference: lead/m1 does not verify: the record is not a message
     expect(doc.differences.map((difference) => difference.what)).toEqual([
       `lead/${ID} was not shown: the read receipt name is held by a file that does not verify for this message`,
     ]);
-    expect(doc.counts).toEqual({ messages: 2, shown: 1, refused: 1 });
+    expect(doc.counts).toEqual({ messages: 2, shown: 1, refused: 1, waiting: 0 });
     expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
     expect(readFileSync(damagedPath, 'utf8')).toBe(damaged);
   });
@@ -747,7 +765,7 @@ import { runMessages } from ${JSON.stringify(moduleUrl('src/commands/messages.ts
 import { testIo } from ${JSON.stringify(pathToFileURL(join(HERE, 'helpers.ts')).href)};
 const [cwd, home, barrier] = process.argv.slice(2);
 while (barrier !== '' && !existsSync(barrier)) await new Promise((tick) => setTimeout(tick, 5));
-const io = testIo(cwd, { kind: 'owner' });
+const io = testIo(cwd, ${JSON.stringify(LEAD)});
 const code = await runMessages([], io, { home, now: () => new Date() });
 console.log(JSON.stringify({ code, out: io.out, err: io.err }));
 `);
@@ -888,14 +906,16 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     project();
     const found = findRoot(root);
     if (!found) throw new Error('not a checkout');
-    plantRecord(home, found, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
+    // Both records wait in the worker's own mailbox: its reading serves the ordinary one and
+    // leaves the brief to the seat's own turn-start reader.
+    plantRecord(home, found, 'acme', 'worker', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
     const brief = plantBrief(found, 'worker');
     const workerDrop = recordDir(found, 'acme', 'worker');
 
-    const result = await run();
+    const result = await run([], WORKER);
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
-    expect(result.out).toContain(`lead/m1:\n${BODY}`);
+    expect(result.out).toContain(`worker/m1:\n${BODY}`);
     expect(result.out).toContain(
       "note: worker: the general seat brief is not shown here; the seat's own turn-start reader serves it.",
     );
@@ -904,7 +924,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     expect(result.out.endsWith('1 message\n')).toBe(true);
 
     // The ordinary record's receipt stands; the brief's id is still waiting for its own reader.
-    expect(statusOf(recordDir(found, 'acme', 'lead'), 'm1', { to: 'lead', root: found, session: 'acme' }, messageKey())).toBe('read');
+    expect(statusOf(workerDrop, 'm1', { to: 'worker', root: found, session: 'acme' }, messageKey())).toBe('read');
     expect(existsSync(recordReceiptFile(workerDrop, brief.id, 'read'))).toBe(false);
     expect(listUnread(workerDrop, { to: 'worker', root: found, session: 'acme' }, home).map((message) => message.id)).toEqual([brief.id]);
   });
@@ -915,7 +935,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     if (!found) throw new Error('not a checkout');
     plantBrief(found, 'worker');
 
-    const result = await run();
+    const result = await run([], WORKER);
     expect(result).toEqual({
       code: 0,
       out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\n' +
@@ -924,7 +944,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
       err: '',
     });
 
-    const json = await runJson();
+    const json = await runJson(['--json'], root, WORKER);
     expect(json.code).toBe(0);
     expect(json.err).toBe('');
     const doc = assertMatchesOutputSchema<MessagesDoc>(json.out, MESSAGES_OUTPUT_SCHEMA);
@@ -936,7 +956,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
       notes: ["worker: the general seat brief is not shown here; the seat's own turn-start reader serves it."],
       differences: [],
       summary: { differences: 0, owner_differences: 0 },
-      counts: { messages: 0, shown: 0, refused: 0 },
+      counts: { messages: 0, shown: 0, refused: 0, waiting: 0 },
     });
   });
 
@@ -959,7 +979,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     });
     if (!written.ok) throw new Error(written.reason);
 
-    const result = await run();
+    const result = await run([], WORKER);
     expect(result.code).toBe(1);
     expect(result.err).toBe('');
     expect(result.out).toContain(`worker/${brief.id}`);
@@ -986,7 +1006,7 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     }, home), home);
     expect(served.ok).toBe(true);
 
-    expect(await run()).toEqual({
+    expect(await run([], WORKER)).toEqual({
       code: 0,
       out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
       err: '',
