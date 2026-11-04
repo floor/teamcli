@@ -158,11 +158,16 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const params = (typeof inner.params === 'object' && inner.params !== null ? inner.params : {}) as Record<string, unknown>;
       if (typeof inner.created !== 'string' || typeof inner.params_sha256 !== 'string') return null;
       if (inner.expires_at !== null && typeof inner.expires_at !== 'string') return null;
+      // A grant names its team in `params.team` (a team grant) or in `params.up.project` (an up
+      // grant binds one team); an owner action names it in `params.team`. A team-create card names
+      // the folder it would create, which is not a team yet and blocks nobody.
+      const up = typeof params.up === 'object' && params.up !== null ? (params.up as Record<string, unknown>) : null;
+      const namedTeam = typeof params.team === 'string' ? params.team : up !== null && typeof up.project === 'string' ? up.project : null;
       return {
         folder,
         kind: grant ? 'grant' : action ? 'owner-action' : 'team-create',
         window: { params_sha256: inner.params_sha256, created: inner.created, expires_at: inner.expires_at },
-        team: action && typeof params.team === 'string' ? params.team : null,
+        team: grant || action ? namedTeam : null,
         entity: grant && typeof params.entity === 'string' ? params.entity : undefined,
       };
     } catch {
@@ -227,7 +232,20 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     };
     const signed = signOwnerLater(home, later, resolved.window.created, via.signer, store, `Defer ${id} until ${later.until}`, via.assertion, at);
     if (!signed.ok) return signed;
-    writeFileSync(join(resolved.folder, `${id}.later.json`), `${JSON.stringify(signed.signed, null, 2)}\n`);
+    // One deferral per request: the file is created, never replaced, so two answers cannot race
+    // into one another and the one already on disk stays what a reader verifies.
+    const path = join(resolved.folder, `${id}.later.json`);
+    try {
+      writeFileSync(path, `${JSON.stringify(signed.signed, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return {
+        ok: false,
+        why: code === 'EEXIST'
+          ? `request ${id} already carries a deferral; it was not replaced`
+          : `the deferral for ${id} could not be written in "${resolved.folder}"`,
+      };
+    }
     // The deferral is written first and stands on its own; telling the team's lead is the one
     // other effect, and a note that cannot be written is reported rather than undone.
     let notice: string;

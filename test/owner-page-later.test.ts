@@ -398,6 +398,31 @@ describe('owner list: the later answer', () => {
     if (!refused.ok) expect(refused.why).toContain('no verified owner-seat answer');
   });
 
+  test('a later file already on disk refuses a second deferral and the card stays listed', async () => {
+    const s = await setup();
+    const p = await ready(s);
+    const tc = tcRequest(s);
+    // A file no reader can verify hides nothing, so the card stays on the page; a second deferral
+    // must not replace it, and the refusal must say so.
+    const foreign = '{"owner_seat_later":{"request_id":"another"},"signer":"mac","signature":"00"}\n';
+    writeFileSync(laterPath(s, tc.id), foreign);
+    expect(await listed(s)).toEqual([tc.id]);
+
+    const { probe, done } = await answerWord(s, p, tc.id, 'later');
+    expect(probe.status).toBe(200);
+    expect(done?.status).toBe(400);
+    expect(String(done?.body.error)).toContain('already carries a deferral');
+    expect(await listed(s)).toEqual([tc.id]);
+    expect(readFileSync(laterPath(s, tc.id), 'utf8')).toBe(foreign);
+
+    // With the file gone the same answer defers normally: the refusal came from the file, not the card.
+    rmSync(laterPath(s, tc.id));
+    const second = await deferOnce(s, p, tc.id);
+    expect(second.body).toMatchObject({ ok: true, choice: 'later' });
+    s.at(MINUTE);
+    expect(await listed(s)).toEqual([]);
+  });
+
   test('a forged, misbound or already-past later record hides nothing', async () => {
     const s = await setup();
     const p = await ready(s);

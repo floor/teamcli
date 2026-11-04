@@ -5,21 +5,23 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { approveAsOwnerSeat, executePendingGrant, grantRequestsFolder } from '../src/client/emission.ts';
 import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { clientKeyDir, newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { runGrant } from '../src/commands/grant.ts';
+import { recordDir } from '../src/commands/messages.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { serveOwnerPage } from '../src/security/owner-page.ts';
-import { keyOf } from '../src/store/keys.ts';
+import { verifyRecord } from '../src/send/record.ts';
+import { keyOf, messageKeyOf } from '../src/store/keys.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { fixtureBase } from './helpers.ts';
+import { fixtureBase, recordAt } from './helpers.ts';
 
 const T0 = new Date('2026-11-04T10:00:00.000Z');
 const MINUTE = 60_000;
@@ -164,10 +166,10 @@ function capture(w: World): { io: Io; out: () => string; err: () => string } {
 }
 
 /** One recorded client-grant request, delivered to the owner seat's inbox. */
-async function requestGrant(w: World, now: Date): Promise<string> {
+async function requestGrant(w: World, now: Date, extra: string[] = []): Promise<string> {
   const io = capture(w);
   const code = await runGrant(
-    ['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--request', '--json'],
+    ['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--request', ...extra, '--json'],
     io.io,
     { home: w.home, notify: () => false, now },
   );
@@ -258,5 +260,34 @@ describe('grant reader: the later window', () => {
     if (!executed.ok) throw new Error(executed.why);
     expect(executed.adapter).toBe('owner-seat');
     expect(existsSync(join(grantRequestsFolder(s.home), `${first}.used`))).toBe(true);
+  });
+
+  test('a grant deferral names the grant\'s team and tells its lead', async () => {
+    const s = await stage();
+    // A team grant names its team in the request's parameters; the owner page must read it from
+    // there, because the card itself carries no team and the blocked lead would never be told.
+    const id = await requestGrant(s, s.now(), ['--team', 'floor', '--seat', 'orchestrator']);
+    expect(await listed(s)).toEqual([id]);
+    const until = new Date(T0.getTime() + 4 * HOUR);
+    const done = await deferOnce(s, id);
+    expect(done.body.until).toBe(until.toISOString());
+    expect(String(done.body.notice ?? '')).toContain('lead of floor');
+
+    const folder = recordDir(s.root, 'floor', 'orchestrator');
+    const notes = readdirSync(folder).filter((name) => !name.includes('.'));
+    expect(notes).toHaveLength(1);
+    const note = recordAt(join(folder, notes[0]!));
+    expect(verifyRecord(note, messageKeyOf(s.home))).toBe(true);
+    expect(note.payload).toMatchObject({
+      from: 'owner page',
+      from_id: null,
+      rule: 'owner page',
+      to: 'orchestrator',
+      root: s.root,
+      session: 'floor',
+      message_kind: 'blocked',
+    });
+    expect(note.payload.body).toContain(id);
+    expect(note.payload.body).toContain(until.toISOString());
   });
 });
