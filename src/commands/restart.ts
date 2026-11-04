@@ -90,6 +90,7 @@ import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQ
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
+import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -722,6 +723,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         session,
         notes,
         performed.pullOnly,
+        performed.handoverAsked,
       );
     }
     default: {
@@ -835,6 +837,10 @@ export type PerformResult =
       /** The handover file the launch was actually given. Absent when no file was there to read,
        *  so a caller never reports a handover the launch did not get. */
       handover?: string;
+      /** The checkpoint that was on record when no file was there: the ask's own path, so the
+       *  caller can tell the lead the restart ran from the previous checkpoint and it may be
+       *  stale. Absent when no ask stood, and when one stood and the file was there (`handover`). */
+      handoverAsked?: string;
       /** Why the registry holds no record binding this seat, when it does not: the seat runs,
        *  but native delivery cannot resolve it and only pull reaches it. */
       pullOnly?: string;
@@ -1100,6 +1106,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
+    let handoverAsked: string | undefined;
     let stopObs: Extract<InspectedSeat, { kind: 'ok' }> = rechecked;
 
     if (rechecked.agent) {
@@ -1126,16 +1133,26 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
+      // The checkpoint the boundary asked for (context reset R2): a caller that named no handover
+      // of its own — a hand restart, the watchdog's `team restart <seat>` — has the seat's
+      // standing ask in this terminal-host session read here, so both entry points get one rule.
+      // A swap that needs a handover names its own path, and that keeps precedence.
+      const checkpoint = input.handover === undefined ? latestCheckpoint(readState(dir), name, session) : null;
+      const handoverAsk = input.handover ?? (checkpoint === null ? undefined : { path: checkpoint.path });
       // The handover is read at the boundary, before the stop: the new conversation is given the
       // file a previous attempt already wrote. Nothing is typed into the old conversation to ask
       // for one. The pane is read again after this, so the stop acts on the screen it is about
       // to close, never the one the preflight read.
-      if (input.handover !== undefined) {
+      if (handoverAsk !== undefined) {
         handoverPath = askForHandover({
           name,
-          path: input.handover.path,
+          path: handoverAsk.path,
           log: (said) => logLine(dir, input.command, who, said, sources.now()),
         });
+        // A checkpoint on record with no file there is the stale case: the launch goes on, and
+        // the result names the ask that was not answered, so the lead is told the checkpoint may
+        // be stale. A swap's own missing handover keeps its existing wording.
+        if (handoverPath === undefined && checkpoint !== null) handoverAsked = checkpoint.path;
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
@@ -1205,7 +1222,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       });
       if (priorPane) forgetLaunchedPane(sources.home, priorPane, session);
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
-      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
+      // The end event names the ask's path when one stood — file or not — so the chain holds its
+      // checkpoint from both sides.
+      const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason, handoverPath ?? handoverAsked);
       if (ended) logLine(dir, input.command, who, ended.note, sources.now());
     } else {
       // Nothing was stopped in this run, so the launch's one machine decision is taken here,
@@ -1457,6 +1476,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+      ...(handoverAsked === undefined ? {} : { handoverAsked }),
       ...(record.kind === 'bound' ? {} : { pullOnly: bindWhy ?? record.why }),
     };
   } finally {
@@ -2463,9 +2483,14 @@ function readyExit(
   session: string,
   notes: readonly string[],
   pullOnly?: string,
+  handoverAsked?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
-  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}`;
+  // The stale-checkpoint line is the design's own words for the case: the restart ran from the
+  // previous checkpoint, and the lead is told it may be stale. The path is named so the lead can
+  // see the ask the seat never answered.
+  const stale = handoverAsked === undefined ? '' : `; the checkpoint may be stale: no handover at ${plainLine(handoverAsked)}`;
+  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}${stale}`;
   if (json) {
     writeJson(out, 'team.restart', {
       format: 1 as const,
@@ -2478,6 +2503,7 @@ function readyExit(
       pane: toPane,
       notes,
       ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
+      ...(handoverAsked === undefined ? {} : { handover_asked: handoverAsked }),
     });
   } else {
     out.stdout(`${summary}\n`);

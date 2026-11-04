@@ -78,12 +78,12 @@ export type SessionStartEvent = {
   effort?: string;
   /** The account the seat spends: its own `account:`, else the vendor, which is the account. */
   account: string;
-  /** The herdr session the seat was launched in. */
+  /** The terminal-host session the seat was launched in. */
   herdr_session: string;
   pane?: string;
   workspace?: string;
   /** The CLI's own session id: the one TeamCLI set at launch where the CLI takes one, else the
-   *  one herdr reported for the pane. Absent when neither was known. */
+   *  one the terminal host reported for the pane. Absent when neither was known. */
   cli_session?: string;
   /** Whether the CLI keeps the session to resume it. Absent when not known. */
   resumable?: boolean;
@@ -91,7 +91,7 @@ export type SessionStartEvent = {
   resume_until?: string;
   /** The handover file the next session reads first, when one was written. */
   handover?: string;
-  /** The session this seat ran before, in this team and herdr session. */
+  /** The session this seat ran before, in this team and terminal-host session. */
   previous?: string;
 };
 
@@ -359,8 +359,8 @@ export function sessionsPath(team: TeamFile, root: string, home: string): string
 }
 
 /**
- * The last session `seat` started in this team and herdr session, as the registry folded it —
- * its `cli_session` is the id a swap resumes where the CLI keeps sessions. Null when the
+ * The last session `seat` started in this team and terminal-host session, as the registry folded
+ * it — its `cli_session` is the id a swap resumes where the CLI keeps sessions. Null when the
  * registry holds none of this seat or cannot be read: a swap that finds no id hands over.
  */
 export function latestSessionOf(
@@ -385,8 +385,8 @@ export function mintSessionId(): string {
 
 /**
  * What a launch tells the registry. `cli_session` is the id TeamCLI set at launch, where the CLI
- * takes one, else the id herdr reported for the pane. `now` is the injected clock, so a test's
- * record has the time its fixture says.
+ * takes one, else the id the terminal host reported for the pane. `now` is the injected clock, so
+ * a test's record has the time its fixture says.
  */
 export type BeginInput = {
   home: string;
@@ -419,12 +419,17 @@ export type EndInput = {
   seat?: string;
   reason: SessionEndReason;
   note?: string;
+  /** The handover file this session's checkpoint asked for, when the ending command knows one:
+   *  named on the end event so the chain holds its checkpoint from both sides — the next start's
+   *  record names the file the successor was given, and this end names the one it was asked to
+   *  write. Absent when no ask was on record, and never a claim the file exists. */
+  handover?: string;
   now?: Date;
 };
 
 /**
  * Records the start of a session for `seat` in `pane`. When the seat already has a session open
- * in this team and herdr session:
+ * in this team and terminal-host session:
  * - the same pane and the same defined CLI session id is the same launch reported twice:
  *   nothing is written;
  * - anything else is a launch that replaces the old one: the old record ends as `crash`, or as
@@ -500,8 +505,8 @@ export function beginSession(input: BeginInput): { id: string } | { note: string
 
 /**
  * Records the end of a session: one seat's open record, or every open record of the team in
- * this herdr session when no seat is named. A record the registry never opened is no error and
- * nothing is written. An error comes back as the note to log.
+ * this terminal-host session when no seat is named. A record the registry never opened is no
+ * error and nothing is written. An error comes back as the note to log.
  */
 export function endSession(input: EndInput): { ended: string[] } | { note: string } {
   const { home, root, team, session } = input;
@@ -525,6 +530,7 @@ export function endSession(input: EndInput): { ended: string[] } | { note: strin
           id: record.id,
           reason: input.reason,
           ...(input.note === undefined ? {} : { note: input.note }),
+          ...(input.handover === undefined ? {} : { handover: input.handover }),
         });
         if (!written.ok) return written;
         ended.push(record.id);

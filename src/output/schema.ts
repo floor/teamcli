@@ -1748,6 +1748,9 @@ export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     // Why the registry holds no record binding the seat, when it does not: the seat runs, but
     // native delivery cannot resolve it and only pull reaches it.
     pull_only: { type: 'string', minLength: 1 },
+    // A checkpoint was on record and no handover file was there: the restart ran from the
+    // previous checkpoint, and the lead is told it may be stale. The value is the ask's path.
+    handover_asked: { type: 'string', minLength: 1 },
   },
 });
 
