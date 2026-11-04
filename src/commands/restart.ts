@@ -32,6 +32,8 @@ import { teamTextTarget } from '../file/team-text.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readLaunchedTeam, readTeamText, readTeamTextTarget, teamPlace, writeTeamText } from '../file/team-text.ts';
 import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
+import { setSeatStopped } from '../file/stopped-mark.ts';
+import { validateTeamFile } from '../file/validate.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -69,7 +71,7 @@ import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/c
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
@@ -85,7 +87,7 @@ import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQ
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
@@ -1205,6 +1207,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       doctor: sources.doctor,
       ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
+    // The roster line this relaunch needs before its CLI starts when it starts from the
+    // registry's record: the inbox registration and the server it starts resolve the seat by it,
+    // before the run's own registerLaunch writes one. A launch that names a team file reads the
+    // seat from that file, and the completed launch's own record writes the line.
+    for (const name of registryLaunches(plan)) {
+      const declared = team.seats.find((candidate) => candidate.name === name);
+      if (declared === undefined) continue;
+      const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
+      if ('note' in lined) logLine(dir, input.command, who, lined.note, sources.now());
+    }
     const report = await executePlan(plan, session, host);
     let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
@@ -2143,15 +2155,20 @@ function signedOffRefused(out: Io, json: boolean, name: string): number {
 }
 
 /**
- * One team-file write a revival makes: the seat's entry edited on the text the file holds now,
- * and the whole file validated before it replaces the one on disk. A file the schema refuses is
- * left as it was, and a seat taken out of the file since the run read it is said, never re-added.
+ * One team-text write a revival makes: the seat's entry edited on the record as the source holds
+ * it now, and the whole text validated before it replaces what was read. A text the schema
+ * refuses is left as it was, and a seat the record no longer declares is said, never re-added.
+ *
+ * The seat's existence is the parsed record's answer, not the line writer's: a seat written as a
+ * flow mapping or in a list at the `seats:` header's own column is declared, and the record editor
+ * rewrites its mark where the line writer could not see it. A record that no longer validates
+ * keeps the line writer's edit, so the write below refuses it with the problems it always did.
  */
 function rewriteSeatEntry(
   path: string,
   name: string,
   home: string,
-  edit: (text: string, name: string) => string,
+  stopped: boolean,
 ): { ok: true } | { ok: false; why: string } {
   const where = { home, command: 'restart' };
   let text: string;
@@ -2160,8 +2177,22 @@ function rewriteSeatEntry(
   } catch (error) {
     return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${error instanceof Error ? error.message : String(error)})` };
   }
-  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
-  const written = writeTeamText(path, edit(text, name), where);
+  const place = teamPlace(path, where, 'the file');
+  const parsed = validateTeamFile(text, { home });
+  const declared = parsed.ok ? parsed.team.seats.some((seat) => seat.name === name) : hasSeat(text, name);
+  if (!declared) return { ok: false, why: `${name} is no longer in ${place}` };
+  let next: string;
+  if (parsed.ok) {
+    const edited = setSeatStopped(text, name, stopped);
+    if (!edited.ok) {
+      const what = stopped ? 'put the stopped mark back on' : 'clear the stopped mark on';
+      return { ok: false, why: `couldn't ${what} ${name} in ${place}: ${edited.why}` };
+    }
+    next = edited.text;
+  } else {
+    next = stopped ? markStopped(text, name) : clearStopped(text, name);
+  }
+  const written = writeTeamText(path, next, where);
   if (!written.ok) {
     const problem = written.errors[0];
     return {
@@ -2174,22 +2205,22 @@ function rewriteSeatEntry(
 
 /**
  * The sign-off a revival lifts, cleared after the old pane is closed and before the launch,
- * which reads the file's own words: the seat's block loses `stopped: true` and keeps everything
+ * which reads the file's own words: the seat's entry loses `stopped: true` and keeps everything
  * else. A failed write is the caller's abort: nothing is launched from a file the run could not
  * rewrite.
  */
 function declareRevived(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, clearStopped);
+  return rewriteSeatEntry(path, name, home, false);
 }
 
 /**
- * The sign-off a launch that did not reach ready puts back: the seat's block is marked
+ * The sign-off a launch that did not reach ready puts back: the seat's entry is marked
  * `stopped: true` again — exactly as it was, without re-adding a seat that left the file and
- * without touching another entry — and the whole file is validated before it replaces the one
- * on disk.
+ * without touching another entry — and the whole text is validated before it replaces what was
+ * read.
  */
 function declareStopped(path: string, name: string, home: string): { ok: true } | { ok: false; why: string } {
-  return rewriteSeatEntry(path, name, home, markStopped);
+  return rewriteSeatEntry(path, name, home, true);
 }
 
 function herdrRefused(out: Io, json: boolean): number {

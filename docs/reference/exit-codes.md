@@ -45,9 +45,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
-| `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
+| `add.no-like` | `add` | 1 | the team has no seat to copy | `team add --temporary --like missing --until result:out.md` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
-| `add.no-seat` | `add` | 1 | the file has no such seat | `team add missing` |
+| `add.no-seat` | `add` | 1 | the team has no such seat | `team add missing` |
 | `add.not-ready` | `add` | 1 | the launch finished without a ready seat | `team add worker` |
 | `add.not-restored` | `add` | 1 | the seat can't be put back into the file | `team add worker` |
 | `add.override-owner` | `add` | 1 | --model and --effort on a declared seat are the owner's | `team add worker --model claude-sonnet-5-5` |

@@ -53,7 +53,7 @@ import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endp
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
-import { upPlan } from '../launch/plan.ts';
+import { registryLaunches, upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -68,7 +68,7 @@ import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
-import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -896,6 +896,18 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         else logLine(dir, 'reload', who, `${seat.name}: ${driftDetail}`, now());
       },
     };
+    // The roster line this relaunch needs before its CLI starts when it starts from the
+    // registry's record: the inbox registration and the server it starts resolve the seat by it,
+    // before the run's own registerLaunch writes one. A launch that names a team file reads the
+    // seat from that file, and the completed launch's own record writes the line.
+    if (home !== undefined) {
+      for (const name of registryLaunches(steps)) {
+        const declared = team.seats.find((candidate) => candidate.name === name);
+        if (declared === undefined) continue;
+        const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
+        if ('note' in lined) logLine(dir, 'reload', who, lined.note, now());
+      }
+    }
     const report = await executePlan(steps, session, host);
     if (!report.dropped.includes(seat.name)) {
       const after = readState(dir).sessions[session]?.seats[seat.name];

@@ -18,6 +18,7 @@ import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { markStopped, seatIsStopped } from '../src/file/lines.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
@@ -1162,6 +1163,80 @@ describe('team restart <seat>', () => {
     const after = readState(fixture.dir).sessions.acme?.seats['parked-seat'];
     expect(after?.stage).toBe('ready');
     expect(after?.pane).toBe('pane-new');
+  });
+
+  // A seat may be written as a bare dash item: YAML reads the fields under `  -` as one entry, and
+  // so must the write that signs the revival into the same file. The dry run never writes, so it
+  // prints a plan; the real run's write decides the seat from the parsed record and clears its mark
+  // through the record editor.
+  test('a stopped seat written as a bare dash item is revived in one run, as the dry run planned', async () => {
+    const yaml = TEAM_YAML.replace(
+      `  - role: implementer
+    name: parked-seat`,
+      `  -
+    role: implementer
+    name: parked-seat`,
+    );
+    expect(validateTeamFile(yaml).ok).toBe(true);
+    const fixture = makeFixture(yaml);
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const caller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const ioDry = testIo(fixture.root, caller);
+    expect(await runRestart(['parked-seat', '--dry-run'], ioDry, sources)).toBe(0);
+    expect(ioDry.err).toBe('');
+    expect(ioDry.out).toContain('parked-seat');
+    expect(ioDry.out).toContain('dry run: nothing was run\n');
+    expect(did.created).toBe(0);
+    const io = testIo(fixture.root, caller);
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    const after = readFileSync(fixture.file, 'utf8');
+    expect(seatIsStopped(after, 'parked-seat')).toBe(false);
+    expect(seatIsStopped(after, 'lead')).toBe(false);
+    expect(after).toContain('    name: parked-seat\n');
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).toBe('ready');
+  });
+
+  // A seat may be written as a flow mapping: the validator declares it, while the line writer
+  // finds no name inside the braces. The revival decides the seat from the parsed record and
+  // rewrites its mark through the record editor, so the sign-off clears and the launch runs.
+  test('a stopped seat written as a flow mapping is revived in one run', async () => {
+    const yaml = TEAM_YAML.replace(
+      `  - role: implementer
+    name: parked-seat
+    label: parked
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    stopped: true
+`,
+      `  - { role: implementer, name: parked-seat, label: parked, cli: claude-code, vendor: anthropic, model: Claude Opus, version: "5.5", launch: claude --model claude-opus-5-5, stopped: true }
+`,
+    );
+    expect(validateTeamFile(yaml).ok).toBe(true);
+    const fixture = makeFixture(yaml);
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
+    const after = readFileSync(fixture.file, 'utf8');
+    expect(seatIsStopped(after, 'parked-seat')).toBe(false);
+    expect(validateTeamFile(after).ok).toBe(true);
+    expect(did.created).toBe(1);
+    expect(did.runs).toHaveLength(1);
+    expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).toBe('ready');
   });
 
   // A launch that never reaches ready is no revival: the run puts the sign-off back in its own

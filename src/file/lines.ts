@@ -61,15 +61,19 @@ export function seatBlocks(text: string): SeatBlock[] {
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i] ?? '';
     if (line.trim() === '' || /^\s*#/.test(line)) continue;
-    if (indent(line) <= key) {
-      flush(i);
-      break;
-    }
-    if (/^\s*-(?:\s|$)/.test(line)) {
+    // A dash at the header's own column is an item of the seats list too: YAML writes an
+    // indentless sequence that way (`seats:` then `- name: …` at the same column), and the
+    // validator reads those entries as seats. Anything shallower is outside the section.
+    if (indent(line) >= key && /^\s*-(?:\s|$)/.test(line)) {
       if (itemIndent < 0) itemIndent = indent(line);
       if (indent(line) > itemIndent) continue;
       flush(i);
       start = i;
+      continue;
+    }
+    if (indent(line) <= key) {
+      flush(i);
+      break;
     }
   }
   if (start >= 0) flush(lines.length);
@@ -154,10 +158,17 @@ export function seatIsStopped(text: string, name: string): boolean {
   return lines.slice(block.start, block.end).some((line) => /^\s*stopped:\s*(true|yes)\b/.test(line));
 }
 
+/** `text` with the counted entry that expands to `name` split into one entry per instance, so a
+ *  write can change that one instance and leave the others as they were. Text without a counted
+ *  entry for `name` is returned as it is. */
+export function splitSeatCount(text: string, name: string): string {
+  const counted = seatBlocks(text).find((block) => block.count > 1 && expanded(block).includes(name));
+  return counted?.name ? rewriteCount(text, counted.name) ?? text : text;
+}
+
 /** Drops `stopped: true` from the entry whose name is `name`. A counted entry is split first. */
 export function clearStopped(text: string, name: string): string {
-  const counted = seatBlocks(text).find((block) => block.count > 1 && expanded(block).includes(name));
-  const rewritten = counted?.name ? rewriteCount(text, counted.name) ?? text : text;
+  const rewritten = splitSeatCount(text, name);
   const block = seatBlocks(rewritten).find((item) => item.name === name);
   if (!block) return rewritten;
   const lines = body(rewritten, block).filter((line) => !/^\s*stopped:\s*(true|yes)\s*(#.*)?$/.test(line));

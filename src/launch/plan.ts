@@ -230,6 +230,17 @@ export type Step =
   /** A seat that is left out, and why. */
   | { kind: 'skip'; text: string; note?: string; do?: Op };
 
+/**
+ * The seats a plan starts from the registry's record rather than through a named team file: the
+ * launches whose inbox registration resolves the seat by the registry's roster, so the roster
+ * must hold the seat's line before the plan runs. A launch that names a team file resolves the
+ * seat from that file instead, and the line its own completed launch writes is enough.
+ */
+export function registryLaunches(steps: readonly Step[]): string[] {
+  return steps.flatMap((step) =>
+    step.do !== undefined && step.do.do === 'launch' && step.do.teamFile === undefined ? [step.do.seat] : []);
+}
+
 export interface UpSeat {
   name: string;
   cli: string;

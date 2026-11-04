@@ -73,7 +73,7 @@ import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, launchWillRun, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -91,7 +91,7 @@ import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../o
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { registerRun } from '../registry/sync.ts';
+import { ensureSeatLine, registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
@@ -2844,6 +2844,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         // The launch does not depend on the bus. A start that cannot be spawned is the daemon's
         // heartbeat to retry.
       }
+    }
+    // Before any launch line runs, the roster holds every seat this plan starts from the
+    // registry's record: the launch's inbox registration and the server it starts both resolve
+    // the seat by that line, and only a completed launch writes one otherwise. A launch that
+    // names a team file needs no line first — its registration reads the seat from that file.
+    // A registry that cannot take the line is a log note, never a refusal: the launch goes on,
+    // and the run's own registerRun writes it afterwards.
+    for (const name of registryLaunches(plan)) {
+      const seat = team.seats.find((candidate) => candidate.name === name);
+      if (seat === undefined) continue;
+      const lined = ensureSeatLine({ home: sources.home, team, root, by: callerLabel(caller), session }, seat);
+      if ('note' in lined) logLine(dir, 'up', callerLabel(caller), lined.note, sources.now?.() ?? new Date());
     }
     const report = await executePlan(plan, session, host, {
       concurrency,
