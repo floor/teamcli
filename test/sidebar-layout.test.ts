@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   applySidebarLayout,
   DEFAULT_SIDEBAR_ROWS,
+  HERDR_TESTED,
   hostConfigPath,
   SIDEBAR_BLOCK_MARKER,
   spliceSidebarRows,
@@ -382,5 +383,11 @@ describe('applySidebarLayout', () => {
     } finally {
       chmodSync(dir, 0o700);
     }
+  });
+});
+
+describe('HERDR_TESTED', () => {
+  test('pins the tested host version range from 0.7.1 to 0.9.5', () => {
+    expect(HERDR_TESTED).toEqual({ from: '0.7.1', to: '0.9.5' });
   });
 });

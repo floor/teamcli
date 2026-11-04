@@ -1629,7 +1629,7 @@ export async function waitAgentStatus(
 }
 
 // The herdr versions this version of `team` was run with.
-export const HERDR_TESTED = { from: '0.7.1', to: '0.7.1' };
+export const HERDR_TESTED = { from: '0.7.1', to: '0.9.5' };
 
 // What `herdr --version` prints, without the name, or null when herdr can't be run.
 export function herdrVersion(): string | null {
