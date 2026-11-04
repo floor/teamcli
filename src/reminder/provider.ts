@@ -8,6 +8,11 @@
 // list is re-resolved at the next read; between reads an address that stopped resolving is
 // refused by the daemon's admission at the fire, with the seat named, so a stale target is
 // recorded as a refusal rather than sent.
+//
+// A read that cannot be made at all (an unreadable entity record, a registry that does not
+// parse) refuses the whole list: nothing fires on a previous reading the failed one may have
+// replaced. The failed read leaves the stamp where it was, so the next beat tries again, and its
+// complaint is logged only when the reason changes.
 import { statSync } from 'node:fs';
 import { entitiesPath } from '../entities.ts';
 import { machineZone, readReminderConfig } from './config.ts';
@@ -32,12 +37,14 @@ export type ReminderProviderInput = {
 export function createReminderProvider(input: ReminderProviderInput): ReminderProvider {
   let stamp: string | null = null;
   let read = false;
+  let failed = false;
+  let failure: string | null = null;
   let specs: readonly ReminderSpec[] = [];
   return (log) => {
     const next = stampOf(input.home);
-    if (read && next === stamp) return specs;
-    read = true;
-    stamp = next;
+    // A failed read is never held: the registry or the file may be repaired without the entity
+    // record moving, so every beat tries again until one read succeeds.
+    if (read && !failed && next === stamp) return specs;
     try {
       const config = readReminderConfig(input.home, { defaultZone: input.defaultZone ?? machineZone() });
       for (const problem of config.problems) log(`reminders: ${problem.why}`);
@@ -46,11 +53,21 @@ export function createReminderProvider(input: ReminderProviderInput): ReminderPr
         : resolveReminderEntries(input.home, config.entries, { hosted: input.hosted });
       for (const problem of resolved.problems) log(`reminders: ${problem.why}`);
       specs = resolved.specs;
+      read = true;
+      failed = false;
+      failure = null;
+      stamp = next;
     } catch (error) {
-      // An unexpected failure keeps the list the last good read produced and says so once, on
-      // the change that caused it: the file's stamp has moved, so the next beat is quiet.
+      // The list cannot be judged, so nothing may fire on the previous reading, which the failed
+      // one may have replaced. The stamp stays where it was: the next beat retries, and the same
+      // reason is not repeated.
       const why = error instanceof Error ? error.message : String(error);
-      log(`reminders: the configured list could not be read — ${why}; keeping the previous list`);
+      specs = [];
+      failed = true;
+      if (why !== failure) {
+        log(`reminders: the configured list could not be read — ${why}; nothing fires until it reads`);
+        failure = why;
+      }
     }
     return specs;
   };
