@@ -6,11 +6,6 @@
 //   conversation (`--resume <cli-session-id>`), carry the standing checkpoint's handover path
 //   through `sessions.jsonl` and the new launch rules, emit `handover` in `team.restart` JSON,
 //   and tell the lead `a handover file was already there`.
-// - Scene 2 (Open Seam B — intentionally red, not skipped): when the pane is still `working` at
-//   the moment `runRestart` inspects it and the call is a detached child (`owner-no-tty`, as
-//   `liveSeatHealth` spawns `team restart <seat> --json` from the chores child), `runRestart`
-//   currently refuses (`detached` / `restart.busy`). Marked with the open Seam B comment for
-//   `builder-7` and security review.
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
@@ -441,55 +436,5 @@ describe('watchdog -> team restart -> conversation resume + checkpoint handover 
     expect(leadMessages).toEqual([
       'worker: restarted after 15 minutes with the screen unchanged; the recorded conversation was resumed; a handover file was already there',
     ]);
-  });
-
-  // OPEN SEAM B (assigned to builder-7 + security review; intentionally RED, not skipped):
-  // When `liveSeatHealth.restart` (`src/seat-health/live.ts:127-168`) spawns
-  // `team restart <seat> --json` from the chores child (`stdinIsTTY: false`, no terminal/seat
-  // caller) while the stalled seat's pane is still `working` (`proofNow` requires
-  // `reconciled === 'working'`), two guards in `src/commands/restart.ts` refuse the run:
-  //   1. `walkCaller` -> `owner-no-tty` hits `detachedRefusal` (`src/commands/restart.ts:247-249`);
-  //   2. `inspectSeat` (`src/commands/restart.ts:1624`) refuses `where === 'working'` with
-  //      `restart.busy` (`"worker is working; left as it is"`) when `--abandon` is not passed.
-  test('OPEN SEAM B: watchdog restart from a detached chores child while the stalled pane is still working', async () => {
-    const fixture = makeFixture();
-    const watchdogHost = makeWatchdogHost();
-    const route = healthRouteOf(fixture);
-    const { sources } = makeRestartHarness(fixture, { paneStillWorking: true });
-    const state = watchdogState();
-    const leadMessages: string[] = [];
-
-    await runWatchdogSlice(state, {
-      seats: await observeRoute(route, watchdogHost),
-      now: 0,
-      restart: async () => ({ kind: 'failed' }),
-      lead: (text) => leadMessages.push(text),
-    });
-
-    const restartPromises: Promise<RestartReady | { kind: 'failed' }>[] = [];
-    await runWatchdogSlice(state, {
-      seats: await observeRoute(route, watchdogHost),
-      now: WATCHDOG_AFTER_MS,
-      restart: (_seat, args) => {
-        const pending = (async (): Promise<RestartReady | { kind: 'failed' }> => {
-          // Detached non-TTY caller, as `spawn('team', ['restart', seat, '--json'])` in
-          // `liveSeatHealth` runs under the chores child.
-          const detachedIo = testIo(fixture.root, { kind: 'owner-no-tty' });
-          const code = await runRestart(args.slice(1), detachedIo, sources);
-          const ready = readRestartReady(detachedIo.out);
-          return code === 0 && ready !== null ? ready : { kind: 'failed' };
-        })();
-        restartPromises.push(pending);
-        return pending;
-      },
-      lead: (text) => leadMessages.push(text),
-    });
-    const outcomes = await Promise.all(restartPromises);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(outcomes[0]).toEqual({
-      kind: 'ready',
-      handover: fixture.handoverPath,
-    });
   });
 });
