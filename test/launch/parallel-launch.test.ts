@@ -68,6 +68,7 @@ describe('launchConcurrency', () => {
     loadMax: 4.0,
     memoryStart: 15,
     memoryMin: 8,
+    swapFreeMin: 2_000_000_000,
     swapGrowthMax: 2_147_483_648,
     swapGrowthWindow: 60,
     diskMin: 5_368_709_120,

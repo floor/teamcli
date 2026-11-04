@@ -243,7 +243,7 @@ describe('the machine\'s figures', () => {
   test('the launch gate: critical pressure refuses, free swap alone never does', () => {
     const limits: TeamFile['machine'] = {
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
-      swapGrowthMax: 1e9, swapGrowthWindow: 600,
+      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
     };
     // The host this slice was measured on: 49% of physical memory free, the OS level normal, and
     // 0.99 GB of a 15.36 GB swap free — under the 2 GB the file asks, and still no refusal.

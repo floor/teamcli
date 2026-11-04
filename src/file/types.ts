@@ -335,6 +335,10 @@ export type TeamFile = {
     memoryStart: number;
     memoryMin: number;
     diskMin: number;
+    /** Carried unchanged in the record shape and ignored: free swap decides nothing, but the
+     *  field is part of the frozen canonical record and the approval fingerprint, so dropping
+     *  it would move signed records. Deprecated in `team check`. */
+    swapFreeMin: number;
     swapGrowthMax: number;
     swapGrowthWindow: number;
   };
