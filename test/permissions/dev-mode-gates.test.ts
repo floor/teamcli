@@ -1,11 +1,12 @@
 // The map's `add` row is the owner's alone in 0.5.0, where no `agree` or `grant` holders
 // stand — the operator and the orchestrator are seats like any other here. A seat's `team add`
-// has exactly two openings: dev mode's one warning, which says the refusal and continues, and a
-// `delegates` entry whose pane the caller stands on. The three scenes are the orchestrator's:
-// in dev mode an operator's add passes, with the warning and the log line; without dev mode and
-// without a delegate the same run is refused in the row's own words; with a delegate entry for
-// `add` the run passes with the real gate — no dev mode — and the same-copy seat it starts
-// writes neither the file nor the record.
+// has exactly two openings: dev mode's owner lift, which admits only the target team's own lead
+// (or the same entity's main orchestrator) and continues with its warning, and a `delegates`
+// entry whose pane the caller stands on. The three scenes are the orchestrator's: in dev mode
+// an operator's add is still the row's refusal — the lift is the lead's, not any placed seat's;
+// without dev mode and without a delegate the same run is refused in the row's own words; with a
+// delegate entry for `add` the run passes with the real gate — no dev mode — and the same-copy
+// seat it starts writes neither the file nor the record.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -201,24 +202,21 @@ const REAL_GATE: NonNullable<AddSources['delegateGate']> = (input) =>
   delegateGate({ ...input, sources: { agents: () => [], sessionRunning: () => false } });
 
 describe('the map\'s add row and the two openings a seat has', () => {
-  test('in dev mode the operator\'s add passes: the warning, the log line, and the seat starts', async () => {
+  test('in dev mode the operator\'s add is still the row\'s refusal: the lift is the lead\'s', async () => {
     const place = layout();
     approve(place, team(place));
     const made = world();
     const io = testIo(place.root, OPERATOR);
     io.env = { TEAMCLI_DEV_MODE: '1' };
     const code = await runAdd(['worker'], io, addSources(place, made));
-    // Dev mode says the map's sentence once and continues: the run is a full add, from the
-    // gate to the launch, and the operator's call is attributed in the project's log.
-    expect(code).toBe(0);
-    expect(io.err.startsWith(`team add: warning: ${ADD_LINE}; dev mode continues\n`)).toBe(true);
-    expect(io.err).toContain('dev mode continues');
-    expect(made.creates).toEqual(['worker']);
-    expect(readState(join(place.root, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
-    expect(readFileSync(place.file, 'utf8')).not.toContain('stopped: true');
-    expect(readFileSync(join(place.root, '.agents', 'team.log'), 'utf8').startsWith(
-      `${NOW.toISOString()} add [op] warning: ${ADD_LINE}; dev mode continues\n`,
-    )).toBe(true);
+    // Dev mode's owner lift asks who the caller is: the file's operator is a seat, not the lead,
+    // so the row's sentence stands untouched and nothing is started or logged.
+    expect(code).toBe(1);
+    expect(io.err).toBe(`team add: ${ADD_LINE}\n`);
+    expect(io.out).toBe('');
+    expect(made.creates).toEqual([]);
+    expect(readFileSync(place.file, 'utf8')).toContain('stopped: true');
+    expect(existsSync(join(place.root, '.agents', 'team.log'))).toBe(false);
   });
 
   test('without dev mode and with no delegate the same run is the map\'s refusal, and nothing is started', async () => {

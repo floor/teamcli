@@ -1,10 +1,13 @@
-// TEAMCLI_DEV_MODE=1 says the "who may run it" gate of `add`, `restart` and `init` once, as a
-// stderr warning, and the run continues — exactly as `up` does: the warning is logged where the
-// call runs, and a dry run says the refusal it would give beside the one command that unblocks
-// it. Unset, and any value but `1`, leaves each refusal where it is; every other refusal — the
-// target's, the flags' — stays a refusal in both modes. The approval is the one more gate the
-// fold covers: in dev mode the live file counts as approved for `add`, warned and logged the
-// same way. `grant`, `delegate`, `revoke` and `approve` never honour dev mode.
+// TEAMCLI_DEV_MODE=1 says the "who may run it" gate of `restart` and `init` once, as a stderr
+// warning, and the run continues — exactly as `up` does: the warning is logged where the call
+// runs, and a dry run says the refusal it would give beside the one command that unblocks it.
+// `add` is the exception: its caller gate is dev mode's owner lift, which asks who the caller
+// is, so only the target team's own lead (or the same entity's main orchestrator) continues —
+// a plain seat keeps the refusal in every mode. Unset, and any value but `1`, leaves each
+// refusal where it is; every other refusal — the target's, the flags' — stays a refusal in both
+// modes. The approval is the one more gate the fold covers: in dev mode the live file counts as
+// approved for `add`, warned and logged the same way. `grant`, `delegate`, `revoke` and
+// `approve` never honour dev mode.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -137,7 +140,7 @@ const ADD_LINE = 'only the owner or a standing grant (delegate) runs this, from 
 const RESTART_LINE = 'only the owner or `leads` restarts a seat; this call is helper';
 const INIT_LINE = 'only the owner runs this, from a terminal outside herdr; this call is helper';
 
-test('add: unset and any value but 1 refuse the helper; 1 warns, logs and continues', async () => {
+test('add: unset, `true` and `1` all refuse the helper: the lift is the team\'s lead\'s', async () => {
   const refused = repo();
   const bare = testIo(refused.root, HELPER);
   expect(await runAdd(['worker'], bare, addSources(refused.home))).toBe(1);
@@ -151,22 +154,16 @@ test('add: unset and any value but 1 refuse the helper; 1 warns, logs and contin
   expect(await runAdd(['worker'], other, addSources(truthy.home))).toBe(1);
   expect(other.err).toBe(`team add: ${ADD_LINE}\n`);
 
-  const warned = repo();
-  const io = testIo(warned.root, HELPER);
+  const folded = repo();
+  const io = testIo(folded.root, HELPER);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  // The approval is folded too: in dev mode the live file stands in for the record, so the run
-  // passes that gate as well and stops at the target's own refusal (no such seat). That is what
-  // proves both gates said their lines and continued rather than deciding.
-  expect(await runAdd(['worker'], io, addSources(warned.home, { standing: () => ({ kind: 'legacy' }) }))).toBe(1);
-  expect(io.err).toBe(
-    `team add: warning: ${ADD_LINE}; dev mode continues\n`
-    + `team add: warning: approved before records were signed; the live team file ${join(warned.root, '.agents', 'team.yaml')} counts as approved; dev mode continues\n`
-    + 'team add: the file has no seat "worker"\n',
-  );
+  // The caller gate is dev mode's owner lift, not the blanket variable `restart` folds: it asks
+  // for the target team's own lead (or its entity's main orchestrator), so a helper's add keeps
+  // the refusal byte for byte, and the approval fold below it is never reached.
+  expect(await runAdd(['worker'], io, addSources(folded.home, { standing: () => ({ kind: 'legacy' }) }))).toBe(1);
+  expect(io.err).toBe(`team add: ${ADD_LINE}\n`);
   expect(io.out).toBe('');
-  expect(readFileSync(join(warned.root, '.agents', 'team.log'), 'utf8'))
-    .toBe(`${NOW.toISOString()} add [helper] warning: ${ADD_LINE}; dev mode continues\n`
-      + `${NOW.toISOString()} add [helper] warning: approved before records were signed; the live team file ${join(warned.root, '.agents', 'team.yaml')} counts as approved; dev mode continues\n`);
+  expect(existsSync(join(folded.root, '.agents', 'team.log'))).toBe(false);
 });
 
 test('add: a dry run says what it would refuse and the one command that unblocks it', async () => {

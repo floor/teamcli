@@ -11,7 +11,7 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
@@ -33,6 +33,8 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
+import { canonicalRoot as ownerCanonicalRoot, readOwnerActionRecord } from '../client/owner-action.ts';
+import { actionRequestsFolder } from '../client/team-create.ts';
 import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
@@ -443,6 +445,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...briefs.differences,
     ...unreadDifferences(team, state, live, root, dir, sources.home, session, sources.sockets ?? defaultSocketsDirs(), declaredUnreadAfter(inForce, watchPace), sources.now()),
     ...provenance.differences,
+    ...liftCardDriftDifferences(sources.home, root, quiet, sources.now()),
     ...attention.differences,
     ...labelDifferences(team, state, live),
     ...featureDifferences(team, state),
@@ -769,6 +772,53 @@ function devModeDifferences(
     });
   }
   return { differences: out, notes: marked > 0 ? [`${pluralCount(marked, 'seat')} recorded under dev mode`] : [] };
+}
+
+/** The actions a card may still ask for while dev mode is on: a change to the general grant, and
+ *  the loosening of a security policy (the machine's own `development-mode` record). Every other
+ *  pending request for this team is policy drift there — the lift already admits the record edit a
+ *  card would ask for, and a seat model, CLI or label change is never carded under it. */
+const LIFT_CARD_ACTIONS: readonly string[] = ['team-general-grant', 'development-mode'];
+
+/**
+ * Pending owner cards for this team while dev mode is on, other than the two actions that may
+ * still be carded. A request that expired or was answered is not pending and is not this
+ * finding's; a request for another folder is another team's. Read-only: the check names the card
+ * and the action it asks for, and the repair is to answer it or let it expire.
+ */
+function liftCardDriftDifferences(home: string | undefined, root: string, quiet: boolean, now: Date): Difference[] {
+  if (home === undefined || !quiet) return [];
+  let names: string[];
+  try {
+    names = readdirSync(actionRequestsFolder(home)).filter((name) => /^oa_[0-9a-f]{24}\.json$/.test(name)).sort();
+  } catch {
+    return [];
+  }
+  const out: Difference[] = [];
+  for (const name of names) {
+    const id = name.slice(0, -'.json'.length);
+    let record: ReturnType<typeof readOwnerActionRecord>;
+    try {
+      record = readOwnerActionRecord(home, id);
+    } catch {
+      continue;
+    }
+    if (typeof record === 'string') continue;
+    if (ownerCanonicalRoot(record.params.root) !== ownerCanonicalRoot(root)) continue;
+    if (record.expires_at !== null && Date.parse(record.expires_at) <= now.getTime()) continue;
+    try {
+      if (existsSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`))) continue;
+    } catch {
+      continue;
+    }
+    const drift = record.params.actions.filter((action) => !LIFT_CARD_ACTIONS.includes(action));
+    if (drift.length === 0) continue;
+    out.push({
+      what: `owner card ${id} asks for ${drift.join(', ')} under dev mode: policy drift, and only a general grant change or a security policy loosening is carded there`,
+      repair: `answer or let ${id} expire; under dev mode the lead runs a seat, CLI or label change with no card`,
+    });
+  }
+  return out;
 }
 
 /**

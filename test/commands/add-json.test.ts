@@ -12,7 +12,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { ADD_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
-import { readState } from '../../src/state.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { Machine } from '../../src/watch/machine.ts';
@@ -297,28 +297,33 @@ describe('team add --json', () => {
   });
 
   test('the dev-mode warning rides in the document notes, and stderr stays empty', async () => {
+    // The caller gate's lift admits the team's own lead, placed on the pane its state records.
+    updateState(join(project, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
+    });
+    const lead = { kind: 'seat' as const, name: 'lead', pane: 'synthetic-pane-lead', session: 'acme' };
     const made = world();
-    const io = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const io = testIo(project, lead);
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(0);
     expect(io.err).toBe('');
     const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
     expect(doc.status).toBe('ready');
     expect(doc.notes).toContain(
-      'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues',
+      'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead; dev mode continues',
     );
     expect(doc.notes.some((note) => note.startsWith('team add:'))).toBe(false);
     expect(made.creates).toEqual(['worker']);
 
     // A dry run collects the same sentence: the plan's `! ` marks a terminal line, not a note.
-    const dryIo = testIo(project, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+    const dryIo = testIo(project, lead);
     dryIo.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker', '--dry-run', '--json'], dryIo, sources(world()))).toBe(0);
     expect(dryIo.err).toBe('');
     const dryDoc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(dryIo.out, ADD_OUTPUT_SCHEMA);
     expect(dryDoc.status).toBe('dry-run');
     expect(dryDoc.notes).toContain(
-      'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is helper; dev mode continues',
+      'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead; dev mode continues',
     );
     expect(dryDoc.notes.some((note) => note.startsWith('! '))).toBe(false);
   });
