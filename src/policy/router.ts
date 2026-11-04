@@ -383,16 +383,18 @@ function assembleRouterPolicy(root: string, home: string, now: Date, team: TeamF
 /**
  * The mailbox router's policy in force for the team rooted at `root`. `ok: false` names the first
  * rule a word broke (or the source that could not be read); the caller stops and shows `why`
- * rather than routing a broken map. The team config is read through `readTeamConfig`; when it
- * cannot be read the release defaults stand, because `team check` names the file itself.
+ * rather than routing a broken map. The team config is read through `readTeamConfig`; a file that
+ * cannot be read refuses the whole read the way every policy reader refuses its source — never
+ * the release defaults over a team it could not read.
  */
 export function readMailboxRouterPolicy(
   root: string,
   home: string,
   now: Date = new Date(),
 ): MailboxRouterPolicyRead {
-  const team = loadTeam(root, home);
-  const assembled = assembleRouterPolicy(root, home, now, team);
+  const loaded = loadTeamOrWhy(root, home);
+  if (!loaded.ok) return { ok: false, why: `the team file cannot be read (${loaded.why})` };
+  const assembled = assembleRouterPolicy(root, home, now, loaded.team);
   if (!assembled.ok) return { ok: false, why: assembled.why };
   return { ok: true, policy: assembled.value };
 }
@@ -407,18 +409,28 @@ export function mailboxRouterPolicyProblems(
   root: string,
   home: string,
   now: Date = new Date(),
-  team: TeamFile | null = loadTeam(root, home),
+  team: TeamFile | null = loadTeamOrNull(root, home),
 ): MailboxRouterProblem[] {
   const assembled = assembleRouterPolicy(root, home, now, team);
   return assembled.ok ? [] : assembled.problems;
 }
 
-/** The team config at `root`, or null when it cannot be read (the release defaults then stand). */
-function loadTeam(root: string, home: string): TeamFile | null {
+/** The team config at `root`, or why it cannot be read — the sentence the reader's refusal carries. */
+function loadTeamOrWhy(root: string, home: string): { ok: true; team: TeamFile | null } | { ok: false; why: string } {
   try {
     const loaded = readTeamConfig(root, { home });
-    return loaded.ok ? loaded.team : null;
-  } catch {
-    return null;
+    if (loaded.ok) return { ok: true, team: loaded.team };
+    const message = loaded.errors
+      .map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message))
+      .join('; ');
+    return { ok: false, why: message === '' ? 'unknown problem' : message };
+  } catch (error) {
+    return { ok: false, why: (error as Error).message };
   }
+}
+
+/** The team config at `root`, or null when it cannot be read (the check path: its own gates name the file). */
+function loadTeamOrNull(root: string, home: string): TeamFile | null {
+  const loaded = loadTeamOrWhy(root, home);
+  return loaded.ok ? loaded.team : null;
 }

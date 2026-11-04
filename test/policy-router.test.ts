@@ -230,6 +230,19 @@ describe('the mailbox router policy words', () => {
     }
   });
 
+  test('a team file that cannot be read refuses the whole read, never the defaults', () => {
+    const fx = makeFixture();
+    try {
+      writeFileSync(join(fx.root, '.agents', 'team.yaml'), 'format: 1\nseats:\n  - name: [broken\n');
+      const read = readMailboxRouterPolicy(fx.root, fx.home, NOW);
+      expect(read.ok).toBe(false);
+      if (read.ok) return;
+      expect(read.why).toContain('the team file cannot be read');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
   test('an entity aliases word is sparse: it changes what it names and the release map keeps the rest', () => {
     const fx = makeFixture();
     try {
