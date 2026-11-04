@@ -24,6 +24,22 @@ export function daemonRuntimeRoot(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon-runtime');
 }
 
+/** The runtime home: where the daemon's hosted modules keep live state and the kit folders
+ *  migrated out of the legacy lobby stand. Owner-only, like every folder under it. */
+export function runtimeDir(home: string = homedir()): string {
+  return join(machineConfigDir(home), 'runtime');
+}
+
+/** The moved kit folders, one per name, under the runtime home. */
+export function runtimeKitsDir(home: string = homedir()): string {
+  return join(runtimeDir(home), 'kits');
+}
+
+/** The runtime-home migration's record: what moved, whence, whither, and what still waits. */
+export function runtimeMigrationNotePath(home: string = homedir()): string {
+  return join(runtimeDir(home), 'migration.json');
+}
+
 /** The daemon's state record: pid, start time, launcher, heartbeat, features and stuck requests. */
 export function daemonStatePath(home: string = homedir()): string {
   return join(machineConfigDir(home), 'daemon.state.json');

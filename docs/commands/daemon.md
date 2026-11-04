@@ -335,8 +335,16 @@ scheduled wall-clock key), `lastResult` (the stored key's outcome: `kind` is `fi
 and `remindersError` names a refused configuration entry and an unreadable state record when
 there is one.
 The one-line status does not carry the reminder reading.
+
+An install that the new daemon answers also moves the known kit folders still standing in
+the machine lobby into the runtime home under the machine folder (`runtime/kits/`), one
+line per folder moved, held (a unit still loaded names it), refused, or left for a later
+lane. A moved guard folder prints the exact `guard_dir` line to re-approve and the
+migration is reported moved, not complete until `team check` shows the new path. A dry
+run prints the same lines as would-move and moves nothing.
+
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
-`installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
+`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
 plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
 prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run

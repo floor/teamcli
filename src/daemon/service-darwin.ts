@@ -23,6 +23,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DAEMON_LABEL, daemonLogPath, daemonRuntimeRoot, machineConfigDir } from './paths.ts';
 import type {
+  LoadedServiceProgram,
   ServiceInstallFailure,
   ServiceInstallResult,
   ServiceJobRecord,
@@ -171,6 +172,45 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   const uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
 
   const unitPath = (home: string): string => join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
+
+  /**
+   * Every loaded unit's label and program words: the manager's list for what is loaded (a
+   * pid stands in the first column), and each loaded unit's own file for what it runs.
+   * Both texts are parsed here and nowhere else. An unreadable list or unit file simply
+   * contributes nothing — a folder is held only on a word actually read.
+   */
+  const loadedPrograms = (home: string): LoadedServiceProgram[] => {
+    const listed = run('launchctl', ['list']);
+    if (listed.status !== 0) return [];
+    const loaded = new Set<string>();
+    for (const line of listed.stdout.split('\n')) {
+      const columns = line.trim().split(/\s+/);
+      if (columns.length >= 3 && columns[0] !== '-' && columns[0] !== 'PID') loaded.add(columns[2] as string);
+    }
+    const dir = join(home, 'Library', 'LaunchAgents');
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return [];
+    }
+    const programs: LoadedServiceProgram[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.plist')) continue;
+      let text: string;
+      try {
+        const path = join(dir, name);
+        if (lstatSync(path).isSymbolicLink()) continue;
+        text = readFileSync(path, 'utf8');
+      } catch {
+        continue;
+      }
+      const label = plistString(text, 'Label');
+      if (label === null || !loaded.has(label)) continue;
+      programs.push({ label, program: plistStrings(text, 'ProgramArguments') ?? [] });
+    }
+    return programs;
+  };
   const domain = `gui/${String(uid)}`;
   const service = `${domain}/${DAEMON_LABEL}`;
 
@@ -754,6 +794,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
   return {
     kind: 'system-service-manager',
     unitPath,
+    loadedPrograms,
     plan: (home, program): ServicePlan => {
       const set = runtimeSet(program);
       const listed = runtimeFiles(home, set);
