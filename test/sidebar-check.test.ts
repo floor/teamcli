@@ -16,6 +16,7 @@ import {
 } from '../src/herdr.ts';
 import { sidebarRowsWord, writePolicySet } from '../src/policy/index.ts';
 import { readSidebarReloads, recordSidebarReloads } from '../src/registry/sidebar-reloads.ts';
+import { upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -233,11 +234,31 @@ describe('sidebar check and --repair (Test 9)', () => {
     expect(configuredCheck.out).toContain('status_indicators is "symbols"; the resolved value is "dots"');
   });
 
-  test('per running session: names missing or older reload records (including hand-reloaded), skips current and stopped sessions', () => {
+  test('per running session: names missing or older reload records (including hand-reloaded), skips current, stopped, and another entity\'s sessions', () => {
     const { root, home } = setupWorld({ recordCurrentReload: false });
 
-    // Record one session at an older layout, one at the current pair, and leave one unrecorded
-    // (simulating a session that was never reloaded by TeamCLI or was reloaded by hand outside TeamCLI).
+    // Register this entity's sibling sessions/lobbies and another entity's session in the team registry.
+    upsertTeam(home, 'sibling123456', {
+      project: 'acme-sibling',
+      entity: 'acme',
+      session: 'session-older-rows',
+      root: join(root, '..', 'acme-sibling'),
+      lobbies: {
+        'session-older-rows': '/tmp/lobby-older-rows',
+        'session-older-indicators': '/tmp/lobby-older-indicators',
+        'session-current': '/tmp/lobby-current',
+        'session-stopped': '/tmp/lobby-stopped',
+      },
+    });
+    upsertTeam(home, 'other12345678', {
+      project: 'globex-app',
+      entity: 'globex',
+      session: 'globex-registered-session',
+      root: join(root, '..', 'globex-app'),
+    });
+
+    // Record one session at an older layout, one at the current pair, and two sessions belonging to
+    // another entity in the machine-wide reload file (one registered under globex, one only in the reload file).
     recordSidebarReloads(home, [
       {
         session: 'session-older-rows',
@@ -251,6 +272,14 @@ describe('sidebar check and --repair (Test 9)', () => {
         session: 'session-current',
         record: { rows: DEFAULT_ROWS_WORD, indicators: 'symbols', at: NOW.toISOString() },
       },
+      {
+        session: 'globex-registered-session',
+        record: { rows: 'workspace;agent', indicators: 'dots', at: NOW.toISOString() },
+      },
+      {
+        session: 'globex-reload-only-session',
+        record: { rows: 'workspace;agent', indicators: 'dots', at: NOW.toISOString() },
+      },
     ]);
 
     const { code, out } = runCheck(root, home, {
@@ -261,6 +290,8 @@ describe('sidebar check and --repair (Test 9)', () => {
           { name: 'session-older-indicators', running: true },
           { name: 'session-current', running: true },
           { name: 'session-stopped', running: false },
+          { name: 'globex-registered-session', running: true },
+          { name: 'globex-reload-only-session', running: true },
         ],
       },
     });
@@ -280,6 +311,34 @@ describe('sidebar check and --repair (Test 9)', () => {
     expect(out).not.toContain('session "session-current"');
     // Session that is not running is never named.
     expect(out).not.toContain('session "session-stopped"');
+    // Another entity's running session in the machine-wide reload file is neither named nor reloaded.
+    expect(out).not.toContain('globex-registered-session');
+    expect(out).not.toContain('globex-reload-only-session');
+
+    const reloaded: string[] = [];
+    const repaired = runCheck(root, home, {
+      repair: true,
+      sidebar: {
+        sessions: () => [
+          { name: 'acme-acme-app', running: true },
+          { name: 'session-older-rows', running: true },
+          { name: 'session-older-indicators', running: true },
+          { name: 'session-current', running: true },
+          { name: 'session-stopped', running: false },
+          { name: 'globex-registered-session', running: true },
+          { name: 'globex-reload-only-session', running: true },
+        ],
+        checkConfig: () => ({ ok: true, text: 'config: ok' }),
+        reloadSession: (session) => {
+          reloaded.push(session);
+          return { applied: true, text: 'applied' };
+        },
+      },
+    });
+    expect(repaired.code).toBe(0);
+    expect(reloaded).toEqual(['acme-acme-app', 'session-older-indicators', 'session-older-rows']);
+    expect(reloaded).not.toContain('globex-registered-session');
+    expect(reloaded).not.toContain('globex-reload-only-session');
   });
 
   test('under workspace.sidebar.manage: false, team check prints the exact TOML block and does not write the config without --repair', () => {

@@ -176,9 +176,6 @@ function entityRunningSessions(
   } catch {
     // Unreadable team registry is named by registryDifferences; fall back to known sessions.
   }
-  for (const recordedSession of Object.keys(safeReadReloads(home))) {
-    known.add(recordedSession);
-  }
   return [
     ...new Set(
       hostSessions
