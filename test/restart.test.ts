@@ -1599,7 +1599,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  // The entity's main orchestrator reaches the entity's teams as their lead (OD-02), and the
+  // The entity's main orchestrator stands as, and reaches as, each team lead, and the
   // proof is its own head team's record, live file and recorded pane — never its seat name. The
   // target team's lead is named `orchestrator` too, so the name alone would refuse the pair.
   test("the entity's main orchestrator restarts a team's seat named like itself", async () => {

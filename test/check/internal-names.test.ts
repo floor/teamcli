@@ -14,11 +14,12 @@ const TEAM_FILE = fileURLToPath(new URL('../../.github/team.yaml', import.meta.u
 /** The rules as `check` prints them: each pattern's source, byte for byte. */
 const PANE = 'forbidden pattern \\bw[0-9A-Z]+:p[0-9]+\\b';
 const SESSION = 'forbidden pattern \\bfloor-[0-9a-f]{2}\\b';
-const DECISION = 'forbidden pattern \\bOD-20[0-9]{6}-[0-9]+\\b';
+const DECISION = 'forbidden pattern \\bOD-(?:20[0-9]{6}-)?[0-9]+\\b';
 /** A session-shaped value that the declared pattern refuses, built from parts like the pattern. */
 const NAMED = ['floor', '-', '1a'].join('');
-/** An owner-decision ID that the declared pattern refuses, built from parts like the pattern. */
+/** Dated and short-form owner-decision IDs that the declared pattern refuses, built from parts. */
 const DECISION_ID = ['OD', '-20261019-', '49'].join('');
+const SHORT_DECISION_ID = ['OD', '-', '02'].join('');
 
 /** A signature of the file's coordinator seat, which passes the signature rule. */
 const SIGNATURE = 'Agent: Claude Opus 5.5 · coordinator';
@@ -50,7 +51,8 @@ ${SIGNATURE}`);
 
   hash.decision = repo.commit(`feat: a decision id in the message
 
-Decided by ${DECISION_ID}.
+Decided by ${DECISION_ID},
+and ${SHORT_DECISION_ID} as well.
 
 ${SIGNATURE}`);
 
@@ -196,14 +198,17 @@ describe('an internal session name in this repository', () => {
 });
 
 describe('an internal owner-decision id in this repository', () => {
-  test('is refused in a commit message, and the commit and the rule are named', async () => {
+  test('is refused in a commit message (dated and short-form), and the commit and the rule are named', async () => {
     const result = await runOne('decision');
     expect(result).toEqual({
       code: 1,
       stdout: [
         'COMMIT      STATUS   DETAIL',
         `${hash.decision.slice(0, 10)}  refused  feat: a decision id in the message`,
-        `difference: commit ${hash.decision.slice(0, 10)} "feat: a decision id in the message", line 3: ${DECISION} — "Decided by ${DECISION_ID}."`,
+        `difference: commit ${hash.decision.slice(0, 10)} "feat: a decision id in the message", line 3: ${DECISION} — "Decided by ${DECISION_ID},"`,
+        '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)',
+        '  who: any seat',
+        `difference: commit ${hash.decision.slice(0, 10)} "feat: a decision id in the message", line 4: ${DECISION} — "and ${SHORT_DECISION_ID} as well."`,
         '  repair: rewrite the commit message so the line no longer matches (git rebase --interactive, then reword)',
         '  who: any seat',
         'team commits check: 1 commit checked: 1 commit refused',
@@ -214,7 +219,10 @@ describe('an internal owner-decision id in this repository', () => {
   });
 
   test('is refused in a pull request body beside a passing commit', async () => {
-    writeFileSync(join(repo.path, 'body.md'), `What this does.\n\nDecided by ${DECISION_ID}.\n\n${PR_SIGNATURE}\n`);
+    writeFileSync(
+      join(repo.path, 'body.md'),
+      `What this does.\n\nDecided by ${DECISION_ID} and ${SHORT_DECISION_ID}.\n\n${PR_SIGNATURE}\n`,
+    );
     const passing = await run([hash.misses, '--since', hash.old, '--file', TEAM_FILE]);
     expect(passing).toEqual({
       code: 0,
@@ -230,7 +238,7 @@ describe('an internal owner-decision id in this repository', () => {
     expect(result).toEqual({
       code: 1,
       stdout: [
-        `difference: pull request body, line 3: ${DECISION} — "Decided by ${DECISION_ID}."`,
+        `difference: pull request body, line 3: ${DECISION} — "Decided by ${DECISION_ID} and ${SHORT_DECISION_ID}."`,
         '  repair: edit the pull request body so the line no longer matches (its author can edit it on the pull request)',
         '  who: any seat',
         'team pr check: 1 pull request body checked: the pull request body refused',
