@@ -131,6 +131,20 @@ send's; `memory` is an experiment no runtime in this build proves zero-persisten
 back to nothing. `message` is within `file`; `memory` is comparable only to itself. It takes the
 entity, project and team levels.
 
+Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
+power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,
+project and team levels) print, for a lead seat, the lines that a lead may type or choose in a
+seat's pane when a send cannot reach it or a dialog blocks it, and that a lead in development
+mode may bring back a stopped seat; `off` drops the line. `entity.main-orchestrator.relays-owner`
+(entity level alone) prints, inside an entity, the line that a decision the main orchestrator
+relays from the owner is quoted, cited, and acted on without asking again; it is `off` until an
+entity turns it on, because a relayed decision carries the owner's authority and a sender's
+claim to relay one does not yet verify. `owner.reserved-scope` is the list the owner's reserved
+scope line names — public releases, spending, credentials, and the owner's machine (its system
+settings, accounts and logins, keychain and hardware) unless a level names its own list — and
+that line always prints, with its second sentence: checkouts, seats and team config belong to
+the teams. A chain that cannot be read leaves the defaults in force.
+
 ## Who may run it
 
 The view (`team policy`) may be run by the owner, a seat of the team, or an approved delegate pane
