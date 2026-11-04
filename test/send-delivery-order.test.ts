@@ -6,9 +6,9 @@ import { NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine } from '../src/
 // owner's cascade (src/send/walk-cascade.ts): the channel-class legs in the order's own sequence,
 // then the typed leg, then the mailbox. A leg that definitely cannot take the send hands it on
 // and is recorded as a failure on the history line, and each leg says its own reason.
-// `mcp-inbox` is not a leg in this build: the MCP inbox is the store's reader and a push from it
-// is no wake, so an order word naming it is read as unavailable — reported as skipped with its
-// reason and never walked, whatever `.inbox-listener` stands beside the seat. The typed leg
+// `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the store's reader and a push
+// from it is no wake. An order word naming it is an alias this build reads and drops — the walk
+// carries nothing for it, whatever `.inbox-listener` stands beside the seat. The typed leg
 // writes the same 0600 file and one trigger line, and the drop leg closes the walk as the mailbox:
 // a scene here proves the pane sees no keystroke at all. A waited send is refused unless the
 // native leg leads the order: the frame the reply listener stands beside is that leg, and only a
@@ -44,11 +44,10 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { planPolicySet, writePolicySet } from '../src/policy/index.ts';
 import { startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { deliveryChainOf, DeliveryChainUnreadable } from '../src/send/delivery.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readPending } from '../src/send/pending.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
-import type { DeliveryLeg, SettingLevel } from '../src/settings/inherit.ts';
+import type { DeliveryLeg, OrderWord, SettingLevel } from '../src/settings/inherit.ts';
 import { storePath } from '../src/store/store.ts';
 import { installKey, messageKeyState } from '../src/store/keys.ts';
 import { isRead, signReceiptPayload, writeReceipt } from '../src/send/record.ts';
@@ -64,7 +63,7 @@ const HEADER = 'from the owner — admitted by: the owner\n\n';
 /** The native skip an owner's send records: no SendMessage of this caller's carries the frame. */
 const NATIVE_UNAVAILABLE = "native: unavailable; the native leg is the sending session's own SendMessage";
 
-type Delivery = Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>;
+type Delivery = Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>;
 
 let base = '';
 const handles: SendDaemonHandle[] = [];
@@ -285,7 +284,7 @@ function receiptSoon(dir: string, home: string, root: string, over: { seat?: str
 }
 
 /** One registry project record, with a delivery order when a scene declares one. */
-function projectRecord(order?: DeliveryLeg[]): ProjectRecord {
+function projectRecord(order?: OrderWord[]): ProjectRecord {
   return {
     id: 'acme',
     name: 'acme',
@@ -350,7 +349,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     });
   });
 
-  test('a level naming the unavailable word and the typed leg still ends in the bus inbox', async () => {
+  test('a level naming the retired word and the typed leg still ends in the bus inbox', async () => {
     const w = world();
     const host = walker(w, { seat: ['mcp-inbox', 'typed'] });
     const io = owner(w.root);
@@ -358,8 +357,9 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
 
     expect(lastEntry(w.root, w.home).via).toBe('drop');
-    // The inbox word is no leg at all, so it never reaches the history's failure list; the typed
-    // leg this CLI declares no wake for is the one refusal recorded, and the drop closes the walk.
+    // The retired word is dropped before the walk, so it never reaches the history's failure
+    // list; the typed leg this CLI declares no wake for is the one refusal recorded, and the drop
+    // closes the walk.
     expect(lastEntry(w.root, w.home).failed).toEqual([`typed: ${NO_PANE_MESSAGING}`]);
     expect(host.typed).toEqual([]);
   });
@@ -445,7 +445,7 @@ describe('the walk records the channel and the legs it skipped', () => {
 
     // The seat's word names `telepathy`, which is no leg at all, so the word is set aside; the
     // team's word stands — `native` is the one leg a level may add. The walk enters native first
-    // and records the skip this sender gives it; the inbox word is read as unavailable and never
+    // and records the skip this sender gives it; the retired inbox word is dropped and never
     // walked, and the drop leg closes the send.
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
@@ -471,8 +471,8 @@ describe('the walk records the channel and the legs it skipped', () => {
   });
 });
 
-describe('an mcp-inbox word is read as unavailable', () => {
-  test('a declared word is reported skipped: the drop stores the record, and a live listener changes nothing', async () => {
+describe('a retired mcp-inbox word is dropped from the order', () => {
+  test('a declared word is dropped: the drop stores the record, and a live listener changes nothing', async () => {
     const w = world();
     const dir = liveInbox(w);
     const host = walker(w, { seat: ['mcp-inbox', 'drop'] });
@@ -487,11 +487,10 @@ describe('an mcp-inbox word is read as unavailable', () => {
     };
     expect(doc.status).toBe('queued, not woken');
     expect(doc.channel).toBe('drop');
-    expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toEqual({
-      leg: 'mcp-inbox',
-      state: 'skipped',
-      reason: MCP_INBOX_UNAVAILABLE,
-    });
+    // The retired word is dropped before the walk: the report carries nothing for it, and the
+    // drop leg is the whole walk.
+    expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toBeUndefined();
+    expect(doc.delivery).toEqual([{ leg: 'drop', state: 'attempted' }]);
     expect(host.typed).toEqual([]);
     const id = inboxDrop(dir);
     expect(lastEntry(w.root, w.home)).toEqual({
@@ -544,7 +543,7 @@ describe('an mcp-inbox word is read as unavailable', () => {
     expect(existsSync(join(dir, `${id}.pending`))).toBe(true);
   });
 
-  test('an order naming only the unavailable word still ends on the drop: the mailbox is under every word', async () => {
+  test('an order naming only the retired word declares nothing: the default walk still takes the send', async () => {
     const w = world();
     const host = walker(w, { seat: ['mcp-inbox'] });
     const io = owner(w.root);
@@ -1061,7 +1060,6 @@ describe('a human seat is never typed into', () => {
   const HUMAN = '    human: true\n';
   const TYPED_SKIP = "typed: the pane is a human's, and nothing is typed into it";
   const NATIVE_SKIP_HUMAN = "native: the pane is a human's, and no frame is sent";
-  const INBOX_SKIP_HUMAN = `mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`;
 
   test('typed-only walks no typing leg: drop takes it and the reason is recorded', async () => {
     const w = world({ lead: `${HUMAN}    delivery_order: [typed]\n` });
@@ -1132,7 +1130,7 @@ describe('a human seat is never typed into', () => {
     expect('failed' in entry).toBe(false);
   });
 
-  test('an order led by the inbox name still walks only the drop file', async () => {
+  test('an order led by the retired name still walks only the drop file', async () => {
     const w = world({ lead: `${HUMAN}    delivery_order: [mcp-inbox, typed]\n` });
     const host = walker(w);
     const io = owner(w.root);
@@ -1145,7 +1143,8 @@ describe('a human seat is never typed into', () => {
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);
     expect(recordBody(dropped(w.root, 'lead'))).toBe(`${HEADER}hello`);
-    expect(lastEntry(w.root, w.home).failed).toEqual([INBOX_SKIP_HUMAN, TYPED_SKIP]);
+    // The retired word is dropped before the human's walk, so the typed leg is the only one kept out.
+    expect(lastEntry(w.root, w.home).failed).toEqual([TYPED_SKIP]);
   });
 
   test('an order that names the drop leg among others walks it alone', async () => {
@@ -1230,7 +1229,7 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(existsSync(dropDir(w.root, 'lead'))).toBe(false);
   });
 
-  test('an order naming only the unavailable word names it skipped, ahead of the drop file', async () => {
+  test('an order naming only the retired word names nothing in the dry run: the default walk stands', async () => {
     const w = world();
     const host = walker(w, { seat: ['mcp-inbox'] });
     const io = owner(w.root);
@@ -1238,12 +1237,7 @@ describe('the dry run names only the legs this build can walk', () => {
     expect(await runSend(['lead', 'hello', '--dry-run', '--json'], io, host)).toBe(0);
 
     const doc = JSON.parse(io.out) as { delivery: { leg: string; state: string; eligible?: boolean; reason?: string }[] };
-    expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toEqual({
-      leg: 'mcp-inbox',
-      state: 'skipped',
-      eligible: false,
-      reason: MCP_INBOX_UNAVAILABLE,
-    });
+    expect(doc.delivery.find((one) => one.leg === 'mcp-inbox')).toBeUndefined();
     // The mailbox is under every word, so the walk the dry run names still ends on the drop.
     expect(doc.delivery.find((one) => one.leg === 'drop')).toEqual({ leg: 'drop', state: 'candidate', eligible: true });
   });
@@ -1429,8 +1423,8 @@ describe('a signed seat setting is what the next send walks', () => {
 
   test('a signed human walks the drop file alone over the file’s order', async () => {
     // The team's order would type; the seat's signed record says its pane is a human's, and a
-    // human's walk is the drop file alone, with every leg it spared recorded. `mcp-inbox` is no
-    // leg for any seat (ADR D1): the word is reported as the store's reader.
+    // human's walk is the drop file alone, with every leg it spared recorded. `mcp-inbox` is a
+    // retired name (ADR D1), dropped before the walk: it spares nothing and records nothing.
     const w = world({ top: 'delivery_order: [mcp-inbox, typed]\n' });
     const agentId = registeredLead(w);
     signSeat(w, agentId, [{ key: 'human', value: true }]);
@@ -1442,7 +1436,6 @@ describe('a signed seat setting is what the next send walks', () => {
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(entry.failed).toEqual([
-      `mcp-inbox: ${MCP_INBOX_UNAVAILABLE}`,
       "typed: the pane is a human's, and nothing is typed into it",
     ]);
     expect(host.typed).toEqual([]);

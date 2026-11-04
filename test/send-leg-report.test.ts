@@ -10,7 +10,6 @@ import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { SEND_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { assertMatchesOutputSchema } from './helpers/output.ts';
 import { dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -54,10 +53,7 @@ test('a real send reports the inbox it skipped and the drop that took it', async
   const doc = assertMatchesOutputSchema<{ status: string; channel: string }>(io.out, SEND_OUTPUT_SCHEMA);
   expect(doc.status).toBe('queued, not woken');
   expect(doc.channel).toBe('drop');
-  expect(deliveryOf(io)).toEqual([
-    { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
-    { leg: 'drop', state: 'attempted' },
-  ]);
+  expect(deliveryOf(io)).toEqual([{ leg: 'drop', state: 'attempted' }]);
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(true);
 });
 

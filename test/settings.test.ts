@@ -12,13 +12,16 @@ import type { Caller } from '../src/caller.ts';
 import { readEvents } from '../src/bus/log.ts';
 import { runSettings, USAGE } from '../src/commands/settings.ts';
 import { grantsDir } from '../src/grant.ts';
+import { entitiesPath } from '../src/entities.ts';
 import { resolveSeatOverrides } from '../src/config/apply.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { SETTINGS_CHANGE_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { writePolicySet } from '../src/policy/index.ts';
+import { policySignaturePayload } from '../src/policy/sources.ts';
+import { POLICY_DOMAIN } from '../src/policy/types.ts';
 import { agentsDir, readAgents, registerAgent, type AgentInit } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { installKey, recordedGeneration } from '../src/store/keys.ts';
+import { installKey, keyOf, recordedGeneration, signDomain } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -462,7 +465,7 @@ describe('the write verbs', () => {
         level: 'entity',
         target: 'lab',
         name: 'delivery-order',
-        value: ['mcp-inbox'],
+        value: ['typed'],
         expiry: '2026-11-01T00:00:00Z',
       },
       { now: new Date('2026-10-01T00:00:00Z') },
@@ -470,13 +473,73 @@ describe('the write verbs', () => {
     expect(policy.ok).toBe(true);
 
     // Control: before the expiry the same word is a loosening and is refused.
-    const beforeExpiry = await run(['set', 'lead', 'delivery_order', 'mcp-inbox,drop'], OWNER, new Date('2026-10-25T00:00:00Z'));
+    const beforeExpiry = await run(['set', 'lead', 'delivery_order', 'drop,typed'], OWNER, new Date('2026-10-25T00:00:00Z'));
     expect(beforeExpiry.code).toBe(1);
     expect(beforeExpiry.err).toContain('loosens policy "delivery-order" in force at level entity');
 
     // At a clock past the expiry the policy is read as unset and no longer governs.
-    const afterExpiry = await run(['set', 'lead', 'delivery_order', 'mcp-inbox,drop'], OWNER, new Date('2026-12-01T00:00:00Z'));
+    const afterExpiry = await run(['set', 'lead', 'delivery_order', 'drop,typed'], OWNER, new Date('2026-12-01T00:00:00Z'));
     expect(afterExpiry.code).toBe(0);
+  });
+
+  test('a signed policy naming only the retired mcp-inbox word governs nothing', async () => {
+    // A record an older build wrote: the alias parses to no live leg and declares nothing at its
+    // level (src/policy/resolve.ts), so no write is a loosening against it - where the `typed`
+    // word of the scene above refused this same write before its expiry, this one admits it.
+    writeFileSync(
+      join(root, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme\n', 'project: acme\nentity: lab\n').replace('delivery_order: [mcp-inbox, typed]\n', ''),
+    );
+    registerLead();
+    // A new write naming only the retired word is refused with its own reason: a stored empty
+    // word would not read back (src/policy/sources.ts).
+    const refused = writePolicySet(
+      home,
+      { level: 'entity', target: 'lab', name: 'delivery-order', value: ['mcp-inbox'] },
+      { now: new Date('2026-10-01T00:00:00Z') },
+    );
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.why).toBe('policy "delivery-order" names mcp-inbox, which is no longer a leg; remove it');
+
+    // The record the older build wrote: a live `typed` entry, re-valued to the retired word and
+    // re-signed over it, the way that build's own writer would have signed `mcp-inbox`.
+    const written = writePolicySet(
+      home,
+      { level: 'entity', target: 'lab', name: 'delivery-order', value: ['typed'] },
+      { now: new Date('2026-10-01T00:00:00Z') },
+    );
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    const entityFile = entitiesPath(home);
+    const text = readFileSync(entityFile, 'utf8');
+    const valueLine = '    value: ["typed"]';
+    const signatureLine = `    signature: "${written.policy.signature}"`;
+    if (text.split(valueLine).length !== 2 || text.split(signatureLine).length !== 2) {
+      throw new Error(`${entityFile}: the entry is not written the way this scene edits it`);
+    }
+    const signature = signDomain(
+      POLICY_DOMAIN,
+      policySignaturePayload({
+        name: 'delivery-order',
+        value: ['mcp-inbox'],
+        level: 'entity',
+        target: 'lab',
+        setter: 'owner',
+        date: written.policy.date!,
+        expiry: null,
+        kind: 'enforced',
+        generation: written.policy.generation!,
+      }),
+      keyOf(home),
+    );
+    writeFileSync(
+      entityFile,
+      text.replace(valueLine, '    value: ["mcp-inbox"]').replace(signatureLine, `    signature: "${signature}"`),
+    );
+
+    const write = await run(['set', 'lead', 'delivery_order', 'drop,typed'], OWNER, new Date('2026-10-25T00:00:00Z'));
+    expect(write.code).toBe(0);
   });
 
   test('--dry-run prints the change and leaves the record bytes alone', async () => {
