@@ -598,6 +598,38 @@ describe('independent adversarial checks: restore spawn abort, deadline, spawn e
     expect(ended).toBe(true);
   }, 20_000);
 
+  test('a success report from a child that never claimed its token leaves no token behind', async () => {
+    const { base, root, home } = scratch();
+    const entry = join(base, 'report-ok-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: true, result: { kind: 'no-recorded-session' } }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).resolves.toEqual({ kind: 'no-recorded-session' });
+    expect(tokenFiles(home)).toEqual([]);
+  }, 20_000);
+
+  test('a failure report from a child that never claimed its token leaves no token behind', async () => {
+    const { base, root, home } = scratch();
+    const entry = join(base, 'report-fail-no-claim-entry.ts');
+    writeFileSync(
+      entry,
+      [
+        `process.stdout.write(JSON.stringify({ ok: false, reason: 'a made-up refusal' }) + '\\n');`,
+        `await new Promise((resolve) => setTimeout(resolve, 10_000));`,
+      ].join('\n'),
+    );
+    await expect(
+      runRestoreSweepInChild({ home, root, entry, timeoutMs: 5_000 }),
+    ).rejects.toThrow('the restore child reported: a made-up refusal');
+    expect(tokenFiles(home)).toEqual([]);
+  }, 20_000);
+
   test.skipIf(offDarwin)('a token for one root never touches a second root, and closing the daemon during a slow herdr call keeps the beat live and leaves no token behind', async () => {
     const { base, root: rootA, home } = scratch();
     const rootB = join(base, 'repo-b');
