@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isHerdrError, paneRead, sessionCleared, sessionStopped, setHerdrRun, setPaneExec, workspacePanes } from '../src/herdr.ts';
+import {
+  hostConfigCheck,
+  isHerdrError,
+  paneRead,
+  reloadConfig,
+  reportDisplayAgent,
+  sessionCleared,
+  sessionStopped,
+  setCaptureExec,
+  setHerdrRun,
+  setPaneExec,
+  SIDEBAR_TTL_CAP_MS,
+  workspacePanes,
+} from '../src/herdr.ts';
 
 const PANE_ONE = ['w1', 'p1'].join(':');
 const PANE_TWO = ['w1', 'p2'].join(':');
@@ -70,6 +83,111 @@ describe('paneRead', () => {
     });
     expect(paneRead('%1', 8)).toBeNull();
     expect(calls.length).toBe(1);
+  });
+});
+
+// reportDisplayAgent's process call is injectable the same way: these ask what the report
+// carries, and which ttls are refused before the host is ever asked. The cap is herdr's own
+// (invalid_metadata_ttl one above it, probed 2026-11-04).
+describe('reportDisplayAgent', () => {
+  afterEach(() => setCaptureExec(null));
+
+  test('a ttl rides the report as --ttl-ms', () => {
+    const calls: string[][] = [];
+    setCaptureExec((args) => {
+      calls.push(args);
+      return '{}';
+    });
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 5000)).toBe(true);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toEqual(['--session', 'fixture-session', 'pane', 'report-metadata', 'fixture-pane-1', '--source', 'team', '--display-agent', 'line two', '--ttl-ms', '5000']);
+  });
+
+  test('without a ttl no flag rides', () => {
+    const calls: string[][] = [];
+    setCaptureExec((args) => {
+      calls.push(args);
+      return '{}';
+    });
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session')).toBe(true);
+    expect(calls[0]?.includes('--ttl-ms')).toBe(false);
+  });
+
+  test('a ttl above the host cap is refused before the call', () => {
+    const calls: string[][] = [];
+    setCaptureExec((args) => {
+      calls.push(args);
+      return '{}';
+    });
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', SIDEBAR_TTL_CAP_MS + 1)).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+
+  test('a non-integer or non-positive ttl is refused the same way', () => {
+    const calls: string[][] = [];
+    setCaptureExec((args) => {
+      calls.push(args);
+      return '{}';
+    });
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 0)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', -5000)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 1.5)).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+});
+
+// The two host answers the sidebar edit leans on, read the way the probes captured them:
+// `config check` answers `config: ok` and exit 0, or its issues text and exit 1 (the thrown
+// stdout carries it); `server reload-config` answers `{"status":"applied","diagnostics":[]}`
+// per session.
+describe('hostConfigCheck', () => {
+  afterEach(() => setCaptureExec(null));
+
+  test('an accepted config reads ok', () => {
+    setCaptureExec(() => 'config: ok\n');
+    expect(hostConfigCheck()).toEqual({ ok: true, text: 'config: ok' });
+  });
+
+  test('a refused config names its issues from the thrown stdout', () => {
+    setCaptureExec(() => {
+      throw Object.assign(new Error('exit 1'), { stdout: 'config: issues found\nconfig parse error: unknown variant\n' });
+    });
+    const answer = hostConfigCheck();
+    expect(answer.ok).toBe(false);
+    expect(answer.text).toContain('issues found');
+    expect(answer.text).toContain('unknown variant');
+  });
+
+  test('a check that answered nothing is a failure', () => {
+    setCaptureExec(() => {
+      throw new Error('boom');
+    });
+    expect(hostConfigCheck()).toEqual({ ok: false, text: 'boom' });
+  });
+});
+
+describe('reloadConfig', () => {
+  afterEach(() => setHerdrRun(null));
+
+  test('applied with no diagnostics is the applied answer', () => {
+    setHerdrRun(() => ({ status: 'applied', diagnostics: [] }));
+    expect(reloadConfig('fixture-session')).toEqual({ applied: true, text: 'applied' });
+  });
+
+  test('diagnostics are a refusal that names them', () => {
+    setHerdrRun(() => ({ status: 'applied', diagnostics: ['config parse error at line 2'] }));
+    const answer = reloadConfig('fixture-session');
+    expect(answer.applied).toBe(false);
+    expect(answer.text).toContain('config parse error at line 2');
+  });
+
+  test('a throw or a non-answer is a refusal', () => {
+    setHerdrRun(() => {
+      throw new Error('server_not_running');
+    });
+    expect(reloadConfig('fixture-session')).toEqual({ applied: false, text: 'server_not_running' });
+    setHerdrRun(() => null);
+    expect(reloadConfig('fixture-session')).toEqual({ applied: false, text: 'reload-config did not answer' });
   });
 });
 
