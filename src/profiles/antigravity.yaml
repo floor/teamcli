@@ -342,5 +342,9 @@ screen:
       - 'Gemini\s+[0-9]'
       - 'esc to cancel'
       - '>\s*/exit\s+Exit'
+    # The empty box draws a rotating hint, `/tasks shows …`, in the input row. The tail
+    # changes; the words up to `shows` are the row. A draft, including one that starts
+    # with `/tasks` and then other words, stays text.
     placeholders:
       - equals: ''
+      - prefix: '/tasks shows'
