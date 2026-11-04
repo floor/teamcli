@@ -228,6 +228,12 @@ first release is later than that date, each dated from the release tags. Re-sign
 after that release stops the note. A grant whose signing time cannot be read says `unknown` instead
 of claiming an op is new. Like every note here, it is information, never a difference.
 
+One more note watches the bus log's size. When the retained segments on disk reach four fifths
+of their 100 MB cap, the check prints `bus: the bus log holds <n> MB of its 100 MB
+retained-size cap; the team's lead: shorten bus.retain_days, or accept the oldest sealed
+segments dropping (each drop is declared in the log)`. It is an alert line, never a second cap:
+it drops nothing, changes no exit, and a log below that share says nothing.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane

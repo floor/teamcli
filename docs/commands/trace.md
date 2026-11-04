@@ -3,8 +3,8 @@
 Prints one message's story from the receiving team's signed event log: the steps a send, the
 bus, a seat and a watch filed for one message id, in the order they were written.
 
-Every step of a message's life is an event of its own in the receiving team's state folder
-(`~/.config/team/<project>-<hash>/events.jsonl`), signed and filed under the message id plus a
+Every step of a message's life is an event of its own in the receiving team's event log
+(the `events*.jsonl` segments under `~/.config/team/<project>-<hash>/`), signed and filed under the message id plus a
 step tail: `message.staged` as `<id>:staged`, each leg the walk tried as
 `<id>:leg.tried:<route>`, the sender's webhook post as `<id>:webhook.posted`, the bus's arrival as
 the bare `<id>`, the seat's receipts as `<id>:delivered`, `<id>:read` and `<id>:replied`, and the
@@ -37,10 +37,11 @@ unverified or self-contradicting record is skipped and counted, never repaired i
 ## What it reads and writes
 
 Reads the team's configuration (its registry record; `.agents/team.yaml` on the legacy `file`
-source) to resolve the project name, session and checkout root, then reads the state folder's
-`events.jsonl` with `O_NOFOLLOW`, verifying each record's signature through the bus log. If a
-symbolic link or FIFO stands at the log or in the state folder ladder, the run refuses and does
-not follow it. Writes nothing.
+source) to resolve the project name, session and checkout root, then reads the event log with
+`O_NOFOLLOW`. A sealed segment is searched through its signed index, which names each record's
+kind and id: only the selected records' own lines are read and verified, and the open segment
+is read whole and verified line by line. If a symbolic link or FIFO stands at the log or in the
+state folder ladder, the run refuses and does not follow it. Writes nothing.
 
 ## Who may run it
 
