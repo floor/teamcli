@@ -1734,6 +1734,22 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+/** Published `--json` output schema for `team checkpoint` (`schema/checkpoint.schema.json`). */
+export const CHECKPOINT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.checkpoint',
+  fileName: 'checkpoint.schema.json',
+  title: 'team checkpoint --json output',
+  statuses: ['recorded'],
+  required: ['seat', 'path', 'at', 'deadline', 'by'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    at: { type: 'string', minLength: 1 },
+    deadline: { type: 'string', minLength: 1 },
+    by: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Published `--json` output schema for `team restart` (`schema/restart.schema.json`). */
 export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.restart',
@@ -3251,6 +3267,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,
+  CHECKPOINT_OUTPUT_SCHEMA,
   RESTART_OUTPUT_SCHEMA,
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,

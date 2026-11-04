@@ -59,7 +59,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 
 ## Synopsis
 
-    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
@@ -68,6 +68,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 | --- | --- | --- |
 | `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--fresh` | — | start a new conversation instead of resuming the recorded one; a launch line that itself names a conversation is refused, and a seat mid-turn is left as it is |
+| `--resume` | `<cli-session-id>` | pin which recorded conversation of the seat to resume instead of the latest; refused for a foreign or unbound id, or beside `--fresh` or `--abandon` |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |

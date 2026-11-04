@@ -1284,6 +1284,34 @@
     },
     {
       "code": 0,
+      "command": "checkpoint",
+      "id": "checkpoint.recorded",
+      "meaning": "the standing checkpoint ask was recorded in state",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 1,
+      "command": "checkpoint",
+      "id": "checkpoint.caller",
+      "meaning": "only the owner or a placed leads seat may record a checkpoint ask",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 1,
+      "command": "checkpoint",
+      "id": "checkpoint.io",
+      "meaning": "the team state cannot be written",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 2,
+      "command": "checkpoint",
+      "id": "checkpoint.invocation",
+      "meaning": "the invocation, seat name, or team file is invalid",
+      "trigger": "team checkpoint"
+    },
+    {
+      "code": 0,
       "command": "client",
       "id": "client.general-grant.issued",
       "meaning": "the general grant was issued and written",

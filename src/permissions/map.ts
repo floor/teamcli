@@ -101,6 +101,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: 'the `start` row for a seat: as `start`',
     },
+    checkpoint: {
+      kind: 'owner-or-leads',
+      why: 'recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`',
+    },
     reload: {
       kind: 'owner-or-leads',
       why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
