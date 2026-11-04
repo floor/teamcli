@@ -10,6 +10,7 @@
 // start: a root's first pass here only escalates, and retirement follows once the interval has
 // passed, so a restart never rewrites a store's history more often than the daemon did. The
 // interval and the per-pass limit come from the sweep module, one source for both processes.
+import { type DropRetirementReport, retireDropsSliced } from '../../send/drop-retention.ts';
 import {
   FALLBACK_STORE_PASS_LIMIT,
   FALLBACK_STORE_PASS_MS,
@@ -23,7 +24,7 @@ import type { ChoresChildConfig } from './protocol.ts';
 
 /** The notes a host's log should carry for one finished root, in the daemon's own words. A
  *  skipped root names why and stops there; counts appear only when a pass has some. */
-function passNotes(entry: SweepRootResult): string[] {
+function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): string[] {
   const notes: string[] = [];
   if (entry.note !== null) notes.push(`fallback sweep: ${entry.note}`);
   if (entry.why !== null) {
@@ -37,14 +38,26 @@ function passNotes(entry: SweepRootResult): string[] {
     );
   }
   const retired = entry.retirement;
-  if (retired === null) return notes;
-  const reclaimed = entry.reclaim?.reclaimed ?? 0;
-  if (retired.retired.length === 0 && retired.refused.length === 0 && retired.unreadable.length === 0 && reclaimed === 0) {
-    return notes;
+  if (retired !== null) {
+    const reclaimed = entry.reclaim?.reclaimed ?? 0;
+    if (
+      retired.retired.length > 0 ||
+      retired.refused.length > 0 ||
+      retired.unreadable.length > 0 ||
+      reclaimed > 0
+    ) {
+      notes.push(
+        `fallback store: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
+      );
+    }
   }
-  notes.push(
-    `fallback store: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
-  );
+  if (drops !== null) {
+    if (drops.refused !== null) {
+      notes.push(`drop store: refused (${drops.refused})`);
+    } else if (drops.archived.length > 0) {
+      notes.push(`drop store: archived ${String(drops.archived.length)}`);
+    }
+  }
   return notes;
 }
 
@@ -90,6 +103,18 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
       slices,
     });
     const entry = swept.roots[0];
-    return entry === undefined ? [] : passNotes(entry);
+    if (entry === undefined) return [];
+    let drops: DropRetirementReport | null = null;
+    if (housekeeping && entry.why === null && !slices.stopping()) {
+      drops = await retireDropsSliced({
+        root: entry.root,
+        home: config.home,
+        ...(route.teamFile !== undefined ? { team: route.teamFile } : {}),
+        at,
+        limit: FALLBACK_STORE_PASS_LIMIT,
+        slices,
+      });
+    }
+    return passNotes(entry, drops);
   };
 }
