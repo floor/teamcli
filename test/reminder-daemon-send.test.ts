@@ -354,7 +354,10 @@ describe('a reminder send carries the daemon\'s own identity', () => {
   });
 
   test('the recheck runs before every leg: a daemon that stopped sends no further leg', async () => {
-    const one = world(['mcp-inbox', 'drop']);
+    // Two legs this build walks: the socket dial fails at once (no listener answers the fixture
+    // socket), so the walk reaches the drop leg, and the refusal lands before that leg begins.
+    // An `mcp-inbox` word is no leg in this build, so an order naming it would leave one leg.
+    const one = world(['socket', 'drop']);
     made.push(one);
     let checks = 0;
     const base = principalOf(one, {
