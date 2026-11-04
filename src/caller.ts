@@ -133,10 +133,14 @@ function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'manage
 }
 
 // The walk without any session at all: the owner is a terminal outside herdr, and that reading
-// needs no agent list and no pane root. A caller under herdr is `unplaced` here, whatever session
-// it might stand in — naming that seat would mean reading a session, and the refusal of a
-// non-owner's `--session` must come before any session is read. The same walk as `placeCaller`'s
-// first half, byte for byte on every case a session would not have decided.
+// needs no agent list — naming a seat would mean reading a session, and the refusal of a
+// non-owner's `--session` must come before any session is read. A caller under herdr is
+// `unplaced` here, whatever session it might stand in. The one read this walk makes is the
+// server's own record of the pane the environment names, for the same live-handoff proof
+// `placeCaller` makes: when the previous server left, the pane's root process was re-parented
+// away from it and no server process is left in the chain, and the hint plus that root pid is
+// what still says the caller runs under it. The same walk as `placeCaller`'s first half, byte for
+// byte on every case a session would not have decided.
 /** The caller's parent processes, nearest first, from the same source `walkCaller` reads; null when they can't be read. */
 export function callerAncestors(io: Pick<Io, 'callerSources'>): Process[] | null {
   const sources = io.callerSources?.(undefined);
@@ -152,6 +156,17 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
   if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
   if (ancestors.some((process) => process.name === 'herdr')) {
     return { kind: 'unplaced', reason: 'it runs under herdr' };
+  }
+  // The handoff reading `placeCaller` makes, without a session: the hint names the pane, and the
+  // root process the server reports for it must be one of the caller's ancestors. The variable
+  // never places on its own — no hint, a read that fails and a root that is not an ancestor all
+  // fall through to the walk below, with the refusal it answered before this reading existed.
+  const hint = env.HERDR_PANE_ID;
+  if (hint !== undefined && hint !== '') {
+    const serverRoot = sources ? sources.paneRootPid(hint) : paneRootPid(hint);
+    if (serverRoot !== null && ancestors.some((process) => process.pid === serverRoot)) {
+      return { kind: 'unplaced', reason: 'it runs under herdr' };
+    }
   }
   return walkOutside(ancestors, { env, stdinIsTTY });
 }
