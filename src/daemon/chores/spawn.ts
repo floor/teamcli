@@ -168,13 +168,9 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   }
 
   const spawnProcess = input.spawn ?? spawn;
-  const execArgs =
-    process.versions.bun === undefined && process.versions.libffi !== undefined
-      ? ['--no-warnings', '--experimental-ffi', entry, '--inherited', nonce]
-      : [entry, '--inherited', nonce];
   let child: ReturnType<typeof spawn>;
   try {
-    child = spawnProcess(process.execPath, execArgs, {
+    child = spawnProcess(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.config.routes[0]?.root ?? dirname(entry),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: input.config.home, ...input.env },

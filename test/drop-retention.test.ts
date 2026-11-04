@@ -29,6 +29,7 @@ import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src
 import { createFallbackPass } from '../src/daemon/chores/fallback.ts';
 import type { ChoresSlices } from '../src/daemon/chores/child.ts';
 import type { ChoresChildConfig, ChoresChildRoute } from '../src/daemon/chores/protocol.ts';
+import { spawnChoresChild } from '../src/daemon/chores/spawn.ts';
 import { FALLBACK_STORE_PASS_MS, sweepFallbackEscalationsSliced } from '../src/daemon/fallback-sweep.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -820,6 +821,37 @@ describe('condition 3: runs only in the chores child, sliced, never on the daemo
     });
     expect(yields).toBeGreaterThan(0);
     expect(report.archived.length).toBe(2);
+  });
+
+  test('spawnChoresChild launches the child with unchanged arguments ([entry, "--inherited", nonce]) and no extra runtime flags', async () => {
+    const fixtureEntry = join(root, 'echo-chores-argv.js');
+    writeFileSync(
+      fixtureEntry,
+      'process.stderr.write(JSON.stringify({ argv: process.argv.slice(1), execArgv: process.execArgv }) + "\\n");\nprocess.exit(0);\n',
+    );
+    const config: ChoresChildConfig = {
+      version: 1,
+      home,
+      beatMs: 5_000,
+      sliceMs: 1,
+      since: OLD_ISO,
+      routes: [{ root, team: 'acme', session: 'acme', teamFile: team }],
+    };
+    const notes: string[] = [];
+    const child = spawnChoresChild({ config, entry: fixtureEntry });
+    child.subscribe((ev) => {
+      if (ev.kind === 'note') notes.push(ev.text);
+    });
+    await child.exited;
+
+    expect(notes.length).toBeGreaterThanOrEqual(1);
+    const parsed = JSON.parse(notes[0]!) as { argv: string[]; execArgv: string[] };
+    expect(parsed.execArgv).toEqual([]);
+    expect(parsed.argv).toHaveLength(3);
+    expect(parsed.argv[0]).toBe(fixtureEntry);
+    expect(parsed.argv[1]).toBe('--inherited');
+    expect(typeof parsed.argv[2]).toBe('string');
+    expect(parsed.argv[2]!.length).toBeGreaterThan(0);
   });
 });
 
