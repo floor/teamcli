@@ -77,7 +77,7 @@ seats:
 
 const AT = '2026-10-20T10:00:00.000Z';
 const DIGEST = 'a'.repeat(64);
-const CALLER = { kind: 'seat', name: 'worker-1', pane: 'w1:p1', session: 'acme-dev' } as const;
+const CALLER = { kind: 'seat', name: 'worker-1', pane: 'fixture-pane-1', session: 'acme-dev' } as const;
 
 type World = {
   root: string;
@@ -160,6 +160,71 @@ function sweepAt(world: World, at: string, roots?: readonly (string | { root: st
 
 function mailboxDir(world: World): string {
   return join(world.entityRoot, '.agents', 'messages', 'entity-lead');
+}
+
+/** One more hosted checkout under the same home and base: one beat sweeps every inline root it
+ *  hosts, so a scene that measures that beat's own turn needs more than the first world. */
+function addRoot(world: World, name: string): { root: string; team: TeamFile } {
+  const base = dirname(world.root);
+  const root = join(base, name);
+  const entityRoot = join(base, `${name}-entity`);
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(join(entityRoot, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  writeFileSync(join(root, '.agents', 'team.yaml'), TEAM_YAML);
+  upsertTeam(world.home, teamIdOf(root), {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme-dev',
+    root,
+    roster: [{ agent: 'agt_crewlead0000', seat: 'crew-lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  upsertTeam(world.home, teamIdOf(entityRoot), {
+    project: 'floor',
+    entity: 'floor',
+    session: 'floor-hq',
+    root: entityRoot,
+    roster: [{ agent: 'agt_entitylead00', seat: 'entity-lead', role: 'coordinator', leads: true }],
+    lifecycle: 'running',
+  });
+  const validated = validateTeamFile(TEAM_YAML);
+  if (!validated.ok) throw new Error(JSON.stringify(validated.errors));
+  return { root, team: validated.team };
+}
+
+/** Plants `each` already-due transport facts on every checkout: the beat's pass has to walk them
+ *  all, and one marker's escalation is the pass's heaviest work item. */
+function plantDueBacklog(
+  world: World,
+  checkouts: ReadonlyArray<{ root: string; team: TeamFile }>,
+  each: number,
+): void {
+  const failedAt = new Date(Date.now() - 301_000).toISOString();
+  for (const one of checkouts) {
+    const ctx: FallbackContext = {
+      caller: CALLER,
+      team: one.team,
+      root: one.root,
+      home: world.home,
+      now: () => new Date(failedAt),
+    };
+    const recipient: CanonicalRecipient = { ...world.recipient, root: one.root };
+    for (let index = 0; index < each; index += 1) {
+      const noted = noteTransport(ctx, {
+        recipient,
+        messageId: `backlog-${String(index)}`,
+        recordDigest: DIGEST,
+        route: 'socket',
+        outcome: 'unreachable',
+        at: failedAt,
+        ms: 120,
+        reason: 'the socket did not answer',
+        liveRoutesRemain: false,
+      });
+      if (!noted.ok) throw new Error(noted.reason);
+    }
+  }
 }
 
 function mailboxCount(world: World): number {
@@ -410,6 +475,43 @@ describe('the daemon fallback sweep', () => {
     expect(readMarker(world).escalatedAt).toBeUndefined();
     unlinkSync(join(lockDir, LOCK_FILE));
   });
+
+  test('a probe answers within the product budget while the beat sweeps a due backlog on several roots', async () => {
+    // A root a chores fleet does not host is swept on the daemon's own beat. A backlog of due
+    // episodes over several roots used to run as one synchronous turn: the health probe's own
+    // 500 ms timer could not even fire until the pass was over. The pass now walks a slice at a
+    // time, so probes land between slices and every one answers at the product's budget.
+    const world = makeWorld();
+    const checkouts = [
+      { root: world.root, team: world.team },
+      addRoot(world, 'repo-2'),
+      addRoot(world, 'repo-3'),
+      addRoot(world, 'repo-4'),
+    ];
+    plantDueBacklog(world, checkouts, 150);
+
+    const started = await startMachineDaemon({
+      home: world.home,
+      roots: checkouts.map((one) => one.root),
+      version: '0.5.12-beat-slice-test',
+      heartbeatMs: 25,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The product's own budget: probeDaemonHealth's default is 500 ms.
+      const until = Date.now() + 2_000;
+      const missed: string[] = [];
+      while (Date.now() < until) {
+        const probe = await probeDaemonHealth(started.daemon.socketPath);
+        if (probe.kind !== 'answered') missed.push(probe.kind === 'unanswered' ? probe.reason : probe.error.code);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(missed).toEqual([]);
+    } finally {
+      await started.daemon.close();
+    }
+  }, 20_000);
 
   test('a lock held by another process defers the escalation without stalling the heartbeat', async () => {
     const world = makeWorld();

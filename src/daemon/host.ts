@@ -41,7 +41,7 @@ import { choresPolicyFor } from './chores/policy.ts';
 import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
 import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
 import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
-import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalations, type SweepRoot } from './fallback-sweep.ts';
+import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalationsSliced, type FallbackSweepResult, type SweepRoot } from './fallback-sweep.ts';
 import { createHeartbeatPolicy } from './heartbeat.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from './paths.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
@@ -292,6 +292,13 @@ export type StartMachineDaemonResult =
  *  default of `daemon.heartbeat` (ADR D6), the beat the daemon ran hard-coded before the word. */
 const HEARTBEAT_MS = DAEMON_HEARTBEAT_SECONDS.release * 1000;
 const STUCK_MS = 10_000;
+/** The longest the beat's fallback pass may hold the event loop before yielding to it: the
+ *  product's own health probe answers within 500 ms (health.ts's `options.timeoutMs ?? 500`), and
+ *  a probe's request needs a few loop turns of its own (accept, read, answer), so the slice stays
+ *  small enough that those turns land every few milliseconds rather than at the budget's edge.
+ *  The pass checks the boundary before each item, so a slice is one item long at most past this
+ *  mark. */
+const FALLBACK_BEAT_SLICE_MS = 10;
 const PRESENCE_EVERY_MS = 250;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
@@ -2074,6 +2081,42 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // ticks never rewrite history a caller may still be reading, and the clock a test pins at a
   // due instant never advances into a store pass.
   let lastStorePassAt = now().getTime();
+  /** The fallback pass in flight, if any: one walk at a time, so two beats never read the same
+   *  store side by side. A pass reads the durable markers itself, so the beat after it settles
+   *  starts the next pass and nothing a skipped beat would have escalated is lost. */
+  let sweepRun: Promise<void> | null = null;
+  /** Writes the lines a finished pass has to say. A pass stopped by the close reports nothing:
+   *  the log is already silent past admission, and the durable markers keep what is left. */
+  const logSweep = (swept: FallbackSweepResult): void => {
+    for (const entry of swept.roots) {
+      if (entry.note !== null) logLine(`fallback sweep ${entry.root}: ${entry.note}`);
+      if (entry.why !== null) {
+        logLine(`fallback sweep ${entry.root}: ${entry.why}`);
+        continue;
+      }
+      const notes = entry.notes;
+      if (notes !== null && (notes.drained.length > 0 || notes.refused.length > 0 || notes.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: notes recorded ${String(notes.drained.length)}, refused ${String(notes.refused.length)}, unreadable ${String(notes.unreadable.length)}`,
+        );
+      }
+      const report = entry.report;
+      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+        logLine(
+          `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
+        );
+      }
+      const retired = entry.retirement;
+      if (retired === null) continue;
+      const reclaimed = entry.reclaim?.reclaimed ?? 0;
+      if (retired.retired.length === 0 && retired.refused.length === 0 && retired.unreadable.length === 0 && reclaimed === 0) {
+        continue;
+      }
+      logLine(
+        `fallback store ${entry.root}: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
+      );
+    }
+  };
   beat = () => {
     try {
       faultInbox.consume(faultTargets);
@@ -2105,6 +2148,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           return row === undefined || row.mode === 'inline';
         });
     if (inlineRoots.length === 0) return;
+    if (sweepRun !== null) return;
     const beatAt = now().getTime();
     const housekeeping = beatAt - lastStorePassAt >= FALLBACK_STORE_PASS_MS;
     if (housekeeping) {
@@ -2113,7 +2157,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // the timer when it changed, beside the sweep's backlog reads below.
       rearmHeartbeat();
     }
-    const swept = sweepFallbackEscalations({
+    // The pass walks a slice at a time on the daemon's own loop: the health probe answers within
+    // its 500 ms budget only when no single turn holds the loop through a store-wide backlog, so
+    // the beat yields between markers, retirement candidates and lock folders. The rest of the
+    // beat, and the heartbeat itself, keep their cadence while it runs; the close ends the walk
+    // at its next slice boundary and drains it before ownership is released.
+    const run = sweepFallbackEscalationsSliced({
       home,
       roots: inlineRoots,
       now,
@@ -2130,35 +2179,32 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             },
           }
         : {}),
-    });
-    for (const entry of swept.roots) {
-      if (entry.note !== null) logLine(`fallback sweep ${entry.root}: ${entry.note}`);
-      if (entry.why !== null) {
-        logLine(`fallback sweep ${entry.root}: ${entry.why}`);
-        continue;
-      }
-      const notes = entry.notes;
-      if (notes !== null && (notes.drained.length > 0 || notes.refused.length > 0 || notes.unreadable.length > 0)) {
-        logLine(
-          `fallback sweep ${entry.root}: notes recorded ${String(notes.drained.length)}, refused ${String(notes.refused.length)}, unreadable ${String(notes.unreadable.length)}`,
-        );
-      }
-      const report = entry.report;
-      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
-        logLine(
-          `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
-        );
-      }
-      const retired = entry.retirement;
-      if (retired === null) continue;
-      const reclaimed = entry.reclaim?.reclaimed ?? 0;
-      if (retired.retired.length === 0 && retired.refused.length === 0 && retired.unreadable.length === 0 && reclaimed === 0) {
-        continue;
-      }
-      logLine(
-        `fallback store ${entry.root}: retired ${String(retired.retired.length)}, reclaimed ${String(reclaimed)}, refused ${String(retired.refused.length)}, unreadable ${String(retired.unreadable.length)}`,
-      );
-    }
+      slices: {
+        sliceMs: FALLBACK_BEAT_SLICE_MS,
+        stopping: () => closed,
+        yield: () => new Promise<boolean>((resolve) => {
+          if (closed) {
+            resolve(false);
+            return;
+          }
+          setImmediate(() => resolve(!closed));
+        }),
+      },
+    })
+      .then(logSweep)
+      .catch((error: unknown) => {
+        // Each root's own failure is reported inside the pass; this one is the walk itself, and
+        // it must never leave an unhandled rejection on the daemon's loop.
+        try {
+          logLine(`fallback sweep: ${messageOf(error)}`);
+        } catch {
+          // The log is unavailable too; there is nowhere left to say it.
+        }
+      })
+      .finally(() => {
+        if (sweepRun === run) sweepRun = null;
+      });
+    sweepRun = run;
   };
 
   let admissionClosed = false;
@@ -2355,6 +2401,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     await Promise.allSettled([
       ...presenceRuns.values(),
       ...(restoreSweepRun === null ? [] : [restoreSweepRun]),
+      // A fallback pass mid-walk ends at its next slice boundary once `closed` is set; the
+      // drain keeps its durable writes from landing after ownership is released.
+      ...(sweepRun === null ? [] : [sweepRun]),
     ]);
     // Source pumps are part of the same drain: their steps were already cancelled in the
     // admission block, and no new pump starts once `closed` is set. A pump that still cannot
