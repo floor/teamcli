@@ -158,9 +158,9 @@ next section is the whole of it.
 The daemon beats one machine-scoped list of reminders: each is a message it sends under its own
 verified identity to seats of this machine's teams, at wall-clock times the owner chose. The list
 is read from the owner's entity record in the machine folder, `~/.config/team/entities.yaml`,
-under an entity's own key — the same record [`team config`](config.md) edits for that entity's
-`names.unique` word. This build has no `team config` key that writes reminders, so the owner
-writes the entry:
+under an entity's own key — the same record [`team config`](config.md) edits, at
+`<entity>.reminders` for the list and `<entity>.names.unique` for that entity's word. The form
+is:
 
     acme:
       reminders:
