@@ -10,7 +10,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
-import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { runUp, watchCommand, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -378,7 +378,9 @@ describe('the watch `up` starts', () => {
     // Three workspaces: the two seats' and the watch's own, started in the folder the watch reads.
     expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator', watchLabel('acme')]);
     expect(made.creates[2]?.cwd).toBe(customDir);
-    const run = made.runs.find((one) => one.command.includes(' watch'));
+    // Found by the exact command `up` runs, never a substring: a seat's launch line carries
+    // its rules, which may themselves contain the word watcher.
+    const run = made.runs.find((one) => one.command === watchCommand(SESSION));
     expect(run?.command).toContain(' watch');
     expect(run?.command).toContain(`--session ${SESSION}`);
     expect(run?.command).not.toContain('--file');
@@ -458,7 +460,7 @@ describe('the watch `up` starts', () => {
     const code = await runUp(['--file', custom], io, upSources(home, made, (pid) => pid === 99));
     expect(code, io.out + io.err).toBe(0);
     expect(made.creates.map((one) => one.label)).toEqual(['coordinator', 'operator']);
-    expect(made.runs.some((one) => one.command.includes(' watch'))).toBe(false);
+    expect(made.runs.some((one) => one.command === watchCommand(SESSION))).toBe(false);
     expect(io.err).not.toContain('watch: started');
     expect(readState(customDir).sessions[SESSION]?.watch?.pid).toBe(99);
   });
