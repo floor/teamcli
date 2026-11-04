@@ -49,21 +49,44 @@ export type CallerSources = {
 
 // Places the caller by its parent processes. When `session` is given the agent list and the pane
 // roots are read in that session — the caller of `currentCaller(io, session)` — and a seat it
-// places is recorded as that session's: a pane the session does not list places nobody.
+// places is recorded as that session's: a pane the session does not list places nobody. A live
+// handoff that re-parents a pane's root away from the server is placed by the server's own record
+// of that pane, under the same pid proof: the hint names the pane, the root pid decides.
 export function placeCaller(sources: CallerSources, session?: string): Caller {
   const ancestors = sources.ancestors();
   // A walk that stopped early may have stopped below a herdr server: it places nobody.
   if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
   const pids = new Set(ancestors.map((process) => process.pid));
 
-  if (ancestors.some((process) => process.name === 'herdr')) {
+  // A herdr server is normally one of the caller's ancestors. A live handoff re-parents every
+  // pane's root process to the system's first process, so the server leaves the chain while the
+  // pane's own root process stays in it. The current server's record for the pane the
+  // environment names is the other way to the same proof: the hint names the pane, and the root
+  // process the server reports for it must be one of the caller's ancestors. The read goes
+  // through the same sources as every other placement — the session the command asks about, or
+  // the caller's own server — so no other session's server is read. A pane the server does not
+  // know, a read that fails, and a root that is not an ancestor all leave this false, and the
+  // caller falls through to the refusal it got before this fix.
+  const underHerdr = ancestors.some((process) => process.name === 'herdr');
+  const hint = sources.env.HERDR_PANE_ID;
+  const hintedRoot = underHerdr || hint === undefined || hint === '' ? null : sources.paneRootPid(hint);
+  if (underHerdr || (hintedRoot !== null && pids.has(hintedRoot))) {
     const agents = sources.agents();
-    if (!agents) return { kind: 'unplaced', reason: 'it runs under herdr, and herdr doesn\'t answer' };
+    if (!agents) {
+      // In the handoff reading the server answered once already (the pane root above). A second
+      // read failing keeps the refusal the caller got before this fix, never a new one.
+      return underHerdr
+        ? { kind: 'unplaced', reason: 'it runs under herdr, and herdr doesn\'t answer' }
+        : walkOutside(ancestors, sources);
+    }
     // The variable only says which pane to read first; the pids decide.
-    const hint = sources.env.HERDR_PANE_ID;
     const ordered = [...agents].sort((a, b) => Number(b.pane === hint) - Number(a.pane === hint));
+    // In the handoff reading the hinted pane's root was the server's own answer, already read
+    // above: one placement asks the server about that pane once.
+    const rootOf = (pane: string): number | null =>
+      !underHerdr && pane === hint ? hintedRoot : sources.paneRootPid(pane);
     for (const agent of ordered) {
-      const root = sources.paneRootPid(agent.pane);
+      const root = rootOf(agent.pane);
       if (root === null || !pids.has(root)) continue;
       if (agent.name) {
         return session === undefined
@@ -76,7 +99,7 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
     // root is among the ancestors: the variable names the pane, the pid decides. No hint, a
     // root that is not an ancestor, or a read that fails stays the refusal below.
     if (hint) {
-      const root = sources.paneRootPid(hint);
+      const root = rootOf(hint);
       if (root !== null && pids.has(root)) {
         return session === undefined
           ? { kind: 'pane', pane: hint }
