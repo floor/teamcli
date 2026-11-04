@@ -167,6 +167,7 @@ screen:
       # exact equals line drawn in a non-bold colour is the placeholder; a bold one stays text.
       - equals: '/tasks shows your open tasks'
       - equals: '/tasks shows workflows, subagents and terminals in one place'
+      - shape: slash-hint
     # 1.4.14 draws a completion row of its own under the input row, inside the box, for the text
     # being typed — `  /exit  Quit when idle` for `/exit` (muse-unsent-ansi.txt). The row is the
     # pane's, not text: it is left out of the box's rows, so the box reads back as the typed text
