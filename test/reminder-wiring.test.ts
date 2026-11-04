@@ -20,8 +20,13 @@ afterEach(() => {
 function worldWithReminders(text: string): World {
   const one = world();
   made.push(one);
+  // The team is inside the reminder's entity; `lobby:` names the machine-global lobby outright
+  // so the entity line does not move the file's trust check.
+  const path = join(one.root, '.agents', 'team.yaml');
+  writeFileSync(path, `${readFileSync(path, 'utf8')}entity: acme\nlobby: ${lobbyDir(one.home)}\n`);
   upsertTeam(one.home, teamIdOf(one.root), {
     project: 'acme',
+    entity: 'acme',
     session: 'acme',
     root: one.root,
     by: 'reminder-wiring-test',
@@ -114,8 +119,8 @@ describe('the daemon run reads the entity record', () => {
         '      text: "Go {team}."',
       ].join('\n'),
     );
-    // A second checkout in the same home: its file trusts this home's lobby, and its registry
-    // record is project beta, but this daemon hosts only `one.root`.
+    // A second checkout in the same home and the same entity: its file trusts this home's
+    // lobby, and its registry record is project beta, but this daemon hosts only `one.root`.
     const other = world();
     made.push(other);
     writeFileSync(
@@ -123,6 +128,8 @@ describe('the daemon run reads the entity record', () => {
       [
         'format: 1',
         'project: beta',
+        'entity: acme',
+        'lobby: ' + lobbyDir(one.home),
         'coordinator: lead',
         'operator: lead',
         'session: beta',
@@ -144,6 +151,7 @@ describe('the daemon run reads the entity record', () => {
     );
     upsertTeam(one.home, teamIdOf(other.root), {
       project: 'beta',
+      entity: 'acme',
       session: 'beta',
       root: other.root,
       by: 'reminder-wiring-test',
