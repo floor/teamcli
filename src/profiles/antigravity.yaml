@@ -342,9 +342,9 @@ screen:
       - 'Gemini\s+[0-9]'
       - 'esc to cancel'
       - '>\s*/exit\s+Exit'
-    # The empty box draws a rotating hint, `/tasks shows …`, in the input row. The tail
-    # changes; the words up to `shows` are the row. A draft, including one that starts
-    # with `/tasks` and then other words, stays text.
+    # The empty box draws one of these hint rows. The same words with more text stay
+    # text, and so does a draft that only starts with `/tasks`.
     placeholders:
       - equals: ''
-      - prefix: '/tasks shows'
+      - equals: '/tasks shows your open tasks'
+      - equals: '/tasks shows workflows, subagents and terminals in one place'

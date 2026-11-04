@@ -163,9 +163,10 @@ screen:
       - equals: 'Tab queues or steers while a run is active'
       # A plain read of the /goal hint. These equals lines stay exact.
       - equals: '/goal pins a session objective with a progress bar'
-      # A plain read of the tasks rotation. The tail changes; the words up to `shows` are the
-      # row. A slash draft, and the same words drawn in color with no faint attribute, stay text.
-      - prefix: '/tasks shows'
+      # A plain read of the two tasks hints. The same words with more text stay text, and so
+      # do those words drawn in color with no faint attribute.
+      - equals: '/tasks shows your open tasks'
+      - equals: '/tasks shows workflows, subagents and terminals in one place'
     # 1.4.14 draws a completion row of its own under the input row, inside the box, for the text
     # being typed — `  /exit  Quit when idle` for `/exit` (muse-unsent-ansi.txt). The row is the
     # pane's, not text: it is left out of the box's rows, so the box reads back as the typed text
