@@ -210,9 +210,18 @@ export type ServiceRestartSuccess = {
 
 export type ServiceRestartResult = ServiceRestartSuccess | ServiceRestartFailure;
 
+/** One loaded unit's own program words, from the manager's records. */
+export type LoadedServiceProgram = { label: string; program: readonly string[] };
+
 export type ServiceManager = {
   readonly kind: 'system-service-manager';
   unitPath(home: string): string;
+  /**
+   * Every loaded unit's label and program words, when the adapter can read them. Used only
+   * to hold a runtime-home folder a loaded unit still names — never to stop anything.
+   * Absent: no folder is held on a unit's word.
+   */
+  loadedPrograms?(home: string): LoadedServiceProgram[];
   plan(home: string, program: ServiceProgram): ServicePlan;
   /**
    * The manager's own record of the job under the daemon's label: the pid it started and the

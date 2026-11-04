@@ -42,6 +42,13 @@ import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_dis
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
+import {
+  migrateRuntimeHome,
+  runtimeMigrationLines,
+  type RuntimeMigrationReport,
+} from '../daemon/runtime-migration.ts';
+import { loadTeamFile } from '../file/load.ts';
+import { projectionOf } from '../reach/projection.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
@@ -139,6 +146,8 @@ export type DaemonCommandSources = {
   mailboxFactory?: Parameters<typeof startMachineDaemon>[0]['mailboxFactory'];
   /** Injected for tests: retires one shuttle unit. The real install uses the service manager. */
   retireShuttle?: (label: string) => { ok: true } | { ok: false; why: string };
+  /** Injected for tests: the runtime-home migration step of an install. */
+  runtimeMigration?: (home: string, roots: readonly string[], dryRun: boolean) => RuntimeMigrationReport;
 };
 
 /** What a status reader answers: the reminders that read, and the entries the parser refused as
@@ -762,7 +771,39 @@ const INSTALL_STEPS: readonly string[] = [
   'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
   'if it still cannot start, the previous unit is put back and its daemon started again',
   'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
+  'once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it',
 ];
+
+/**
+ * The runtime-home migration an install runs, wired to the manager's own records: a kit
+ * folder is held only on a loaded unit's program word, and the guard completion gate reads
+ * the hosted roots' own team files for the guard folders they name (defaults resolved the
+ * way the reach projection resolves them). An injected source replaces the whole step.
+ */
+function runRuntimeMigrationStep(
+  home: string,
+  roots: readonly string[],
+  dryRun: boolean,
+  manager: ServiceManager | null,
+  sources: DaemonCommandSources,
+): RuntimeMigrationReport {
+  if (sources.runtimeMigration !== undefined) return sources.runtimeMigration(home, roots, dryRun);
+  return migrateRuntimeHome(home, {
+    ...(sources.now !== undefined ? { now: sources.now } : {}),
+    loadedPrograms: () => manager?.loadedPrograms?.(home) ?? [],
+    guardDirsNamed: () => {
+      const named: string[] = [];
+      for (const root of roots) {
+        try {
+          const loaded = loadTeamFile(root, { home });
+          if (!loaded.ok) continue;
+          for (const seat of projectionOf(loaded.team, home).seats) named.push(seat.guard_dir);
+        } catch { /* a root that will not read names no guard here; the note keeps the gate open */ }
+      }
+      return named;
+    },
+  }, { dryRun });
+}
 
 /**
  * The command that starts a daemon again after an install that left none running: this install
@@ -1324,6 +1365,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     });
   }
   if (parsed.dryRun) {
+    const migration = runRuntimeMigrationStep(home, named.roots, true, manager, sources);
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
         format: 1,
@@ -1334,11 +1376,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         program: plan.program,
         roots: named.roots,
         steps: [...INSTALL_STEPS],
+        runtime_migration: migration,
       });
     } else {
       io.stdout(
         `team daemon: would install the machine daemon for ${String(named.roots.length)} checkout(s); the system's service manager starts it at login and restarts it after a failure; nothing was written\n${INSTALL_STEPS.map((step) => `  - ${step}\n`).join('')}`,
       );
+      for (const line of runtimeMigrationLines(migration)) io.stdout(`team daemon: ${line}\n`);
     }
     // exit: daemon.dry-run
     return 0;
@@ -1395,6 +1439,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       io.stderr(`team daemon: ${one.label} was not retired: ${one.why}\n`);
     }
   }
+  // Only now, with the new daemon answering, do the lobby's kit folders move into the
+  // runtime home. A failed or rolled-back install above never reaches this line, so the
+  // old daemon and the old folders stay a consistent pair.
+  const migration = runRuntimeMigrationStep(home, named.roots, false, manager, sources);
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,
@@ -1409,6 +1457,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // The removal is never silent: a structured run says it in a field, a plain run below in
       // a sentence.
       ...(installed.droppedAuthorization === true ? { dropped_authorization: true } : {}),
+      runtime_migration: migration,
     });
   } else {
     io.stdout(
@@ -1417,6 +1466,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     if (installed.droppedAuthorization === true) {
       io.stdout('team daemon: the earlier unit named a client key or a general grant; this unit was rewritten without either\n');
     }
+    for (const line of runtimeMigrationLines(migration)) io.stdout(`team daemon: ${line}\n`);
   }
   // exit: daemon.installed
   return 0;
