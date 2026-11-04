@@ -98,9 +98,9 @@ describe('reportDisplayAgent', () => {
       calls.push(args);
       return '{}';
     });
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli', 5000)).toBe(true);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 5000)).toBe(true);
     expect(calls.length).toBe(1);
-    expect(calls[0]).toEqual(['--session', 'teamcli', 'pane', 'report-metadata', 'w1:p1', '--source', 'team', '--display-agent', 'line two', '--ttl-ms', '5000']);
+    expect(calls[0]).toEqual(['--session', 'fixture-session', 'pane', 'report-metadata', 'fixture-pane-1', '--source', 'team', '--display-agent', 'line two', '--ttl-ms', '5000']);
   });
 
   test('without a ttl no flag rides', () => {
@@ -109,7 +109,7 @@ describe('reportDisplayAgent', () => {
       calls.push(args);
       return '{}';
     });
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli')).toBe(true);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session')).toBe(true);
     expect(calls[0]?.includes('--ttl-ms')).toBe(false);
   });
 
@@ -119,7 +119,7 @@ describe('reportDisplayAgent', () => {
       calls.push(args);
       return '{}';
     });
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli', SIDEBAR_TTL_CAP_MS + 1)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', SIDEBAR_TTL_CAP_MS + 1)).toBe(false);
     expect(calls.length).toBe(0);
   });
 
@@ -129,9 +129,9 @@ describe('reportDisplayAgent', () => {
       calls.push(args);
       return '{}';
     });
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli', 0)).toBe(false);
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli', -5000)).toBe(false);
-    expect(reportDisplayAgent('w1:p1', 'line two', 'teamcli', 1.5)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 0)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', -5000)).toBe(false);
+    expect(reportDisplayAgent('fixture-pane-1', 'line two', 'fixture-session', 1.5)).toBe(false);
     expect(calls.length).toBe(0);
   });
 });
@@ -171,12 +171,12 @@ describe('reloadConfig', () => {
 
   test('applied with no diagnostics is the applied answer', () => {
     setHerdrRun(() => ({ status: 'applied', diagnostics: [] }));
-    expect(reloadConfig('teamcli')).toEqual({ applied: true, text: 'applied' });
+    expect(reloadConfig('fixture-session')).toEqual({ applied: true, text: 'applied' });
   });
 
   test('diagnostics are a refusal that names them', () => {
     setHerdrRun(() => ({ status: 'applied', diagnostics: ['config parse error at line 2'] }));
-    const answer = reloadConfig('teamcli');
+    const answer = reloadConfig('fixture-session');
     expect(answer.applied).toBe(false);
     expect(answer.text).toContain('config parse error at line 2');
   });
@@ -185,9 +185,9 @@ describe('reloadConfig', () => {
     setHerdrRun(() => {
       throw new Error('server_not_running');
     });
-    expect(reloadConfig('teamcli')).toEqual({ applied: false, text: 'server_not_running' });
+    expect(reloadConfig('fixture-session')).toEqual({ applied: false, text: 'server_not_running' });
     setHerdrRun(() => null);
-    expect(reloadConfig('teamcli')).toEqual({ applied: false, text: 'reload-config did not answer' });
+    expect(reloadConfig('fixture-session')).toEqual({ applied: false, text: 'reload-config did not answer' });
   });
 });
 

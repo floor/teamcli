@@ -908,7 +908,7 @@ export function hostConfigCheck(): { ok: boolean; text: string } {
 }
 
 /** `server reload-config` is session-scoped: each session runs its own server behind its own
- *  socket, so the reload reaches only the session it names (Atlas, measured live 2026-11-04).
+ *  socket, so the reload reaches only the session it names (measured live 2026-11-04).
  *  `status: applied` with no diagnostics is the only applied answer; diagnostics, a non-zero
  *  exit, invalid JSON or a timeout are a refusal whose text the caller names. */
 export type ConfigReload = { applied: boolean; text: string };
