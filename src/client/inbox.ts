@@ -605,7 +605,7 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     }
   }
   // The pane guard, judged before the grant or the key is opened (see src/client/pane-guard.ts).
-  // It is a machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  // It is a machine guard: no dev-mode setting lifts it.
   const pane = clientPaneGuard(io);
   if (!pane.ok) {
     if (json) io.stdout(errorDoc('messages.client-pane', pane.why));

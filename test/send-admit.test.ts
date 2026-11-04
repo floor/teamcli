@@ -157,8 +157,8 @@ describe('send admission: the rules that admit', () => {
     expect(admitSend(orchCli, tester1, teams)).toEqual(own);
     expect(admitSend(orchCli, assistantCli, teams)).toEqual(own);
     expect(admitSend(orchRadio, builderRadio, teams)).toEqual(own);
-    // Another team's plain seat of the same entity: the head team's lead reaches it
-    // (OD-20261103-02). Another entity's seat, and a sub-team's lead, still do not.
+    // Another team's plain seat of the same entity: the head team's lead reaches it.
+    // Another entity's seat, and a sub-team's lead, still do not.
     expect(admitSend(orchCli, builderLabs, teams)).toEqual({
       ok: true,
       rule: "the entity's main orchestrator to any seat of the entity's teams",
@@ -565,7 +565,7 @@ describe('send admission: default deny', () => {
   });
 
   test("the entity's main orchestrator reaches a worker seat of another team of its entity; another entity's does not", () => {
-    // The owner's decision (OD-20261103-02): the head team's lead reaches every seat of the
+    // The head team's lead reaches every seat of the
     // entity's teams, and stops at the entity's edge.
     expect(admitSend(orchCli, builderLabs, teams)).toEqual({
       ok: true,

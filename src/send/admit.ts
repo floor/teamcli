@@ -156,7 +156,7 @@ export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
 
 /**
  * The rule a seat's reply to the entity's main orchestrator is admitted by — the main
- * orchestrator's reach (OD-20261103-02) in the direction of an answer: the main orchestrator
+ * orchestrator's reach in the direction of an answer: the main orchestrator
  * wrote to the seat on a thread it opened, and the seat answers there, on that thread, and
  * nowhere else. The caller sets the marker only after it verified the record, its sender and
  * the thread's opening record; admission asks the chain place and the setting again. It is never
@@ -278,7 +278,7 @@ export function admitSend(
   // whose project is the entity itself reaches every seat below it, one entity and no further.
   // The seat is the chain place `onMainCoordinator` reads — the `leads` capability on the head
   // team, never a role's word — and the reach is a setting: the same `seats_cross_teams` word the
-  // lead pair reads, with its own default on (the owner's OD-20261103-02) and the project as the
+  // lead pair reads, with its own default on and the project as the
   // only level that may reopen it.
   const entity = callerTeam?.entity ?? null;
   if (
@@ -584,8 +584,8 @@ function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undef
 
 /**
  * The main orchestrator's reach over the entity's teams: the same `seats_cross_teams` word the
- * lead pair reads, with this reach's own default — on, the owner's decision that the entity's
- * main orchestrator reaches any seat of the entity's teams (OD-20261103-02) — and the same
+ * lead pair reads, with this reach's own default — on, so the entity's
+ * main orchestrator reaches any seat of the entity's teams — and the same
  * project loosening level. A word at any level of the asker's chain that closes it closes this
  * reach; only the project may reopen what an entity closed.
  */

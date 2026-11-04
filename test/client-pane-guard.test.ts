@@ -4,8 +4,8 @@
 // grant-issuing paths (a `--client-request` sub-grant, a holder's `general-grant --via --key`)
 // place the caller the same way, while the general door and the own `--general` doors are
 // deliberately open to a pane caller (an owner tool applies changes under a general grant from
-// inside a team pane). The guard is a machine guard: dev mode, the owner's switch, never lifts it
-// (OD-20261019-49); an external client outside the terminal host is never refused. Every seat,
+// inside a team pane). The guard is a machine guard: dev mode, the owner's switch, never lifts it;
+// an external client outside the terminal host is never refused. Every seat,
 // file, pane and home below is synthetic.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';

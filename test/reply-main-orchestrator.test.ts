@@ -1,5 +1,5 @@
 // A seat answers the entity's main orchestrator on the thread that orchestrator opened toward
-// that seat, and nowhere else (OD-20261103-02, the reach's reply direction).
+// that seat, and nowhere else (the main orchestrator reach's reply direction).
 //
 // The reach itself is the send direction's — the lead of the team whose project is the entity
 // writes to any seat below it. This file covers the one reply it admits in return: bound to the

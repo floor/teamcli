@@ -1,4 +1,4 @@
-// The entity's main orchestrator reaches any seat of the entity's teams (OD-20261103-02).
+// The entity's main orchestrator reaches any seat of the entity's teams.
 //
 // The main orchestrator is the lead of the team whose project is the entity itself — the chain
 // place `onMainCoordinator` reads, the `leads` capability on the head team, never a role's word.
