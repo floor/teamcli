@@ -9,6 +9,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runTeamCheck } from '../src/check/team.ts';
+import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { planPolicySet, resolvePolicy, writePolicySet } from '../src/policy/index.ts';
 import { mailboxRouterPolicyProblem, readMailboxRouterPolicy } from '../src/policy/router.ts';
@@ -16,7 +18,9 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
-import { deliverBriefs } from './helpers.ts';
+import type { Live } from '../src/status/compare.ts';
+import { approvalStanding } from '../src/store/store.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-04T12:00:00Z');
 
@@ -49,6 +53,19 @@ const parsedTeam = validateTeamFile(TEAM_YAML);
 if (!parsedTeam.ok) throw new Error(JSON.stringify(parsedTeam.errors));
 /** The fixture's own team, narrowed once: property narrowings do not reach inside functions. */
 const TEAM = parsedTeam.team;
+
+const QUIET_LIVE: Live = {
+  running: true,
+  agents: [
+    { name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
+    { name: 'worker', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null },
+  ],
+  workspaces: [
+    { id: 'w1', label: workspaceLabel(TEAM.seats[0]!) },
+    { id: 'w2', label: workspaceLabel(TEAM.seats[1]!) },
+  ],
+  screens: { 'w1:p1': CLAUDE_IDLE, 'w2:p1': CLAUDE_IDLE },
+};
 
 
 function makeFixture(): {
@@ -520,5 +537,25 @@ describe('the mailbox router policy words', () => {
       { alias: 'iris', address: 'iris@floor', fallback: null },
       { alias: 'atlas', address: 'orchestrator@floor', fallback: 'iris@floor' },
     ])).toBeNull();
+  });
+
+  test('team check names a router word the load refuses', () => {
+    const fx = makeFixture();
+    try {
+      setWord(fx, 'team', 'router.aliases', 'atlas=iris@floor');
+      const io = testIo(fx.root, { kind: 'owner' });
+      const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+        live: () => QUIET_LIVE,
+        branch: () => 'main',
+        standing: (at) => approvalStanding(at, fx.home),
+        now: () => NOW,
+        home: fx.home,
+      });
+      expect(code, io.err).toBe(1);
+      expect(io.out).toContain('difference: router alias "atlas" is set by the entity');
+      expect(io.out).toContain('  repair: team policy unset team router.aliases');
+    } finally {
+      fx.cleanup();
+    }
   });
 });
