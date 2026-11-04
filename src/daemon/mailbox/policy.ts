@@ -1,8 +1,13 @@
 // The mailbox router's policy read. Three advised words (the alias map, the fallback, the
-// reply bound) resolve nearest-level-wins. This module holds the release defaults, the fold,
-// and the load checker. The chain that reads the signed words is stubbed: it answers the
-// defaults until that reader lands, and the fold below is what that reader calls.
+// reply bound) resolve nearest-level-wins. The signed chain is `readMailboxRouterPolicy` and
+// `mailboxRouterPolicyProblems` in `src/policy/router.ts`. This module keeps the release map,
+// the fold, and the load checker the child applies to a policy it already holds.
 import { parseOwnerReplyToValue } from '../../settings/owner-reply.ts';
+
+export {
+  mailboxRouterPolicyProblems,
+  readMailboxRouterPolicy,
+} from '../../policy/router.ts';
 
 /** One resolved alias. `address` and `fallback` are `seat@team`. A null fallback means none. */
 export type MailboxRoute = {
@@ -168,14 +173,3 @@ export function resolveMailboxRouterPolicy(input: {
   return { ok: true, policy };
 }
 
-/**
- * The policy in force for one root. Stubbed: the chain reader is not wired, so every root
- * answers the release defaults. The signature is the one that reader will keep.
- */
-export function readMailboxRouterPolicy(
-  _root: string,
-  _home: string,
-  _now: Date,
-): MailboxRouterPolicyRead {
-  return resolveMailboxRouterPolicy();
-}

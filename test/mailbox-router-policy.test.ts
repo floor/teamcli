@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   MAILBOX_ROUTER_DEFAULTS,
   mailboxRouterPolicyProblem,
+  mailboxRouterPolicyProblems,
   readMailboxRouterPolicy,
   resolveMailboxRouterPolicy,
 } from '../src/daemon/mailbox/policy.ts';
@@ -13,9 +17,15 @@ describe('the mailbox router policy', () => {
     expect(mailboxRouterPolicyProblem(MAILBOX_ROUTER_DEFAULTS)).toBeNull();
   });
 
-  test('the stub reader answers those defaults for any root', () => {
-    const read = readMailboxRouterPolicy('/repo', '/home', new Date('2026-11-04T00:00:00Z'));
-    expect(read).toEqual({ ok: true, policy: MAILBOX_ROUTER_DEFAULTS });
+  test('an unreadable team refuses the read, and the check path names no problem for it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mailbox-policy-root-'));
+    const home = mkdtempSync(join(tmpdir(), 'mailbox-policy-home-'));
+    const now = new Date('2026-11-04T00:00:00Z');
+    const read = readMailboxRouterPolicy(root, home, now);
+    expect(read.ok).toBe(false);
+    if (read.ok) return;
+    expect(read.why.startsWith('the team file cannot be read (')).toBe(true);
+    expect(mailboxRouterPolicyProblems(root, home, now, null)).toEqual([]);
   });
 
   test('the entity level may retarget an alias and clear its fallback', () => {
