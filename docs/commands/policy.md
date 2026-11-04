@@ -57,13 +57,13 @@ limit are the tighter words. The daemon reads both for each hosted root; a chain
 read keeps the release defaults and says which word it could not read.
 
 `daemon.heartbeat` (alias `daemon-heartbeat-seconds`) is the machine daemon's loop heartbeat, in
-whole seconds from 1 to 60 — 5 by default: how often the daemon refreshes its state record,
-probes its hosted endpoints and runs the fallback sweep, which still rides the beat in this
-release. The daemon reads it for each hosted root when it starts and again on its housekeeping
+whole seconds from 1 to 60 — 5 by default: how often the daemon refreshes its state record
+and probes its hosted endpoints. The fallback sweep rides the beat only under
+`daemon.chores: inline`; otherwise it is the chores child's pass (below). The daemon reads it for each hosted root when it starts and again on its housekeeping
 pass, and runs the shortest word any hosted root declares, so no hosted team loosens another's
 beat; a longer beat has to be declared at a level every hosted checkout shares. A shorter beat is
 the tighter word. `team daemon status` prints the beat it runs (`heartbeat <time> (every
-<seconds>s)`). While the sweep still rides the beat, a shorter beat makes a backlog stall more
+<seconds>s)`). Where the sweep does ride the beat, a shorter beat makes a backlog stall more
 often, not less.
 
 `daemon.chores` decides where the machine daemon runs its heavy per-checkout chores: `per-root`
