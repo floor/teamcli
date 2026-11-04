@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { SUBMIT_ENTER } from '../src/herdr.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/index.ts';
@@ -19,6 +20,8 @@ const FIXTURES = join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
 const UNSENT = readFileSync(join(FIXTURES, 'unsent.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working.txt'), 'utf8');
+const DRAWING = readFileSync(join(FIXTURES, 'drawing.txt'), 'utf8');
+const SETTLED = readFileSync(join(FIXTURES, 'drawing-settled.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 
@@ -125,6 +128,36 @@ describe('the cursor typed wake', () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
     expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a line still drawing is not submitted until two reads of the settled row agree', async () => {
+    expect(SUBMIT_ENTER).toBe('enter');
+    expect(readScreen('cursor', DRAWING).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', LINE, DRAWING)).toBe(false);
+    expect(readScreen('cursor', SETTLED).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', LINE, SETTLED)).toBe(true);
+    let draws = 0;
+    const pane = wakeFake((read, enters) => {
+      if (read < 2) return IDLE;
+      if (enters > 0) return WORKING;
+      draws += 1;
+      return draws === 1 ? DRAWING : SETTLED;
+    });
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(draws).toBe(3);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a line that does not fit one row is not typed', async () => {
+    const pane = wakeFake(() => IDLE);
+    const over = await deliverTypedWake(pane.host, 'pane-1', 'x'.repeat(81), 'cursor', FAST);
+    expect(over).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the line does not fit 80 characters on one row; nothing was typed' });
+    const broken = await deliverTypedWake(pane.host, 'pane-1', 'one\ntwo', 'cursor', FAST);
+    expect(broken).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the line does not fit 80 characters on one row; nothing was typed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });

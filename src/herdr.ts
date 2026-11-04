@@ -799,8 +799,14 @@ export function typeText(pane: string, text: string, session?: string): boolean 
   }
 }
 
+/** The `send-keys` name of the Enter that submits. Text goes out with `send-text` and no
+ *  Return of its own. herdr 0.9.5 (`herdr --version`, `herdr --skill` on 2026-11-04) names
+ *  this logical Enter; `pane run` queues the text and Enter together, which presses while
+ *  the line is still drawing. */
+export const SUBMIT_ENTER = 'enter';
+
 export function pressEnter(pane: string, session?: string): boolean {
-  return sendKey(pane, 'enter', session);
+  return sendKey(pane, SUBMIT_ENTER, session);
 }
 
 /** One key, by the name `herdr pane send-keys` takes. The same call `pressEnter` uses. */

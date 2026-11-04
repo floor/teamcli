@@ -14,6 +14,7 @@
 // line, and the profile's `working` rule is the acknowledgement.
 import { paneRead, pressEnter, typeText } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
+import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
 import { readScreen } from '../watch/screen.ts';
 import { POLL_MS, SETTLE_MS } from './native.ts';
 
@@ -135,8 +136,9 @@ async function pollSubmitted(
  * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
  * nothing typed. After the line is typed, Enter is pressed only into a box that reads back as
  * exactly that line; a box that is empty, holds other text or cannot be read gets no Enter.
- * Muse and Antigravity submit with Enter, not Return, and the first Enter waits until two
- * reads show that same drawn line. After an Enter, a box that still holds exactly the line
+ * The host's Enter is the submit key, not a Return on the text, and the first one waits
+ * until two reads show that same drawn line. A line longer than the composer cap, or a line
+ * with a newline, is not typed. After an Enter, a box that still holds exactly the line
  * and shows no working screen is pressed again, up to `MAX_WAKE_ENTERS`, and the line is
  * never typed a second time. After an Enter, a working screen that still holds the line is
  * not a submission: the wake keeps polling for `verifyMs` until the box empties, and delivers
@@ -150,6 +152,9 @@ export async function deliverTypedWake(
   cli: string,
   options: TypedWakeOptions = {},
 ): Promise<TypedWakeResult> {
+  if (line.includes('\n') || line.length > MESSAGE_LINE_MAX) {
+    return { delivered: false, typed: false, tries: 0, reason: `the line does not fit ${String(MESSAGE_LINE_MAX)} characters on one row; nothing was typed` };
+  }
   const settleMs = options.settleMs ?? SETTLE_MS;
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
