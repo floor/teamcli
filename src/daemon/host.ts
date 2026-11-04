@@ -39,6 +39,7 @@ import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_F
 import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
 import { createChoresFleet, type ChoresFleet } from './chores/supervisor.ts';
+import { createMailboxRouter, type MailboxChild, type MailboxRouter } from './mailbox/supervisor.ts';
 import type { ChoresChild, SpawnChoresInput } from './chores/spawn.ts';
 import type { ChoresPresenceProof, ChoresPresenceReading, ChoresPresenceStatus } from './chores/protocol.ts';
 import { FALLBACK_STORE_PASS_LIMIT, FALLBACK_STORE_PASS_MS, storeBacklogLimits, sweepFallbackEscalationsSliced, type FallbackSweepResult, type SweepRoot } from './fallback-sweep.ts';
@@ -314,6 +315,13 @@ export type StartMachineDaemonInput = {
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
 
+  /**
+   * Whether this daemon starts the one mailbox router. Off unless a start asks for it, so a
+   * harness that never opted in does not spawn the child. The beat only nudges it.
+   */
+  mailboxHosting?: boolean;
+  /** Starts the mailbox router child. A test injects a fixture child. */
+  mailboxFactory?: () => MailboxChild;
 };
 
 export type StartMachineDaemonResult =
@@ -579,6 +587,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    *  the daemon was not started with the isolation seam. The state writer reads it every time,
    *  so a beat's record carries what each child said on this beat. */
   let choresFleet: ChoresFleet | null = null;
+  /** The one mailbox router, built once the beat exists. Null when this start did not ask for it. */
+  let mailboxRouter: MailboxRouter | null = null;
   /** What each route must re-read, by canonical root. The route remembers the loader's root and
    *  the file a `team-file` route launched from; a registry route names no file, so it is resolved
    *  from its root again the way every writer resolves it. `handle` is the path the loader
@@ -790,6 +800,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         stuck: stuckNow(),
         roots: [...roots],
         ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
+        ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
       });
     } catch {
       // The next heartbeat tries again; an unwritable record is reported as unknown, never healthy.
@@ -2128,6 +2139,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // record; this one records what each checkout actually got, failures and reasons included, and
   // every heartbeat refreshes it after asking the hosted sockets whether they still answer. The
   // timer itself started before the roots loop; this attaches the rest of the beat to it.
+  // One router for every root. The beat nudges it and reads the heartbeat; it does not wait
+  // on the child, an ask, or a reply.
+  if (input.mailboxHosting === true && input.mailboxFactory !== undefined) {
+    mailboxRouter = createMailboxRouter({
+      beatMs: heartbeatMs,
+      now,
+      log: (text) => logLine(text),
+      factory: input.mailboxFactory,
+    });
+  }
   writeState();
 
   // The first retirement pass waits one full interval after the daemon started: a restart's first
@@ -2213,6 +2234,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
     choresFleet?.tick(now());
+    mailboxRouter?.tick(now());
     writeState();
     void refreshHostedEndpoints();
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
@@ -2441,6 +2463,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // grace, so a child that never leaves cannot hold the daemon's ownership.
       if (choresFleet !== null) {
         admissions.push(choresFleet.stop('the daemon is closing').catch(() => undefined));
+      }
+      if (mailboxRouter !== null) {
+        admissions.push(mailboxRouter.stop('the daemon is closing').catch(() => undefined));
       }
       // The endpoint refresh is joined below, after this admission block, so its wait is bounded
       // and a retry joins a run that outlived the first answer. It is not part of `admissions`:

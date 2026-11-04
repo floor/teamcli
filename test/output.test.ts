@@ -1353,7 +1353,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
               levels: ['seat'],
               type: 'order',
               allowed: 'delivery legs, tighten only',
-              default: ['mcp-inbox', 'drop', 'typed'],
+              default: ['typed', 'drop'],
               governed_by: 'delivery-order',
               applies: 'at-once',
             },

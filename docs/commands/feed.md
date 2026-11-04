@@ -30,15 +30,15 @@ own handoff or the receiving runtime's own queue), `headless-resume` (a resumed 
 `channel` (the bus), `session` (a session the send created), `webhook` (the arrival the send
 posted to the seat's adapter), `typed` (a composer trigger), or `drop` (the signed record in the
 bus inbox) — absent when it never left the sender; a line an older build wrote may carry
-`mcp-inbox`, a leg this build reads and never walks. `session` is the id the receiving CLI
+`mcp-inbox`, a name retired from the leg vocabulary that no walk reads. `session` is the id the receiving CLI
 printed on its own session line, written on a line the `session` leg carried, so a reader can
 pull that session's result; every other line carries none. `failed` names the delivery legs a
 send walked past, each as `<leg>: <reason>`: the legs of the seat's delivery order that
 definitely could not take the send — the ones a walk passed before the leg that took it, or
 every leg that failed on a walk that ran out of legs — `native` (recorded `unavailable` with the
-leg's own reason while no socket write is made), or `mcp-inbox` (`not a delivery leg in this
-build; the inbox is the store's reader`, when a human's walk sets the word aside or a record an
-older build wrote names it). A line an older build wrote may carry `no live inbox listener`, or
+leg's own reason while no socket write is made), or `mcp-inbox` (on a line an older build wrote
+only: that build reported the word it read, and this build's lines carry nothing for it). A line
+an older build wrote may carry `no live inbox listener`, or
 `no receipt within 10m` on the watch's later typed line for a message that build's inbox left
 unread past the fallback window. It is absent when no leg failed, and a line that has none of
 these fields, from a build older than them, carries the six required fields alone. `note` is

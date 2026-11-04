@@ -756,7 +756,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-channel` | `send` | 0 | the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read | `team send lead hello` |
-| `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its drop folder on the drop leg, its inbox on a word an older build wrote — and no signed read receipt has come back | `team send worker hello` |
 | `send.session-created` | `send` | 0 | the receiving CLI created a remote session from the message and printed its session line with an id; that id is the delivery, and no read receipt follows | `team send worker hello` |
 | `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |

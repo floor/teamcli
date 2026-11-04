@@ -245,6 +245,12 @@ export type ServiceManager = {
    * growing retries answers `refused` with no daemon running.
    */
   restart(home: string): ServiceRestartResult;
+  /**
+   * Stops and removes one shuttle unit. Optional: a manager that does not carry shuttle units
+   * omits it, and a test double that never retires omits it too. A unit that is not loaded is
+   * still retired when its definition is gone. Nothing starts the unit again.
+   */
+  retireUnit?(home: string, label: string): { ok: true } | { ok: false; why: string };
 };
 
 export type ServiceManagerOptions = {

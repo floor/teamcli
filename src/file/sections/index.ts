@@ -23,6 +23,7 @@ import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
 import { deliveryOrder } from './delivery_order.ts';
 import { senderName } from './sender_name.ts';
+import { messaging } from './messaging.ts';
 import { policies } from './policies.ts';
 import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
@@ -85,6 +86,9 @@ export const SECTIONS: readonly Section[] = [
   // `delivery_order`, so a file written before it keeps every digest and approval it had. The
   // seat-level word sits on a seat and is read by the seats section above.
   senderName,
+  // The file's word on the store a send leaves for its seats (ADR D8): non-owner and additive,
+  // like `delivery_order`. The seat-level word sits on a seat and is read by the seats section.
+  messaging,
   // Owner-signed team-level policies (Kernel amendment 02 §2.12). Non-owner in the section list
   // so existing approval digests stay intact; each entry carries its own Ed25519 signature.
   policies,

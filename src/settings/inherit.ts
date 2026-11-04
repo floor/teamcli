@@ -273,9 +273,7 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 /**
  * The legs a send may walk, in the words the delivery order is written in: `socket`, the frame on
  * the receiving seat's cross-session socket (a signed copy is written first); `native`, the
- * sender's own cross-session SendMessage, recorded by the sender with `--confirm`; `mcp-inbox`,
- * a name this build still reads but never walks: the MCP inbox is the store's reader, so a word
- * naming it is reported unavailable with a `team check` note (`src/send/walk-cascade.ts`);
+ * sender's own cross-session SendMessage, recorded by the sender with `--confirm`;
  * `typed`, the 0600 drop file and one composer trigger line; `drop`, the
  * same 0600 drop file and no keystroke at all — for a receiver that watches its own drop folder,
  * or a pane that must not be typed into; `headless-resume`, the receiving seat's own CLI resumed
@@ -293,9 +291,47 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * the session line it prints. A seat whose profile declares one walks it first while no level
  * of its chain declares an order, and no fallback adds it.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
+export type DeliveryLeg = 'socket' | 'native' | 'typed' | 'drop' | 'headless-resume' | 'channel' | 'session';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume', 'session'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed', 'drop', 'headless-resume', 'session'];
+
+/**
+ * A word a team file or policy may still carry where a delivery order is written: a live leg,
+ * or `mcp-inbox`, a retired name. The MCP inbox is the store's reader, not a leg, so the name
+ * is an alias that is simply dropped from every parsed order (`src/policy/types.ts`) — reading
+ * it is never an error, `team check` names it for removal once per team and seat
+ * (`src/check/team.ts`), and writing it anew through `team config` is refused with that reason.
+ * The model keeps the word only so the note can see it; every walk and every resolver filters
+ * it out with `liveOrderWords`.
+ */
+export type OrderWord = DeliveryLeg | 'mcp-inbox';
+
+/** The retired order words: read as aliases and dropped, never walked and never written anew. */
+export const LEGACY_ORDER_WORDS: readonly OrderWord[] = ['mcp-inbox'];
+
+/** Drops every retired alias word, leaving only the legs a walk may attempt. */
+export function liveOrderWords(words: readonly OrderWord[]): DeliveryLeg[] {
+  return words.filter((word): word is DeliveryLeg => !LEGACY_ORDER_WORDS.includes(word));
+}
+
+/**
+ * A declared-order record with the retired alias words dropped, ready for the resolver: a level
+ * whose word is aliases only declares NOTHING here — it is left out entirely, not passed as an
+ * empty word, because an empty word is a set-aside the resolver would report. A level whose word
+ * mixes the alias with live legs keeps those legs, exactly as the alias had never been written.
+ */
+export function liveOrderRecord(
+  declared: Partial<Record<SettingLevel, readonly OrderWord[] | undefined>>,
+): Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>> {
+  const live: Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>> = {};
+  for (const level of SETTING_LEVELS) {
+    const words = declared[level];
+    if (words === undefined) continue;
+    const legs = liveOrderWords(words);
+    if (legs.length > 0) live[level] = legs;
+  }
+  return live;
+}
 
 /**
  * The order a send walks when no level of the receiving seat's chain declares one: typed, then
@@ -308,8 +344,9 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * where its CLI has an MCP front, the launch's start-of-turn read where it has a hook — takes
  * the message there, but nothing wakes a seat that is idle. A seat that watches nothing never
  * walks this leg (`src/send/delivery.ts` leaves it out of that seat's order). The `mcp-inbox`
- * name is not in this fallback: the MCP inbox is the store's reader, not a leg, and a word that
- * names it is read as unavailable rather than walked. The `native` leg is not in the
+ * name is not in this fallback and no word can add it: the MCP inbox is the store's reader,
+ * not a leg — the name is retired, read in a word only as an alias that is dropped
+ * (`OrderWord`). The `native` leg is not in the
  * default: a level that names it is the sender choosing the cross-session SendMessage and
  * recording the delivery itself, so `native` is a leg a declared word may add
  * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default
@@ -334,6 +371,69 @@ export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
   policy: 'delivery-order',
   fallback: ['typed', 'drop'],
+};
+
+/**
+ * A word setting: one value from a closed list, declared once per feature with the catalogue
+ * policy it is, the value when no level declares one, and the levels allowed to loosen it. Which
+ * word tightens and which loosens is the catalogue policy's to say (its `isWithin`); tightening
+ * is allowed at every level and needs no listing. A word equal to the value in force is no word
+ * at all.
+ */
+export type WordSettingSpec<W extends string> = {
+  /** The spelling the setting is written under in a team file and a report. */
+  name: string;
+  /** The catalogue policy this setting is, in canonical kebab-case. */
+  policy: string;
+  /** The value when nothing declares it. */
+  fallback: W;
+  /** The levels allowed to loosen this setting. */
+  looseningLevels: readonly SettingLevel[];
+};
+
+/** One level's word on a word setting: the level that holds it, the word it declares, and when
+ *  the word stops counting (an expired word is unset at its level). */
+export type WordDeclaration<W extends string = string> = { level: SettingLevel; value: W; expiry?: string | null };
+
+/** The declarations a chain of per-level words holds, in inheritance order; a level the chain
+ *  says nothing about is left out, and so is a level given `undefined`. */
+export function wordDeclarationsOf<W extends string>(declared: Partial<Record<SettingLevel, W | undefined>>): WordDeclaration<W>[] {
+  const out: WordDeclaration<W>[] = [];
+  for (const level of SETTING_LEVELS) {
+    const value = declared[level];
+    if (value !== undefined) out.push({ level, value });
+  }
+  return out;
+}
+
+/**
+ * The store a send leaves behind for the receiving seat, as that seat's chain — entity, project,
+ * team, seat — declares it. `first` is the shape every send walks today: the signed record is
+ * written into the recipient's folder before the walk wakes it, and a wake that never lands
+ * leaves the copy where the watch's retry, the unread re-wake and the read receipt find it.
+ * `parallel` starts the same write and the first wake together, and ends the send only when both
+ * settle. `none` never stores the record: the frame carries the same signed bytes, so the
+ * receiver verifies sender and integrity exactly as today, and what the sender gives up is the
+ * retry, the unread re-wake, the read receipt and the `queued, not woken` flag.
+ *
+ * Durability is the safe side: `first` is tighter than `parallel`, which is tighter than `none`.
+ * Any level may move a seat toward `first`; moving toward less durability is the loosening, and
+ * only the levels this setting lists may do it — the entity and the project, the scopes that
+ * decide for everyone beneath them. The team and the seat may always close the door again.
+ */
+export const MESSAGING_STORES = ['first', 'parallel', 'none'] as const;
+export type MessagingStore = (typeof MESSAGING_STORES)[number];
+
+/** Whether a declared word is one of the three. */
+export function isMessagingStore(value: unknown): value is MessagingStore {
+  return typeof value === 'string' && (MESSAGING_STORES as readonly string[]).includes(value);
+}
+
+export const MESSAGING_STORE: WordSettingSpec<MessagingStore> = {
+  name: 'messaging.store',
+  policy: 'messaging.store',
+  fallback: 'first',
+  looseningLevels: ['entity', 'project'],
 };
 
 /**

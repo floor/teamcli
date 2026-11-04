@@ -1,11 +1,11 @@
 // ADR zeus-message-path D1: a send walks the owner's cascade — the channel-class legs the
 // receiving seat's delivery_order names, then the typed leg, then the drop file — and stops at
-// the first leg taken. `mcp-inbox` is not a leg in this build: the MCP inbox is the store's
-// reader (the same records `team drops --read` reads), and a push from an MCP server is not a
-// wake. A delivery_order that still names it keeps the word; the walk reports it skipped with
-// `MCP_INBOX_UNAVAILABLE`, and a live `.inbox-listener` beside the seat neither splices a leg
-// into the walk nor changes the order. The store the cascade's mailbox leg writes is the record
-// the inbox's server reads.
+// the first leg taken. `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the
+// store's reader (the same records `team drops --read` reads), and a push from an MCP server is
+// not a wake. A delivery_order that still names it keeps the word in the file; the word is
+// dropped from the order before the walk, so the report carries nothing for it, and a live
+// `.inbox-listener` beside the seat neither splices a leg into the walk nor changes the order.
+// The store the cascade's mailbox leg writes is the record the inbox's server reads.
 //
 // The store-then-trigger walk this file used to pin (`pull-only-trigger.test.ts`) is gone with
 // it: a pull-on-turn seat is woken by the typed leg's own trigger, and the drop leg behind it is
@@ -21,7 +21,7 @@ import { deliverWebhook } from '../src/bus/webhook.ts';
 import { runSend } from '../src/commands/send.ts';
 import { MESSAGE_ID } from '../src/mcp/inbox.ts';
 import { readHistory } from '../src/send/history.ts';
-import { cascadeOrder, cascadeWalk, legClassOf, MCP_INBOX_UNAVAILABLE, unavailableLegsOf } from '../src/send/walk-cascade.ts';
+import { cascadeOrder, cascadeWalk, legClassOf } from '../src/send/walk-cascade.ts';
 import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import { fake, filed, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
@@ -170,7 +170,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     }
   });
 
-  test('a declared mcp-inbox word is read as unavailable, and the typed leg behind it delivers', async () => {
+  test('a declared mcp-inbox word is dropped, and the typed leg behind it delivers the same', async () => {
     const one = world(['mcp-inbox', 'typed', 'drop'], [CURSOR]);
     made.push(one);
     liveInbox(one);
@@ -188,14 +188,13 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     };
     expect(doc.status).toBe('delivered');
     const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
-    expect(legs.get('mcp-inbox')).toEqual({
-      leg: 'mcp-inbox',
-      state: 'skipped',
-      reason: MCP_INBOX_UNAVAILABLE,
-    });
+    // The retired word is dropped from the order: no entry for it exists, and the walk is
+    // exactly the one the same file without the word would make.
+    expect(legs.has('mcp-inbox')).toBe(false);
+    expect(doc.delivery.map((entry) => entry.leg)).toEqual(['typed', 'drop']);
     expect(legs.get('typed')).toMatchObject({ state: 'attempted' });
     expect(legs.get('drop')).toMatchObject({ state: 'not-reached' });
-    // One line, one Enter, one record: the unavailable word adds no copy and no wake.
+    // One line, one Enter, one record: the dropped word adds no copy and no wake.
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     expect(recordsIn(inboxOf(one))).toHaveLength(1);
@@ -222,7 +221,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'delivered (typed wake)', via: 'typed' });
   });
 
-  test('an order with no typed leg and a stored-only word ends on the drop, with the word reported', async () => {
+  test('an order with no typed leg and the retired word ends on the drop, with nothing reported for the word', async () => {
     const one = world(['mcp-inbox', 'drop'], [CURSOR]);
     made.push(one);
     liveInbox(one);
@@ -240,7 +239,8 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     };
     expect(doc.status).toBe('queued, not woken');
     const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
-    expect(legs.get('mcp-inbox')).toEqual({ leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE });
+    expect(legs.has('mcp-inbox')).toBe(false);
+    expect(doc.delivery.map((entry) => entry.leg)).toEqual(['drop']);
     expect(legs.get('drop')).toBeDefined();
     // No typed word, no typed wake: the pane is never typed into.
     expect(pane.typed).toEqual([]);
@@ -294,7 +294,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(recordBody(join(dir, records[0] as string))).toBe(filed('hello'));
   });
 
-  test('cascadeWalk orders channel classes, then webhook, then typed, then drop, and omits mcp-inbox', () => {
+  test('cascadeWalk orders channel classes, then webhook, then typed, then drop', () => {
     expect(legClassOf('socket')).toBe('channel');
     expect(legClassOf('native')).toBe('channel');
     expect(legClassOf('headless-resume')).toBe('channel');
@@ -303,10 +303,8 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(legClassOf('webhook')).toBe('webhook');
     expect(legClassOf('typed')).toBe('typed');
     expect(legClassOf('drop')).toBe('mailbox');
-    expect(legClassOf('mcp-inbox')).toBe('unavailable');
 
-    const scrambled = ['drop', 'mcp-inbox', 'typed', 'native', 'socket', 'channel', 'headless-resume', 'session'] as const;
-    expect(unavailableLegsOf(scrambled)).toEqual(['mcp-inbox']);
+    const scrambled = ['drop', 'typed', 'native', 'socket', 'channel', 'headless-resume', 'session'] as const;
     expect(cascadeOrder(scrambled)).toEqual(['native', 'socket', 'channel', 'headless-resume', 'session', 'typed', 'drop']);
     expect(cascadeWalk(scrambled, true)).toEqual([
       'native',
@@ -336,7 +334,7 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     stops.push(() => server.stop(true));
     const url = `http://127.0.0.1:${String(server.port)}/routine`;
 
-    // Declared order scrambles drop, mcp-inbox, typed, socket; cascade walks socket -> webhook -> typed -> drop.
+    // Declared order scrambles drop, the retired mcp-inbox word, typed, socket; cascade walks socket -> webhook -> typed -> drop.
     const one = world(['drop', 'mcp-inbox', 'typed', 'socket'], [{ ...CURSOR, webhook: hookFiles(url) }]);
     made.push(one);
     liveInbox(one);
@@ -361,7 +359,6 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     expect(idlePane.typed).toHaveLength(1);
     expect(idlePane.enters).toBe(1);
     expect(doc1.delivery.map((entry) => [entry.leg, entry.state])).toEqual([
-      ['mcp-inbox', 'skipped'],
       ['socket', 'skipped'],
       ['webhook', 'attempted'],
       ['typed', 'attempted'],

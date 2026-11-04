@@ -238,10 +238,10 @@ export function recordSwap(samples: SwapSample[], used: number, now: number, win
 /**
  * The first `machine:` start limit this reading crosses, or null. A figure that was not read
  * (null) is neither fine nor a refusal, and neither is a pressure level that wasn't read. Free
- * swap is not a launch limit: macOS keeps swap nearly full while physical memory is free, so
- * `swap_free_min` belongs to the watch and never refuses a launch on its own; the OS's pressure
- * level does, at `critical`. Swap growth uses the samples this command has already taken; one
- * reading on its own never crosses it.
+ * swap is not a launch limit and is not reported either: the OS keeps swap nearly full while
+ * physical memory is free, so the free figure decides nothing; the OS's pressure level refuses
+ * at `critical`, and swap growth — the movement, not the level — refuses over its window. Swap
+ * growth uses the samples this command has already taken; one reading on its own never crosses it.
  */
 export function launchLimit(
   machine: Machine,
@@ -272,29 +272,15 @@ export function launchLimit(
 }
 
 /**
- * The swap the watch check asks for, when this reading cannot meet it: more free swap than the
- * machine has in total. Within one reading free is never above total, so the `swap-free` check
- * cannot pass against this reading; the warning says what this reading holds, never what a later
- * pass will. Free swap is not a launch limit, so this is a configuration the watch reports, not
- * a launch that refused. Null when either figure wasn't read, and when the check can pass in
- * principle: a machine with no swap at all is not this case, and neither is one that merely lacks
- * free swap right now.
- */
-export function swapTotalProblem(machine: Machine, limits: TeamFile['machine']): string | null {
-  if (machine.swapTotal === null || machine.swapFree === null) return null;
-  if (limits.swapFreeMin <= machine.swapTotal) return null;
-  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so this reading cannot meet it; set \`machine.swap_free_min\` to a figure this machine can keep`;
-}
-
-/**
  * How many seats `team up` may launch and wait on concurrently.
  *
  * `--serial` (or an unreadable load or memory figure, which never counts as fine) runs one seat
  * at a time (`1`). When `launchLimit` passes but the machine is already under load — load per
- * core above 70% of `load_start`, free memory within 10 percentage points of `memory_start`, free
- * swap below 1.5x `swap_free_min`, or the OS's pressure level at `warn` — it falls back to `1` so
- * `allow` re-reads after each seat settles. When headroom is present, concurrency scales between
- * `2` and `8` from both remaining load and remaining free memory.
+ * core above 70% of `load_start`, free memory within 10 percentage points of `memory_start`, or
+ * the OS's pressure level at `warn` — it falls back to `1` so `allow` re-reads after each seat
+ * settles. Free swap never decides: the OS keeps swap nearly full while memory is free. When
+ * headroom is present, concurrency scales between `2` and `8` from both remaining load and
+ * remaining free memory.
  */
 export function launchConcurrency(
   machine: Machine | undefined,
@@ -305,7 +291,6 @@ export function launchConcurrency(
   if (machine.loadPerCore === null || machine.memoryFree === null) return 1;
   if (machine.loadPerCore > limits.loadStart * 0.7) return 1;
   if (machine.memoryFree < limits.memoryStart + 10) return 1;
-  if (machine.swapFree !== null && machine.swapFree < limits.swapFreeMin * 1.5) return 1;
   // A warning level does not refuse a launch, but it is no weather for several at once.
   if (machine.pressure === 'warn' || machine.pressure === 'critical') return 1;
   const loadSlots = Math.floor((limits.loadStart - machine.loadPerCore) * 4);

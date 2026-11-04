@@ -341,7 +341,7 @@ describe('delivery_order', () => {
     writeProjects(record('delivery_order: typed'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must be a list of legs/);
     writeProjects(record('delivery_order: [telepathy]'));
-    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session/);
+    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: socket, native, typed, drop, headless-resume, session/);
     writeProjects(record('delivery_order: [typed, typed]'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" names a leg twice/);
   });
@@ -366,11 +366,26 @@ describe('delivery_order', () => {
     expect(get(home, 'teamcli')?.teams).toEqual(['cli-id']);
   });
 
+  test('a write naming the retired mcp-inbox alias is refused, and a row an older build wrote still loads', () => {
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
+    const before = readFileSync(projectsFile(home), 'utf8');
+    // The upsert is a write: no new record names the alias, alone or beside live legs.
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['mcp-inbox'] })).toThrow('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['mcp-inbox', 'typed'] })).toThrow('delivery_order names mcp-inbox, which is no longer a leg; remove it');
+    expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
+    // The load is a read: a record an older build wrote keeps the word and reads back with it.
+    writeProjects(
+      'projects:\n  teamcli:\n    name: TeamCLI\n    entity: null\n    lead: null\n    teams: []\n' +
+        `    delivery_order: [mcp-inbox, typed]\n    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }\n`,
+    );
+    expect(get(home, 'teamcli')?.deliveryOrder).toEqual(['mcp-inbox', 'typed']);
+  });
+
   test('a patch with a word the reader would refuse is refused, and the file stays as it was', () => {
     upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
     const before = readFileSync(projectsFile(home), 'utf8');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: [] })).toThrow('"delivery_order" must name at least one leg');
-    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, mcp-inbox, typed, drop, headless-resume, session');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: socket, native, typed, drop, headless-resume, session');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['typed', 'typed'] })).toThrow('"delivery_order" names a leg twice');
     expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
   });

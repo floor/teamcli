@@ -7,7 +7,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
 import type { CrossSessionInbound } from '../launch/declaration.ts';
-import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
+import type { LivenessThresholds, MessagingStore, OrderWord, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
@@ -94,6 +94,12 @@ export type SeatWebhook = {
    */
   timeoutMs?: number;
 };
+
+/**
+ * The words a team file writes in its `messaging` map, at the top level or on a seat. A file
+ * that writes none carries an empty map, and a seat that does the same carries no field at all.
+ */
+export type MessagingWords = { store?: MessagingStore };
 
 export type Seat = {
   role: string;
@@ -200,11 +206,13 @@ export type Seat = {
   reach?: SeatReach;
   /**
    * The seat's own word on the delivery order, when the file writes one: the legs a send to this
-   * seat may walk, in order. Absent otherwise, so a file that writes none keeps the digest it
-   * had. Only the word's shape is settled here; whether it drops or reorders the order in force,
-   * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
+   * seat may walk, in order, and the retired `mcp-inbox` alias, which is still read here and
+   * dropped before any walk (`src/settings/inherit.ts`). Absent otherwise, so a file that writes
+   * none keeps the digest it had. Only the word's shape is settled here; whether it drops or
+   * reorders the order in force, or would add a leg, is settled when a send resolves the chain
+   * (`src/settings/inherit.ts`).
    */
-  deliveryOrder?: DeliveryLeg[];
+  deliveryOrder?: OrderWord[];
   /**
    * The seat's own word on how a sender reads in its own headlines, when the file writes one:
    * the presentation word a command run for this seat prints senders with. Absent otherwise, so
@@ -212,6 +220,13 @@ export type Seat = {
    * registry id.
    */
   senderName?: SenderNameMode;
+  /**
+   * The seat's own word on the store a send leaves for it, when the file writes one: `none`
+   * stores nothing and the frame carries the signed bytes alone, `parallel` writes and wakes at
+   * once, and `first` (the shape every file had before the key) stores before the first wake.
+   * Absent otherwise, so a file that writes none keeps the digest it had.
+   */
+  messaging?: MessagingWords;
   /**
    * The seat's own word on the liveness defaults, when the file writes one: the idle-to-lead and
    * idle-to-owner windows its reports run by, and the blind window its state is read by. Absent
@@ -255,10 +270,11 @@ export type TeamFile = {
   operator: string;
   /**
    * The file's own word on the delivery order, or null when it writes none: the order a send to
-   * any of its seats walks when the seat and the levels above say nothing. Non-owner and
+   * any of its seats walks when the seat and the levels above say nothing, with the retired
+   * `mcp-inbox` alias still read in the word and dropped before any walk. Non-owner and
    * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
    */
-  deliveryOrder: DeliveryLeg[] | null;
+  deliveryOrder: OrderWord[] | null;
   /**
    * The file's own word on how a sender reads in TeamCLI's headlines, or null when it writes
    * none. Non-owner and additive — it changes no approval fingerprint, so a file written before
@@ -266,6 +282,12 @@ export type TeamFile = {
    * record's.
    */
   senderName: SenderNameMode | null;
+  /**
+   * The file's own word on the store a send leaves for its seats, when the file writes one:
+   * `first`, `parallel` or `none`, read for a seat whose chain says nothing nearer. Non-owner and
+   * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
+   */
+  messaging: MessagingWords;
   /**
    * Owner-signed team-level policy declarations (Kernel amendment 02 §2.12), when present.
    */
@@ -335,6 +357,9 @@ export type TeamFile = {
     memoryStart: number;
     memoryMin: number;
     diskMin: number;
+    /** Carried unchanged in the record shape and ignored: free swap decides nothing, but the
+     *  field is part of the frozen canonical record and the approval fingerprint, so dropping
+     *  it would move signed records. Deprecated in `team check`. */
     swapFreeMin: number;
     swapGrowthMax: number;
     swapGrowthWindow: number;

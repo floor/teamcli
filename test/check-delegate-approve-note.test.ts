@@ -168,10 +168,10 @@ describe('a delegate entry naming approve', () => {
   });
 
   test("a delivery_order naming mcp-inbox is read, not set aside: a note names it and validates under --json", () => {
-    // ADR D1: the inbox is the store's reader, not a delivery leg, so a word naming it is kept in
-    // force (a word may add it) and the walk reports it unavailable. The check names the word in
-    // a note above its findings — not a difference: the walk travels the same legs either way,
-    // so neither the total nor the exit changes.
+    // ADR D1: the inbox is the store's reader, and `mcp-inbox` is a retired name — the word is
+    // read as an alias that is dropped from every order, so the walk travels the same legs either
+    // way and neither the total nor the exit changes. The check names the word once per team and
+    // per seat in a note above its findings — not a difference.
     const withInboxSeat = [
       ...HEAD.trimEnd().split('\n'),
       '    delivery_order: [mcp-inbox, typed]',
@@ -187,7 +187,8 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code).toBe(0);
-    expect(io.out).toContain("note: lead: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it from the seat's row when the file is next edited\n");
+    expect(io.out).toContain("note: lead: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is no longer a leg; remove it\n");
+    expect(io.out.split('names mcp-inbox, which is no longer a leg').length - 1).toBe(1);
     expect(io.out).toContain('no differences');
     expect(io.out).not.toContain('is set aside');
     expect(io.out).not.toContain('difference: lead: delivery_order');
@@ -206,7 +207,8 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code2).toBe(0);
-    expect(io2.out).toContain("note: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is not a delivery leg in this build — the inbox is the store's reader, so the walk skips the word; drop it when the file is next edited\n");
+    expect(io2.out).toContain("note: delivery_order [mcp-inbox, typed] in team config names mcp-inbox, which is no longer a leg; remove it\n");
+    expect(io2.out.split('names mcp-inbox, which is no longer a leg').length - 1).toBe(1);
     expect(io2.out).toContain('no differences');
 
     const jsonIo = testIo(root, { kind: 'owner' });

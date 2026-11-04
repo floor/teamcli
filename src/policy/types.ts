@@ -13,12 +13,16 @@ import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
   DELIVERY_ORDER,
+  isMessagingStore,
+  MESSAGING_STORE,
+  LEGACY_ORDER_WORDS,
   parseSeatNumberingValue,
   SEAT_NUMBERING_DEFAULT_VALUE,
   SEATS_CROSS_TEAMS,
   STATE_THRESHOLDS,
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
+  type MessagingStore,
 } from '../settings/inherit.ts';
 import {
   MESSAGE_DISPLAY_DEFAULT,
@@ -105,6 +109,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'messaging.store',
   'delivery-timeout',
   'delivery-escalation',
   'brief-transport',
@@ -161,6 +166,9 @@ export const ADVISED_POLICY_NAMES = [
   'leads.pane-actions',
   'leads.self-service',
   'owner.reserved-scope',
+  'router.aliases',
+  'router.fallback',
+  'router.reply-bound',
 ] as const;
 
 export type AdvisedPolicyName = (typeof ADVISED_POLICY_NAMES)[number];
@@ -188,6 +196,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  messaging_store: 'messaging.store',
+  'messaging-store': 'messaging.store',
   delivery_timeout: 'delivery-timeout',
   delivery_escalation: 'delivery-escalation',
   brief_transport: 'brief-transport',
@@ -248,6 +258,12 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_reserved_scope: 'owner.reserved-scope',
   'owner.reserved_scope': 'owner.reserved-scope',
   'owner-reserved-scope': 'owner.reserved-scope',
+  router_aliases: 'router.aliases',
+  'router-aliases': 'router.aliases',
+  router_fallback: 'router.fallback',
+  'router-fallback': 'router.fallback',
+  router_reply_bound: 'router.reply-bound',
+  'router-reply-bound': 'router.reply-bound',
   event_thread_ttl_seconds: 'event-thread-ttl-seconds',
   thread_ttl_seconds: 'event-thread-ttl-seconds',
   'thread-ttl': 'event-thread-ttl-seconds',
@@ -322,6 +338,14 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   parseValue: (raw: unknown) => V | null;
   /** Optional custom refusal reason when `parseValue(raw)` returns null. */
   valueProblem?: (raw: unknown) => string | null;
+  /**
+   * True when a `parseValue` result that is an empty array means the declaration names nothing:
+   * the resolver skips it like an expired one — never refused, never set aside — and the word in
+   * force stands. Only `delivery-order` sets it: a word whose every name is retired (`mcp-inbox`,
+   * read as an alias and dropped by `parseDeliveryOrder`) declares nothing, and a signed record
+   * an older build wrote still reads.
+   */
+  emptyWordDeclaresNothing?: boolean;
   /**
    * Optional: merges a lower declaration into the value in force above it before the chain moves
    * on. A sparse value names only some fields, and the fields it leaves out inherit the value in
@@ -627,13 +651,30 @@ function parseDeliveryOrder(raw: unknown): readonly DeliveryLeg[] | null {
   const items = rawDeliveryItems(raw);
   if (!items || items.length === 0) return null;
   const out: DeliveryLeg[] = [];
+  const seen: string[] = [];
   for (const item of items) {
-    if (typeof item !== 'string' || !(DELIVERY_LEGS as readonly string[]).includes(item)) return null;
-    const leg = item as DeliveryLeg;
-    if (out.includes(leg)) return null;
-    out.push(leg);
+    if (typeof item !== 'string') return null;
+    const known = (DELIVERY_LEGS as readonly string[]).includes(item)
+      || (LEGACY_ORDER_WORDS as readonly string[]).includes(item);
+    // A duplicate is judged before the retired name is dropped: [mcp-inbox, mcp-inbox] was
+    // invalid for every build that knew the word, and a duplicated alias is as invalid as a
+    // duplicated live leg. A word this build knows nothing else about refuses the same way.
+    if (!known || seen.includes(item)) return null;
+    seen.push(item);
+    // A retired name is dropped, never refused: the chain reads it as an alias, and the level
+    // it came from keeps the legs it names.
+    if ((LEGACY_ORDER_WORDS as readonly string[]).includes(item)) continue;
+    out.push(item as DeliveryLeg);
   }
   return out;
+}
+
+/** True when a raw delivery-order word names a retired alias word anywhere — alone or beside
+ *  live legs. New writes refuse such a word with the leg's own reason (`src/policy/sources.ts`);
+ *  a stored record still reads, and `parseDeliveryOrder` drops the name. */
+export function namesRetiredOrderWord(raw: unknown): boolean {
+  const items = rawDeliveryItems(raw);
+  return items !== null && items.some((item) => typeof item === 'string' && (LEGACY_ORDER_WORDS as readonly string[]).includes(item));
 }
 
 function deliveryOrderProblem(raw: unknown): string | null {
@@ -754,6 +795,205 @@ export const DELIVERY_TIMEOUT_DEFAULTS: Readonly<Record<DeliveryTimeoutRoute, nu
   native: 15,
 };
 
+// ---- The mailbox router's three words (the mailbox-router design of 2026-11-03) -----------------------
+//
+// `router.aliases` places each alias at a `seat@team` address; `router.fallback` places where an
+// alias's ask goes on a definite miss (`none` clears it); `router.reply-bound` bounds the wait for
+// a verified reply. The words carry the map; the router child's own mechanics — the definite-miss
+// rule and the bridge's synchronous 120 s cap — are constants of the child, never values here.
+// `readMailboxRouterPolicy` in `src/policy/router.ts` reads them back into the shape the child
+// consumes and refuses a word that broke its rules at load, with a named error.
+
+/** The release's router alias map, in the order `team policy view` lists it. */
+export const ROUTER_ALIAS_DEFAULTS: Readonly<Record<string, string>> = {
+  iris: 'iris@floor',
+  atlas: 'orchestrator@floor',
+  zeus: 'architect@floor',
+};
+
+/** The release's fallback map; iris and zeus have none. Only the entity level may move these. */
+export const ROUTER_FALLBACK_DEFAULTS: Readonly<Record<string, string>> = {
+  atlas: 'iris@floor',
+};
+
+/** A `seat@team` address: one `@`, a name each side of it. */
+export function parseSeatTeamAddress(text: string): { seat: string; team: string } | null {
+  const at = text.indexOf('@');
+  if (at <= 0 || at !== text.lastIndexOf('@')) return null;
+  const seat = text.slice(0, at).trim();
+  const team = text.slice(at + 1).trim();
+  if (seat === '' || team === '') return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(seat) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(team)) return null;
+  return { seat, team };
+}
+
+/** One map word's entries, in the order the word names them. */
+function routerMapItems(raw: unknown): unknown[] | null {
+  if (typeof raw === 'string') return raw.split(',');
+  if (Array.isArray(raw)) return raw;
+  return null;
+}
+
+const ROUTER_ALIAS_SHAPE = /^[a-z][a-z0-9-]*$/;
+
+/** The aliases a `router.aliases` word places, or null when an entry is not one this surface admits. */
+export function parseRouterAliases(raw: unknown): Map<string, string> | null {
+  const items = routerMapItems(raw);
+  if (!items || items.length === 0) return null;
+  const entries = new Map<string, string>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const eq = item.indexOf('=');
+    if (eq < 0) return null;
+    const alias = item.slice(0, eq).trim();
+    const address = item.slice(eq + 1).trim();
+    if (!ROUTER_ALIAS_SHAPE.test(alias)) return null;
+    if (entries.has(alias)) return null;
+    if (address === '') return null;
+    const parsed = parseSeatTeamAddress(address);
+    if (parsed === null || parsed.seat === 'desk') return null;
+    entries.set(alias, address);
+  }
+  return entries;
+}
+
+/** The fallbacks a `router.fallback` word sets (`alias=seat@team`, `alias=none` to clear), or null. */
+export function parseRouterFallback(raw: unknown): Map<string, string | null> | null {
+  const items = routerMapItems(raw);
+  if (!items || items.length === 0) return null;
+  const entries = new Map<string, string | null>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const eq = item.indexOf('=');
+    if (eq < 0) return null;
+    const alias = item.slice(0, eq).trim();
+    const address = item.slice(eq + 1).trim();
+    if (!ROUTER_ALIAS_SHAPE.test(alias)) return null;
+    if (entries.has(alias)) return null;
+    if (address === 'none') {
+      entries.set(alias, null);
+      continue;
+    }
+    const parsed = address === '' ? null : parseSeatTeamAddress(address);
+    if (parsed === null || parsed.seat === 'desk') return null;
+    entries.set(alias, address);
+  }
+  return entries;
+}
+
+function formatRouterAliases(entries: ReadonlyMap<string, string>): string {
+  return [...entries].map(([alias, address]) => `${alias}=${address}`).join(',');
+}
+
+function formatRouterFallback(entries: ReadonlyMap<string, string | null>): string {
+  return [...entries].map(([alias, address]) => `${alias}=${address ?? 'none'}`).join(',');
+}
+
+const ROUTER_ALIAS_DEFAULT_VALUE = formatRouterAliases(new Map(Object.entries(ROUTER_ALIAS_DEFAULTS)));
+const ROUTER_FALLBACK_DEFAULT_VALUE = formatRouterFallback(new Map(Object.entries(ROUTER_FALLBACK_DEFAULTS)));
+
+/** A word keeps every key the value in force above it already places, so a word names only what it
+ *  moves; the value in force after the merge is always the complete map. */
+function inheritRouterAliases(higher: string, lower: string): string {
+  const merged = new Map<string, string>(Object.entries(ROUTER_ALIAS_DEFAULTS));
+  for (const source of [higher, lower]) {
+    const entries = parseRouterAliases(source);
+    if (entries === null) continue;
+    for (const [alias, address] of entries) merged.set(alias, address);
+  }
+  return formatRouterAliases(merged);
+}
+
+function inheritRouterFallback(higher: string, lower: string): string {
+  const merged = new Map<string, string | null>(Object.entries(ROUTER_FALLBACK_DEFAULTS));
+  for (const source of [higher, lower]) {
+    const entries = parseRouterFallback(source);
+    if (entries === null) continue;
+    for (const [alias, address] of entries) merged.set(alias, address);
+  }
+  return formatRouterFallback(merged);
+}
+
+/** Every alias the higher value places keeps the address the lower value finds there. */
+function routerAliasesWithin(lower: string, higher: string): boolean {
+  const lowerMap = parseRouterAliases(lower);
+  const higherMap = parseRouterAliases(higher);
+  if (lowerMap === null || higherMap === null) return false;
+  for (const [alias, address] of higherMap) {
+    if (lowerMap.get(alias) !== address) return false;
+  }
+  return true;
+}
+
+function routerFallbackWithin(lower: string, higher: string): boolean {
+  const lowerMap = parseRouterFallback(lower);
+  const higherMap = parseRouterFallback(higher);
+  if (lowerMap === null || higherMap === null) return false;
+  for (const [alias, fallback] of higherMap) {
+    if (lowerMap.get(alias) !== fallback) return false;
+  }
+  return true;
+}
+
+export function routerAliasesProblem(raw: unknown): string | null {
+  const items = routerMapItems(raw) ?? [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim();
+    const eq = text.indexOf('=');
+    const alias = (eq < 0 ? text : text.slice(0, eq).trim()).trim();
+    if (!ROUTER_ALIAS_SHAPE.test(alias)) continue;
+    if (seen.has(alias)) return `router alias "${alias}" is named twice in one word`;
+    seen.add(alias);
+    if (eq < 0) return `router alias "${alias}" has no address`;
+    const address = text.slice(eq + 1).trim();
+    if (address === '') return `router alias "${alias}" has no address`;
+    const parsed = parseSeatTeamAddress(address);
+    if (parsed !== null && parsed.seat === 'desk') {
+      return `router alias "${alias}" targets the desk seat, which no alias may name`;
+    }
+    if (parsed === null) return `router alias "${alias}" names "${address}", which is not a seat@team address`;
+  }
+  return null;
+}
+
+export function routerFallbackProblem(raw: unknown): string | null {
+  const items = routerMapItems(raw) ?? [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (typeof item !== 'string') return null;
+    const text = item.trim();
+    const eq = text.indexOf('=');
+    const alias = (eq < 0 ? text : text.slice(0, eq).trim()).trim();
+    if (!ROUTER_ALIAS_SHAPE.test(alias)) continue;
+    if (seen.has(alias)) return `router fallback for "${alias}" is named twice in one word`;
+    seen.add(alias);
+    if (eq < 0) return `router fallback for "${alias}" has no address`;
+    const address = text.slice(eq + 1).trim();
+    if (address === '') return `router fallback for "${alias}" has no address`;
+    if (address === alias) return `router fallback for "${alias}" names the alias itself`;
+    if (address === 'none') continue;
+    const parsed = parseSeatTeamAddress(address);
+    if (parsed !== null && parsed.seat === 'desk') {
+      return `router fallback for "${alias}" targets the desk seat, which no alias may name`;
+    }
+    if (parsed === null) {
+      return `router fallback for "${alias}" names "${address}", which is not a seat@team address`;
+    }
+  }
+  return null;
+}
+
+/** `router.reply-bound`: whole seconds from 1 to 86400, written bare or with an `s`. */
+export function parseRouterReplyBound(raw: unknown): number | null {
+  const text = typeof raw === 'number' ? String(raw) : typeof raw === 'string' ? raw.trim() : '';
+  const match = /^([1-9][0-9]{0,4})s?$/.exec(text);
+  if (!match) return null;
+  const seconds = Number.parseInt(match[1]!, 10);
+  return seconds >= 1 && seconds <= 86_400 ? seconds : null;
+}
+
 /**
  * The daemon's two fallback-store backlog knobs: the finished-episode count above which one pass
  * drains a backlog, and how many it then takes. Both are bounded so one pass stays a bounded
@@ -854,6 +1094,10 @@ export const OWNER_RESERVED_SCOPE_DEFAULT = [
   'credentials',
   "the owner's machine",
 ] as const;
+
+/** How durable a `messaging.store` word is: the lower the rank, the more the send keeps. A word
+ *  is within another when it is at least as durable, so tightening runs toward `first`. */
+const STORE_DURABILITY: Readonly<Record<MessagingStore, number>> = { first: 0, parallel: 1, none: 2 };
 
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
@@ -958,17 +1202,36 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseDeliveryOrder,
     valueProblem: deliveryOrderProblem,
+    emptyWordDeclaresNothing: true,
     // Dropping or reordering channels present in `higher` is within. `native`, `socket`,
     // `headless-resume` and `session` are the legs a word may add: none is in the fallback order,
     // and a level that names one is the sender choosing that channel — its own SendMessage, this
     // build's frame on the receiver's socket, a headless runtime's own turn, or the receiving
-    // CLI's own session call, which no default order ever inserts. `mcp-inbox` is a name this
-    // build still reads: the word is kept rather than refused, and the walk reports it as
-    // unavailable (`src/send/walk-cascade.ts`). Every other leg absent from `higher` is still an
+    // CLI's own session call, which no default order ever inserts. The retired `mcp-inbox` name
+    // never reaches this test: it is dropped from the word before the word is judged
+    // (`parseDeliveryOrder` above), so it can neither add a leg nor widen a level's order.
+    // Every other leg absent from `higher` is still an
     // addition, and the whole word is set aside.
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
-      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || leg === 'mcp-inbox' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+      && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The store a send leaves behind for the receiving seat (`messaging.store` in a team file,
+  // ADR D8). `first` writes the signed record into the recipient's folder before the walk wakes
+  // it; `parallel` starts the write and the first wake together and ends the send only when both
+  // settle; `none` never stores the record, and the frame carries the same signed bytes so the
+  // receiver verifies them as today. Durability is the safe side: first is tighter than
+  // parallel, parallel tighter than none, and a level moves a seat toward first freely; moving
+  // toward none is the loosening the setting's own levels list decides (`MESSAGING_STORE`).
+  'messaging.store': {
+    name: 'messaging.store',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: MESSAGING_STORE.looseningLevels as readonly PolicyLevel[],
+    defaultValue: MESSAGING_STORE.fallback,
+    gateLifting: false,
+    parseValue: (raw: unknown) => (isMessagingStore(raw) ? raw : null),
+    isWithin: (lower: MessagingStore, higher: MessagingStore) => STORE_DURABILITY[lower] <= STORE_DURABILITY[higher],
   },
   // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
   // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the
@@ -1698,6 +1961,60 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     lowerLevelChooses: true,
     parseValue: parseScopeItems,
     valueProblem: (raw: unknown) => `owner.reserved-scope is a list of reserved scopes, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // The mailbox router's alias map: each entry places an alias at a `seat@team` address. The
+  // release places iris, atlas and zeus; the entity may move them or add names, and a team may add
+  // an alias for its own seats — never retarget one the entity places. `readMailboxRouterPolicy`
+  // in `src/policy/router.ts` judges that split at load, naming the alias; the resolver's own
+  // ordering refuses a team word that moves an entity-placed alias against an entity declaration.
+  'router.aliases': {
+    name: 'router.aliases',
+    kind: 'advised',
+    levels: ['entity', 'team'],
+    defaultValue: ROUTER_ALIAS_DEFAULT_VALUE,
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      const entries = parseRouterAliases(raw);
+      return entries === null ? null : formatRouterAliases(entries);
+    },
+    valueProblem: routerAliasesProblem,
+    inherit: inheritRouterAliases,
+    // Every alias the higher value places keeps the address the lower value finds there.
+    isWithin: routerAliasesWithin,
+  },
+  // Where an alias's ask goes on a definite miss: another alias's route is a `seat@team` address,
+  // `none` clears it. The release falls atlas back to iris; iris and zeus have none. An entity
+  // alias's fallback belongs to the entity alone — a team may set the fallback only of an alias it
+  // added, which `readMailboxRouterPolicy` judges at load, naming the alias.
+  'router.fallback': {
+    name: 'router.fallback',
+    kind: 'advised',
+    levels: ['entity', 'team'],
+    defaultValue: ROUTER_FALLBACK_DEFAULT_VALUE,
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      const entries = parseRouterFallback(raw);
+      return entries === null ? null : formatRouterFallback(entries);
+    },
+    valueProblem: routerFallbackProblem,
+    inherit: inheritRouterFallback,
+    // Every fallback the higher value sets (or clears) stays as the higher value left it.
+    isWithin: routerFallbackWithin,
+  },
+  // How long the router waits for a seat's verified reply to an ask: whole seconds from 1 to
+  // 86400, and the nearest level chooses. Unset — the release default — means twice the seat's
+  // unread window. The bridge's synchronous cap of 120 s is a constant of the child, not a value
+  // here; a bound above it still waits the full bound for the mailbox record.
+  'router.reply-bound': {
+    name: 'router.reply-bound',
+    kind: 'advised',
+    levels: ['entity', 'team'],
+    defaultValue: 'unset',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseRouterReplyBound,
+    valueProblem: () => 'policy "router.reply-bound" is a whole number of seconds from 1 to 86400, such as 600',
     isWithin: () => true,
   },
 };

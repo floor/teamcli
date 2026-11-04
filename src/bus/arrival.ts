@@ -21,6 +21,7 @@ import {
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { EventAppendInput } from './log.ts';
+import { readSealedRelative } from './relative-read.ts';
 
 /** One seat folder or record name: the names this pass and the bus's nudge both admit. */
 export const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -76,13 +77,7 @@ function notReadable(read: SealedRead, what: string): Refused {
  * not signed by this checkout's message key, not a message this version reads, or addressed to
  * another id, seat, session or checkout raises nothing.
  */
-export function checkedDropRecord(
-  path: string,
-  claim: ArrivalClaim,
-  scope: ArrivalScope,
-  key: KeyObject,
-): ArrivalRead {
-  const read = readSealedRecord(path);
+function dropFromSealed(read: SealedRead, claim: ArrivalClaim, scope: ArrivalScope, key: KeyObject): ArrivalRead {
   if (!read.ok || read.sealed === null) return notReadable(read, 'the record');
   const auth = recordAuthOfSealed(read.sealed, key);
   if (auth.kind !== 'ok') {
@@ -115,19 +110,40 @@ export function checkedDropRecord(
   };
 }
 
+export function checkedDropRecord(
+  path: string,
+  claim: ArrivalClaim,
+  scope: ArrivalScope,
+  key: KeyObject,
+): ArrivalRead {
+  return dropFromSealed(readSealedRecord(path), claim, scope, key);
+}
+
+/** The drop record opened from the checkout's folder chain. A link is not followed. */
+export function checkedDropRelative(
+  root: string,
+  session: string,
+  seat: string,
+  name: string,
+  claim: ArrivalClaim,
+  scope: ArrivalScope,
+  key: KeyObject,
+): ArrivalRead {
+  return dropFromSealed(
+    readSealedRelative(root, ['.agents', 'send-drops', session, seat], name),
+    claim,
+    scope,
+    key,
+  );
+}
+
 /**
  * One message in the mailbox a previous build wrote. Its records carry the older minimal payload
  * (`kind`, `id`, `to`, `root`, `session`, `at`, `body`, `from`), so the rule here is the signed
  * envelope and the addressing, not this version's projection; the event is still built only from
  * the fields the signature covered.
  */
-export function checkedMailboxRecord(
-  path: string,
-  claim: ArrivalClaim,
-  scope: ArrivalScope,
-  key: KeyObject,
-): MailboxRecordRead {
-  const read = readSealedRecord(path);
+function mailboxFromSealed(read: SealedRead, claim: ArrivalClaim, scope: ArrivalScope, key: KeyObject): MailboxRecordRead {
   if (!read.ok || read.sealed === null) return notReadable(read, 'the record');
   if (!verifySealedRecord(read.sealed, key)) {
     return { ok: false, reason: 'the record is not signed with this checkout\'s message key' };
@@ -148,15 +164,30 @@ export function checkedMailboxRecord(
   };
 }
 
-/** One read receipt beside a mailbox message. The older receipt carries no status; the envelope,
- *  signature and addressing are the rule either shape answers to. */
-export function checkedMailboxReceipt(
+export function checkedMailboxRecord(
   path: string,
   claim: ArrivalClaim,
   scope: ArrivalScope,
   key: KeyObject,
-): MailboxReceiptRead {
-  const read = readSealedRecord(path);
+): MailboxRecordRead {
+  return mailboxFromSealed(readSealedRecord(path), claim, scope, key);
+}
+
+/** The mailbox record opened from the checkout's folder chain. A link is not followed. */
+export function checkedMailboxRelative(
+  root: string,
+  seat: string,
+  name: string,
+  claim: ArrivalClaim,
+  scope: ArrivalScope,
+  key: KeyObject,
+): MailboxRecordRead {
+  return mailboxFromSealed(readSealedRelative(root, ['.agents', 'messages', seat], name), claim, scope, key);
+}
+
+/** One read receipt beside a mailbox message. The older receipt carries no status; the envelope,
+ *  signature and addressing are the rule either shape answers to. */
+function receiptFromSealed(read: SealedRead, claim: ArrivalClaim, scope: ArrivalScope, key: KeyObject): MailboxReceiptRead {
   if (!read.ok || read.sealed === null) return notReadable(read, 'the receipt');
   if (!verifySealedReceipt(read.sealed, key)) {
     return { ok: false, reason: 'the receipt is not signed with this checkout\'s message key' };
@@ -171,6 +202,27 @@ export function checkedMailboxReceipt(
     return { ok: false, reason: 'the signed receipt belongs to another checkout' };
   }
   return { ok: true, at: typeof payload.at === 'string' && payload.at !== '' ? payload.at : undefined };
+}
+
+export function checkedMailboxReceipt(
+  path: string,
+  claim: ArrivalClaim,
+  scope: ArrivalScope,
+  key: KeyObject,
+): MailboxReceiptRead {
+  return receiptFromSealed(readSealedRecord(path), claim, scope, key);
+}
+
+/** The mailbox receipt opened from the checkout's folder chain. A link is not followed. */
+export function checkedMailboxReceiptRelative(
+  root: string,
+  seat: string,
+  name: string,
+  claim: ArrivalClaim,
+  scope: ArrivalScope,
+  key: KeyObject,
+): MailboxReceiptRead {
+  return receiptFromSealed(readSealedRelative(root, ['.agents', 'messages', seat], name), claim, scope, key);
 }
 
 /**
@@ -189,8 +241,6 @@ export function verifiedArrival(claim: ArrivalClaim, scope: ArrivalScope, home: 
   if (claim.session !== scope.session) return null;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  if (!dropFolderIsReal(scope.root, claim.session, claim.seat)) return null;
-  const path = join(scope.root, '.agents', 'send-drops', claim.session, claim.seat, claim.record_id);
-  const checked = checkedDropRecord(path, claim, scope, key.key);
+  const checked = checkedDropRelative(scope.root, claim.session, claim.seat, claim.record_id, claim, scope, key.key);
   return checked.ok ? checked.event : null;
 }

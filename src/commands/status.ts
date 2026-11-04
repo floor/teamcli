@@ -74,7 +74,6 @@ import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status
 import type { Comparison, Difference, Live, WatchDaemonReading } from '../status/compare.ts';
 import { seatWakeReadingOf, wakeAge, wakeCell, type SeatWake, type SeatWakeReading } from '../status/wake.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
-import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 import { readBacklogDepth, readQueueDepths, type QueueDepths } from '../queues.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
@@ -92,9 +91,6 @@ export type StatusSources = {
   home?: string;
   /** The project registry, for `--project`. The real one when absent; a test stands in for it. */
   projects?: ProjectSources;
-  /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
-   *  that does not read them; absent is not "fine", it is nothing said. */
-  machine?(root: string): Machine;
   /** Whether a recorded process id names something still running, for the `team proc` note.
    *  The real reading when absent; a test stands in for it so no fixture depends on a pid. */
   alive?(pid: number): boolean;
@@ -182,7 +178,6 @@ export const realSources: StatusSources = {
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
-  machine: readMachine,
 };
 
 /** What one awaited whole-session read takes: the per-call kill, the loop's stop, the agent
@@ -621,14 +616,6 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       })
     : undefined;
   const registryByName = registryRows ? new Map(registryRows.map((item) => [item.name, item])) : undefined;
-  // The one machine check this reading cannot pass — the same fact `doctor` reports as a finding,
-  // as one note, in the reading's own words. `up`'s refusal on it is its own line, and nothing
-  // here changes an exit.
-  const machine = sources.machine?.(root);
-  if (machine) {
-    const problem = swapTotalProblem(machine, team.machine);
-    if (problem !== null) comparison.notes.unshift(problem);
-  }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
   if (hold) comparison.notes.unshift(holdText(hold));
   // The pause stands above both: it is the one note that says why no seat takes work.

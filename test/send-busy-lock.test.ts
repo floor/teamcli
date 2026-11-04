@@ -1,5 +1,4 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
-import { MCP_INBOX_UNAVAILABLE } from '../src/send/walk-cascade.ts';
 // A send that finds the receiving seat's lock held by another command is queued, not refused:
 // the reachable legs store the signed record and the marker the watch already delivers, type
 // nothing, and answer `queued (receiver busy)` with the id the delivery keeps. The scenes here
@@ -241,10 +240,7 @@ test('a send queued on a held seat lock waits for the seat\'s own read, and the 
   const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
   expect(doc.status).toBe('queued (receiver busy)');
   expect(doc.channel).toBe('drop');
-  expect(doc.delivery).toEqual([
-    { leg: 'mcp-inbox', state: 'skipped', reason: MCP_INBOX_UNAVAILABLE },
-    { leg: 'drop', state: 'queued' },
-  ]);
+  expect(doc.delivery).toEqual([{ leg: 'drop', state: 'queued' }]);
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');
   expect(host.frames).toEqual([]);

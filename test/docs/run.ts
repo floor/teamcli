@@ -651,7 +651,7 @@ function blockWorld(page: Page, block: Block): void {
   }
   if (block.attrs.machine) {
     const kind = block.attrs.machine;
-    if (kind !== 'calm' && kind !== 'tight' && kind !== 'small-swap') throw new Error(`machine="${kind}": it is calm, tight or small-swap`);
+    if (kind !== 'calm' && kind !== 'tight') throw new Error(`machine="${kind}": it is calm or tight`);
     world.setMachine(kind);
   }
   const tools = block.attrs.tools;

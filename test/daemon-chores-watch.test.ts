@@ -6,18 +6,23 @@
 //
 // Nothing below reads or writes a real home, pane or session: the read sources answer from the
 // fixture, and the process-info seam answers from those same sources before the terminal host is
-// ever consulted.
+// ever consulted. The one scene that measures a slow host puts a fake one on PATH — never the
+// machine's own — and answers from it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type { WatchSources } from '../src/commands/watch.ts';
+import { serveChoresChild } from '../src/daemon/chores/child.ts';
 import type { ChoresChildRoute } from '../src/daemon/chores/protocol.ts';
 import { createChoresWatch } from '../src/daemon/chores/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { setHerdrRun } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { forgetIdleEpisodes } from '../src/watch/dispatch.ts';
+import { handoverPath } from '../src/watch/handover.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { Machine } from '../src/watch/machine.ts';
 
@@ -278,4 +283,283 @@ describe('the chores child\'s hosted watch', () => {
       await watch.stop('the test is done');
     }
   }, 15_000);
+});
+
+describe('the chores child\'s beat beside a slow terminal host', () => {
+  test('a host answering in three seconds holds the watch\'s read, never the child\'s beat', async () => {
+    bind();
+    // A standing pane watch holds the route's authority record. Proving that holder is the
+    // process in its own pane is the one terminal-host read the hosted watch makes before it
+    // stands by: the record has no epoch, so it is a pane watch, and the read is asked for it.
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-7',
+      };
+    });
+    // The fake host — never the machine's own — logs every call before answering it three
+    // seconds later, and names this process as the pane's own, so the holder is proven.
+    const bin = join(base, 'bin');
+    const herdrLog = join(base, 'herdr.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 3
+printf '{"result":{"process_info":{"shell_pid":%s,"foreground_processes":[{"pid":%s}]}}}\\n' "$TEAM_TEST_HERDR_PID" "$TEAM_TEST_HERDR_PID"
+`,
+    );
+    chmodSync(shim, 0o755);
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    const savedPid = process.env.TEAM_TEST_HERDR_PID;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+    process.env.TEAM_TEST_HERDR_PID = String(process.pid);
+    // The child's own beats, as it wrote them: the instant each heartbeat frame carries, on the
+    // child's own clock. The frames come from its real heartbeat timer.
+    const beats: string[] = [];
+    let pending = '';
+    const output = new PassThrough();
+    output.setEncoding('utf8');
+    output.on('data', (chunk: string) => {
+      pending += chunk;
+      let nl = pending.indexOf('\n');
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf('\n');
+        const frame = JSON.parse(line) as { type?: string; at?: string };
+        if (frame.type === 'heartbeat' && typeof frame.at === 'string') beats.push(frame.at);
+      }
+    });
+    const stdin = new PassThrough();
+    const serving = serveChoresChild({
+      config: {
+        version: 1,
+        home,
+        beatMs: 200,
+        sliceMs: 200,
+        since: iso(NOW),
+        routes: [route()],
+      },
+      stdin,
+      stdout: output,
+      // The chores and presence are quiet stand-ins: this scene measures the child's beat, and
+      // the only read that may reach the fake host is the watch's own pane read.
+      pass: async () => [],
+      presence: { run: async () => ({ proofs: [], notes: [] }) },
+      markerCacheStats: () => ({ read: 0, reused: 0, cached: 0 }),
+    });
+    try {
+      // The child writes one heartbeat, builds the route's watch, and only then installs its
+      // beat timer. Across the first three beats, the watch's pane read is in flight.
+      await waitUntil(() => beats.length >= 3, 15_000);
+      // The fake was reached: the watch asked the host for the recorded pane.
+      expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').toContain('pane process-info');
+      // No gap between the child's beats came near that call: a read made on the loop would
+      // hold the whole child for its three seconds. The seam beat is 200 ms; a quarter of the
+      // call's three seconds is the honest bound for a loaded machine.
+      const gaps = beats.slice(1).map((beat, index) => Date.parse(beat) - Date.parse(beats[index]!));
+      expect(beats.length).toBeGreaterThanOrEqual(3);
+      expect(Math.max(...gaps), `beat gaps (ms): ${gaps.join(', ')}`).toBeLessThan(1_250);
+    } finally {
+      stdin.end();
+      await serving;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+      if (savedPid === undefined) delete process.env.TEAM_TEST_HERDR_PID;
+      else process.env.TEAM_TEST_HERDR_PID = savedPid;
+    }
+  }, 30_000);
+
+  test('test read sources answer first for a standing pane watch and never invoke the fake host on PATH', async () => {
+    bind();
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-9',
+      };
+    });
+
+    const bin = join(base, 'bin-unused');
+    const herdrLog = join(base, 'herdr-unused.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 5
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+
+    const clock = { at: NOW };
+    const sourceCalls: { pane: string; session: string | undefined }[] = [];
+    const reports: HostedWatchState[] = [];
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: (_root, state) => reports.push(state),
+      pulse: () => {},
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: {
+        ...quietSources(clock),
+        processes: (pane, session) => {
+          sourceCalls.push({ pane, session });
+          return { shell: 100, foreground: [process.pid] };
+        },
+      },
+    });
+    try {
+      await waitUntil(() => sourceCalls.length >= 1);
+      expect(sourceCalls[0]).toEqual({ pane: 'fixture-pane-9', session: 'crew' });
+      expect(existsSync(herdrLog)).toBe(false);
+    } finally {
+      await watch.stop('the test is done');
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 15_000);
+
+  test('a null process answer is the seam\'s own and the host runner is not asked', async () => {
+    bind();
+    // A live pane watch, no epoch: proving it is the one read a provided seam must finish.
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-null',
+      };
+    });
+    const clock = { at: NOW };
+    const sourceCalls: string[] = [];
+    let hostCalls = 0;
+    setHerdrRun(() => {
+      hostCalls += 1;
+      return null;
+    });
+    const reports: HostedWatchState[] = [];
+    const watch = createChoresWatch({
+      routes: [route()],
+      log: () => {},
+      report: (_root, state) => reports.push(state),
+      pulse: () => {},
+      faultResult: () => {},
+      now: () => new Date(clock.at),
+      base: {
+        ...quietSources(clock),
+        processes: (pane) => {
+          sourceCalls.push(pane);
+          return null;
+        },
+      },
+    });
+    try {
+      await beatUntil(watch, clock, () => reports.at(-1)?.phase === 'standby');
+      expect(sourceCalls).toEqual(['fixture-pane-null']);
+      expect(hostCalls).toBe(0);
+      expect(existsSync(handoverPath(agents))).toBe(false);
+      expect(record()).toMatchObject({ pid: process.pid, pane: 'fixture-pane-null' });
+      expect(record()?.epoch).toBeUndefined();
+    } finally {
+      setHerdrRun(null);
+      await watch.stop('the test is done');
+    }
+  }, 15_000);
+
+  test('a hung and failing fake host on PATH never stalls the child heartbeat stream or blocks clean shutdown', async () => {
+    bind();
+    updateState(agents, (state) => {
+      (state.sessions.crew ??= emptySession()).watch = {
+        pid: process.pid,
+        heartbeat: iso(NOW),
+        pane: 'fixture-pane-hung',
+      };
+    });
+
+    const bin = join(base, 'bin-hung');
+    const herdrLog = join(base, 'herdr-hung.log');
+    mkdirSync(bin);
+    const shim = join(bin, 'herdr');
+    writeFileSync(
+      shim,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$TEAM_TEST_HERDR_LOG"
+sleep 2
+printf '{"type":"error","error":"host hung and failed"}\\n'
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const savedPath = process.env.PATH;
+    const savedLog = process.env.TEAM_TEST_HERDR_LOG;
+    process.env.PATH = `${bin}:${savedPath ?? '/usr/bin:/bin'}`;
+    process.env.TEAM_TEST_HERDR_LOG = herdrLog;
+
+    const beats: string[] = [];
+    const watchStates: HostedWatchState[] = [];
+    let pending = '';
+    const output = new PassThrough();
+    output.setEncoding('utf8');
+    output.on('data', (chunk: string) => {
+      pending += chunk;
+      let nl = pending.indexOf('\n');
+      while (nl !== -1) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf('\n');
+        const frame = JSON.parse(line) as { type?: string; at?: string; state?: HostedWatchState };
+        if (frame.type === 'heartbeat' && typeof frame.at === 'string') beats.push(frame.at);
+        if (frame.type === 'watch-state' && frame.state !== undefined) watchStates.push(frame.state);
+      }
+    });
+    const stdin = new PassThrough();
+    const serving = serveChoresChild({
+      config: {
+        version: 1,
+        home,
+        beatMs: 150,
+        sliceMs: 150,
+        since: iso(NOW),
+        routes: [route()],
+      },
+      stdin,
+      stdout: output,
+      pass: async () => [],
+      presence: { run: async () => ({ proofs: [], notes: [] }) },
+      markerCacheStats: () => ({ read: 0, reused: 0, cached: 0 }),
+    });
+    try {
+      await waitUntil(() => beats.length >= 6, 15_000);
+      expect(existsSync(herdrLog) ? readFileSync(herdrLog, 'utf8') : '').toContain(
+        '--session crew pane process-info --pane fixture-pane-hung',
+      );
+      const gaps = beats.slice(1).map((beat, index) => Date.parse(beat) - Date.parse(beats[index]!));
+      expect(Math.max(...gaps), `beat gaps (ms): ${gaps.join(', ')}`).toBeLessThan(900);
+      expect(watchStates.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      stdin.end();
+      await serving;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+      if (savedLog === undefined) delete process.env.TEAM_TEST_HERDR_LOG;
+      else process.env.TEAM_TEST_HERDR_LOG = savedLog;
+    }
+  }, 30_000);
 });

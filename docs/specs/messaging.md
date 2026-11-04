@@ -336,14 +336,15 @@ it, and the header says the record is missing; it is never granted. Every other 
 
 ### The delivery order
 
-1. The catalogue's legs are `socket`, `native`, `mcp-inbox`, `typed`, `drop`, `headless-resume`,
+1. The catalogue's legs are `socket`, `native`, `typed`, `drop`, `headless-resume`,
    `session` (the cross-session socket, a Codex seat's runtime queue or the sender's own handoff,
-   the seat's MCP inbox, the drop file with its wake line, the mailbox, a headless resume, and a
+   the drop file with its wake line, the mailbox, a headless resume, and a
    CLI's own session-creating call), and `channel`, the receiving server's development-channel
    push, which is implied and never a declared word. Each belongs to one class: `socket`,
    `native`, `headless-resume`, `session` and `channel` are the channel class; `typed` is the
-   typed class; `drop` is the mailbox. `mcp-inbox` is a name this build reads and never walks —
-   the MCP inbox is the store's reader, not a wake. The sender-posted `webhook` is the second
+   typed class; `drop` is the mailbox. `mcp-inbox` is a retired name, no longer a leg — the
+   MCP inbox is the store's reader, not a wake; a word that still names it is read as an alias
+   and dropped from the order, never an error. The sender-posted `webhook` is the second
    class, between the channel legs and the typed leg; no order names it, the receiving seat's
    adapter row decides whether it exists (`src/send/walk-cascade.ts`, `src/settings/inherit.ts`
    `DELIVERY_LEGS`).
@@ -355,8 +356,8 @@ it, and the header says the record is missing; it is never granted. Every other 
    typed wake), then the mailbox. The fallback order is `typed`,
    `drop`. A level drops legs, reorders the ones it keeps, and may add `socket`, `native`,
    `headless-resume` or `session`; a word naming any other leg the order in force does not have is
-   set aside and the order in force stands, and an `mcp-inbox` word is kept and reported
-   unavailable.
+   set aside and the order in force stands. An `mcp-inbox` word is never a set-aside: it declares
+   nothing, and the legs it sits beside keep their word.
 3. The cascade is tried until one leg confirms; a leg that does not exist for this sender or
    receiver is skipped and recorded `unavailable`; a send falls through to the next leg only on a
    definite failure before the send went through (no session, refused, a timeout before the send,
@@ -447,7 +448,7 @@ signed steps the send, the bus, the seat and the watch write for it, in one log,
 
 - **delivery-legs** (registries/delivery-legs.md):
   `native` | the sender's own cross-session channel, recorded through the route record | 0.5.0 | `src/settings/inherit.ts` (`DELIVERY_LEGS`) | the only leg that is the sender's own tool
-  `mcp-inbox` | delivery into a seat session's MCP inbox | 0.5.0 (named) | `src/settings/inherit.ts` | not built at the tag; skipped and recorded `unavailable`
+  `mcp-inbox` | delivery into a seat session's MCP inbox | 0.5.0 (named), retired 0.5.13 | `src/settings/inherit.ts` | never built; read as an alias and dropped since
   `typed` | the drop file and the wake line | 0.5.0 | `src/settings/inherit.ts` | the fallback
 - **exit-codes** (registries/exit-codes.json's rows): the `send.*` (15 rows), `messages.*` (10),
   `feed.*` (4) and `route.*` (6) rows listed in §4, read at the tag.

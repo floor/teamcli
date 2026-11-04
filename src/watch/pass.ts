@@ -53,7 +53,6 @@ import { modelDrift } from './checks/model-drift.ts';
 import { modelRule } from './checks/model-rule.ts';
 import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
-import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
 import { idleQueueSummary, teamIdle } from './checks/team-idle.ts';
 import type { QueueDepths } from '../queues.ts';
@@ -190,7 +189,7 @@ export type PassResult = {
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
 // run, except the six that can't be turned off.
 export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, unsent, idle];
-export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
+export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane

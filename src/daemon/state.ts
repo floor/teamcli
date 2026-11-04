@@ -197,6 +197,9 @@ export type DaemonState = {
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
   roots: DaemonRootState[];
+  /** The mailbox router's last heartbeat, when this daemon started one. Absent on a daemon
+   *  that has no router, and null until the child has answered a beat. */
+  mailbox?: { heartbeatAt: string | null };
 };
 
 export type DaemonStateRead =
@@ -252,6 +255,7 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
   }
   const roots = rootsOf(record.roots);
   if (roots === null) return null;
+  const mailbox = mailboxOf(record.mailbox);
   return {
     format: 1,
     pid: record.pid as number,
@@ -272,7 +276,19 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
     stuck: requests,
     roots,
+    ...(mailbox === undefined ? {} : { mailbox }),
   };
+}
+
+/** The router heartbeat was added after the first state records. A record without it reads as
+ *  no router; a malformed field is ignored rather than making the whole record unreadable. */
+function mailboxOf(raw: unknown): { heartbeatAt: string | null } | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const at = (raw as Record<string, unknown>).heartbeatAt;
+  if (at === null) return { heartbeatAt: null };
+  if (typeof at === 'string' && at !== '') return { heartbeatAt: at };
+  return undefined;
 }
 
 /** `roots` was added after the first state records were written: a record without it reads as

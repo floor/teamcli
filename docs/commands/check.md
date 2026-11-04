@@ -141,6 +141,30 @@ bus is serving the root to finish it, one line says how many wait:
 A bus that serves the root draws no line: its own pass records the outcome. The line never
 reports a post as delivered, and it never enters the total or the exit.
 
+A seat whose chain declares `messaging.store: none` is named on the same pass, one line per seat:
+the line says its sends keep no copy, that a socket frame still carries the signed record's bytes
+a receiver verifies, and what the copy would have carried — the retry, the unread re-wake, the
+read receipt and the `queued, not woken` flag. For a seat the file marks `human` the line says a
+send to it is refused instead, because a person's pane is reached by the stored copy alone. The
+word is a choice, never a fault, so like every note here it does not enter the total or the exit
+([the team file](../team-file.md#messagingstore)).
+
+The nightly harness's latest per-leg result is read on the same pass: `pingpong-legs.json` in the
+team's state folder, `.agents` in the project, and nothing else — the check never starts a run,
+and a team that has not run the nightly draws no finding for a missing file. A class is over when
+its staged-to-read p50 or p95 is past its send-to-read target — channel 3 s and 6 s, webhook 2 s
+and 5 s, typed 12 s and 20 s; mailbox has no target — and each measure past one is a difference
+naming the run's date: `nightly run <date>: channel p50 4s is over 3s and p95 7s is over 6s`. A
+class the result recorded no samples for draws nothing. A message the run recorded as lost is its
+own finding — `nightly run <date>: 1 message was lost`, `<n> messages were lost` for more — and a
+result older than 36 hours is still read: its misses keep the run's own date, and one more finding
+says `nightly run <date> is older than a day`, repaired with `run the nightly again`. A missed
+class's repair names that nightly run's per-leg table, a lost message's its lost table, and every
+finding here is the team's lead's. A file that is not the nightly result, or cannot be read, is
+one finding in the check's own words — `the nightly run result cannot be read`, repaired when the
+next nightly rewrites it — never a reading of its contents; a lost count that is not a whole
+number is that same finding.
+
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
 process team launched — back at its shell, or replaced by one the state's stored session does not

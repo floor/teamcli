@@ -4,9 +4,9 @@
 // mode 0600), start lock (`.agents/bus.sock.lock`), and stale-socket recovery. Supports three
 // operations:
 // - `publish`: appends a signed event record to `events.jsonl` and fans it out to matching
-//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is the one kind
-//   that names a delivery, so it is verified against its signed drop record before it is
-//   appended and fanned out; the other kinds are appended as published.
+//   live subscribers with bounded per-subscriber buffers. A `message.arrived` is verified
+//   against its signed drop record before it is appended. A seat observation is appended as
+//   published. Any other kind is refused: the bus writes those itself.
 // - `nudge`: names one record in a seat's drop folder; the bus re-reads and verifies the signed
 //   record itself, then appends its `message.arrived` and fans it out. A missing, unsigned or
 //   misaddressed record delivers nothing, and the nudge carries no authority of its own.
@@ -245,6 +245,21 @@ const LOCK_YOUNG_MS = 1000;
 const UNKNOWN_REQUEST = 'the request is not one this bus knows';
 /** A published arrival is refused with fixed words when the record it names does not verify. */
 const UNVERIFIED_ARRIVAL = 'the message.arrived it publishes names no signed drop record for its seat';
+
+/** Kinds a socket caller may publish. `message.arrived` is still held to its signed record.
+ *  Seat observations are what the watch publishes. Every other kind is written by the bus. */
+const SOCKET_PUBLISH_KINDS = new Set<EventKind>([
+  'message.arrived',
+  'seat.working',
+  'seat.idle',
+  'seat.idle-timeout',
+  'seat.blocked',
+  'seat.at-prompt',
+  'seat.prompt-escalated',
+  'seat.unblocked',
+  'seat.unreachable',
+  'seat.done',
+]);
 
 function alive(pid: number): boolean {
   try {
@@ -1129,7 +1144,12 @@ async function dispatchBusRequest(
   if (request.op === 'publish') {
     // A published arrival names a delivery, so it is held to the record that delivery carries.
     // The verified event is built from the signed record, never from the caller's fields.
+    // A kind the bus writes itself is not taken from a socket caller.
     let event = request.event;
+    if (!SOCKET_PUBLISH_KINDS.has(event.kind)) {
+      answerOnce(socket, { ok: false, at: 'caller', message: `a socket publish of ${event.kind} is not taken` });
+      return;
+    }
     if (event.kind === 'message.arrived') {
       const verified = verifiedArrival(
         { session: event.session, seat: event.to ?? '', record_id: event.record_id },

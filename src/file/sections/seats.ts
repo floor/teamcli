@@ -4,7 +4,7 @@ import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
 import { displayEffort, profileFor } from '../../profiles/profile.ts';
 import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/rules.ts';
-import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
+import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, MESSAGING_STORES, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
@@ -16,6 +16,7 @@ import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
 import { readSenderName } from './sender_name.ts';
+import { readMessaging } from './messaging.ts';
 import { MODES } from './workspace.ts';
 
 /** The words a seat's `inbound` key may name: the same three the receiving CLI accepts. */
@@ -81,11 +82,22 @@ export const seats: Section = {
           minItems: 1,
           uniqueItems: true,
           items: { enum: DELIVERY_LEGS },
-          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame',
+          $comment: 'the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender\'s own frame; mcp-inbox is a retired name this schema no longer accepts for new words — a seat that still names it is read and the word is dropped from the order, never an error, and team check asks for its removal',
         },
         sender_name: {
           enum: [...SENDER_NAME_MODES],
           $comment: 'how a sender reads in this seat\'s headlines: auto, nickname, seat or seat@team; presentation only, and the registry id stays in every record',
+        },
+        messaging: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            store: {
+              enum: [...MESSAGING_STORES],
+              $comment: 'the store this seat leaves for itself: first stores the signed record before the walk wakes it, parallel starts both at once, none never stores it (the frame still carries the signed bytes); a seat may always tighten toward first, and only the entity and the project may loosen toward none',
+            },
+          },
+          $comment: 'the seat\'s own word on message storage; omitted when the file writes no word, so every file that writes none keeps its digest',
         },
         liveness: {
           type: 'object',
@@ -166,7 +178,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -286,6 +298,10 @@ function readSeats(
     // field of the built seat like `effort`, so it is part of the seat's digest and omitted when
     // the file omits the key — every file that writes none keeps the digest it had.
     const senderName = readSenderName(fields.get('sender_name'), `${at}: sender_name`, check);
+    // The seat's own word on message storage (ADR D8), when the file writes one. A field of the
+    // built seat like `effort`, so it is part of the seat's digest and omitted when the file
+    // omits the key — every file that writes none keeps the digest it had.
+    const messaging = readMessaging(fields.get('messaging'), `${at}: messaging`, check);
     // The seat's own word on the liveness defaults. A field of the built seat like `effort`, so
     // it is part of the seat's digest and omitted when the file omits the key — every file that
     // writes none keeps the digest it had.
@@ -320,6 +336,8 @@ function readSeats(
         ...(deliveryOrder ? { deliveryOrder } : {}),
         // Omitted when the file writes no sender-name word, for the same reason.
         ...(senderName ? { senderName } : {}),
+        // Omitted when the file writes no messaging word, for the same reason.
+        ...(messaging.store !== undefined ? { messaging } : {}),
         // Omitted when the file writes no liveness word, for the same reason.
         ...(liveness ? { liveness } : {}),
         // Omitted when the file marks no assistant, so every file that writes none keeps its digest.
