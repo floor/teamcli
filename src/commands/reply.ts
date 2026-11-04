@@ -1054,7 +1054,9 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered')
         : walkedVia === 'typed'
           ? 'delivered (typed wake)'
-          : landed ? 'delivered' : 'sent (unconfirmed)';
+          : walkedVia === 'native' || walkedVia === 'headless-resume'
+            ? (walk?.unconfirmed === true ? 'sent (unconfirmed)' : 'delivered (read)')
+            : landed ? 'delivered' : 'sent (unconfirmed)';
   appendHistory(toProject, toRoot, host.home, {
     ts: at,
     from: me,
