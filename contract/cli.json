@@ -1088,6 +1088,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--close-orphans",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -1158,7 +1164,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team check [--session <name>] [--file <path>] [--repair] [--json]",
+        "team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
       ],
       "who": {

@@ -554,7 +554,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>] [--repair] [--json]
+    team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Who may run it
@@ -565,6 +565,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--close-orphans` | no | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
