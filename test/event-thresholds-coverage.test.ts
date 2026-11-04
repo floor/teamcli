@@ -31,6 +31,7 @@ import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { dropMessage } from '../src/send/native.ts';
 import { markPending } from '../src/send/pending.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
 import { parseYaml, toValue, type YamlValue } from '../src/yaml.ts';
@@ -513,13 +514,30 @@ describe('the bus serves on the numbers the chain resolves', () => {
   function heldDrops(fx: Fixture): void {
     const seatDir = join(fx.root, '.agents', 'send-drops', 'acme', 'worker');
     const body = 'from the owner — admitted by: the owner\n\nheld';
-    dropMessage(seatDir, 'held-1', body);
+    const ts = new Date(Date.now() - 120_000).toISOString();
+    // The reconcile pass raises a held drop only after the record it names verifies, so the
+    // drop is written as a send writes it: a signed record, not a plain body file.
+    const payload: RecordPayload = {
+      kind: 'message',
+      id: 'held-1',
+      to: 'worker',
+      to_id: null,
+      root: fx.root,
+      session: 'acme',
+      at: ts,
+      body,
+      from: 'owner',
+      from_id: null,
+      rule: 'a synthetic admission',
+      thread: 'held-1',
+    };
+    dropMessage(seatDir, 'held-1', `${JSON.stringify(signRecord(payload, fx.home), null, 2)}\n`);
     markPending(seatDir, {
       id: 'held-1',
       from: 'owner',
       to: 'worker',
       body,
-      ts: new Date(Date.now() - 120_000).toISOString(),
+      ts,
     });
   }
 
