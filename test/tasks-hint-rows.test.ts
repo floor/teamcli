@@ -87,7 +87,11 @@ test('a plain Muse tasks hint is the empty box, and the same words with more tex
   const colored = MUSE_DIM
     .replace('/goal pins a session objective with a progress bar', OPEN)
     .replace('\u001b[2m', '\u001b[38;5;245m');
-  expect(readScreen('muse', colored).kind).toBe('unsent');
+  expect(readScreen('muse', colored).kind).toBe('idle');
+  const mixed = MUSE_DIM
+    .replace('/goal pins a session objective with a progress bar', `/tasks shows\u001b[39m your open tasks`)
+    .replace('\u001b[2m', '\u001b[38;5;245m');
+  expect(readScreen('muse', mixed).kind).toBe('unsent');
 });
 
 test('the typed wake types into the hint row and waits for the working screen', async () => {
