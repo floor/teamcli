@@ -452,3 +452,40 @@ seats:
     version: "4"
     display: Gemini 4 Argon
     launch: agy
+
+  # 2026-11-04: seats repointed today, each signing with its registry display and role.
+  - role: tester
+    name: tester-2
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: reviewer
+    name: grok-reviewer
+    cli: cursor
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    display: Grok 4.7 via Cursor
+    launch: cursor-agent
+
+  - role: reviewer
+    name: reviewer-argon
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
+
+  - role: operator
+    name: operator-1
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: claude-deepseek
