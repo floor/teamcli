@@ -215,8 +215,8 @@ a question in a pane: the answer is a signature from the owner's own device. `te
 2. The owner answers on the owner page (`team owner-seat serve`): **Approve once**, **Always allow**
    or **Deny**, confirmed with Touch ID on the Mac or with the iPhone passkey. **Approve once** is
    a one-time approval. A migration needs that, and its card offers only **Approve once** and
-   **Deny**. The answer is signed by an accepted owner signer whose key TeamCLI confirms against
-   the credential store.
+   **Deny** as decisions (the later words are on every card, but they decide nothing). The answer
+   is signed by an accepted owner signer whose key TeamCLI confirms against the credential store.
 3. The caller runs the same command with `--approval <id>`. TeamCLI verifies the signed answer is
    bound to this id, this action, this repository, team, `HEAD` and arguments, claims it once for
    this action, and writes an audit entry in `~/.config/team/action-audit/`. `--dry-run` verifies

@@ -142,7 +142,9 @@ The link opens one card on the owner page (`team owner-seat serve --port 7392`) 
 token. The nonce is in the fragment, so it never reaches a request line or a log; it is bound to
 that request id, opens it once, and expires with the request. It authorizes nothing: the card's
 buttons answer only with an owner-signer signature (Touch ID through the Mac's signer, or a
-passkey), and the page cannot reach any other request. `--json` carries the same facts in
+passkey), and the page cannot reach any other request. The card also offers the later words
+(**Later**, **Tomorrow**, **Monday**), which put the request off without deciding it — see
+[the later answer](owner-seat.md#the-later-answer). `--json` carries the same facts in
 `notified` (`delivered`, `channel`, `approved`, `why`) and `link`.
 
 `--expires` is an ISO timestamp. A team grant is meant to last: without `--expires` it expires

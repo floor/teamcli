@@ -101,6 +101,11 @@ an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal
 **Always allow**, on the other cards, covers every sibling repository of the parent folder for
 that action from then on.
 
+Every card also offers **Later**, **Tomorrow** and **Monday**. A later word decides nothing: it
+hides the card until the return instant, brings it back with one more full answer window, and
+tells a blocked team's lead in a plain note from the owner page — see
+[the later answer](commands/owner-seat.md#the-later-answer).
+
 ## Security profile
 
 `security-profile` is a policy with two values, `strict` (default) and `relaxed` (alias `dev`).
@@ -139,7 +144,8 @@ token is per run). The orchestrator opens it on the Mac. There you can:
 - **add a passkey**: the browser creates it (iCloud Keychain on the Mac, or the iPhone through
   the QR code); the Mac's Secure Enclave signer confirms it with one Touch ID;
 - **approve the waiting security profile** with that passkey;
-- **answer team requests** (**Approve once**, **Always allow** or **Deny**) with that passkey.
+- **answer team requests** (**Approve once**, **Always allow** or **Deny**) with that passkey,
+  or put one off with **Later**, **Tomorrow** or **Monday**.
   **Approve once** is a one-time approval. A migration needs that, and its card does not offer
   **Always allow**.
 
