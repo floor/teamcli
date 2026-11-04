@@ -11,6 +11,9 @@ import { readScreen } from '../src/watch/screen.ts';
 const FIXTURES = join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12');
 const IDLE = readFileSync(join(FIXTURES, 'idle.txt'), 'utf8');
 const WORKING = readFileSync(join(FIXTURES, 'working-synthetic.txt'), 'utf8');
+const MUSE_PLAIN = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'goal-hint-synthetic.txt'), 'utf8');
+const MUSE_DIM = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'goal-hint-dim.txt'), 'utf8');
+const MUSE_DRAFT = readFileSync(join(import.meta.dir, 'fixtures', 'muse', '1.4.11', 'slash-draft-synthetic.txt'), 'utf8');
 const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
 
@@ -50,6 +53,23 @@ test('an Antigravity /tasks shows hint is the empty box, and a draft in that box
   expect(readScreen('antigravity', row(LINE)).kind).toBe('unsent');
   expect(readScreen('antigravity', row('/tasks')).kind).toBe('unsent');
   expect(readScreen('antigravity', row('/goal ship the release')).kind).toBe('unsent');
+});
+
+/** The plain Muse goal-hint frame with another input row. */
+function musePlain(text: string): string {
+  return MUSE_PLAIN.replace('❯ /goal pins a session objective with a progress bar', `❯ ${text}`);
+}
+
+test('a plain Muse /tasks shows hint is the empty box, and a slash draft stays unsent', () => {
+  expect(readScreen('muse', MUSE_PLAIN).kind).toBe('idle');
+  expect(readScreen('muse', musePlain('/tasks shows your open tasks')).kind).toBe('idle');
+  expect(readScreen('muse', musePlain('/tasks shows the queue')).kind).toBe('idle');
+  expect(readScreen('muse', MUSE_DRAFT).kind).toBe('unsent');
+  expect(readScreen('muse', musePlain('/goal ship the release')).kind).toBe('unsent');
+  const colored = MUSE_DIM
+    .replace('/goal pins a session objective with a progress bar', '/tasks shows your open tasks')
+    .replace('\u001b[2m', '\u001b[38;5;245m');
+  expect(readScreen('muse', colored).kind).toBe('unsent');
 });
 
 test('the typed wake types into the hint row and waits for the working screen', async () => {
