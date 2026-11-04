@@ -333,17 +333,21 @@ const WALKED_LEGS: readonly string[] = [...DELIVERY_LEGS, 'webhook'];
 /**
  * Whether the sender-posted webhook is the next leg below the one the send's own history line
  * names. The cascade places the webhook between the channel-class legs and the typed leg
- * (`src/send/walk-cascade.ts`), so a line whose `via` is a channel-class leg has it below, and a
- * line naming the webhook, the typed leg, the mailbox or a word this build does not walk has
- * nothing below worth a post. A line whose `failed` already names the webhook spent that leg: it
- * is never posted again. A message whose line this pass cannot find — a sender in another home,
- * a rotated store, a record an older build wrote — is never posted either: a webhook that may
- * already have fired is worse than the typed line the pass still types.
+ * (`src/send/walk-cascade.ts`), so a line whose `via` is a channel-class leg has it below. A
+ * line whose `via` is already the webhook, and whose seat still has not read the drop, is
+ * posted once more, with the same message id. The wake marker makes that once for the message,
+ * and a failed attempt stays inside the typed retry bound. A line whose `failed` already names
+ * the webhook spent that leg: it is never posted again. A typed leg, the mailbox, or a word
+ * this build does not walk has nothing below worth a post. A message whose line this pass
+ * cannot find — a sender in another home, a rotated store, a record an older build wrote —
+ * is never posted either: a webhook that may already have fired is worse than the typed line
+ * the pass still types.
  */
 function webhookNext(seat: Seat, line: HistoryEntry | undefined): boolean {
   if (seat.webhook === undefined || line === undefined) return false;
   if ((line.failed ?? []).some((one) => one.startsWith('webhook: '))) return false;
   const via = line.via;
+  if (via === 'webhook') return true;
   if (via === undefined || !WALKED_LEGS.includes(via)) return false;
   return legClassOf(via as WalkLeg) === 'channel';
 }
@@ -376,6 +380,8 @@ async function wakeByWebhook(
   message: { id: string; ts: string },
   payload: RecordPayload,
   at: string,
+  /** The send already recorded a webhook delivery. Post once more; the `.posted` mark stays. */
+  again: boolean,
 ): Promise<WebhookWake> {
   const home = scene.home;
   if (home === undefined) return { outcome: 'next' };
@@ -399,6 +405,7 @@ async function wakeByWebhook(
     now: () => scene.now,
     project: scene.team.project,
     body: payload.body,
+    ...(again ? { again: true } : {}),
   });
   if (posted.kind === 'posted') {
     mark(dropDir, `${message.id}.wake`, { id: message.id, at, state: 'sent', evidence: 'webhook', ms: posted.ms });
@@ -507,7 +514,16 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           typedDue.push(message);
           continue;
         }
-        const woke = await wakeByWebhook(scene, seat, seat.webhook, dropDir, message, payload, scene.now.toISOString());
+        const woke = await wakeByWebhook(
+          scene,
+          seat,
+          seat.webhook,
+          dropDir,
+          message,
+          payload,
+          scene.now.toISOString(),
+          lines.get(message.id)?.via === 'webhook',
+        );
         if (woke.outcome === 'next') {
           if (woke.failed !== undefined) failedWebhook.set(message.id, woke.failed);
           typedDue.push(message);

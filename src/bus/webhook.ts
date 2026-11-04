@@ -741,6 +741,9 @@ export type SenderPostInput = {
   /** The POST itself, injectable so a test can watch it without a socket. A test's fetch stays
    *  in this process. The real fetch is a detached process, so `team send` can exit at the deadline. */
   fetch?: typeof fetch;
+  /** The watch's one re-post of a confirmed delivery the seat has not read. The `.posted` mark
+   *  does not skip this call. A claim left `sent` still refuses: that request's fate is unknown. */
+  again?: boolean;
 };
 
 /**
@@ -840,7 +843,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     held = 'claimed';
     // The bus may have posted and marked the record while this send was building its request:
     // that mark is the newer word, and the claim this send just took is redundant.
-    if (existsSync(join(input.dropDir, `${input.id}${POSTED_SUFFIX}`))) {
+    if (!input.again && existsSync(join(input.dropDir, `${input.id}${POSTED_SUFFIX}`))) {
       giveUp();
       return { kind: 'none', why: 'already-posted' };
     }

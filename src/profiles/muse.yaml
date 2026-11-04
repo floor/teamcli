@@ -163,8 +163,8 @@ screen:
       - equals: 'Tab queues or steers while a run is active'
       # A plain read of the /goal hint. These equals lines stay exact.
       - equals: '/goal pins a session objective with a progress bar'
-      # A plain read of the two tasks hints. The same words with more text stay text, and so
-      # do those words drawn in color with no faint attribute.
+      # A plain read of the two tasks hints. The same words with more text stay text. An
+      # exact equals line drawn in a non-bold colour is the placeholder; a bold one stays text.
       - equals: '/tasks shows your open tasks'
       - equals: '/tasks shows workflows, subagents and terminals in one place'
     # 1.4.14 draws a completion row of its own under the input row, inside the box, for the text
