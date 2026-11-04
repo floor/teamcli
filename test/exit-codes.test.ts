@@ -41,6 +41,7 @@ import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/servic
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
+import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -1763,6 +1764,27 @@ scene('doctor.missing', async (place) => {
   approve(place, TEAM);
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor(['--file', place.file], io, doctor(place.home, { version: () => null })), out: io.out, err: io.err }, 'install');
+});
+
+scene('checkpoint.recorded', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'recorded lead ->');
+});
+scene('checkpoint.caller', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, other);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'only the owner or `leads`');
+});
+scene('checkpoint.io', async (place) => {
+  approve(place, TEAM);
+  mkdirSync(join(place.root, '.agents', 'team.state.json'), { recursive: true });
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'the state cannot be written');
+});
+scene('checkpoint.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint([], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'a seat name is required');
 });
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {

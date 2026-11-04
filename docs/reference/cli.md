@@ -582,6 +582,36 @@ Usage:
 | --- | --- | --- |
 | `ref` | yes | no |
 
+## `checkpoint`
+
+Hidden: no
+
+Usage:
+
+    team checkpoint <seat> [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `client`
 
 Hidden: no

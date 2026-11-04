@@ -78,6 +78,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   broker: [],
   bus: ['approval', 'inherited', 'reason'],
   check: ['file', 'pr', 'session', 'since'],
+  checkpoint: ['file', 'session'],
   client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
   config: ['approval', 'reason'],

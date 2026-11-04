@@ -22,6 +22,7 @@ import { runBatch } from '../../src/commands/batch.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { runForget } from '../../src/commands/forget.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
+import { runCheckpoint } from '../../src/commands/checkpoint.ts';
 import { commits } from '../../src/commands/commits.ts';
 import { pr } from '../../src/commands/pr.ts';
 import { runDoctor } from '../../src/commands/doctor.ts';
@@ -429,6 +430,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       });
     case 'restart':
       return runRestart(rest, io, world.restartSources());
+    case 'checkpoint':
+      return runCheckpoint(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'order':
       return runOrder(rest, io, world.orderSources());
     case 'send': {

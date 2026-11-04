@@ -189,6 +189,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `checkpoint.recorded` | `checkpoint` | 0 | the standing checkpoint ask was recorded in state | `team checkpoint worker` |
+| `checkpoint.caller` | `checkpoint` | 1 | only the owner or a placed leads seat may record a checkpoint ask | `team checkpoint worker` |
+| `checkpoint.io` | `checkpoint` | 1 | the team state cannot be written | `team checkpoint worker` |
+| `checkpoint.invocation` | `checkpoint` | 2 | the invocation, seat name, or team file is invalid | `team checkpoint` |
 | `client.general-grant.issued` | `client` | 0 | the general grant was issued and written | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.general-grant.requested` | `client` | 0 | the owner-seat request to issue a general grant was recorded; nothing was issued yet | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |

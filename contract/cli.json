@@ -1170,6 +1170,69 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "checkpoint",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team checkpoint <seat> [--session <name>] [--file <path>] [--json]"
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--general",
           "repeatable": false,
           "takesValue": true
