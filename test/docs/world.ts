@@ -387,11 +387,9 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
   let machineKind = spec.machine;
   let toolState: Record<string, ToolState> = { ...spec.tools };
   const machine = (): Machine =>
-    machineKind === 'calm'
-      ? { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 }
-      : machineKind === 'tight'
-        ? { loadPerCore: 1.2, memoryFree: 8, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 }
-        : { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
+    machineKind === 'tight'
+      ? { loadPerCore: 1.2, memoryFree: 8, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 }
+      : { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 16e9, swapFree: 8e9, swapUsed: 0 };
 
   const action = {
     sessionState: () => (herdr === 'none' ? null : sessionState()),
@@ -579,7 +577,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
     sessionRunning: () => (herdr === 'none' ? null : herdr === 'running'),
     now,
     home,
-    machine,
   });
 
   // A machine where the MCP bring-up ran and every leg is up: one helper under the install root,
@@ -788,7 +785,6 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         standing: standingSource(home),
         now,
         home,
-        machine,
         projects: projectsAt(home),
         // The fixture's process table, not the machine's: the proc notes a page shows are the
         // records the same page's `team proc` examples made, never the host's own pids.

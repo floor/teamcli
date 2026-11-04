@@ -1,4 +1,4 @@
-import { ALWAYS_ON, CHECK_NAMES } from '../../watch/check.ts';
+import { ALWAYS_ON, CHECK_NAMES, RETIRED_CHECK_NAMES } from '../../watch/check.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import type { Check } from '../check.ts';
 import type { TeamFile } from '../types.ts';
@@ -154,6 +154,16 @@ function readChecks(entry: YamlEntry | undefined, check: Check): string[] {
     return off;
   }
   for (const item of node.entries) {
+    // A retired check is read and ignored, like the deprecated sections: refusing it would
+    // refuse a file written while the check ran. `team check` names it with its repair.
+    if ((RETIRED_CHECK_NAMES as readonly string[]).includes(item.key)) {
+      check.deprecations.push({
+        line: item.line,
+        message: `\`${item.key}\` is not a check any more: free swap is not reported`,
+        repair: `remove ${item.key} from watch.checks in {file}`,
+      });
+      continue;
+    }
     if (!(CHECK_NAMES as readonly string[]).includes(item.key)) {
       check.fail(item.line, `unknown check "${item.key}" in watch.checks: the checks are ${CHECK_NAMES.join(', ')}`);
       continue;

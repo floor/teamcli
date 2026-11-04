@@ -35,7 +35,6 @@ import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
-import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
 
 // What `doctor` reads from the machine, so tests can stand in for it.
@@ -60,9 +59,6 @@ export type DoctorSources = {
   standing?(root: string): Standing;
   /** A pane's visible text. Absent in a test that does not read panes; the real command reads them. */
   paneText?(session: string, pane: string): string | undefined;
-  /** This machine's own figures, read for the one check no machine can ever meet. Absent in a test
-   *  that does not read them; absent is not "fine", it is nothing said. */
-  machine?(root: string): Machine;
   /** Whether the watch's pid is alive. Absent: a fresh heartbeat is read as running, as before. */
   watchAlive?(pid: number): boolean;
   /** The process's own name, never its arguments. Null when it cannot be read. */
@@ -144,7 +140,6 @@ export const realSources: DoctorSources = {
   runCheck: (path) => runCommand(path),
   command: readCommand,
   paneText: (session, pane) => paneRead(pane, 40, session) ?? undefined,
-  machine: readMachine,
   watchAlive(pid) {
     try {
       process.kill(pid, 0);
@@ -373,19 +368,6 @@ export function modelFlagFinding(
     level: 'warn',
     text: plainLine(`${seat.name}: the launch runs ${first}, not ${profile.binary}, and names no model: if the launcher chooses the model, say so with model_from: launcher`),
   };
-}
-
-// The machine's own figures against the check in force, in the one case this reading cannot
-// meet: the check asks for more free swap than the machine has in total. `up` refuses on that
-// same comparison (`swapTotalProblem`), so the line tells the reading's own fact, in the reading's
-// own words — on macOS the total moves with pressure, and a later run reads one of its own. A
-// check that merely fails right now is `up`'s refusal beside it and the watch's finding; this
-// report does not repeat that, and neither reading changes an exit.
-export function machineFindings(team: TeamFile, root: string, sources: DoctorSources): Finding[] {
-  const machine = sources.machine?.(root);
-  if (!machine) return [];
-  const problem = swapTotalProblem(machine, team.machine);
-  return problem === null ? [] : [{ level: 'warn', text: plainLine(problem) }];
 }
 
 // The team's hold, when one stands (`team hold`). A `--` line like the readings around it: a
@@ -1028,8 +1010,6 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
         // A wildcard general grant signed before the release that first shipped an op reaches that
         // op without a new approval: one `note` finding per grant, in neither count, blocking nothing.
         ...widenedGrantNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
-        // The machine's own reading, last: the one check no machine can ever meet here.
-        ...machineFindings(team, root, sources),
         // The team's hold, when one stands: the last line before the summary.
         ...holdFindings(dirname(loaded.path), sources),
       ];

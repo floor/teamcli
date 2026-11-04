@@ -36,9 +36,7 @@ and that relative path is found from the project root and not from the seat's st
 option-bearing line such as `zsh -x ../x` is a note, not a refusal); the shell cannot start without
 it and is a `MISS`. The owner's `doctor` also
 runs each approved account's check command once, the way the watch runs it; the command's raw output
-is parsed and dropped, never shown. The machine's own swap is read for the one check a reading can
-show this machine cannot pass — `swap_free_min` above what the machine has in total (macOS's
-`vm.swapusage`, Linux's `/proc/meminfo`). It writes nothing.
+is parsed and dropped, never shown. It writes nothing.
 
 ## Who may run it
 
@@ -311,43 +309,6 @@ the machine, so a file another team's CLI left is named with whose it is:
 ok    the lobby ~/.config/team/lobby: verified
 ok    the lobby ~/.config/team/lobby: .claude/scheduled_tasks.lock is claude-code's
 ```
-
-The machine's own swap is read for one case only: the check in force — the 2GB default, or the
-file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
-total. One warning names both figures and the repair, the key to write and the approval a change
-needs, and it speaks of the reading it was made from: on macOS the total moves with pressure, so a
-later reading can show a different one:
-
-```console machine="small-swap"
-$ team doctor ; echo "exit $?"
-team beacon, session "beacon"
-warn  the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
-warn  claude-beacon: its name repeats "beacon"; the session already carries it
-ok    the check for openai reads weekly 40% used
-ok    herdr 0.7.1
-note  session beacon is running
-ok    claude 2.1.288
-ok    claude-code: logged in
-ok    the watch is running
-ok    the lobby ~/.config/team/lobby: will be created at the first launch
-warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep
-team doctor: nothing missing, 3 warnings
-what 0.5.0 must not pretend:
-  The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
-  A right given to a team or a seat stands until it is revoked, and may carry an end date; a seat cannot lend a right to another seat for a task and take it back when the task is done.
-  Three ways of sharing control are not built yet — a grant co-signed by a second person, a seat approving an identical copy of another seat, and an agent creating a team within pre-set limits — so only the owner grants rights and adds seats.
-  Four things are not checked yet: which project files a seat may see, acting under an account the owner holds — GitHub, Linear, email — using the broker, and deploying a release.
-  Apart from one lead seat per team and no seat starting with two exclusive rights, nothing else about how a team is put together is enforced: no limit on how many seats hold a right, no rule that a change is merged by a different seat from the one that wrote it, and no rule that a reviewer comes from another lab.
-exit 0
-```
-
-A check that merely fails right now — the machine has the swap in total, and not enough of it
-free at this moment — prints nothing of this: the watch's `swap-free` check reports it as its own
-finding. The line above is only for the case the file can fix, and it describes the reading it
-came from: on macOS the total moves with pressure, so it promises nothing about a later reading.
-The total is read on macOS from `sysctl -n vm.swapusage`, and on Linux from `/proc/meminfo`'s
-`SwapTotal`; a machine with no swap at all is not this case — nothing here guesses one, and free
-swap does not refuse a launch.
 
 A CLI outside the range this version was tested with keeps its warning and says what that means —
 herdr's own version line says only where it sits, for the same reason:

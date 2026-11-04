@@ -20,7 +20,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
+import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
@@ -240,30 +240,10 @@ describe('the machine\'s figures', () => {
     expect(pressure === null || pressure === 'normal' || pressure === 'warn' || pressure === 'critical').toBe(true);
   });
 
-  test('the swap total the check can never meet', () => {
-    const limits: TeamFile['machine'] = {
-      loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
-      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
-    };
-    const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
-    expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep',
-    );
-    // The check can pass in principle — its floor sits under the machine's total — and the free
-    // figure is low right now: the watch's finding, and nothing here.
-    expect(swapTotalProblem({ ...small, swapTotal: 16e9, swapFree: 0.5e9 }, limits)).toBeNull();
-    // Exactly the total the check asks for is meetable.
-    expect(swapTotalProblem({ ...small, swapTotal: 2e9 }, limits)).toBeNull();
-    // A figure that wasn't read is neither fine nor bad: a machine with no swap at all leaves
-    // both null, and neither this warning nor `launchLimit` can fire there.
-    expect(swapTotalProblem({ ...small, swapTotal: null, swapFree: null }, limits)).toBeNull();
-    expect(swapTotalProblem({ ...small, swapFree: null }, limits)).toBeNull();
-  });
-
   test('the launch gate: critical pressure refuses, free swap alone never does', () => {
     const limits: TeamFile['machine'] = {
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
-      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
+      swapGrowthMax: 1e9, swapGrowthWindow: 600,
     };
     // The host this slice was measured on: 49% of physical memory free, the OS level normal, and
     // 0.99 GB of a 15.36 GB swap free — under the 2 GB the file asks, and still no refusal.
@@ -823,14 +803,13 @@ describe('a pass of the watch', () => {
     expect(pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: fine, now: 0, memory: newMemory() }).reports).toEqual([]);
   });
 
-  test('the machine: load per core, memory, disk and free swap, each against its threshold', () => {
+  test('the machine: load per core, memory and disk, each against its threshold; free swap is never reported', () => {
     const tight: Machine = { loadPerCore: 6.5, memoryFree: 10, diskFree: 5e9, swapTotal: 23.3e9, swapFree: 0.3e9, swapUsed: 23e9 };
     const reports = pass({ team: team(), watch: team().watch, state: emptySession(), live: live(), machine: tight, now: 0, memory: newMemory() }).reports;
     expect(reports.map((report) => report.text)).toEqual([
       'the load is 6.5 per core, above 6',
       'free memory is 10%, below 15%',
       'free disk is 5.0 GB, below 10.0 GB',
-      'free swap is 0.3 GB, below 2.0 GB',
     ]);
     expect(reports.every((report) => report.to === 'owner')).toBe(true);
   });

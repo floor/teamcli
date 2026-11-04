@@ -335,7 +335,6 @@ export type TeamFile = {
     memoryStart: number;
     memoryMin: number;
     diskMin: number;
-    swapFreeMin: number;
     swapGrowthMax: number;
     swapGrowthWindow: number;
   };

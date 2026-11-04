@@ -68,7 +68,6 @@ describe('launchConcurrency', () => {
     loadMax: 4.0,
     memoryStart: 15,
     memoryMin: 8,
-    swapFreeMin: 2_000_000_000,
     swapGrowthMax: 2_147_483_648,
     swapGrowthWindow: 60,
     diskMin: 5_368_709_120,
@@ -123,12 +122,27 @@ describe('launchConcurrency', () => {
     expect(launchConcurrency({ ...ample, memoryFree: null }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, loadPerCore: 2.0 }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, memoryFree: 20 }, limits)).toBe(1);
-    expect(launchConcurrency({ ...ample, swapFree: 2.5e9 }, limits)).toBe(1);
     // A warning level does not refuse a launch, but it runs the seats one at a time; a level that
     // wasn't read leaves the headroom rules to decide.
     expect(launchConcurrency({ ...ample, pressure: 'warn' }, limits)).toBe(1);
     expect(launchConcurrency({ ...ample, pressure: 'normal' }, limits)).toBe(8);
     expect(launchConcurrency({ ...ample, pressure: null }, limits)).toBe(8);
+  });
+
+  test('free swap never serializes launches, however little is free', () => {
+    const ample: Machine = {
+      loadPerCore: 0.3,
+      memoryFree: 60,
+      diskFree: 200e9,
+      swapTotal: 19e9,
+      swapFree: 0.9e9,
+      swapUsed: 18.1e9,
+    };
+    // Below `swap_free_min` and below 1.5x it alike: the figure the OS keeps nearly full
+    // decides nothing here (ruling D8); pressure and swap growth keep their refusals.
+    expect(launchConcurrency(ample, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: 0 }, limits)).toBe(8);
+    expect(launchConcurrency({ ...ample, swapFree: null }, limits)).toBe(8);
   });
 });
 
