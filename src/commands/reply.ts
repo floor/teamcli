@@ -48,7 +48,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
-import { acquireSeatLock, holderText } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText, type LockSteps } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
@@ -107,9 +107,16 @@ export type ReplyHost = {
    *  real host binds the send's; a test hands the walk a fake, and an absent one leaves the
    *  answer the record alone, exactly as a reply was before the walk existed. */
   send?: SendHost;
+  /** The lock this walk takes on the target seat before writing the copy. A test injects the
+   *  clock and the sleep, or a shorter budget; the real one waits out a busy seat. */
+  seatLock?: { steps?: Partial<LockSteps>; waitMs?: number; pollMs?: number };
 };
 
 export const realHost: ReplyHost = { home: homedir(), now: () => new Date(), send: realSendHost };
+
+/** How long a reply waits for a busy target seat, and the step it polls at while waiting. */
+const SEAT_LOCK_WAIT_MS = 2_000;
+const SEAT_LOCK_POLL_MS = 25;
 
 const reply: Command = (argv, io) => runReply(argv, io, realHost);
 export default reply;
@@ -1005,7 +1012,13 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   };
 
   let landed = false;
-  const lock = acquireSeatLock(toDir, toSession, targetSeat);
+  // A seat that is mid-write holds its lock only for that write. Reply waits it out, so a
+  // burst of replies to one seat queues instead of refusing each other.
+  const asked = host.seatLock;
+  const lock = acquireSeatLock(toDir, toSession, targetSeat, asked?.steps, {
+    waitMs: asked?.waitMs ?? SEAT_LOCK_WAIT_MS,
+    pollMs: asked?.pollMs ?? SEAT_LOCK_POLL_MS,
+  });
   if (!('release' in lock)) {
     return refused(io, json, `${targetSeat}: another command holds it (${holderText(lock)}); nothing was written`);
   }

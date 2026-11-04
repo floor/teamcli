@@ -72,6 +72,10 @@ export type LockSteps = {
   ownStart(): number;
   pid(): number;
   nonce(): string;
+  /** The current time in milliseconds. */
+  now(): number;
+  /** Blocks this thread for about `ms` milliseconds. */
+  sleep(ms: number): void;
 };
 
 export const lockSteps: LockSteps = {
@@ -124,6 +128,10 @@ export const lockSteps: LockSteps = {
   ownStart: () => Math.round(performance.timeOrigin),
   pid: () => process.pid,
   nonce: () => randomBytes(6).toString('hex'),
+  now: () => Date.now(),
+  sleep: (ms) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  },
 };
 
 /** How far a live process's start may sit from the instant a token records. The start line is
@@ -162,11 +170,30 @@ export type LockHolder = { held: number; startedAt: number | null };
 
 export type SeatLock = { release(): void } | LockHolder;
 
+/** How long a taker is willing to wait for a live holder, and how long each wait step is. */
+export type LockBudget = {
+  /** 0, the default, refuses at the first sight of a live holder. */
+  waitMs?: number;
+  pollMs?: number;
+};
+
 /**
  * Takes the lock, or reports the live holder it found: the pid and the start the token records,
  * or pid -1 for a lock that cannot be read or parsed (held, never taken over).
+ *
+ * With a budget, a live holder is polled until the deadline and the taker publishes its
+ * already-staged token again after each sleep, so the wait adds no window before the
+ * lock's one atomic step. A budget of 0 — every caller but reply's target seat — keeps
+ * the old behaviour: one refusal, no sleep. An unreadable lock is held at once whatever
+ * the budget, because waiting cannot make a corrupt lock legible.
  */
-export function acquireSeatLock(dir: string, session: string, seat: string, overrides?: Partial<LockSteps>): SeatLock {
+export function acquireSeatLock(
+  dir: string,
+  session: string,
+  seat: string,
+  overrides?: Partial<LockSteps>,
+  budget: LockBudget = {},
+): SeatLock {
   const steps: LockSteps = { ...lockSteps, ...overrides };
   const path = seatLockPath(dir, session, seat);
   const claimPath = `${path}.steal`;
@@ -175,6 +202,9 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
   const startedAt = Math.round(steps.ownStart());
   const token = `${pid} ${steps.nonce()} ${String(startedAt)}`;
   const mine = steps.stage(path, token);
+  const waitMs = budget.waitMs ?? 0;
+  const pollMs = Math.max(1, budget.pollMs ?? 25);
+  const deadline = steps.now() + waitMs;
 
   const done = (): SeatLock => ({
     release: () => {
@@ -187,7 +217,8 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
     return { held: holderPid, startedAt: holderStart };
   };
 
-  for (let attempt = 0; attempt < 8; attempt++) {
+  let races = 0;
+  for (;;) {
     try {
       steps.publish(mine, path);
       steps.drop(mine);
@@ -199,15 +230,22 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
     if (text === null) {
       // Unreadable is held, never stale; gone means the name is free again.
       if (steps.exists(path)) return held();
+      if (++races >= 8) return held();
       continue;
     }
     const owner = parseToken(text);
     if (!owner) return held();
-    if (stillHeld(owner, steps)) return held(owner.pid, owner.startedAt);
+    if (stillHeld(owner, steps)) {
+      if (waitMs <= 0) return held(owner.pid, owner.startedAt);
+      const at = steps.now();
+      if (at >= deadline) return held(owner.pid, owner.startedAt);
+      steps.sleep(Math.min(pollMs, deadline - at));
+      continue;
+    }
     if (!claim(claimPath, token, steps)) return held();
     try {
-      const now = steps.read(path);
-      if (now === null ? steps.exists(path) : now.trim() !== owner.token) {
+      const current = steps.read(path);
+      if (current === null ? steps.exists(path) : current.trim() !== owner.token) {
         // The lock changed under the claim: someone else owns it now. Leave it.
         return held();
       }
@@ -224,7 +262,6 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
       steps.drop(claimPath);
     }
   }
-  return held();
 }
 
 /**

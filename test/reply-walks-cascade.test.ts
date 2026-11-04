@@ -75,10 +75,11 @@ async function run(
   at: World,
   patch: Partial<SendHost>,
   caller: Caller = { kind: 'owner' },
+  reply: Partial<ReplyHost> = {},
 ): Promise<Result> {
   const io = testIo(at.root, caller);
   const send = fake(at, patch);
-  const host: ReplyHost = { home: at.home, now: () => NOW, newId: () => REPLY, send };
+  const host: ReplyHost = { home: at.home, now: () => NOW, newId: () => REPLY, send, ...reply };
   const code = await runReply([SENT, 'the answer'], io, host);
   return { code, out: io.out, err: io.err, host: send };
 }
@@ -1221,7 +1222,11 @@ test.skipIf(offDarwin)('probe 4: webhook is posted at most once when reply webho
   const heldLock = acquireSeatLock(made.dir, 'acme', 'iris');
   if (!('release' in heldLock)) throw new Error('expected seat lock to be acquired');
   try {
-    const busyRes = await run(made, { agents: () => [{ name: 'iris', pane: 'pane-iris' }] });
+    // No budget here: this scene is about the webhook claim, and a refusal at once is the
+    // no-budget path. The scenes below cover the reply site's own wait.
+    const busyRes = await run(made, { agents: () => [{ name: 'iris', pane: 'pane-iris' }] }, { kind: 'owner' }, {
+      seatLock: { waitMs: 0 },
+    });
     expect(busyRes.code).toBe(1);
     expect(busyRes.err).toContain('iris: another command holds it');
     expect(hits).toEqual([]);
@@ -1289,5 +1294,68 @@ test.skipIf(offDarwin)('probe 4: webhook is posted at most once when reply webho
   expect(afterPostedWalk.unconfirmed).toBe(false);
   expect(afterPostedWalk.summary).toMatch(/^iris: delivered \(webhook, \d+ ms\)$/);
   expect(hits).toHaveLength(1);
+});
+
+test('a reply to a busy target seat lands once the holder lets go inside the reply budget', async () => {
+  const made = world(null, [{ name: 'iris', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
+  stops.push(made.cleanup);
+  sentToOwner(made, 'iris');
+  const held = acquireSeatLock(made.dir, 'acme', 'iris');
+  if (!('release' in held)) throw new Error('expected seat lock to be acquired');
+
+  let clock = 1_000;
+  const sleeps: number[] = [];
+  const res = await run(made, { agents: () => [{ name: 'iris', pane: 'pane-iris' }] }, { kind: 'owner' }, {
+    seatLock: {
+      waitMs: 2_000,
+      pollMs: 25,
+      steps: {
+        now: () => clock,
+        sleep: (ms) => {
+          sleeps.push(ms);
+          clock += ms;
+          // The holder finishes its own write while reply waits, then reply takes its turn.
+          held.release();
+        },
+      },
+    },
+  });
+
+  expect(res.code).toBe(0);
+  expect(res.out).toBe('team acme, session "acme"\niris: delivered (drop)\n');
+  expect(sleeps).toEqual([25]);
+  expect(existsSync(join(recordDir(made.root, 'acme', 'iris'), REPLY))).toBe(true);
+});
+
+test('a reply refuses, in the same words, when the target seat stays locked for the whole budget', async () => {
+  const made = world(null, [{ name: 'iris', role: 'reviewer', cli: 'gemini', launch: 'gemini' }]);
+  stops.push(made.cleanup);
+  sentToOwner(made, 'iris');
+  const held = acquireSeatLock(made.dir, 'acme', 'iris');
+  if (!('release' in held)) throw new Error('expected seat lock to be acquired');
+
+  try {
+    let clock = 1_000;
+    const sleeps: number[] = [];
+    const res = await run(made, { agents: () => [{ name: 'iris', pane: 'pane-iris' }] }, { kind: 'owner' }, {
+      seatLock: {
+        waitMs: 50,
+        pollMs: 25,
+        steps: {
+          now: () => clock,
+          sleep: (ms) => {
+            sleeps.push(ms);
+            clock += ms;
+          },
+        },
+      },
+    });
+    expect(res.code).toBe(1);
+    expect(res.err).toContain(`iris: another command holds it (pid ${String(process.pid)}); nothing was written`);
+    expect(sleeps).toEqual([25, 25]);
+    expect(existsSync(join(recordDir(made.root, 'acme', 'iris'), REPLY))).toBe(false);
+  } finally {
+    held.release();
+  }
 });
 

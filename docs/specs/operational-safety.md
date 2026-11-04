@@ -152,7 +152,10 @@ hard link, so a partially written token is never observable. An existing link me
 An unreadable or unparseable lock is held: it is never renamed or removed. A stale lock, whose
 process id is dead, is taken over only by winning a second exclusive link on `<path>.steal` and
 re-reading the token before the unlink. Release compares the whole token, so a lock taken over in
-between is not released by its old holder.
+between is not released by its old holder. A taker may ask for a budget: reply's target-seat write
+polls a live holder every 25 ms for up to two seconds before it reports the holder, while every
+other taker refuses at its first attempt. An unreadable lock is reported at once whatever the
+budget.
 
 Two commands contend for the same seat state. A launch that opens a dialog records the manual
 marker under the seat lock before it focuses the pane; at v0.5.0 the marker is the boolean

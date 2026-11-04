@@ -127,7 +127,9 @@ signed close sidecar `<id>.closed.json` beside it instead. A reply on a client t
 exception to the destination: its record goes into the client's own inbox folder, and no history
 line is appended. The seat's folder and the reply's
 record are each written under the seat's lock (`<state dir>/seat-locks/<session>/<seat>`), so two
-commands never write into one folder at once. It writes one line to `.agents/team.log`, and
+commands never write into one folder at once. A reply that finds a seat's lock held waits for the
+holder — polling every 25 ms for up to two seconds — and refuses with the holder's process id only
+when the wait runs out. It writes one line to `.agents/team.log`, and
 appends the reply to the project's message history ([team feed](feed.md)); when the reply record
 cannot be written, the receipt is not written either and the run is a refusal.
 
