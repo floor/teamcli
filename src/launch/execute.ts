@@ -1206,7 +1206,12 @@ export async function executePlan(
         if (applied.kind === 'refused') {
           held = true;
           abort = true;
-          const tail = applied.restored ? '' : ' (the config was left untouched)';
+          const tail =
+            applied.restored === 'untouched'
+              ? ' (the config was left untouched)'
+              : applied.restored
+                ? ' (the prior config was restored)'
+                : ' (and the prior config could not be restored)';
           const what = `the terminal host's sidebar layout was refused: ${applied.reason}${tail}`;
           host.say(`sidebar: ${what}\n`);
           host.log('sidebar', what);
