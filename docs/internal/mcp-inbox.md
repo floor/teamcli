@@ -260,8 +260,8 @@ every process finds the name held.
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the
 body is returned, once the record's signature has been checked against the checkout's message
 key. The mark on a sender belongs to the content, not the receipt: `inbox_check` reports
-`sender_verified` on each item, and `inbox_read` serves a body whose sender does not verify with
-its attribution line marked, exactly as `team drops --read` serves it. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
+`sender_attribution` on each item, and `inbox_read` serves every body with its attribution line
+marked, exactly as `team drops --read` serves it. It is the signed status receipt `team messages` writes — `{payload: {kind, status, id, to,
 root, session, at}, signature}` at `<id>.read.json`, signed with the same message key — so one
 module answers for the inbox, `team drops`, `team messages` and the watch, and each verifies the
 receipt rather than trusting the file's presence. A file that is not a signed record, or whose

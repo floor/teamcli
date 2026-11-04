@@ -573,8 +573,8 @@ declaration is re-confirmed. No leg writes a second record: each write accepts t
 same id, and a frame the socket takes writes no receipt — only the seat writes a read receipt, so
 the record stays unread until the seat's own read, and the watch re-wakes it like any other
 message. The frame
-opens with the claim marked unverified, `[unverified sender: claimed <caller>]` on its own line —
-nothing attests the caller yet — then names its sender `Message from Grok Bot (owner)`, with the
+opens with the sender attributed, `[attributed sender: <caller>]` on its own line — every sender
+a reader displays is an attribution, never a verification — then names its sender `Message from Grok Bot (owner)`, with the
 owner's reply target as its reply line, so the receiving seat reads a person's message and not a
 seat address. The walk's ending
 never changes the invocation: the drop is on disk, the confirmation already printed, and the
@@ -690,8 +690,8 @@ naming the message its frame carried, because either act settles that exact reco
 `zeus-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
-unverified-claim banner `[unverified sender: claimed <caller>]` — nothing attests the caller yet,
-so every frame is marked — then a blank line, the sender's identity line,
+attribution banner `[attributed sender: <caller>]` — every frame's sender is attributed, and the
+mark is always present so its absence never reads as verification — then a blank line, the sender's identity line,
 `Message from <name> (<seat>@<team>)` — the nickname the registry holds, the name the seat's
 written label carries before the middle dot, or its seat name, with no summary and no rule — then
 a blank line, the signed body with its own `from … — admitted by: …` header, and the reader line

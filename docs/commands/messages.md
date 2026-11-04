@@ -76,15 +76,15 @@ body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
-[`sender_name`](../team-file.md#sender_name) word asks, followed by `[unverified sender]` unless
-the claim verifies — only the seat's current general seat brief does — and a printed body whose
-sender does not verify is marked the same way [`team drops --read`](drops.md) marks one: its
-`from … — admitted by: …` line gains `[unverified sender — shared checkout key only]` and
-`(unverified claim)`, and a body with no such line opens with `[unverified sender: claimed
-<sender>]`, the message's own words untouched. `--json` carries the record's own `from` with
-`sender_verified` and `sender_trust` (`launch-brief` or `shared-key-only`) beside it, its `body`
-stays the signed bytes — only the text reading marks it — and the signed record keeps the
-sender's registry id apart from it.
+[`sender_name`](../team-file.md#sender_name) word asks, followed by `(attributed)` — every
+displayed sender is attributed, never verified: the shared checkout key every seat can read
+proves a record was not changed after signing, not who wrote it — or `(unattributed)` when no key
+could vouch for the file. A printed body is marked the same way [`team drops --read`](drops.md)
+marks one: its `from … — admitted by: …` line gains `(attributed)` after the claimed name, and a
+body with no such line opens with `[attributed sender: <sender>]`, the message's own words
+untouched. `--json` carries the record's own `from` with `sender_attribution` beside it
+(`attributed`, `launch-brief`, or `none`), its `body` stays the signed bytes — only the text
+reading marks it — and the signed record keeps the sender's registry id apart from it.
 A `waiting` row writes no
 receipt: it says the record is there for its own mailbox's reader, and a seat's run carries no
 body for it. The owner's run is read-only over the whole session and does carry the verified body
