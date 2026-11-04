@@ -335,4 +335,71 @@ describe('the seat lock', () => {
       expect(holderText({ held: -1, startedAt: null })).toBe('an unreadable lock');
     });
   });
+
+  // The bounded wait: reply's target-seat write asks for it, and nothing else does. The clock
+  // and the sleep are injected, so the scenes assert poll counts, never wall time.
+  test('a bounded wait wins the lock when the holder releases inside the budget', () => {
+    const { dir, path } = place();
+    writeFileSync(path, `${process.pid} deadbeef\n`);
+    let clock = 1_000;
+    const sleeps: number[] = [];
+    const steps: Partial<LockSteps> = {
+      now: () => clock,
+      sleep: (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+        lockSteps.drop(path);
+      },
+    };
+    const lock = acquireSeatLock(dir, 'acme', 'lead', steps, { waitMs: 2_000, pollMs: 25 });
+    expect(own(lock)).toBe(true);
+    expect(sleeps).toEqual([25]);
+    if (own(lock)) lock.release();
+    expect(statSync(path, { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  test('a bounded wait refuses with the live holder once the budget is spent, after its polls', () => {
+    const { dir, path } = place();
+    writeFileSync(path, `${process.pid} deadbeef\n`);
+    let clock = 1_000;
+    const sleeps: number[] = [];
+    const steps: Partial<LockSteps> = {
+      now: () => clock,
+      sleep: (ms) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    };
+    const lock = acquireSeatLock(dir, 'acme', 'lead', steps, { waitMs: 100, pollMs: 25 });
+    expect(lock).toEqual({ held: process.pid });
+    expect(sleeps).toEqual([25, 25, 25, 25]);
+    expect(token(path)).toBe(`${process.pid} deadbeef`);
+  });
+
+  test('without a wait the first attempt refuses and never sleeps', () => {
+    const { dir, path } = place();
+    writeFileSync(path, `${process.pid} deadbeef\n`);
+    const sleeps: number[] = [];
+    const lock = acquireSeatLock(dir, 'acme', 'lead', {
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    expect(lock).toEqual({ held: process.pid });
+    expect(sleeps).toEqual([]);
+  });
+
+  test('a lock that cannot be read still refuses at once, even with a budget', () => {
+    const { dir, path } = place();
+    writeFileSync(path, 'nonsense\n');
+    const sleeps: number[] = [];
+    const lock = acquireSeatLock(dir, 'acme', 'lead', {
+      sleep: (ms) => {
+        sleeps.push(ms);
+      },
+    }, { waitMs: 2_000, pollMs: 25 });
+    expect(lock).toEqual({ held: -1 });
+    expect(sleeps).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe('nonsense\n');
+  });
 });
