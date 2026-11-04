@@ -275,7 +275,7 @@ not placed: an owner tool applies changes under a general grant from inside a te
 grant's own bounds — its ops, entities and expiry — cover that call. Keys stay under
 `~/.config/team-client`, and an external client outside the terminal host (an agent CLI included)
 is not refused. A usage error is still judged first and keeps exit 2. The guard is a machine
-guard, not a policy: no dev-mode setting lifts it (OD-20261019-49), and a caller inside a team
+guard, not a policy: no dev-mode setting lifts it, and a caller inside a team
 pane is refused alike with dev mode on or off — the lift would hand a seat's own process the key
 the guard keeps out of it.
 Seatbelt confinement of `~/.config/team-client` for guarded seats belongs to the pane guard
