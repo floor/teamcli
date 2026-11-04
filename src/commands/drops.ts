@@ -38,6 +38,7 @@ import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RU
 import { heldAt } from '../launch/rules-file.ts';
 import { currentClaimIn, listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { verifySenderClaim } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
   contextLine,
@@ -49,7 +50,7 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { isRead, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
+import { fileStatStamp, isRead, keyPrintForCache, signedRecordOf, verifyRecord, type StatusContext } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
@@ -101,6 +102,10 @@ export type DropRow = {
   /** The sender's registry id when the drop is a signed record; the table resolves it to the
    *  project's readable name. A raw drop has no id, and its first line is already a headline. */
   from_id: string | null;
+  /** Whether the sender claim verifies: only the seat's current general seat brief does. Every
+   *  other record was signed with the shared checkout key, which every seat can read, so its
+   *  sender is a claim the listing marks. */
+  sender_verified: boolean;
   received: string;
   path: string;
 };
@@ -259,6 +264,18 @@ export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'
  * earlier brief is not waiting mail. A receipt at the current claim's own id counts only when it
  * binds that claim, so a read of another delivery never hides the delivery the claim names.
  */
+const DROP_INSPECT_CACHE_LIMIT = 4096;
+const dropInspectCache = new Map<
+  string,
+  {
+    stamp: string;
+    keyPrint: string;
+    from: string | null;
+    fromId: string | null;
+    launch: { id: string; sha256: string | undefined; incarnation: string | undefined } | null;
+  }
+>();
+
 export function listDrops(dropDir: string, key?: KeyObject, context?: StatusContext): DropListing {
   let names: string[];
   try {
@@ -268,11 +285,13 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'ok', rows: [] };
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
+  const nameSet = new Set(names);
   const rows: DropRow[] = [];
   // The claim this listing serves under. Without a context there is none, and every drop is
   // listed — the same "nothing can be proven" rule the receipt read follows above.
   const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
+  const keyPrint = key === undefined ? 'none' : keyPrintForCache(key);
   for (const name of names) {
     if (name.includes('.')) continue;
     if (superseded.has(name)) continue;
@@ -290,37 +309,53 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     // At the current claim's id the receipt must bind that claim too: a read of an earlier
     // delivery does not count for this one.
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key, binding)) continue;
+    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+    if (key !== undefined && context !== undefined && hasReceiptFile && isRead(dropDir, name, context, key, binding)) continue;
+    const stamp = fileStatStamp(path);
     let from: string | null = null;
     let fromId: string | null = null;
-    let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
-    try {
-      const text = readFileSync(path, 'utf8');
-      const record = signedRecordOf(parsedJson(text));
-      if (record !== null) {
-        // The record names its sender in the payload. The key that verified it is the message
-        // key; when the folder is read with no key at all, the payload is still what is shown —
-        // a record that fails the key it was checked with leaves the sender unknown.
-        if (key === undefined || verifyRecord(record, key)) {
-          from = record.payload.from;
-          fromId = record.payload.from_id;
-          if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-            launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+    let senderVerified = false;
+    let launch: { id: string; sha256: string | undefined; incarnation: string | undefined } | null = null;
+    const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
+    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
+      from = cached.from;
+      fromId = cached.fromId;
+      launch = cached.launch;
+    } else {
+      try {
+        const text = readFileSync(path, 'utf8');
+        const record = signedRecordOf(parsedJson(text));
+        if (record !== null) {
+          // The record names its sender in the payload. The key that verified it is the message
+          // key; when the folder is read with no key at all, the payload is still what is shown —
+          // a record that fails the key it was checked with leaves the sender unknown.
+          if (key === undefined || verifyRecord(record, key)) {
+            from = record.payload.from;
+            fromId = record.payload.from_id;
+            if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+              launch = { id: record.payload.id, sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+            }
           }
+        } else {
+          from = senderOf(text.split('\n', 1)[0] ?? '');
         }
-      } else {
-        from = senderOf(text.split('\n', 1)[0] ?? '');
+        if (stamp !== null && keyPrint !== '') {
+          if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
+          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch });
+        }
+      } catch {
+        // The file is still a drop; its sender is unknown.
       }
-    } catch {
-      // The file is still a drop; its sender is unknown.
     }
+    senderVerified = key !== undefined && launch !== null && claim !== null && launch.id === claim.id
+      && launch.sha256 === claim.sha256 && launch.incarnation === claim.incarnation;
     // A launch record the current claim does not name cannot be served: it is an earlier
     // delivery, or an old build's record carrying none of the fields a claim binds.
     if (key !== undefined && context !== undefined && launch !== null
       && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
       continue;
     }
-    rows.push({ id: name, from, from_id: fromId, received: stat.mtime.toISOString(), path });
+    rows.push({ id: name, from, from_id: fromId, sender_verified: senderVerified, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -329,9 +364,12 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
 }
 
 /** The row's sender as the project's `sender_name` asks for. A record's `from` is the seat, and
- *  its registry id lets the name resolve; a raw drop's first line is already a headline. */
+ *  its registry id lets the name resolve; a raw drop's first line is already a headline. A claim
+ *  that does not verify is marked: the name is what the drop says, not who it is. */
 function readableFrom(row: DropRow, naming: SenderNaming): string | null {
-  return row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  if (row.from === null) return null;
+  const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  return row.sender_verified ? name : `${name} (unverified)`;
 }
 
 /** `from <sender> — <path>`, the one line `--follow` prints per new drop. */
@@ -583,7 +621,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         project: loaded.team.project,
         session,
         seat,
-        drops: rows.map((row) => ({ from: row.from, received: row.received, path: row.path })),
+        drops: rows.map((row) => ({
+          from: row.from,
+          sender_verified: row.sender_verified,
+          received: row.received,
+          path: row.path,
+        })),
         counts: { drops: rows.length },
       });
     } else {

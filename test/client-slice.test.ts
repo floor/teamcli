@@ -1092,8 +1092,9 @@ describe('the client send walk', () => {
     const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
     expect(frame.type).toBe('user');
     expect(frame.msg_id).toBe('drop-1');
+    // The client's claim is unattested, so the frame opens with it marked before the display name.
     expect(frame.message.content).toBe(
-      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
+      '[unverified sender: claimed client:grok-bot]\n\nMessage from Grok Bot (owner)\n\nhello orchestrator\n\nAnswer with team reply drop-1 "…" (this marks it read), or team ack drop-1 if no answer is needed.',
     );
     // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
     // leaves the record unread and the watch re-wakes it like any other message.

@@ -44,6 +44,7 @@ import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '..
 import type { FallbackNote } from '../send/fallback-events.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import { frameFor, readerLine } from '../send/frame.ts';
+import { unverifiedBanner } from '../send/sender-claim.ts';
 import {
   declaredInboundOf,
   heldSocketPath,
@@ -886,10 +887,13 @@ function resolveSocketFrameFor(
   input: DaemonRelaySendInput,
   id: string,
   body: string | undefined,
+  from: string,
 ): string | undefined {
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
-  return frameFor(body, id, readerLine(id));
+  // Nothing attests the caller yet: a frame this daemon composes opens with the claim marked
+  // unverified, exactly as the CLI's own frames do.
+  return frameFor(`${unverifiedBanner(from)}\n\n${body}`, id, readerLine(id));
 }
 
 /**
@@ -1133,7 +1137,7 @@ export async function handleDaemonRelaySend(
     },
   );
 
-  const frame = resolveSocketFrameFor(input, id, body);
+  const frame = resolveSocketFrameFor(input, id, body, from);
   const message: RuntimeRelayMessage = {
     id,
     record: recordText,

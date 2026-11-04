@@ -1,9 +1,12 @@
 // Bare `team check`: one answer to "is anything wrong with this team that someone should act on",
 // for the callers who may see it — the owner, a seat of the team, and a pane the team's approved
 // file names (design note §3, §4). It needs no git, it reads, and it changes nothing. The owner's
-// `--repair` is the one act: the state's leftovers (a record for a seat the file no longer
+// `--repair` is the owner's one act: the state's leftovers (a record for a seat the file no longer
 // declares, a session with no seat of the team in it), the dev-mode mark an agent's registration
-// left, and the two sidebar lines a drift moved off the file's text — and nothing else. The file is
+// left, and the two sidebar lines a drift moved off the file's text — and nothing else.
+// `--close-orphans` is the lead's or the owner's: a live agent CLI no pane holds, re-proven just
+// before it is signalled, after one question at a terminal; it is the second act and never the same
+// run as the first. The file is
 // resolved with `remember` false for every caller, nothing of the watch's pass, report, readings or
 // nudge path is called, and the one screen reading (§3.3a) is read-only.
 //
@@ -11,7 +14,7 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
@@ -27,7 +30,7 @@ import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig } from 
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds, watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
-import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { callerLabel, fileOwnerRefusal, isOwner, readAncestors, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { widenedGrantNotes } from '../client/general-grant.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -53,7 +56,7 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionList, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
@@ -117,7 +120,10 @@ import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { busProblemNotes } from '../bus/notes.ts';
+import { processCommOf, processFoldersOf, processStartOf, processTable } from '../watch/process-adapter.ts';
+import { EVENT_LOG_TOTAL_BYTES } from '../bus/kinds.ts';
+import { retainedLogBytes } from '../bus/log.ts';
+import { busLogSizeNotes, busProblemNotes } from '../bus/notes.ts';
 import { pingpongLegDifferences } from './pingpong-legs.ts';
 import {
   EMPTY_SIDEBAR_REPAIR,
@@ -132,8 +138,17 @@ import { readScreen, type Screen } from '../watch/screen.ts';
 
 export type { CheckSidebarSources };
 
-/** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
-export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
+import { closeOrphans, orphanReading, type OrphanCloseSources, type OrphanProcessSources, type OrphanReading } from './orphans.ts';
+
+/** The team check's own arguments: the owner's aimed/repair flags, the lead's or owner's close, and
+ *  optional `--json`. */
+export type TeamCheckArgs = {
+  session?: string;
+  file?: string;
+  repair?: boolean;
+  closeOrphans?: boolean;
+  json?: boolean;
+};
 
 // What the check reads from outside the file and the state, so tests and the docs harness can
 // stand in for it: the same reads `status` makes, except that the live read is narrowed to the
@@ -174,6 +189,14 @@ export type CheckSources = {
   codexEndpoint?: CodexEndpointCheckSources;
   /** The sidebar layout, per-session reload, and pane display reads/writes; adapter defaults when absent. */
   sidebar?: CheckSidebarSources;
+  /** The process readings the orphan scan makes — the table, many working folders at once, and
+   *  this run's own ancestry. Absent when no producer is wired: a run then reads no process table,
+   *  as a scene that does not stand one in must not touch this machine. */
+  orphans?: OrphanProcessSources;
+  /** What the close flow reads and does — liveness, the same process's identity, the pane proof,
+   *  the stop signals and the waits between them. Absent when no producer is wired: a run then
+   *  refuses `--close-orphans` rather than touching a process it cannot re-prove. */
+  closeOrphans?: OrphanCloseSources;
 };
 
 export type CodexEndpointCheckSources = {
@@ -184,10 +207,28 @@ export type CodexEndpointCheckSources = {
   runtimeRoot?: string;
 };
 
+/** What one session's panes hold: each pane's shell and the foreground pids that are not it; null
+ *  when the session's agent list or any pane's process reading did not answer. A read that does not
+ *  answer is never read as "no pane holds it". */
+function heldIn(session: string): ReadonlySet<number> | null {
+  const agents = agentList(session);
+  if (agents === null) return null;
+  const held = new Set<number>();
+  for (const agent of agents) {
+    const processes = paneProcessesOf(paneProcessInfo(agent.pane, session));
+    if (processes === null) return null;
+    held.add(processes.shell);
+    for (const pid of processes.foreground) held.add(pid);
+  }
+  return held;
+}
+
 /**
  * The shipped sources. The live read is `status`'s own with one narrowing: `status` reads every
- * agent's pane, a stray's included, and this reads a pane only where this project's state records
- * one for a seat of this team in the session read. The rest is the same code, not a copy of it.
+ * agent's screen, a stray's included, and this reads a screen only where this project's state
+ * records the pane for a seat of this team. Every agent's process identity is read either way:
+ * the orphan reading holds a CLI herdr names at a pane even when no record of this project's
+ * names the seat there. The rest is the same code, not a copy of it.
  */
 export const realCheckSources: CheckSources = {
   live(session, team, state) {
@@ -214,9 +255,10 @@ export const realCheckSources: CheckSources = {
     const processes: Record<string, PaneProcesses | null> = {};
     const foreground: Record<string, string[] | null> = {};
     for (const agent of agents) {
-      if (!recorded.has(agent.pane)) continue;
-      const screen = paneRead(agent.pane, PANE_WINDOW, session);
-      if (screen !== null) screens[agent.pane] = screen;
+      if (recorded.has(agent.pane)) {
+        const screen = paneRead(agent.pane, PANE_WINDOW, session);
+        if (screen !== null) screens[agent.pane] = screen;
+      }
       // The pane's process identity, for the comparison with the one the state recorded: a pane
       // that no longer holds what team launched is not the seat. Null when herdr can't tell. The
       // same reading carries the foreground names the restore proof ties a restored CLI with, so
@@ -253,6 +295,48 @@ export const realCheckSources: CheckSources = {
     isSocket: isSocketFile,
   },
   sidebar: realSidebarCheckSources,
+  // The process adapter's own readings: the table scoped to this user, one bulk folder query, and
+  // this run's ancestry so the check never names or closes itself.
+  orphans: {
+    table: processTable,
+    foldersOf: processFoldersOf,
+    ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
+    own: () => readAncestors(process.pid)?.map((one) => one.pid) ?? [process.pid],
+  },
+  // The close flow's own readings. Every session but this one is read once per close run, and this
+  // session's panes are read again immediately before each signal: the question can stand open
+  // while a pane picks a process up. A pane list or pane reading that does not answer means no
+  // close, never a guess.
+  closeOrphans: {
+    alive: pidAlive,
+    commOf: processCommOf,
+    startOf: processStartOf,
+    ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
+    heldElsewhere: (_pids, session) => {
+      const sessions = sessionList();
+      if (sessions === null) return null;
+      const held = new Set<number>();
+      for (const other of sessions) {
+        if (!other.running || other.name === session) continue;
+        const set = heldIn(other.name);
+        if (set === null) return null;
+        for (const pid of set) held.add(pid);
+      }
+      return held;
+    },
+    heldHere: (session) => heldIn(session),
+    signal: (pid, signal) => {
+      try {
+        process.kill(pid, signal === 'terminate' ? 'SIGTERM' : 'SIGKILL');
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    pause: (ms) => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    },
+  },
 };
 
 /**
@@ -337,6 +421,42 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
         return 1;
       }
       io.stderr(`${lift.warning}\n`);
+    }
+    // `--close-orphans` ends processes: the team's lead or the owner, never a plain seat. This
+    // caller still sees every row the reading names; only the close is not the seat's.
+    if (args.closeOrphans === true && !(walked.kind === 'seat' && isLeadSeat(current.team, walked.name))) {
+      const msg = "--close-orphans is the team's lead's or the owner's";
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-lead', msg, null, 1, undefined, fallbackNotice);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-lead
+      return 1;
+    }
+  }
+  // The close asks its one question at a terminal, before anything is read or signalled: a run
+  // with no terminal, or with no process reading wired, refuses here and changes nothing.
+  if (args.closeOrphans === true) {
+    if (sources.orphans === undefined || sources.closeOrphans === undefined) {
+      const msg = '--close-orphans has no process reading here';
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-unavailable', msg, null, 2);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-unavailable
+      return 2;
+    }
+    if (!io.stdinIsTTY) {
+      const msg = '--close-orphans asks before it closes anything; it needs a terminal';
+      if (args.json) {
+        writeJsonError(io, 'check.close-orphans-terminal', msg, null, 2);
+      } else {
+        io.stderr(`team check: ${msg}\n`);
+      }
+      // exit: check.close-orphans-terminal
+      return 2;
     }
   }
   const { team, root, dir } = current;
@@ -437,6 +557,39 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     sidebar: sources.sidebar,
     repairState: sidebarRepair,
   });
+  // Live agent CLIs no pane holds any more, read from the state's own launches and from the
+  // working folders inside this root. A scene that wires no process source reads no process
+  // table, and the reading itself asks for nothing until a seat or an agent exists.
+  const orphansOf = (): OrphanReading | null =>
+    sources.orphans === undefined
+      ? null
+      : orphanReading({
+          project: team.project,
+          root,
+          session,
+          state,
+          live,
+          now: sources.now(),
+          daemonSince: sources.daemon?.since ?? null,
+          sources: sources.orphans,
+        });
+  let orphans = orphansOf();
+  // The lead's or owner's one act per run: close the orphan candidates that carry the close's
+  // proof, after one question at the terminal. The reading is then taken again, so the rows below
+  // describe the world the close left — a closed process is gone, and one the close could not end
+  // is still a row with the reading's own repair on it.
+  const closedLines: string[] = [];
+  if (args.closeOrphans === true && orphans !== null && sources.closeOrphans !== undefined) {
+    const closing = closeOrphans({
+      candidates: orphans.candidates,
+      session,
+      sources: sources.closeOrphans,
+      confirm: (prompt) => confirmClose(io, prompt),
+    });
+    closedLines.push(...closing.lines);
+    for (const line of closing.lines) logLine(dir, 'check', callerLabel(walked), line, sources.now());
+    if (closing.closed > 0) orphans = orphansOf();
+  }
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
@@ -548,6 +701,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     ...staleDifferences(stale),
+    // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
+    // the team's own close where a state record or the daemon's start proves it the team's.
+    ...(orphans?.differences ?? []),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.
     ...blindDifferences(team, state, live, comparison, sources.now(), liveHold(whole, sources.now()) !== null, { project: team.project, root, home: sources.home, stateDir: dir, session }),
@@ -625,6 +781,14 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       recorded: state.bus,
       autostart: team.bus?.autostart !== false,
     }),
+    // The retained event log at four fifths of its size cap: named so the team's lead sees the
+    // cap coming. A stat per retained slot, never a read of a segment.
+    ...(sources.home !== undefined
+      ? busLogSizeNotes({
+          bytes: retainedLogBytes(team.project, root, sources.home),
+          cap: EVENT_LOG_TOTAL_BYTES,
+        })
+      : []),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
@@ -663,6 +827,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...unfinishedWebhookNotes({ root, alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid) }),
     ...record.notes,
     ...provenance.notes,
+    // Why the orphan reading named nothing it might otherwise have named: a pane list that read
+    // no agents, a pane herdr could not answer for, a folder or process read that did not answer.
+    ...(orphans?.notes ?? []),
     ...idleNotes,
     ...watchPaceNotes(watchPace),
   ]);
@@ -692,6 +859,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     io.stdout(`${KEY_ISOLATION_LINE}\n`);
     for (const warning of warnings) io.stdout(`${warning}\n`);
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
+    for (const line of closedLines) io.stdout(`${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
     for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
     if (sidebarChecked.tomlBlock !== null) io.stdout(`${sidebarChecked.tomlBlock}\n`);
@@ -712,6 +880,29 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   }
   // exit: check.ok
   return 0;
+}
+
+/**
+ * The close's one question, asked before anything is signalled. The report is a synchronous run,
+ * so the answer is read in one go: `io.stdin` in a scene, the terminal's own input in a real run.
+ * Only a clear yes closes; an empty answer, a no, or a read that did not answer declines.
+ */
+function confirmClose(io: Io, prompt: string): boolean {
+  io.stdout(prompt);
+  let answer = '';
+  try {
+    if (io.stdin !== undefined) {
+      answer = io.stdin();
+    } else {
+      const buffer = Buffer.alloc(256);
+      const read = readSync(0, buffer, 0, buffer.length, null);
+      answer = read > 0 ? buffer.subarray(0, read).toString('utf8') : '';
+    }
+  } catch {
+    answer = '';
+  }
+  io.stdout('\n');
+  return /^\s*y(es)?\s*$/i.test(answer);
 }
 
 // The one sentence a caller that does not pass gets, whatever failed underneath it: it names no

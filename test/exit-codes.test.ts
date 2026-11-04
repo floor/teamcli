@@ -41,6 +41,7 @@ import type { ServiceManager, ServiceRestartSuccess } from '../src/daemon/servic
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
+import { runCheckpoint } from '../src/commands/checkpoint.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -1218,6 +1219,46 @@ scene('check.repair-owner', async (place) => {
   recordsLead(place);
   return show(await checked(place, ['--repair'], leadSeat, checkSources(quiet)), "--repair is the owner's");
 });
+scene('check.close-orphans-lead', async (place) => {
+  // A plain seat of the team sees every row the reading names, but the close is the lead's or the
+  // owner's: this caller is recorded and placed, and the flag is still refused.
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', pane: 'pane-worker' };
+  });
+  const worker: Caller = { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' };
+  return show(
+    await checked(place, ['--close-orphans'], worker, checkSources(quiet)),
+    "--close-orphans is the team's lead's or the owner's",
+  );
+});
+scene('check.close-orphans-unavailable', async (place) => {
+  // A report wired with no process reading cannot re-prove a process, so the close refuses before
+  // it reads anything.
+  write(place, TEAM);
+  return show(await checked(place, ['--close-orphans'], owner, checkSources(quiet)), 'has no process reading here');
+});
+scene('check.close-orphans-terminal', async (place) => {
+  // The close asks its one question at a terminal; with none, the run refuses before it reads or
+  // signals anything.
+  write(place, TEAM);
+  const sources: CheckSources = {
+    ...checkSources(quiet),
+    orphans: { table: () => [], foldersOf: () => new Map(), ancestorsOf: () => null, own: () => [] },
+    closeOrphans: {
+      alive: () => false,
+      commOf: () => null,
+      startOf: () => null,
+      ancestorsOf: () => null,
+      heldElsewhere: () => new Set<number>(),
+      heldHere: () => new Set<number>(),
+      signal: () => false,
+      pause: () => {},
+    },
+  };
+  return show(await checked(place, ['--close-orphans'], owner, sources), 'it needs a terminal');
+});
 scene('check.repaired', async (place) => {
   write(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {
@@ -1763,6 +1804,27 @@ scene('doctor.missing', async (place) => {
   approve(place, TEAM);
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor(['--file', place.file], io, doctor(place.home, { version: () => null })), out: io.out, err: io.err }, 'install');
+});
+
+scene('checkpoint.recorded', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'recorded lead ->');
+});
+scene('checkpoint.caller', async (place) => {
+  approve(place, TEAM);
+  const io = testIo(place.root, other);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'only the owner or `leads`');
+});
+scene('checkpoint.io', async (place) => {
+  approve(place, TEAM);
+  mkdirSync(join(place.root, '.agents', 'team.state.json'), { recursive: true });
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint(['lead'], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'the state cannot be written');
+});
+scene('checkpoint.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runCheckpoint([], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err }, 'a seat name is required');
 });
 
 async function down(place: Place, argv: string[], caller: Caller, sources: RemoveSources): Promise<Ran> {
@@ -5382,6 +5444,32 @@ scene('team.restore-entry-refused', async (place) => {
     };
   }
   return show(ran, 'the token name is not one this daemon writes');
+});
+// The mailbox router child is its own program too: started with no token, or with a token it
+// cannot read and spend, it routes nothing and says so from a process of its own.
+scene('team.mailbox-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/mailbox/entry.ts', import.meta.url));
+  const runEntry = (argv: string[]): Ran => {
+    try {
+      execFileSync(process.execPath, [entry, ...argv], {
+        cwd: place.root,
+        env: { ...process.env, HOME: place.home },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return { code: 0, out: '', err: '' };
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: unknown };
+      return {
+        code: failed.status ?? -1,
+        out: '',
+        err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+      };
+    }
+  };
+  const noToken = show(runEntry([]), 'the mailbox router child has no readable one-use token');
+  show(runEntry([join(place.base, 'missing-token')]), 'the mailbox router child has no readable one-use token');
+  return noToken;
 });
 scene('daemon.fault-usage', async (place) =>
   show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));

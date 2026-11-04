@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-11-04
 kind: registry-draft
 status: draft
 read-at: v0.5.0 (52db9b75); integration supplement int/0.5.1 8acb470b, unreleased
@@ -114,10 +114,13 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `broker.not-a-repo` | not inside a git repository | present at 0.5.0 | `contract/exit-codes.json` | command `broker`; exit `2` |
 | `check.ok` | nothing needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `0` |
 | `check.repaired` | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `0` |
+| `check.close-orphans-lead` | --close-orphans is the team's lead's or the owner's | unreleased | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.file-owner` | --file is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.findings` | something needs acting on | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.repair-owner` | --repair is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
 | `check.session-owner` | --session is the owner's | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `1` |
+| `check.close-orphans-terminal` | --close-orphans asks before it closes anything; it needs a terminal | unreleased | `contract/exit-codes.json` | command `check`; exit `2` |
+| `check.close-orphans-unavailable` | --close-orphans has no process reading here | unreleased | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.file` | the team file can't be read | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.file-invalid` | the team file can't be parsed | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
 | `check.herdr` | herdr doesn't answer | present at 0.5.0 | `contract/exit-codes.json` | command `check`; exit `2` |
@@ -633,3 +636,4 @@ Contributions reconciled at this draft: accounts and gates, budgets, events, gra
 ## Revision log
 
 - **Draft** (2026-10-18): read the pinned source lists and consolidated completed spec contributions; planned entries remain distinct.
+- **Orphan close** (2026-11-04): registered `check.close-orphans-lead`, `check.close-orphans-terminal` and `check.close-orphans-unavailable` as unreleased rows from `contract/exit-codes.json`; no release tag carries them yet.

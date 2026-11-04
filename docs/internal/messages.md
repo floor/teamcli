@@ -42,8 +42,12 @@ still goes to the log, and also to the desktop notification.
 
 The signature is integrity, not authenticity. Every seat runs as the owner-user, so a signature
 says the record was not rewritten after it was signed. It does not say which seat sent it. `from`
-is a name the writer put on the record. The receipt says a process was shown the body, not that
-the recipient acted on it.
+is a name the writer put on the record. A reader therefore marks a sender it cannot verify:
+`team messages` appends `[unverified sender]` to the cell and marks the served body's attribution
+line, `team drops` appends `(unverified)`, and `inbox_check` reports `sender_verified: false`. One
+claim verifies today — the launch's own general seat brief, bound to the seat's current claim;
+every other record, and every raw drop, is a claim on the shared checkout key. The receipt says a
+process was shown the body, not that the recipient acted on it.
 
 The signature covers the complete payload exactly as it was parsed, and it is checked before any
 field is read: a field inserted, altered or removed after signing is a signature refusal whatever
@@ -101,10 +105,12 @@ The second run, once every waiting record has a receipt, prints the zero-message
 table's headers and no rows, `note: nothing is waiting`, and `0 messages`.
 
 Under `--json` the reading is one `team.messages` v1 document on stdout, its `schema` tag first:
-`format`, `project`, `session`, every row as `{ id, from, to, sent, sent_display, status, body? }`
-— `sent` the exact ISO string `SENT` renders as an age, `body` only on a row whose record
-verified (a `shown` row, or a `waiting` row in the owner's reading), the status `shown`, `refused`
-or `waiting` — then
+`format`, `project`, `session`, every row as
+`{ id, from, to, sent, sent_display, status, sender_verified, sender_trust, body? }` — `sent` the
+exact ISO string `SENT` renders as an age, `body` only on a row that verified, and the body stays
+the signed bytes even when the text reading marks it; `sender_verified` is true only for the
+seat's current general seat brief, and `sender_trust` names what the claim rests on,
+`launch-brief` or `shared-key-only`; status is `shown`, `refused` or `waiting`, and an owner reading may carry another mailbox's verified body read-only — then
 `notes`, `differences` (each `{ what, repair, who }`), `summary` (the `differences` and
 `owner_differences` counts every reading envelope carries) and `counts` (`messages`, `shown`,
 `refused`, `waiting`, the table's own closing figures). An empty mailbox's document carries no

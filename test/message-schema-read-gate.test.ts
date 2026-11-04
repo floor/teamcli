@@ -19,6 +19,8 @@ const SESSION = 'acme';
 const SEAT = 'lead';
 const ID = '4f0b8d82-7a8e-4da2-9e6f-9b5aac2d3e45';
 const BODY = 'the body only a verified record may expose';
+/** The body as the reader serves it: nothing attests the fixture's claim, so it opens marked. */
+const SERVED = `[unverified sender: claimed worker]\n\n${BODY}`;
 
 type Place = { base: string; root: string; home: string; dropDir: string; cleanup(): void };
 
@@ -79,7 +81,7 @@ describe('the read gate authenticates the raw payload first', () => {
       write(at, signRecord(payload(at) as never, at.home));
       const got = read(at);
       expect(got.ok).toBe(true);
-      expect(got.ok ? got.body : '').toBe(BODY);
+      expect(got.ok ? got.body : '').toBe(SERVED);
       expect(existsSync(receiptPath(at.dropDir, ID))).toBe(true);
     } finally {
       at.cleanup();

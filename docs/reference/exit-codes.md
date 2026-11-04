@@ -178,10 +178,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `bus.usage` | `bus` | 2 | the invocation cannot be read | `team bus extra` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
 | `check.repaired` | `check` | 0 | the owner's --repair dropped the state's leftovers, and nothing else needs acting on | `team check --repair` |
+| `check.close-orphans-lead` | `check` | 1 | --close-orphans is the team's lead's or the owner's | `team check --close-orphans` |
 | `check.file-owner` | `check` | 1 | --file is the owner's | `team check --file .agents/team.yaml` |
 | `check.findings` | `check` | 1 | something needs acting on | `team check` |
 | `check.repair-owner` | `check` | 1 | --repair is the owner's | `team check --repair` |
 | `check.session-owner` | `check` | 1 | --session is the owner's | `team check --session team` |
+| `check.close-orphans-terminal` | `check` | 2 | --close-orphans asks before it closes anything; it needs a terminal | `team check --close-orphans` |
+| `check.close-orphans-unavailable` | `check` | 2 | --close-orphans has no process reading here | `team check --close-orphans` |
 | `check.file` | `check` | 2 | the team file can't be read | `team check --file missing.yaml` |
 | `check.file-invalid` | `check` | 2 | the team file can't be parsed | `team check --file team.yaml` |
 | `check.herdr` | `check` | 2 | herdr doesn't answer | `team check` |
@@ -189,6 +192,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `checkpoint.recorded` | `checkpoint` | 0 | the standing checkpoint ask was recorded in state | `team checkpoint worker` |
+| `checkpoint.caller` | `checkpoint` | 1 | only the owner or a placed leads seat may record a checkpoint ask | `team checkpoint worker` |
+| `checkpoint.io` | `checkpoint` | 1 | the team state cannot be written | `team checkpoint worker` |
+| `checkpoint.invocation` | `checkpoint` | 2 | the invocation, seat name, or team file is invalid | `team checkpoint` |
 | `client.general-grant.issued` | `client` | 0 | the general grant was issued and written | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.general-grant.requested` | `client` | 0 | the owner-seat request to issue a general grant was recorded; nothing was issued yet | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
@@ -839,6 +846,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
 | `team.general-target` | `team` | 1 | the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran | `team status --general <grant.json> --key <client.key> (a grant that lists entities)` |
+| `team.mailbox-entry-refused` | `team` | 1 | the machine daemon's mailbox router child was started without a readable one-use token, so it routed nothing | `the daemon starts its mailbox router child entry` |
 | `team.mcp-serve-replacement-ended` | `team` | 1* | the stale inbox server's fresh replacement ended, and the server left with that process's exit code (1 when a signal ended it) | `team mcp serve` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |

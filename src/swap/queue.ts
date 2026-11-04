@@ -4,8 +4,8 @@
 // `down` and `up`, and the same record serves any change that needs a restart (`reason` says
 // which command asked).
 
-import { join } from 'node:path';
 import { supportsSessionResume } from '../profiles/profile.ts';
+import { handoverPath } from '../handover/paths.ts';
 import { readState, updateState, type QueuedSwap, type State, type SwapModel } from '../state.ts';
 
 export type QueueRequest = {
@@ -48,12 +48,9 @@ export function needsHandover(from: SwapModel, to: QueuedSwap['to']): boolean {
   return from.cli !== to.cli || !supportsSessionResume(to.cli);
 }
 
-/** The path a swap's handover is written at: the project's `handovers` folder, named for the
- *  seat and the queueing instant. A queued record keeps the path, so a run retried after a busy
- *  turn looks for the same file and a retry never types over one already written. */
-export function handoverPath(dir: string, seat: string, now: Date): string {
-  return join(dir, 'handovers', `${seat}-${now.toISOString().replace(/[:.]/g, '-')}.md`);
-}
+/** The path a swap's handover is written at: the shared `handoverPath` shape (see
+ *  `src/handover/paths.ts`), re-exported for the queue's readers. */
+export { handoverPath } from '../handover/paths.ts';
 
 /** Queues (or replaces) one seat's swap and returns the record written. The deadline is the
  *  request's own wait from `now`; queueing again restarts the wait and the record. A swap whose

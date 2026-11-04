@@ -388,13 +388,16 @@ export function registerRename(
  *
  * The session registry's record ends first, whatever the agent registry knows: the session is
  * the CLI process this command stopped, and its record names why (`why`, the word the design
- * note fixes). A registry that cannot be written is a note, as above; the end still happened.
+ * note fixes), and the handover path its checkpoint asked for when the ending command knows one
+ * (`handover`; a path on the record, never a claim the file exists). A registry that cannot be
+ * written is a note, as above; the end still happened.
  */
 export function registerEnd(
   input: RegistryTeam,
   seat: string,
   ending: Ending,
   why: SessionEndReason = 'owner-stop',
+  handover?: string,
 ): { note: string } | null {
   const notes: string[] = [];
   const closed = endSession({
@@ -404,6 +407,7 @@ export function registerEnd(
     session: input.session ?? input.team.session,
     seat,
     reason: why,
+    ...(handover === undefined ? {} : { handover }),
   });
   if ('note' in closed) notes.push(closed.note);
   try {

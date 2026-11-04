@@ -1208,6 +1208,13 @@
     {
       "code": 1,
       "command": "check",
+      "id": "check.close-orphans-lead",
+      "meaning": "--close-orphans is the team's lead's or the owner's",
+      "trigger": "team check --close-orphans"
+    },
+    {
+      "code": 1,
+      "command": "check",
       "id": "check.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team check --file .agents/team.yaml"
@@ -1232,6 +1239,20 @@
       "id": "check.session-owner",
       "meaning": "--session is the owner's",
       "trigger": "team check --session team"
+    },
+    {
+      "code": 2,
+      "command": "check",
+      "id": "check.close-orphans-terminal",
+      "meaning": "--close-orphans asks before it closes anything; it needs a terminal",
+      "trigger": "team check --close-orphans"
+    },
+    {
+      "code": 2,
+      "command": "check",
+      "id": "check.close-orphans-unavailable",
+      "meaning": "--close-orphans has no process reading here",
+      "trigger": "team check --close-orphans"
     },
     {
       "code": 2,
@@ -1281,6 +1302,34 @@
       "id": "check.state",
       "meaning": "the state can't be read",
       "trigger": "team check"
+    },
+    {
+      "code": 0,
+      "command": "checkpoint",
+      "id": "checkpoint.recorded",
+      "meaning": "the standing checkpoint ask was recorded in state",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 1,
+      "command": "checkpoint",
+      "id": "checkpoint.caller",
+      "meaning": "only the owner or a placed leads seat may record a checkpoint ask",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 1,
+      "command": "checkpoint",
+      "id": "checkpoint.io",
+      "meaning": "the team state cannot be written",
+      "trigger": "team checkpoint worker"
+    },
+    {
+      "code": 2,
+      "command": "checkpoint",
+      "id": "checkpoint.invocation",
+      "meaning": "the invocation, seat name, or team file is invalid",
+      "trigger": "team checkpoint"
     },
     {
       "code": 0,
@@ -5831,6 +5880,13 @@
       "id": "team.general-target",
       "meaning": "the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran",
       "trigger": "team status --general <grant.json> --key <client.key> (a grant that lists entities)"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.mailbox-entry-refused",
+      "meaning": "the machine daemon's mailbox router child was started without a readable one-use token, so it routed nothing",
+      "trigger": "the daemon starts its mailbox router child entry"
     },
     {
       "code": 1,

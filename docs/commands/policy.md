@@ -15,7 +15,7 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `state-trace-window-seconds`, `state-blind-after-seconds`, `state-hook-working-seconds`,
 `liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
 `brief-transport`,
-`event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
+`event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`, `event-segment-mb`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
 `swap-wait-seconds`, `watch-read-budget-ms`, `watch-read-timeout-ms`, `webhook-sender-deadline-ms`,
@@ -24,7 +24,8 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `daemon.chores`, `daemon.chores-slice-ms`, `daemon.chores-missed-beats`,
 `daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`,
 `workspace.sidebar.rows`, `workspace.sidebar.manage`, `workspace.sidebar.status_indicators`,
-`daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`).
+`daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`, `seat.dialog.answer`,
+`seat-health.watchdog.after`, `seat-health.watchdog.auto-restart`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -100,6 +101,16 @@ a value above the release default is refused, and so is a level's word that leng
 above it. The shorter field spellings (`held_threshold_seconds`, `thread-ttl`, …) are accepted
 and written back under the canonical name. `team bus` reads the held, retention and reconcile
 numbers when it starts, and `team reply` reads the thread life and cap from the caller's chain.
+
+The log itself is kept in segments. `event-segment-mb` is the size of the open segment in whole
+megabytes — 8 by default, 1 to 50 — after which an append seals it and opens the next; it is a
+mechanical number, so the nearest level's word wins and no word tightens another's. What is kept
+in all is bounded two ways: `event-retention-days` drops a sealed segment once it is wholly older
+than the window (`0` and `all` are the explicit keep-everything words, and keep-all is looser
+than every positive count, so no lower level may restore it against a level that dropped it),
+and a fixed retained-size cap of 100 MB drops the oldest sealed segments first, each drop
+declared in the log itself. The log stays writable when the chain cannot be read: the release
+defaults stand in and the append path keeps writing.
 
 `model-rule` is the entity's rule for which models may run on which seats, held as one line of
 `;`-separated entries, `<seat|role|*>=<lab>+<lab>`. A seat name beats a role word, a role beats
@@ -185,6 +196,19 @@ the config (applying it only on the owner's explicit `team check --repair`). The
 child refreshes each seat's `display_agent` at `daemon.sidebar-refresh-ms` with `--ttl-ms`
 `daemon.sidebar-ttl-ms` under a read-back guard, and skips roots whose `daemon.chores` policy is
 `inline` with a note.
+
+Three words govern the seat-health watchdog (its behaviour is under
+[`team daemon`](daemon.md#seat-health)). `seat.dialog.answer` is the closed list of dialogs the
+watchdog may answer itself: comma-separated `trust:<folder>` tokens (trust exactly that folder)
+and `permission:<command>` tokens (allow always for a command named token for token, as the
+command guard parses it — no `*`, no `..`, no backslash). Nothing is answered when it is unset,
+a lower level may only drop tokens, and widening it — at `set` or at load — needs a fresh owner
+proof, at most 30 seconds old, naming exactly the resulting list. A login dialog is never on
+the list and never answered. `seat-health.watchdog.after` is how long the full stall proof must
+hold before the watchdog acts, in whole seconds from 60 to 7200 — 900 by default; a lower level
+may only lengthen the wait. `seat-health.watchdog.auto-restart` is whether a proven stall is
+restarted at all: `1`, the release default, restarts once; `0` only tells the lead. A lower
+level may only turn it down.
 
 Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
 power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,

@@ -9,15 +9,20 @@
 // be started again by name.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
+import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { runAdd, USAGE, type AddSources } from '../src/commands/add.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import type { Launch } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { copySeat, seatIsStopped, takeOut } from '../src/file/lines.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
+import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { readState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
@@ -317,6 +322,41 @@ describe('a declared copy writes one entry and leaves the rest', () => {
     }
     expect(made.creates).toEqual(['apprentice']);
   });
+
+  test('a registry-backed team with no team file on disk copies a bare-dash seat into the registry record', async () => {
+    const previousSource = process.env.TEAM_CONFIG_SOURCE;
+    process.env.TEAM_CONFIG_SOURCE = 'registry';
+    try {
+      const registryText = teamText().replace(
+        '  - role: implementer\n    name: skipper\n    label: skipper\n    nickname: skip\n',
+        '  -\n    role: implementer\n    name: skipper\n    label: "skip · implementer"\n    nickname: skip\n',
+      );
+      const wrote = writeTeamText(teamPath(), registryText, { home, command: 'init', create: true, now: () => NOW });
+      expect(wrote.ok).toBe(true);
+      rmSync(teamPath());
+      expect(existsSync(teamPath())).toBe(false);
+
+      const made = world();
+      const io = testIo(project, owner);
+      expect(await runAdd(['apprentice', '--like', 'skipper'], io, sources(made)), io.out + io.err).toBe(0);
+
+      expect(existsSync(teamPath())).toBe(false);
+      const stored = readTeamText(teamPath(), { home });
+      expect(stored).toContain('  -\n    role: implementer\n    name: apprentice\n    label: "apprentice"\n    cli: claude-code\n');
+      expect(stored.match(/nickname: skip/g)).toHaveLength(1);
+      expect(takeOut(stored, 'apprentice')).toBe(registryText);
+      const loaded = readTeamConfig(project, { home });
+      expect(loaded.ok).toBe(true);
+      if (loaded.ok) {
+        expect(loaded.source).toBe('registry');
+        expect(loaded.team.seats.find((seat) => seat.name === 'apprentice')?.nickname).toBeUndefined();
+      }
+      expect(made.creates).toEqual(['apprentice']);
+    } finally {
+      if (previousSource === undefined) delete process.env.TEAM_CONFIG_SOURCE;
+      else process.env.TEAM_CONFIG_SOURCE = previousSource;
+    }
+  });
 });
 
 describe('a copy onto a name the file already declares is refused before any write', () => {
@@ -527,5 +567,99 @@ describe('a launch that fails after the write', () => {
     // It is a declared seat now, so the restart writes no second entry and no edit at all.
     expect(readFileSync(teamPath(), 'utf8')).toBe(afterFail);
     expect(readState(join(project, '.agents')).sessions.acme?.seats.apprentice?.stage).toBe('ready');
+  });
+});
+
+describe('team add --request validates the whole add before recording a request or asking Touch ID', () => {
+  const PUBLIC_KEY = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+    .publicKey.export({ type: 'spki', format: 'der' })
+    .subarray(-65)
+    .toString('hex');
+
+  function spyStore(): { store: OwnerSeatKeyStore; calls: number } {
+    const tracker = {
+      calls: 0,
+      store: {
+        name: 'spy-keystore',
+        available: () => {
+          tracker.calls += 1;
+          return true;
+        },
+        create: () => ({ ok: true as const, publicKey: PUBLIC_KEY }),
+        publicKey: () => ({ ok: true as const, publicKey: PUBLIC_KEY }),
+        sign: () => {
+          tracker.calls += 1;
+          return { ok: false as const, why: 'prompt cancelled' };
+        },
+        pinSet: () => ({ ok: true as const }),
+        pinGet: () => ({ ok: false as const, why: 'unused' }),
+      },
+    };
+    const registered = registerOwnerSeat(home, { team: 'acme', signer: 'touch' }, tracker.store, NOW);
+    if (!registered.ok) throw new Error(registered.why);
+    tracker.calls = 0;
+    return tracker;
+  }
+
+  function requestFiles(): string[] {
+    const folder = actionRequestsFolder(home);
+    return existsSync(folder) ? readdirSync(folder) : [];
+  }
+
+  test('a missing --like source refuses locally with no owner-action request or Touch ID prompt', async () => {
+    const spy = spyStore();
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'missing', '--request'], io, sources(made, { present: true, ownerSeatStore: spy.store }))).toBe(1);
+    expect(io.err).toBe('team add: the file has no seat "missing"\n');
+    expect(io.out).toBe('');
+    expect(requestFiles()).toEqual([]);
+    expect(spy.calls).toBe(0);
+    expect(made.creates).toEqual([]);
+  });
+
+  test('an already-declared seat name refuses locally with no owner-action request', async () => {
+    const spy = spyStore();
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['builder', '--like', 'spare', '--request'], io, sources(made, { present: true, ownerSeatStore: spy.store }))).toBe(1);
+    expect(io.err).toBe('team add: the file already declares "builder"; --like adds a copy under a new name\n');
+    expect(io.out).toBe('');
+    expect(requestFiles()).toEqual([]);
+    expect(spy.calls).toBe(0);
+  });
+
+  test('a human source seat refuses locally with no owner-action request', async () => {
+    const spy = spyStore();
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'scribe', '--request'], io, sources(made, { present: true, ownerSeatStore: spy.store }))).toBe(1);
+    expect(io.err).toBe("team add: scribe is a human's pane: nothing is typed into it or launched over it; left as it is\n");
+    expect(io.out).toBe('');
+    expect(requestFiles()).toEqual([]);
+    expect(spy.calls).toBe(0);
+  });
+
+  test('an unknown model override refuses locally with no owner-action request', async () => {
+    const spy = spyStore();
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'runner', '--model', 'no-such-model', '--request'], io, sources(made, { present: true, ownerSeatStore: spy.store }))).toBe(2);
+    expect(io.err).toBe('team add: apprentice: unknown model "no-such-model" for claude-code\n');
+    expect(io.out).toBe('');
+    expect(requestFiles()).toEqual([]);
+    expect(spy.calls).toBe(0);
+  });
+
+  test('a valid add --request records the owner-action request only after validation and writes no seat yet', async () => {
+    const spy = spyStore();
+    const before = readFileSync(teamPath(), 'utf8');
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'builder', '--request'], io, sources(made, { present: false, ownerSeatStore: spy.store })), io.out + io.err).toBe(0);
+    expect(io.out).toContain('team add: owner-seat request oa_');
+    expect(requestFiles().filter((name) => name.endsWith('.json'))).toHaveLength(1);
+    expect(readFileSync(teamPath(), 'utf8')).toBe(before);
+    expect(made.creates).toEqual([]);
   });
 });

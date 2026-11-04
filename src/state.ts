@@ -3,6 +3,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, ren
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
+import { handoverPath } from './handover/paths.ts';
 import { folderProblem, heldAt } from './held.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
@@ -278,6 +279,27 @@ export type QueuedSwap = {
 };
 
 /**
+ * One checkpoint ask for a seat (context reset R2): the handover path the old conversation is
+ * asked to write before `deadline`, named by `team checkpoint` and read by `restart`. The record
+ * is the project's, like the hold and the pause; a new ask for the same seat replaces it, and it
+ * is offered only inside the terminal-host session that asked. The record names no file's
+ * content — the seat writes the handover, and only a file already at the path is ever used.
+ */
+export type CheckpointRecord = {
+  /** Who asked for the checkpoint: the caller `team checkpoint` judged. */
+  by: string;
+  /** The handover file the seat is asked to write; the swap queue mints the same shape. */
+  path: string;
+  /** The terminal-host session the ask belongs to; another session's ask is not offered. */
+  session: string;
+  /** ISO 8601 instant the ask was made. */
+  at: string;
+  /** ISO 8601 instant after which the seat's write is late. A restart still uses a file that is
+   *  there; a missing one past the deadline is the stale-checkpoint case the lead is told of. */
+  deadline: string;
+};
+
+/**
  * A hold on the team's work: the reason it was placed, who placed it and when, and the instant
  * it lapses (`until` absent: it stands until released). A hold past its `until` reads as no
  * hold at all (`liveHold`), so an expired record needs no writer to clear it.
@@ -452,6 +474,13 @@ export type State = {
    * by `team swap` and carried out by the watch. A seat keeps no new task while its entry stands.
    */
   swaps?: Record<string, QueuedSwap>;
+  /**
+   * The checkpoint asks, by seat (context reset R2): the project's record, written by
+   * `team checkpoint` and read by `restart`. Like the queue it outlives `down` and `up`; a seat's
+   * new ask replaces its old one, and the record never claims a file — only the seat writes the
+   * handover.
+   */
+  checkpoints?: Record<string, CheckpointRecord>;
   sessions: Record<string, SessionState>;
 };
 
@@ -627,6 +656,23 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
   return true;
 }
 
+/** Whether a value from the state file is the record `team checkpoint` writes: a caller, the
+ *  handover path an ask mints for this seat at its own instant, a terminal-host session, and
+ *  instants that parse. Anything else is dropped at the read door, so a hand-edited file can
+ *  never offer a path it made up. */
+function isCheckpointRecord(value: unknown, dir: string, seat: string): value is CheckpointRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Partial<CheckpointRecord>;
+  if (typeof record.by !== 'string' || record.by === '') return false;
+  if (typeof record.path !== 'string' || record.path === '') return false;
+  if (typeof record.session !== 'string' || record.session === '') return false;
+  if (typeof record.at !== 'string' || Number.isNaN(Date.parse(record.at))) return false;
+  if (typeof record.deadline !== 'string' || Number.isNaN(Date.parse(record.deadline))) return false;
+  // The path is not free text: the ask mints it from the seat and the instant, so a made-up path
+  // — another folder, another seat's name — does not pass the door however well-formed it is.
+  return record.path === handoverPath(dir, seat, new Date(record.at));
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
@@ -682,6 +728,16 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
     }
   } else if (state.swaps !== undefined) {
     delete state.swaps;
+  }
+  // The checkpoint asks pass the same door: a key that is not a name by the lock's rule is
+  // dropped, and so is a record that is not the one `team checkpoint` writes. Only that command
+  // writes a key, so a key that survives is a seat name a reader prints.
+  if (state.checkpoints && typeof state.checkpoints === 'object') {
+    for (const [seat, record] of Object.entries(state.checkpoints)) {
+      if (!validLockName(seat) || !isCheckpointRecord(record, dir, seat)) delete state.checkpoints[seat];
+    }
+  } else if (state.checkpoints !== undefined) {
+    delete state.checkpoints;
   }
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};

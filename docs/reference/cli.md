@@ -554,7 +554,7 @@ Hidden: no
 
 Usage:
 
-    team check [--session <name>] [--file <path>] [--repair] [--json]
+    team check [--session <name>] [--file <path>] [--repair] [--close-orphans] [--json]
     team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
 
 ### Who may run it
@@ -565,6 +565,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--close-orphans` | no | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
@@ -581,6 +582,36 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `ref` | yes | no |
+
+## `checkpoint`
+
+Hidden: no
+
+Usage:
+
+    team checkpoint <seat> [--session <name>] [--file <path>] [--json]
+
+### Who may run it
+
+`owner-or-leads` — recording a standing checkpoint ask for a seat: the owner or `leads`, as `restart`
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--file` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--session` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
 
 ## `client`
 
@@ -2955,7 +2986,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
@@ -2975,6 +3006,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--resume` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `-h` | no | no | yes |

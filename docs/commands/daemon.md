@@ -234,6 +234,22 @@ per recipient; only the daemon writes it, and `status` reads it. A record that c
 stops every reminder firing on that beat — it would otherwise repeat or erase an instant — and
 the failure is named in the log and in `status`.
 
+## Seat health
+
+The chores child also runs a seat-health slice for each hosted root with a route: once a beat it
+reads every declared non-human seat that is not stopped, and acts only on proof. A dialog is
+told to the team's lead at once and never restarted over; a permission, trust or login dialog
+the `seat.dialog.answer` policy names exactly (a login dialog never) is answered where it
+stands. A seat is restarted only when the whole stall proof holds for the
+`seat-health.watchdog.after` window — the seat reconciles as working, its plain screen and its
+last presence instant never change, and no process but its own CLI and pane shell is alive — and
+then once: `team restart <seat> --json`, read from the record, with no handover and no
+checkpoint ask. A live child process is never a stall: the lead is told once instead. The
+watchdog starts at most one restart per slice and returns before it finishes; a restart that
+does not come back ready, a seat with no resume form, and a second stall after an automatic
+restart are each told to the lead once. `seat-health.watchdog.auto-restart` at `0` turns the
+restart off and leaves the telling ([`team policy`](policy.md) carries the three words).
+
 ## Flags
 
 | Flag | Value | Effect |

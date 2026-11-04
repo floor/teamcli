@@ -439,6 +439,19 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           summary: { differences: 0, owner_differences: 0 },
         }),
       ],
+      'team.checkpoint': [
+        jsonEnvelope('team.checkpoint', {
+          format: 1 as const,
+          dry_run: false,
+          status: 'recorded' as const,
+          action_summary: 'team checkpoint: recorded worker -> /tmp/beacon/.agents/handovers/beacon/worker/2026-04-11T10-00-00.000Z.md (by 2026-04-11T10:05:00.000Z)',
+          seat: 'worker',
+          path: '/tmp/beacon/.agents/handovers/beacon/worker/2026-04-11T10-00-00.000Z.md',
+          at: '2026-04-11T10:00:00.000Z',
+          deadline: '2026-04-11T10:05:00.000Z',
+          by: 'lead',
+        }),
+      ],
       'team.client.keygen': [
         jsonEnvelope('team.client.keygen', {
           format: 1 as const,
@@ -845,7 +858,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           project: 'beacon',
           session: 'beacon',
           seat: 'worker',
-          drops: [{ from: 'the owner', received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
+          drops: [{ from: 'the owner', sender_verified: false, received: '2026-10-17T12:00:00.000Z', path: '/work/beacon/.agents/send-drops/beacon/worker/0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d' }],
           counts: { drops: 1 },
         }),
       ],
