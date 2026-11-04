@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { entitiesPath } from '../entities.ts';
 import { parseSpec } from '../send/resolve.ts';
-import { parseYaml, YamlError, type YamlEntry, type YamlNode } from '../yaml.ts';
+import { parseYaml, YamlError, type YamlNode } from '../yaml.ts';
 
 /** A reminder's name: lower-case words and dashes, the shape the state record keys on. */
 export const REMINDER_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -68,40 +68,39 @@ export function isKnownZone(zone: string): boolean {
   }
 }
 
-/** The entity entries of the owner's file, in its order; an absent or unreadable file, and a
- *  document that is not a map, declare none. The read is the same one `src/entities.ts` makes. */
-function entityEntries(home: string): { ok: true; entries: YamlEntry[] } | { ok: false; why: string } {
+/** The owner's entities document, read the same way `src/entities.ts` reads it: an absent or
+ *  empty file is an empty map, an unreadable file or invalid text is refused, and any other
+ *  document is returned as parsed (the caller reads its kind). */
+function entityRoot(home: string): { ok: true; root: YamlNode } | { ok: false; why: string } {
   let text: string;
   try {
     text = readFileSync(entitiesPath(home), 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, entries: [] };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, root: { kind: 'map', line: 1, entries: [] } };
     return { ok: false, why: `${entitiesPath(home)}: ${error instanceof Error ? error.message : String(error)}` };
   }
-  if (text.trim() === '') return { ok: true, entries: [] };
-  let root: YamlNode;
+  if (text.trim() === '') return { ok: true, root: { kind: 'map', line: 1, entries: [] } };
   try {
-    root = parseYaml(text);
+    return { ok: true, root: parseYaml(text) };
   } catch (error) {
     const where = error instanceof YamlError ? `line ${String(error.line)}: ${error.message}` : String(error);
     return { ok: false, why: `${entitiesPath(home)}: ${where}` };
   }
-  if (root.kind !== 'map') return { ok: false, why: `${entitiesPath(home)}: expected a map of entities` };
-  return { ok: true, entries: root.entries };
 }
 
 /**
- * Reads every entity's `reminders:` list. An entry the file refuses is named and skipped; a name
- * a second entity repeats is refused there too, because the state record keys one reminder by
- * name for the whole machine.
+ * Reads every entity's `reminders:` list from an entities document. An entry the file refuses is
+ * named and skipped; a name a second entity repeats is refused there too, because the state
+ * record keys one reminder by name for the whole machine. The parser is shared with the write
+ * half (`team config set <entity>.reminders`), so a list the daemon would refuse is never
+ * written.
  */
-export function readReminderConfig(home: string, options: ReminderConfigOptions): ReminderConfigRead {
-  const read = entityEntries(home);
-  if (!read.ok) return { entries: [], problems: [{ entity: null, name: null, why: read.why }] };
+export function readReminders(root: YamlNode, options: ReminderConfigOptions): ReminderConfigRead {
+  if (root.kind !== 'map') return { entries: [], problems: [{ entity: null, name: null, why: 'expected a map of entities' }] };
   const entries: ReminderConfigEntry[] = [];
   const problems: ReminderConfigProblem[] = [];
   const named = new Map<string, string>();
-  for (const entity of read.entries) {
+  for (const entity of root.entries) {
     const node = entity.value.kind === 'map' ? entity.value.entries.find((candidate) => candidate.key === 'reminders')?.value : undefined;
     if (node === undefined) continue;
     if (node.kind !== 'seq') {
@@ -124,6 +123,14 @@ export function readReminderConfig(home: string, options: ReminderConfigOptions)
     }
   }
   return { entries, problems };
+}
+
+/** Reads every entity's `reminders:` list from the owner's file (`readReminders` for the parser). */
+export function readReminderConfig(home: string, options: ReminderConfigOptions): ReminderConfigRead {
+  const read = entityRoot(home);
+  if (!read.ok) return { entries: [], problems: [{ entity: null, name: null, why: read.why }] };
+  if (read.root.kind !== 'map') return { entries: [], problems: [{ entity: null, name: null, why: `${entitiesPath(home)}: expected a map of entities` }] };
+  return readReminders(read.root, options);
 }
 
 type ParsedEntry = ReminderConfigEntry | { name: string | null; why: string };

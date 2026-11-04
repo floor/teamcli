@@ -217,9 +217,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
-| `config.entity.unchanged` | `config` | 0 | the entity already writes that names.unique word; nothing was written | `team config set <entity>.names.unique off` |
-| `config.entity.value` | `config` | 0 | the entity's names.unique word is printed | `team config get <entity>.names.unique` |
-| `config.entity.written` | `config` | 0 | the entity's names.unique word was written | `team config set <entity>.names.unique off` |
+| `config.entity.unchanged` | `config` | 0 | the entity already writes that value; nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.value` | `config` | 0 | the entity's value is printed | `team config get <entity>.names.unique` |
+| `config.entity.written` | `config` | 0 | the entity's value was written | `team config set <entity>.names.unique off` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
@@ -230,9 +230,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.entity.detached` | `config` | 1 | an entity's word was set with no terminal | `team config set <entity>.names.unique off` |
 | `config.entity.general-refused` | `config` | 1 | the general grant does not cover this entity or admit this set; nothing was written | `team config set <entity>.names.unique off --general <grant.json> --key <client.key>` |
 | `config.entity.names-value` | `config` | 1 | the word is not one of entity, project, team or off; nothing was written | `team config set <entity>.names.unique everywhere` |
-| `config.entity.no-value` | `config` | 1 | the entity's entry writes no names.unique word | `team config get <entity>.names.unique` |
-| `config.entity.not-owner` | `config` | 1 | an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
+| `config.entity.no-value` | `config` | 1 | the entity's entry writes no such value | `team config get <entity>.names.unique` |
+| `config.entity.not-owner` | `config` | 1 | an entity's value was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
 | `config.entity.path` | `config` | 1 | the entity's entry cannot be set (no such entry, or a value on the way); nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.reminders-problem` | `config` | 1 | the reminder list holds a value the daemon's own parser refuses; nothing was written | `team config set <entity>.reminders '[{name: NO, at: ["09:00"], text: hi, to: [lead@acme]}]'` |
+| `config.entity.reminders-value` | `config` | 1 | the value is not a YAML list of reminders; nothing was written | `team config set <entity>.reminders not-a-list` |
 | `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
 | `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |

@@ -3,8 +3,8 @@
 // edit this team's own record — what `.agents/team.yaml` used to hold — wherever the team lives
 // (the registry under the registry source): one schema-validated editor in place of editing a
 // file by hand. Every write is validated by the team-file validator before it is stored, and is
-// the owner's, as editing the file was. A path whose last segment is `names.unique` reads or
-// writes one word of the owner's entity record instead, and reads no team
+// the owner's, as editing the file was. A path whose last segment is `names.unique` or `reminders`
+// reads or writes one key of the owner's entity record instead, and reads no team
 // (src/config/entity-edit.ts).
 
 import { readArgs } from '../args.ts';
@@ -49,18 +49,23 @@ reach makes the command rewrite the record whole, which does not keep its commen
 command says so on stderr (comments_kept: false in --json). edit keeps the comments it
 leaves.
 
-A path whose last segment is names.unique names an entity's own word in the owner's entities
-file (<entity>.names.unique): how far apart seat nicknames stay — entity, project, team or off.
+A path whose last segment is names.unique or reminders names one key of an entity's own record
+in the owner's entities file (<entity>.names.unique, <entity>.reminders). names.unique is how far
+apart seat nicknames stay — entity, project, team or off. reminders is the list the reminder
+chore fires: each item is {name, at, zone, catchUp, text, to}, the same shape the daemon reads.
 A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
 only, so one that lists entities is refused until 0.5.11, and the grant's operations must admit
 config. A charter covers a folder and does not reach it. It edits an entry the file already
-declares, keeps every other line and writes nothing else; get is any caller's.
+declares, keeps every other line and writes nothing else; get is any caller's. A reminders set
+takes its value as one-line YAML, writes the whole list, and is refused unless the daemon's own
+parser would read it; an empty list ([]) clears the entity's reminders, and there is no unset.
 
 Exits 0 when the registry or a value is printed or a change is written (or there was
 nothing to change), 1 when the path holds nothing, the caller is not the owner, the
-names.unique word is not one of the four, the entities file declares no such entity, or the
-change does not validate, 2 when the invocation is invalid, no team is found, the entities
-file cannot be read, or the editor fails.
+names.unique word is not one of the four, the reminders value is not a YAML list or is one the
+daemon would refuse, the entities file declares no such entity, or the change does not validate,
+2 when the invocation is invalid, no team is found, the entities file cannot be read, or the
+editor fails.
 `;
 
 export const config: Command = (argv, io) => runConfig(argv, io);
@@ -85,10 +90,12 @@ export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSource
   const args = readArgs(argv, ['approval', 'general', 'key', 'reason'], ['json', 'request']);
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
-    // A path whose last segment is `names.unique` is an entity's own record, not this team's:
-    // the entry lives in the owner's entities file, and no team is read (src/config/entity-edit.ts).
-    // The team's record has no key of that name, so nothing else can be meant.
-    if (verb !== 'edit' && (args.rest[1] ?? '').endsWith('.names.unique')) {
+    // A path whose last segment is `names.unique` or `reminders` is an entity's own record, not
+    // this team's: the entry lives in the owner's entities file, and no team is read
+    // (src/config/entity-edit.ts). The team's record has no key of either name, so nothing else
+    // can be meant.
+    const entityPath = args.rest[1] ?? '';
+    if (verb !== 'edit' && (entityPath.endsWith('.names.unique') || entityPath.endsWith('.reminders'))) {
       const { runEntityRecordEdit } = await import('../config/entity-edit.ts');
       return runEntityRecordEdit(argv, rawIo, sources);
     }

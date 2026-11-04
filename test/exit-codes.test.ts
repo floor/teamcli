@@ -2773,6 +2773,17 @@ scene('seats.not-yours', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
   });
+  scene('config.entity.reminders-problem', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.reminders', '[{name: Daily, at: ["09:00"], text: hi, to: [lead@acme]}]']),
+      'a name is lower-case words and dashes',
+    );
+  });
+  scene('config.entity.reminders-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.reminders', 'not-a-list']), 'is not a YAML list of reminders');
+  });
   scene('config.entity.unreadable', async (place) => {
     entities(place);
     writeFileSync(join(place.home, '.config', 'team', 'entities.yaml'), 'floor:\n\troots: x\n');
