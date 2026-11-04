@@ -10,8 +10,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Caller } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
-import { orphanReading, type OrphanProcessEntry, type OrphanProcessSources } from '../src/check/orphans.ts';
+import { check } from '../src/commands/check.ts';
+import {
+  closeOrphans,
+  orphanReading,
+  type OrphanCandidate,
+  type OrphanCloseSources,
+  type OrphanProcessEntry,
+  type OrphanProcessSources,
+} from '../src/check/orphans.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { SessionState } from '../src/state.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -69,7 +78,7 @@ function sources(options: Sources = {}): OrphanProcessSources {
   return {
     table: () => (options.table === undefined ? [] : options.table),
     foldersOf: () => (options.folders === undefined ? new Map() : options.folders),
-    // Null by default: the chain was not read, so a pane herdr could not answer for holds.
+    // Null by default: the chain was not read, so a pane the session could not answer for holds.
     ancestorsOf: () => (options.ancestors === undefined ? null : options.ancestors),
     own: () => options.own ?? [],
   };
@@ -223,7 +232,7 @@ describe('the orphan reading names nothing when a pane read could lie', () => {
     expect(notes).toEqual(['the session\'s pane list reads no agents while the state records 2 seats; no orphan processes are named']);
   });
 
-  test('a pane herdr could not read holds its recorded CLI and blocks folder discovery', () => {
+  test('a pane the session could not read holds its recorded CLI and blocks folder discovery', () => {
     const { differences, candidates, notes } = reading({
       seats: { 'dev-one': { stage: 'ready', pane: 'pane-a', launched: { shell: 100, cli: [200] } } },
       live: liveWith({ 'pane-a': null }),
@@ -232,11 +241,11 @@ describe('the orphan reading names nothing when a pane read could lie', () => {
     });
     expect(differences).toEqual([]);
     expect(candidates).toEqual([]);
-    expect(notes).toEqual(['herdr could not say what runs in 1 pane; processes found by their folder are not named']);
+    expect(notes).toEqual(['the session could not say what runs in 1 pane; processes found by their folder are not named']);
   });
 
-  test('a pane herdr could not read still names a CLI whose launch shell no longer contains it', () => {
-    // The launch recorded shell 100 and CLI 200; herdr cannot answer for the pane, and the chain
+  test('a pane the session could not read still names a CLI whose launch shell no longer contains it', () => {
+    // The launch recorded shell 100 and CLI 200; the pane list cannot answer for the pane, and the chain
     // no longer holds 100 — the CLI left its pane, so it is the reading's to name.
     const { differences, candidates } = reading({
       seats: { 'dev-one': { stage: 'ready', pane: 'pane-a', launched: { shell: 100, cli: [200] } } },
@@ -396,6 +405,201 @@ function runCheck(agentsListed: boolean): { code: number; out: string } {
   return { code, out: `${io.out}${io.err}` };
 }
 
+// The close flow, on its own: every read and every signal is handed in, so a scene pins the full
+// sequence — the one question, the re-proof just before each signal, the wait and the force — and
+// no process on this machine is touched.
+const STARTED = new Date('2026-11-04T10:00:00Z').getTime();
+
+function candidate(overrides: Partial<OrphanCandidate> = {}): OrphanCandidate {
+  return {
+    pid: 200,
+    comm: 'codex',
+    startedAtMs: STARTED,
+    cli: 'codex',
+    seat: 'dev-one',
+    recorded: true,
+    closeable: true,
+    shell: 100,
+    ...overrides,
+  };
+}
+
+type CloseAnswers = {
+  /** Which signal stops the process; `never` means neither does. */
+  stopOn?: 'terminate' | 'kill' | 'never';
+  refuse?: boolean;
+  comm?: string | null;
+  start?: number | null;
+  chain?: number[] | null;
+  held?: ReadonlySet<number> | null;
+};
+
+function closing(options: CloseAnswers = {}): {
+  sources: OrphanCloseSources;
+  signals: { pid: number; signal: 'terminate' | 'kill' }[];
+  alive: () => boolean;
+} {
+  const signals: { pid: number; signal: 'terminate' | 'kill' }[] = [];
+  const stopOn = options.stopOn ?? 'terminate';
+  let alive = true;
+  return {
+    signals,
+    alive: () => alive,
+    sources: {
+      alive: () => alive,
+      commOf: () => (options.comm === undefined ? 'codex' : options.comm),
+      startOf: () => (options.start === undefined ? STARTED : options.start),
+      ancestorsOf: () => (options.chain === undefined ? [200, 1] : options.chain),
+      heldElsewhere: () => (options.held === undefined ? new Set<number>() : options.held),
+      signal: (pid, signal) => {
+        signals.push({ pid, signal });
+        if (options.refuse === true) return false;
+        if (signal === stopOn) alive = false;
+        return true;
+      },
+      pause: () => {},
+    },
+  };
+}
+
+function close(
+  candidates: OrphanCandidate[],
+  answers: CloseAnswers = {},
+  confirm: (prompt: string) => boolean = () => true,
+) {
+  const close = closing(answers);
+  const result = closeOrphans({ candidates, session: 'acme', sources: close.sources, confirm });
+  return { ...result, signals: close.signals };
+}
+
+describe('the close re-proves every candidate just before it signals it', () => {
+  test('a recorded CLI outside its pane is closed after one question', () => {
+    let asked = '';
+    const { lines, closed, signals } = close([candidate()], {}, (prompt) => {
+      asked = prompt;
+      return true;
+    });
+    expect(asked).toBe('team check: close 1 orphan process? [y/N] ');
+    expect(lines).toEqual(['closed: pid 200: codex (seat dev-one)']);
+    expect(closed).toBe(1);
+    expect(signals).toEqual([{ pid: 200, signal: 'terminate' }]);
+  });
+
+  test('a process found by its folder names no seat record', () => {
+    const { lines } = close([candidate({ seat: null, recorded: false, shell: null })]);
+    expect(lines).toEqual(['closed: pid 200: codex (no seat record)']);
+  });
+
+  test('a declined question closes nothing', () => {
+    const { lines, closed, signals } = close([candidate()], {}, () => false);
+    expect(lines).toEqual(['left: 1 orphan process: you answered no']);
+    expect(closed).toBe(0);
+    expect(signals).toEqual([]);
+  });
+
+  test('nothing closeable asks nothing', () => {
+    let asked = false;
+    const { lines, closed } = close([candidate({ closeable: false })], {}, () => {
+      asked = true;
+      return true;
+    });
+    expect(lines).toEqual([]);
+    expect(closed).toBe(0);
+    expect(asked).toBe(false);
+  });
+
+  test('one already gone is left, with no signal', () => {
+    const close = closing();
+    const result = closeOrphans({
+      candidates: [candidate()],
+      session: 'acme',
+      sources: { ...close.sources, alive: () => false },
+      confirm: () => true,
+    });
+    expect(result.lines).toEqual(['left: pid 200: it was gone before it could be closed']);
+    expect(close.signals).toEqual([]);
+  });
+
+  test('a pid the system now runs as another program is left', () => {
+    const { lines, signals } = close([candidate()], { comm: 'zsh' });
+    expect(lines).toEqual(['left: pid 200: the pid now runs zsh']);
+    expect(signals).toEqual([]);
+  });
+
+  test('a reused pid whose start moved is not the process the check saw', () => {
+    const { lines, signals } = close([candidate()], { start: STARTED + 60_000 });
+    expect(lines).toEqual(['left: pid 200: it is not the process the check saw']);
+    expect(signals).toEqual([]);
+  });
+
+  test('a CLI back inside its pane is left', () => {
+    const { lines, signals } = close([candidate()], { chain: [200, 100, 1] });
+    expect(lines).toEqual(['left: pid 200: it is still inside its pane']);
+    expect(signals).toEqual([]);
+  });
+
+  test('an unreadable chain leaves the process alone', () => {
+    const { lines, signals } = close([candidate()], { chain: null });
+    expect(lines).toEqual(['left: pid 200: its process chain could not be read']);
+    expect(signals).toEqual([]);
+  });
+
+  test('a recorded CLI is left too when another session holds it', () => {
+    // The seat's CLI was moved into another session's pane: the launch record here cannot see
+    // that pane, and closing its pid would end a live seat.
+    const { lines, signals } = close([candidate()], { held: new Set([200]) });
+    expect(lines).toEqual(["left: pid 200: another session's pane holds it"]);
+    expect(signals).toEqual([]);
+  });
+
+  test("another session's pane holding a folder-found process leaves it", () => {
+    const { lines, signals } = close([candidate({ seat: null, recorded: false, shell: null })], {
+      held: new Set([200]),
+    });
+    expect(lines).toEqual(["left: pid 200: another session's pane holds it"]);
+    expect(signals).toEqual([]);
+  });
+
+  test("unreadable panes leave a folder-found process alone", () => {
+    const { lines, signals } = close([candidate({ seat: null, recorded: false, shell: null })], { held: null });
+    expect(lines).toEqual(['left: pid 200: other panes could not be read']);
+    expect(signals).toEqual([]);
+  });
+
+  test('a process that ignores the first stop is forced', () => {
+    const { lines, closed, signals } = close([candidate()], { stopOn: 'kill' });
+    expect(lines).toEqual(['forced: pid 200: codex (seat dev-one)']);
+    expect(closed).toBe(1);
+    expect(signals).toEqual([
+      { pid: 200, signal: 'terminate' },
+      { pid: 200, signal: 'kill' },
+    ]);
+  });
+
+  test('one that answers neither stop is left', () => {
+    const { lines, closed, signals } = close([candidate()], { stopOn: 'never' });
+    expect(lines).toEqual(['left: pid 200: it did not stop']);
+    expect(closed).toBe(0);
+    expect(signals).toHaveLength(2);
+  });
+
+  test('a stop the system refuses is left', () => {
+    const { lines, signals } = close([candidate()], { refuse: true });
+    expect(lines).toEqual(['left: pid 200: the system refused the stop']);
+    expect(signals).toEqual([{ pid: 200, signal: 'terminate' }]);
+  });
+
+  test('the question counts only the closeable rows', () => {
+    let asked = '';
+    const { lines } = close([candidate(), candidate({ pid: 400, closeable: false })], {}, (prompt) => {
+      asked = prompt;
+      return true;
+    });
+    expect(asked).toBe('team check: close 1 orphan process? [y/N] ');
+    expect(lines).toEqual(['closed: pid 200: codex (seat dev-one)']);
+  });
+});
+
 describe('the check prints the orphan row and the close it offers', () => {
   test('a live CLI with no pane is a difference with the team\'s close', () => {
     const { code, out } = runCheck(true);
@@ -412,5 +616,121 @@ describe('the check prints the orphan row and the close it offers', () => {
     expect(out).toContain(
       "note: the session's pane list reads no agents while the state records 1 seat; no orphan processes are named",
     );
+  });
+});
+
+// `--close-orphans` through the real run: the caller gate, the question, the close, and the fresh
+// reading the output then carries. The process table answers from one mutable truth, so the close
+// is visible to the check exactly as a real stop would be.
+const CLOSE_START = new Date('2026-11-04T10:00:00Z').getTime();
+
+function closeRun(options: {
+  caller: Caller;
+  terminal?: boolean;
+  answer?: string;
+}): { code: number; out: string; alive: () => boolean } {
+  const { root, home } = fixture();
+  // The lead's own record, for a lead seat to stand on: the state places it in pane pane-lead.
+  updateState(join(root, '.agents'), (state) => {
+    const session = state.sessions.acme ?? emptySession();
+    session.seats.lead = { stage: 'ready', pane: 'pane-lead' };
+  });
+  const io = testIo(root, options.caller);
+  if (options.terminal === true) {
+    io.stdinIsTTY = true;
+    io.stdin = () => options.answer ?? 'y\n';
+  }
+  const live: Live = {
+    running: true,
+    agents: [{ name: 'dev-one', agent: 'codex', pane: 'pane-a', workspace: 'w', status: 'idle', cwd: null }],
+    workspaces: [{ id: 'w', label: 'team' }],
+    screens: {},
+    processes: { 'pane-a': { shell: 100, foreground: [100] } },
+  };
+  let alive = true;
+  const code = runTeamCheck({ closeOrphans: true }, io, {
+    live: () => live,
+    branch: () => 'main',
+    standing: (at) => approvalStanding(at, home),
+    now: () => NOW,
+    home,
+    orphans: {
+      table: () => (alive ? [row(200, 'codex', new Date(CLOSE_START))] : []),
+      foldersOf: () => new Map(),
+      ancestorsOf: () => null,
+      own: () => [],
+    },
+    closeOrphans: {
+      alive: () => alive,
+      commOf: () => (alive ? 'codex' : null),
+      startOf: () => (alive ? CLOSE_START : null),
+      ancestorsOf: () => [200, 1],
+      heldElsewhere: () => new Set<number>(),
+      signal: () => {
+        alive = false;
+        return true;
+      },
+      pause: () => {},
+    },
+  });
+  return { code, out: `${io.out}${io.err}`, alive: () => alive };
+}
+
+describe("the lead's or the owner's close runs in the check", () => {
+  test('the lead confirms once and the closed process leaves the rows', () => {
+    const { code, out, alive } = closeRun({
+      caller: { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' },
+      terminal: true,
+    });
+    expect(out).toContain('team check: close 1 orphan process? [y/N] ');
+    expect(out).toContain('closed: pid 200: codex (seat dev-one)');
+    expect(out).not.toContain('difference: pid 200:');
+    expect(alive()).toBe(false);
+    // The closed process is gone; anything else the file and the state disagree on still exits 1.
+    expect(code).toBe(1);
+  });
+
+  test('a plain seat is refused the close before the question', () => {
+    const { code, out, alive } = closeRun({
+      caller: { kind: 'seat', name: 'dev-one', pane: 'pane-a', session: 'acme' },
+      terminal: true,
+    });
+    expect(out).toContain("--close-orphans is the team's lead's or the owner's");
+    expect(out).not.toContain('close 1 orphan process?');
+    expect(alive()).toBe(true);
+    expect(code).toBe(1);
+  });
+
+  test('no terminal refuses the close, and nothing is signalled', () => {
+    const { code, out, alive } = closeRun({ caller: { kind: 'owner' }, terminal: false });
+    expect(out).toContain('it needs a terminal');
+    expect(alive()).toBe(true);
+    expect(code).toBe(2);
+  });
+
+  test('a declined answer leaves the process and says so', () => {
+    const { out, alive } = closeRun({
+      caller: { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' },
+      terminal: true,
+      answer: 'n\n',
+    });
+    expect(out).toContain('left: 1 orphan process: you answered no');
+    expect(alive()).toBe(true);
+  });
+});
+
+describe('the close flag is refused in a shape that cannot run it', () => {
+  test('with --repair: two acts never share one run', async () => {
+    const io = testIo(realpathSync(tmpdir()));
+    const code = await check(['--close-orphans', '--repair'], io);
+    expect(code).toBe(2);
+    expect(`${io.out}${io.err}`).toContain('--close-orphans and --repair are two acts; run one of them');
+  });
+
+  test('with --json: the close asks at a terminal', async () => {
+    const io = testIo(realpathSync(tmpdir()));
+    const code = await check(['--close-orphans', '--json'], io);
+    expect(code).toBe(2);
+    expect(`${io.out}${io.err}`).toContain('--close-orphans asks at a terminal; it cannot run with --json');
   });
 });

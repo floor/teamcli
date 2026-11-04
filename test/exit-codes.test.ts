@@ -1219,6 +1219,45 @@ scene('check.repair-owner', async (place) => {
   recordsLead(place);
   return show(await checked(place, ['--repair'], leadSeat, checkSources(quiet)), "--repair is the owner's");
 });
+scene('check.close-orphans-lead', async (place) => {
+  // A plain seat of the team sees every row the reading names, but the close is the lead's or the
+  // owner's: this caller is recorded and placed, and the flag is still refused.
+  write(place, TWO);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.worker = { stage: 'ready', pane: 'pane-worker' };
+  });
+  const worker: Caller = { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' };
+  return show(
+    await checked(place, ['--close-orphans'], worker, checkSources(quiet)),
+    "--close-orphans is the team's lead's or the owner's",
+  );
+});
+scene('check.close-orphans-unavailable', async (place) => {
+  // A report wired with no process reading cannot re-prove a process, so the close refuses before
+  // it reads anything.
+  write(place, TEAM);
+  return show(await checked(place, ['--close-orphans'], owner, checkSources(quiet)), 'has no process reading here');
+});
+scene('check.close-orphans-terminal', async (place) => {
+  // The close asks its one question at a terminal; with none, the run refuses before it reads or
+  // signals anything.
+  write(place, TEAM);
+  const sources: CheckSources = {
+    ...checkSources(quiet),
+    orphans: { table: () => [], foldersOf: () => new Map(), ancestorsOf: () => null, own: () => [] },
+    closeOrphans: {
+      alive: () => false,
+      commOf: () => null,
+      startOf: () => null,
+      ancestorsOf: () => null,
+      heldElsewhere: () => new Set<number>(),
+      signal: () => false,
+      pause: () => {},
+    },
+  };
+  return show(await checked(place, ['--close-orphans'], owner, sources), 'it needs a terminal');
+});
 scene('check.repaired', async (place) => {
   write(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {

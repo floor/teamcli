@@ -5,11 +5,14 @@
 // CLI does not, the process keeps running with nothing holding it — no prompt, no reader, no stop
 // the team knows about — and it can outlive the seat it was launched for. This reading names every
 // such process it can prove belongs to this team, with its pid, CLI, age and the team record it
-// answers to, and offers the team's own close (a later commit's `team check --close-orphans`).
+// answers to, and offers the team's own close (`team check --close-orphans`). The close lives at
+// the end of this file: it asks once, re-proves every candidate immediately before signalling it,
+// and leaves — never guesses at — anything whose proof no longer holds.
 //
 // It never guesses. A pane list that could not be read, or that reads no agents while the state
 // records seats, names nothing and closes nothing: a failed read must never make a live seat's
-// CLI look orphaned. Where herdr cannot answer for one pane, the launch's recorded shell decides:
+// CLI look orphaned. Where the pane list cannot answer for one pane, the launch's recorded shell
+// decides:
 // a CLI still in its pane is a descendant of that shell, so a chain without it proves the CLI
 // left. A process found by its working folder must sit inside this team's root, and one that
 // started before the daemon's own start is named but not closed unless a state record names it —
@@ -23,6 +26,7 @@ import { PROFILES, processNameMatches } from '../clis.ts';
 import type { Difference, Live } from '../status/compare.ts';
 import type { SessionState } from '../state.ts';
 import { formatRelativeTime, pluralCount } from '../output/text.ts';
+import { plainLine } from '../launch/plain.ts';
 
 /** One row of the process table, as the reading needs it: the pid, the name the system holds for
  *  the process, and the instant it started. */
@@ -38,7 +42,7 @@ export type OrphanProcessSources = {
   foldersOf(pids: readonly number[]): Map<number, string | null> | null;
   /** One process's own pid and its ancestors, or null when the chain could not be read. The
    *  launch's recorded shell is an ancestor of the CLI it started; a chain without it is the
-   *  proof a CLI left its pane even when herdr could not answer for that pane. */
+   *  proof a CLI left its pane even when the pane list could not answer for that pane. */
   ancestorsOf(pid: number): readonly number[] | null;
   /** The pids of this run and its own ancestry: the check never names, and never closes, itself. */
   own(): readonly number[];
@@ -55,6 +59,9 @@ export type OrphanCandidate = {
   seat: string | null;
   recorded: boolean;
   closeable: boolean;
+  /** The pane shell the launch recorded for a seat's CLI; null for a process found by its folder.
+   *  The close flow re-reads the chain: a shell still above the pid means the CLI never left. */
+  shell: number | null;
 };
 
 /** The reading's answer: the rows the check prints, the notes that explain a read that could not
@@ -201,6 +208,7 @@ export function orphanReading(input: OrphanInput): OrphanReading {
       // A state record is the proof: it names this pid as the seat's CLI, so the close may end it
       // whatever its start instant.
       closeable: true,
+      shell: heldLaunch?.shell ?? null,
     };
     candidates.push(candidate);
   }
@@ -208,7 +216,7 @@ export function orphanReading(input: OrphanInput): OrphanReading {
   // Processes no record names: found by the working folder they run in. One folder read answers
   // them all, and only the CLI-shaped rows that no pane and no record accounts for are asked
   // about — when that set is empty, the read does not run. An unread pane blocks this discovery
-  // outright: the process could be sitting in the pane herdr could not answer for.
+  // outright: the process could be sitting in the pane the session could not answer for.
   let folderUnread = false;
   if (unreadPanes.size === 0) {
     const suspects = table.filter(
@@ -236,6 +244,7 @@ export function orphanReading(input: OrphanInput): OrphanReading {
             // The daemon's start is the floor for a close no record backs: a process that was
             // already running before it may belong to something the record does not know.
             closeable: knownDaemon && row.startedAtMs >= daemonAt,
+            shell: null,
           });
         }
       }
@@ -245,7 +254,7 @@ export function orphanReading(input: OrphanInput): OrphanReading {
   const notes: string[] = [];
   if (unreadPanes.size > 0) {
     notes.push(
-      `herdr could not say what runs in ${pluralCount(unreadPanes.size, 'pane')}; processes found by their folder are not named`,
+      `the session could not say what runs in ${pluralCount(unreadPanes.size, 'pane')}; processes found by their folder are not named`,
     );
   }
   if (folderUnread) {
@@ -272,4 +281,142 @@ export function orphanReading(input: OrphanInput): OrphanReading {
   });
 
   return { differences, notes, candidates, unread };
+}
+
+/** What the close flow reads and does on the machine. Handed in like the reading's sources: the
+ *  real run wires the process adapter and signals, a scene its own answers. */
+export type OrphanCloseSources = {
+  alive(pid: number): boolean;
+  /** The name the system holds for the pid now, or null when it is gone. */
+  commOf(pid: number): string | null;
+  /** The pid's start instant, or null when it is gone or the table cannot be read. */
+  startOf(pid: number): number | null;
+  /** One process's own pid and its ancestors, or null when the chain cannot be read. */
+  ancestorsOf(pid: number): readonly number[] | null;
+  /** The pids another running session's panes hold, read once for every closeable candidate; null
+   *  when a pane list or a pane reading did not answer. A seat's CLI moved into another session is
+   *  alive there, and no record of this session's launches proves otherwise. */
+  heldElsewhere(pids: readonly number[], session: string): ReadonlySet<number> | null;
+  /** Sends the stop; false when the system refused it (the process is gone or not ours). */
+  signal(pid: number, signal: 'terminate' | 'kill'): boolean;
+  pause(ms: number): void;
+};
+
+export type OrphanCloseInput = {
+  candidates: readonly OrphanCandidate[];
+  session: string;
+  sources: OrphanCloseSources;
+  /** Asks the one question. False means the person declined; nothing is signalled. */
+  confirm(prompt: string): boolean;
+};
+
+/** What the close flow did: one line per close, force or leave, in the order it tried. */
+export type OrphanCloseResult = { lines: string[]; closed: number };
+
+const CLOSE_WAIT_MS = 2000;
+const KILL_WAIT_MS = 1000;
+const STEP_MS = 100;
+/** How far the start instant may move between the reading and the close and still be the same
+ *  process. The table's own clock seconds are the floor; a pid reused inside the wait is the only
+ *  way past it, and a reused pid's start is later still. */
+const SAME_START_MS = 2000;
+
+/** Waits for the pid to go, up to `ms`, asking every step. */
+function waitGone(pid: number, sources: OrphanCloseSources, ms: number): boolean {
+  for (let waited = 0; waited < ms; waited += STEP_MS) {
+    if (!sources.alive(pid)) return true;
+    sources.pause(STEP_MS);
+  }
+  return !sources.alive(pid);
+}
+
+/**
+ * Closes the orphan candidates that carry the close's proof, after one confirm. Every candidate is
+ * re-proven just before it is signalled — still the same pid, still the same CLI, still the same
+ * start, and still no pane holding it — so a pid reused or a pane reattached since the reading is
+ * left alone. A process that does not answer the first stop is forced, and one that will not stop
+ * is left and named.
+ */
+export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
+  const closeable = input.candidates.filter((one) => one.closeable);
+  if (closeable.length === 0) return { lines: [], closed: 0 };
+  const count = pluralCount(closeable.length, 'orphan process', 'orphan processes');
+  if (!input.confirm(`team check: close ${count}? [y/N] `)) {
+    return { lines: [`left: ${count}: you answered no`], closed: 0 };
+  }
+
+  // One pane pass answers every candidate, before the first signal: a close run must not ask the
+  // machine once per process. A CLI moved into another session's pane is alive there, and the
+  // launch record that names it here says nothing about that pane.
+  const elsewhere = input.sources.heldElsewhere(
+    closeable.map((one) => one.pid),
+    input.session,
+  );
+
+  const lines: string[] = [];
+  let closed = 0;
+  const leave = (candidate: OrphanCandidate, why: string): void => {
+    lines.push(`left: pid ${candidate.pid}: ${why}`);
+  };
+
+  for (const candidate of closeable) {
+    const label = candidate.seat === null ? 'no seat record' : `seat ${candidate.seat}`;
+    if (!input.sources.alive(candidate.pid)) {
+      leave(candidate, 'it was gone before it could be closed');
+      continue;
+    }
+    const comm = input.sources.commOf(candidate.pid);
+    if (comm === null) {
+      leave(candidate, 'it was gone before it could be closed');
+      continue;
+    }
+    if (cliOf(comm) !== candidate.cli) {
+      leave(candidate, `the pid now runs ${plainLine(comm)}`);
+      continue;
+    }
+    const start = input.sources.startOf(candidate.pid);
+    if (start === null || Math.abs(start - candidate.startedAtMs) > SAME_START_MS) {
+      leave(candidate, 'it is not the process the check saw');
+      continue;
+    }
+    // The same proof the reading needed, read again: no other session's pane holds it, and a
+    // recorded CLI's launch shell is no longer above it. A read that does not answer leaves the
+    // process alone.
+    if (elsewhere === null) {
+      leave(candidate, 'other panes could not be read');
+      continue;
+    }
+    if (elsewhere.has(candidate.pid)) {
+      leave(candidate, "another session's pane holds it");
+      continue;
+    }
+    if (candidate.shell !== null) {
+      const chain = input.sources.ancestorsOf(candidate.pid);
+      if (chain === null) {
+        leave(candidate, 'its process chain could not be read');
+        continue;
+      }
+      if (chain.includes(candidate.shell)) {
+        leave(candidate, 'it is still inside its pane');
+        continue;
+      }
+    }
+    if (!input.sources.signal(candidate.pid, 'terminate')) {
+      leave(candidate, 'the system refused the stop');
+      continue;
+    }
+    if (waitGone(candidate.pid, input.sources, CLOSE_WAIT_MS)) {
+      lines.push(`closed: pid ${candidate.pid}: ${candidate.cli} (${label})`);
+      closed += 1;
+      continue;
+    }
+    input.sources.signal(candidate.pid, 'kill');
+    if (waitGone(candidate.pid, input.sources, KILL_WAIT_MS)) {
+      lines.push(`forced: pid ${candidate.pid}: ${candidate.cli} (${label})`);
+      closed += 1;
+      continue;
+    }
+    leave(candidate, 'it did not stop');
+  }
+  return { lines, closed };
 }
