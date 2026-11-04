@@ -2,6 +2,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
+import { sidebarRowsWord } from '../policy/types.ts';
+import type { SidebarIndicator } from '../settings/sidebar-policy.ts';
 import { profileFor } from '../profiles/index.ts';
 import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
@@ -29,6 +31,15 @@ export const WATCH_STOP_SECONDS = 10;
 export type Op =
   | { do: 'server'; session: string }
   | { do: 'wait-session'; session: string; seconds: number }
+  /** Writes the terminal host's sidebar layout before any seat starts: backup, one-pass splice
+   *  of both keys, validate through the host's own `config check`, roll back on refusal. A
+   *  refusal aborts the plan — nothing was started yet — with the reason the splice or the check
+   *  gave. Reloads are their own steps (`sidebar-reload`), so one session's refusal is one line. */
+  | { do: 'sidebar'; rows: readonly (readonly string[])[]; indicators: SidebarIndicator }
+  /** Reloads one already-running session's server onto the layout the `sidebar` write left, and
+   *  records it. A refusal names the session and fails nothing else: the file holds the layout,
+   *  and check names any session without a record. */
+  | { do: 'sidebar-reload'; session: string; rows: readonly (readonly string[])[]; indicators: SidebarIndicator }
   | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true; watcher?: CliWatcher }
   /** The watchdog's workspace: no seat, so no seat repair either. */
   | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined; bus?: true }
@@ -657,6 +668,20 @@ export interface UpInput {
    *  record lives in the registry is not looked up again through a file path it has no file at
    *  (which reads as unresolved, and a managed Codex endpoint would then never be planned). */
   team?: TeamFile;
+  /** The terminal host's sidebar step (`src/launch/sidebar-step.ts`), planned first — before the
+   *  server and every seat — wherever `workspace.sidebar.manage` resolves on. Absent: no step,
+   *  including every plan where managing resolved off. `skip` prints as one skipped line and
+   *  writes nothing; otherwise the write runs once and each of `sessions` reloads in its own
+   *  step. */
+  sidebar?: {
+    rows: readonly (readonly string[])[];
+    indicators: SidebarIndicator;
+    /** The running sessions of the entity's teams the layout reloads into, minus the session
+     *  this run starts, which reads the config when it starts. */
+    sessions: readonly string[];
+    /** The whole step is already in force: the sentence says so, and nothing runs. */
+    skip?: string;
+  };
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -903,6 +928,31 @@ export function upPlan(input: UpInput): Step[] {
       },
     });
   };
+
+  // The sidebar layout goes in before anything starts: the session this run creates reads the
+  // config as it comes up, and the sessions already running are reloaded onto it. A refusal of
+  // the write stops the plan here, with no seat left half-started behind it.
+  if (input.sidebar !== undefined) {
+    const { rows, indicators, sessions, skip } = input.sidebar;
+    if (skip !== undefined) {
+      steps.push({ kind: 'skip', text: `sidebar: ${skip}` });
+    } else {
+      steps.push({
+        kind: 'run',
+        argv: ['herdr', 'config', 'check'],
+        note: `after writing the marked sidebar block — rows ${sidebarRowsWord(rows)}; indicators ${indicators}`,
+        do: { do: 'sidebar', rows, indicators },
+      });
+      for (const one of sessions) {
+        steps.push({
+          kind: 'run',
+          argv: ['herdr', '--session', one, 'server', 'reload-config'],
+          note: `the sidebar layout onto the running session; recorded when it applies`,
+          do: { do: 'sidebar-reload', session: one, rows, indicators },
+        });
+      }
+    }
+  }
 
   if (!input.sessionRunning) {
     steps.push({

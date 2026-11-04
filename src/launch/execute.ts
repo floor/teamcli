@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+import type { ConfigReload, HerdrAgent, PaneProcesses, SidebarApply } from '../herdr.ts';
 
 function saveTextFile(path: string, text: string): boolean {
   try {
@@ -119,6 +119,18 @@ export type Host = {
   registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  /** Writes the terminal host's sidebar layout (`sidebar` op): backup, one-pass splice of both
+   *  keys, validate through the host, roll back from the bytes held in memory. The sessions to
+   *  reload are their own steps, so the apply takes none here. Absent on a host that writes no
+   *  config: the step then does nothing, and nothing is reloaded either. */
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  /** Reloads one running session's server onto the config the `sidebar` write left
+   *  (`sidebar-reload` op). Absent on a host that reloads nothing. */
+  reloadSidebar?(session: string): ConfigReload;
+  /** Records one applied reload, beside the entity-level sources in the TeamCLI config
+   *  directory. The executor calls it only after an applied reload; a host that records nothing
+   *  leaves the witness missing, and a later comparison names it. */
+  recordSidebarReload?(session: string, rows: readonly (readonly string[])[], indicators: string): void;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   /** The live exit typing; see `ExitTyping`. May wait: the pane draws typed text late, and the
@@ -1188,6 +1200,38 @@ export async function executePlan(
     };
 
     switch (op.do) {
+      case 'sidebar': {
+        if (!host.applySidebar) break;
+        const applied = host.applySidebar(op.rows, op.indicators);
+        if (applied.kind === 'refused') {
+          held = true;
+          abort = true;
+          const tail = applied.restored ? '' : ' (and the prior config could not be restored)';
+          const what = `the terminal host's sidebar layout was refused: ${applied.reason}${tail}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+        }
+        break;
+      }
+      case 'sidebar-reload': {
+        if (!host.reloadSidebar) break;
+        const reloaded = host.reloadSidebar(op.session);
+        if (!reloaded.applied) {
+          const what = `session ${op.session}: its sidebar config did not reload: ${reloaded.text}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+          break;
+        }
+        try {
+          host.recordSidebarReload?.(op.session, op.rows, op.indicators);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const what = `session ${op.session}: its sidebar reload was not recorded: ${reason}`;
+          host.say(`sidebar: ${what}\n`);
+          host.log('sidebar', what);
+        }
+        break;
+      }
       case 'server': {
         if (!host.startServer(op.session)) {
           serverFailed = true;
@@ -2891,9 +2935,19 @@ export async function executePlan(
   } else {
     let start = 0;
     while (start < steps.length) {
-      const kind = steps[start]?.do?.do;
-      if (kind === 'server' || kind === 'wait-session') start++;
-      else break;
+      const step = steps[start];
+      const kind = step?.do?.do;
+      if (
+        kind === 'sidebar' ||
+        kind === 'sidebar-reload' ||
+        kind === 'server' ||
+        kind === 'wait-session' ||
+        (step?.kind === 'skip' && step.do === undefined && step.text.startsWith('sidebar:'))
+      ) {
+        start++;
+      } else {
+        break;
+      }
     }
     let end = steps.length;
     while (end > start) {
