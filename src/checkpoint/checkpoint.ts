@@ -33,7 +33,8 @@ export function askCheckpoint(dir: string, seat: string, session: string, by: st
 
 /**
  * The seat's standing checkpoint ask inside `session`, or null when none does: no record, or one
- * left by another herdr session, whose path this session's restart was never asked to wait for.
+ * left by another terminal-host session, whose path this session's restart was never asked to
+ * wait for.
  * The deadline does not gate the read — a file written late is still the seat's own handover,
  * and a missing one past the deadline is the stale case the restart reports, not a record this
  * reader hides.

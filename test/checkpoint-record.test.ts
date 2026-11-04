@@ -56,7 +56,7 @@ test('a second ask replaces the seat\'s record: one ask stands, the later path',
   expect(again.at).toBe(LATER.toISOString());
 });
 
-test('the standing ask is offered only inside the herdr session that asked', () => {
+test('the standing ask is offered only inside the terminal-host session that asked', () => {
   const dir = project();
   expect(latestCheckpoint(readState(dir), 'architect', 'vega')).toBeNull();
   const record = askCheckpoint(dir, 'architect', 'vega', 'the owner', NOW);
@@ -76,22 +76,51 @@ test('a deadline past does not hide the record: a late file is still the seat\'s
 test('the read door keeps the record the command writes and drops what a hand-edit made', () => {
   const dir = project();
   const record = askCheckpoint(dir, 'architect', 'vega', 'the owner', NOW);
+  const writer = askCheckpoint(dir, 'writer', 'vega', 'the owner', NOW);
   const state = JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')) as Record<string, unknown>;
   writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
     ...state,
     checkpoints: {
       architect: record,
-      writer: record,
+      writer,
       'not a seat': record,
       forged: { by: 'the owner', path: '/etc/passwd', session: 'vega', at: NOW.toISOString(), deadline: 'not a date' },
       empty: null,
     },
   }, null, 2)}\n`);
   const cleaned = readState(dir).checkpoints;
-  // The door drops a key that is not a seat name and a record that is not the command's; a valid
-  // record under another seat's own name is indistinguishable from one written there, and stays —
-  // only the command writes keys, so this is the same truth the swap queue's door tells.
+  // The door drops a key that is not a seat name and a record that is not the command's; each
+  // seat's own record stays under its own name — only the command writes keys, so this is the
+  // same truth the swap queue's door tells.
   expect(Object.keys(cleaned ?? {}).sort()).toEqual(['architect', 'writer']);
   expect(cleaned?.architect).toEqual(record);
-  expect(cleaned?.writer).toEqual(record);
+  expect(cleaned?.writer).toEqual(writer);
+});
+
+test('the read door drops a path the ask never minted for this seat, however well-formed the record', () => {
+  const dir = project();
+  const record = askCheckpoint(dir, 'architect', 'vega', 'the owner', NOW);
+  const writer = askCheckpoint(dir, 'writer', 'vega', 'the owner', NOW);
+  const made = (path: string) => ({
+    by: 'the owner',
+    path,
+    session: 'vega',
+    at: NOW.toISOString(),
+    deadline: NOW.toISOString(),
+  });
+  const state = JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')) as Record<string, unknown>;
+  writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
+    ...state,
+    checkpoints: {
+      architect: record,
+      // A made-up path whose other fields are all well formed, deadline included: the state file
+      // is unsigned, so the door cannot take the path on trust.
+      foreign: made('/etc/passwd'),
+      // Another seat's own minted path under this seat's name: minted, but not for this seat.
+      swapped: made(writer.path),
+    },
+  }, null, 2)}\n`);
+  const cleaned = readState(dir).checkpoints;
+  expect(Object.keys(cleaned ?? {})).toEqual(['architect']);
+  expect(cleaned?.architect).toEqual(record);
 });

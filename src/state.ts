@@ -3,6 +3,7 @@ import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, ren
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
+import { handoverPath } from './handover/paths.ts';
 import { folderProblem, heldAt } from './held.ts';
 import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
@@ -281,15 +282,15 @@ export type QueuedSwap = {
  * One checkpoint ask for a seat (context reset R2): the handover path the old conversation is
  * asked to write before `deadline`, named by `team checkpoint` and read by `restart`. The record
  * is the project's, like the hold and the pause; a new ask for the same seat replaces it, and it
- * is offered only inside the herdr session that asked. The record names no file's content — the
- * seat writes the handover, and only a file already at the path is ever used.
+ * is offered only inside the terminal-host session that asked. The record names no file's
+ * content — the seat writes the handover, and only a file already at the path is ever used.
  */
 export type CheckpointRecord = {
   /** Who asked for the checkpoint: the caller `team checkpoint` judged. */
   by: string;
   /** The handover file the seat is asked to write; the swap queue mints the same shape. */
   path: string;
-  /** The herdr session the ask belongs to; another session's ask is not offered. */
+  /** The terminal-host session the ask belongs to; another session's ask is not offered. */
   session: string;
   /** ISO 8601 instant the ask was made. */
   at: string;
@@ -655,10 +656,11 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
   return true;
 }
 
-/** Whether a value from the state file is the record `team checkpoint` writes: a caller, a
- *  handover path, a herdr session, and instants that parse. Anything else is dropped at the read
- *  door, so a hand-edited file can never offer a path it made up. */
-function isCheckpointRecord(value: unknown): value is CheckpointRecord {
+/** Whether a value from the state file is the record `team checkpoint` writes: a caller, the
+ *  handover path an ask mints for this seat at its own instant, a terminal-host session, and
+ *  instants that parse. Anything else is dropped at the read door, so a hand-edited file can
+ *  never offer a path it made up. */
+function isCheckpointRecord(value: unknown, dir: string, seat: string): value is CheckpointRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Partial<CheckpointRecord>;
   if (typeof record.by !== 'string' || record.by === '') return false;
@@ -666,7 +668,9 @@ function isCheckpointRecord(value: unknown): value is CheckpointRecord {
   if (typeof record.session !== 'string' || record.session === '') return false;
   if (typeof record.at !== 'string' || Number.isNaN(Date.parse(record.at))) return false;
   if (typeof record.deadline !== 'string' || Number.isNaN(Date.parse(record.deadline))) return false;
-  return true;
+  // The path is not free text: the ask mints it from the seat and the instant, so a made-up path
+  // — another folder, another seat's name — does not pass the door however well-formed it is.
+  return record.path === handoverPath(dir, seat, new Date(record.at));
 }
 
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
@@ -730,7 +734,7 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   // writes a key, so a key that survives is a seat name a reader prints.
   if (state.checkpoints && typeof state.checkpoints === 'object') {
     for (const [seat, record] of Object.entries(state.checkpoints)) {
-      if (!validLockName(seat) || !isCheckpointRecord(record)) delete state.checkpoints[seat];
+      if (!validLockName(seat) || !isCheckpointRecord(record, dir, seat)) delete state.checkpoints[seat];
     }
   } else if (state.checkpoints !== undefined) {
     delete state.checkpoints;
