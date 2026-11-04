@@ -392,6 +392,7 @@ describe('declared-seat roster', () => {
       expect(launch?.startsWith('helper|')).toBe(true);
       const agentId = findAgent(home, { team: teamIdOf(root), seat: 'helper' })?.id;
       expect(agentId).toBeDefined();
+      if (agentId === undefined) throw new Error('the declared seat has no agent id');
       expect(getTeam(home, teamIdOf(root))?.roster).toEqual([{ agent: agentId, seat: 'helper', role: 'worker' }]);
 
       const again = cursorWorld(home, root);
@@ -505,6 +506,7 @@ seats:
         home,
         sessionState: () => 'absent',
         agents: () => [],
+        workspaces: () => [],
         now: () => NOW,
         doctor: {
           version: () => '2.1.288',
