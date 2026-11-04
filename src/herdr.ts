@@ -255,25 +255,46 @@ export async function workspaceListAsync(session: string | undefined, options: H
   }
 }
 
-// The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
-// Every entry must be an object with a string pane_id and a workspace_id equal to the workspace asked for;
-// anything else makes the whole reading unreadable (null).
-export function workspacePanes(workspace: string, session?: string): string[] | null {
+export type WorkspacePaneDisplay = {
+  pane: string;
+  workspace: string;
+  /** Sidebar line 2 as herdr holds it on the pane row; absent when never reported or expired. */
+  displayAgent?: string;
+};
+
+// The panes in a workspace and the display_agent herdr holds for each, or null when herdr can't
+// be reached or the workspace does not exist. Every entry must be an object with a string pane_id
+// and a workspace_id equal to the workspace asked for; anything else makes the whole reading
+// unreadable (null). Probed 2026-11-04 against herdr 0.9.5: `pane list --workspace <id>` carries
+// `display_agent` while the TTL holds and omits the field once it lapses.
+export function workspacePaneDisplays(workspace: string, session?: string): WorkspacePaneDisplay[] | null {
   try {
     const result = run(['pane', 'list', '--workspace', workspace], session) as { panes?: unknown } | undefined;
     if (!result || typeof result !== 'object' || !Array.isArray(result.panes)) return null;
-    const panes: string[] = [];
+    const panes: WorkspacePaneDisplay[] = [];
     for (const entry of result.panes) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
       const p = entry as Record<string, unknown>;
       if (typeof p.pane_id !== 'string' || !p.pane_id) return null;
       if (typeof p.workspace_id !== 'string' || p.workspace_id !== workspace) return null;
-      panes.push(p.pane_id);
+      const displayAgent = typeof p.display_agent === 'string' && p.display_agent !== '' ? p.display_agent : undefined;
+      panes.push({
+        pane: p.pane_id,
+        workspace: p.workspace_id,
+        ...(displayAgent !== undefined ? { displayAgent } : {}),
+      });
     }
     return panes;
   } catch {
     return null;
   }
+}
+
+// The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
+// Every entry must be an object with a string pane_id and a workspace_id equal to the workspace asked for;
+// anything else makes the whole reading unreadable (null).
+export function workspacePanes(workspace: string, session?: string): string[] | null {
+  return workspacePaneDisplays(workspace, session)?.map((entry) => entry.pane) ?? null;
 }
 
 export type SessionState = 'running' | 'stopped' | 'absent';
@@ -969,12 +990,13 @@ function isAbsent(error: unknown): boolean {
  *  given: the file already reads equal, but a session that never reloaded since an older file
  *  holds the older layout in memory. `failed` names the sessions whose reload refused — the
  *  edit stands (a restore cannot un-reload the sessions that applied); check names them and
- *  `--repair` retries. A `refused` edit either wrote nothing or restored the prior bytes
- *  (`restored`). */
+ *  `--repair` retries. A `refused` edit either wrote nothing (`restored: 'untouched'`), restored
+ *  the prior bytes (`restored: true`), or replaced the file and could not restore the prior bytes
+ *  (`restored: false`). */
 export type SidebarApply =
   | { kind: 'unchanged'; reloaded: string[]; failed: { session: string; text: string }[] }
   | { kind: 'applied'; reloaded: string[]; failed: { session: string; text: string }[] }
-  | { kind: 'refused'; reason: string; restored: boolean };
+  | { kind: 'refused'; reason: string; restored: boolean | 'untouched' };
 
 /** The host calls the apply makes, injectable for tests. */
 export type SidebarApplyDeps = {
@@ -1019,11 +1041,11 @@ export function applySidebarLayout(
       priorText = null;
     }
   } catch (error) {
-    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: false };
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
   const spliced = spliceSidebarRows(priorText ?? '', rows, indicators);
-  if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: false };
+  if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: 'untouched' };
   if (!spliced.changed) {
     const { reloaded, failed } = reloads();
     return { kind: 'unchanged', reloaded, failed };
@@ -1035,7 +1057,7 @@ export function applySidebarLayout(
   } catch (error) {
     // The replace is atomic: a throw here is before the rename, so the config still holds the
     // prior bytes (or is still absent) and nothing needs restoring.
-    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: true };
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
   const check = deps.checkConfig();

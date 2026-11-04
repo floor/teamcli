@@ -123,14 +123,15 @@ function written(w: World): { state: boolean; agents: number; log: boolean } {
 }
 
 /** Records each applied write as one line and accepts it. */
-function refresh(applied: string[]): Partial<RegisterSources> {
+function refresh(applied: string[], ttls?: (number | undefined)[]): Partial<RegisterSources> {
   return {
     renameWorkspace: (session, workspace, label) => {
       applied.push(`rename ${session} ${workspace} ${label}`);
       return true;
     },
-    reportDisplayAgent: (session, pane, text) => {
+    reportDisplayAgent: (session, pane, text, ttlMs) => {
       applied.push(`display ${session} ${pane} ${text}`);
+      ttls?.push(ttlMs);
       return true;
     },
   };
@@ -140,7 +141,8 @@ describe("register's label refresh", () => {
   test('sets the file\'s workspace label and display agent, and nothing else reaches herdr', async () => {
     const w = world();
     const applied: string[] = [];
-    const r = await register(w, ['lead'], refresh(applied));
+    const ttls: (number | undefined)[] = [];
+    const r = await register(w, ['lead'], refresh(applied, ttls));
 
     expect(r.code).toBe(0);
     expect(r.out).toContain('lead: registered — pane w1:p1');
@@ -148,6 +150,7 @@ describe("register's label refresh", () => {
     // version, a space, then `default` for the effort the file does not set.
     expect(applied).toContain(`rename acme ${WORKSPACE} lead`);
     expect(applied).toContain(`display acme ${PANE} Claude Opus 5.5 default`);
+    expect(ttls).toEqual([86_400_000]);
     // The two writes are the whole of it: an adoption changes nothing else in herdr.
     expect(applied).toHaveLength(2);
   });
@@ -208,7 +211,8 @@ describe("register's label refresh", () => {
     expect(first.code).toBe(0);
 
     const applied: string[] = [];
-    const again = await register(w, ['lead'], refresh(applied));
+    const ttls: (number | undefined)[] = [];
+    const again = await register(w, ['lead'], refresh(applied, ttls));
 
     expect(again.code).toBe(0);
     expect(again.out).toContain('lead: already registered — pane w1:p1');
@@ -216,6 +220,7 @@ describe("register's label refresh", () => {
     // drifted is put back from the file where the seat stands.
     expect(applied).toContain(`rename acme ${WORKSPACE} lead`);
     expect(applied).toContain(`display acme ${PANE} Claude Opus 5.5 default`);
+    expect(ttls).toEqual([86_400_000]);
     expect(applied).toHaveLength(2);
   });
 

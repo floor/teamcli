@@ -18,6 +18,7 @@ export {
   POLICY_LEVELS,
   POLICY_NAME_ALIASES,
   sidebarRowsOf,
+  sidebarRowsWord,
   WATCH_RHYTHM_FACTOR,
   WATCH_RHYTHM_SWEEP,
   WATCH_RHYTHMS,

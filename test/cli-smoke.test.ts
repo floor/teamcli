@@ -54,6 +54,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   batch: 'records several owner-seat actions as one request, or runs a batch the owner seat already signed',
   answer: 'types an answer into a live herdr pane dialog',
   archive: 'stops the team as down does and moves its state into an archive folder, with no registered output schema',
+  checkpoint: 'records a standing checkpoint ask in .agents/team.state.json for a named seat',
   order: 'closes and re-creates workspaces through team restart against the live pane host, with no registered output schema',
   client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
   'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',

@@ -53,7 +53,8 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import { inboxRegistration } from '../mcp/register.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
-import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentList, foregroundArgv0, PANE_WINDOW, paneProcessesOf, paneProcessInfo, paneRead, reportDisplayAgent, sessionRunning, SIDEBAR_TTL_CAP_MS, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
@@ -142,7 +143,7 @@ export type CheckSources = {
   /** The two sidebar writes `team register` makes: the workspace label and the display line.
    *  `--repair` re-applies the file's lines through them; the real ones when absent. */
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
-  reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  reportDisplayAgent?: (session: string, pane: string, text: string, ttlMs?: number) => boolean;
   /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
    *  a test stands in for it. */
   idleWork?(input: IdleWorkInput): IdleWorkReport;
@@ -393,7 +394,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     const after = whole.sessions[session] ?? emptySession();
     const drifts = labelDrifts(team, after, live);
     if (drifts.length > 0) {
-      named(syncLabels(drifts, session, sources, io));
+      const sidebarTtlMs =
+        sources.home === undefined
+          ? SIDEBAR_TTL_CAP_MS
+          : sidebarPolicy({ home: sources.home, root, team, now: sources.now() }).ttlMs;
+      named(syncLabels(drifts, session, sources, io, sidebarTtlMs));
       live = sources.live(session, team, after) ?? live;
     }
   }
@@ -1693,10 +1698,18 @@ function labelDifferences(team: TeamFile, state: SessionState, live: Live): Diff
  * makes. A herdr that will not take one says so as `team register` does, and its difference stands;
  * a line the repair wrote is named in the run's `repaired:` lines and logged with them.
  */
-function syncLabels(drifts: LabelDrift[], session: string, sources: CheckSources, io: Io): string[] {
+function syncLabels(
+  drifts: LabelDrift[],
+  session: string,
+  sources: CheckSources,
+  io: Io,
+  ttlMs = SIDEBAR_TTL_CAP_MS,
+): string[] {
   const lines: string[] = [];
   const rename = sources.renameWorkspace ?? ((s: string, workspace: string, label: string) => workspaceRename(workspace, label, s));
-  const report = sources.reportDisplayAgent ?? ((s: string, pane: string, text: string) => reportDisplayAgent(pane, text, s));
+  const report =
+    sources.reportDisplayAgent ??
+    ((s: string, pane: string, text: string, ttl = SIDEBAR_TTL_CAP_MS) => reportDisplayAgent(pane, text, s, ttl));
   for (const drift of drifts) {
     const name = drift.seat.name;
     if (drift.workspace !== undefined) {
@@ -1709,7 +1722,7 @@ function syncLabels(drifts: LabelDrift[], session: string, sources: CheckSources
     }
     if (drift.display !== undefined) {
       const text = displayAgent(drift.seat);
-      if (report(session, drift.pane, text)) {
+      if (report(session, drift.pane, text, ttlMs)) {
         lines.push(`${name}: its herdr display is set back to "${text}"`);
       } else {
         io.stdout(`${plainLine(name)}: its display was not reported\n`);

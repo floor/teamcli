@@ -1184,7 +1184,11 @@ function backoffCapProblem(name: string, raw: unknown): string | null {
 /** The rows layout as one canonical word: rows separated by `;`, a row's tokens by `,` —
  *  `state_icon,machine,workspace,tab;state_text,agent`. At load the YAML natural form (a list
  *  of token lists) and a list of row strings read the same way. */
-const SIDEBAR_ROWS_DEFAULT_VALUE = DEFAULT_SIDEBAR_ROWS.map((row) => [...row].join(',')).join(';');
+export function sidebarRowsWord(rows: readonly (readonly string[])[]): string {
+  return rows.map((row) => [...row].join(',')).join(';');
+}
+
+const SIDEBAR_ROWS_DEFAULT_VALUE = sidebarRowsWord(DEFAULT_SIDEBAR_ROWS);
 
 function parseSidebarRowsValue(raw: unknown): string | null {
   const rowsRaw: unknown[] = [];

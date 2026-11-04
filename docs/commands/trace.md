@@ -3,8 +3,9 @@
 Prints one message's story from the receiving team's signed event log: the steps a send, the
 bus, a seat and a watch filed for one message id, in the order they were written.
 
-Every step of a message's life is an event of its own in the receiving team's event log
-(the `events*.jsonl` segments under `~/.config/team/<project>-<hash>/`), signed and filed under the message id plus a
+Every step of a message's life is an event of its own in the receiving team's state folder's
+event log — the live segment and the sealed segments the retention keeps, under
+`~/.config/team/<project>-<hash>/` — signed and filed under the message id plus a
 step tail: `message.staged` as `<id>:staged`, each leg the walk tried as
 `<id>:leg.tried:<route>`, the sender's webhook post as `<id>:webhook.posted`, the bus's arrival as
 the bare `<id>`, the seat's receipts as `<id>:delivered`, `<id>:read` and `<id>:replied`, and the

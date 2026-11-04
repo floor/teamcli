@@ -32,15 +32,20 @@ import {
   agentList,
   agentStatus,
   agentRename,
+  applySidebarLayout,
   focusAgent,
+  hostConfigCheck,
   paneForeground,
   paneProcesses,
   paneRead,
   paneRun,
+  reloadConfig,
   reportDisplayAgent,
+  SIDEBAR_TTL_CAP_MS,
   workspaceRename,
   paneShellBack,
   sessionDelete,
+  sessionList,
   sessionStop,
   typeText,
   pressEnter,
@@ -52,11 +57,17 @@ import {
   workspaceCreate,
   workspaceList,
   workspacePanes,
+  type ConfigReload,
   type HerdrAgent,
   type HerdrWorkspace,
   type PaneProcesses,
   type SessionState,
+  type SidebarApply,
 } from '../herdr.ts';
+import { sidebarConfigText, sidebarStepOf } from '../launch/sidebar-step.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
+import { sidebarRowsWord } from '../policy/types.ts';
+import { recordSidebarReloads } from '../registry/sidebar-reloads.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -180,11 +191,29 @@ export type UpSources = {
     isSocket(path: string): boolean;
     runtimeRoot?: string;
   };
+  /** Every session the terminal host lists, with its running state, for the sidebar layout step.
+   *  Absent: no sidebar step is planned unless `launch` carries a sidebar seam, so a world that
+   *  does not probe the host's sessions plans none. */
+  hostSessions?(): readonly { name: string; running: boolean }[] | null;
+  /** The terminal host's config text for the sidebar step (`''` when absent, `null` when
+   *  unreadable). Absent: reads `hostConfigPath(home)` on disk. */
+  sidebarConfigText?(home: string): string | null;
 };
 
 export type Launch = {
   /** Whether a resume line's conversation is on disk; absent in fixtures, so nothing is read. */
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
+  /** Writes the sidebar layout (`rows` and `indicators`) to the terminal host's config, validates
+   *  it through the host, and rolls back on failure. Absent: runs `applySidebarLayout` on
+   *  `sources.home` with `checkSidebarConfig`. */
+  applySidebar?(rows: readonly (readonly string[])[], indicators: string): SidebarApply;
+  /** The host's `config check` answer for the default `applySidebar` path. */
+  checkSidebarConfig?(): { ok: boolean; text: string };
+  /** Reloads one running session's server onto the sidebar config (`server reload-config`). */
+  reloadSidebar?(session: string): ConfigReload;
+  /** Records one applied session reload in the machine-scoped reload store. Absent: writes to
+   *  `sidebar-reloads.yaml` under `sources.home`. */
+  recordSidebarReload?(session: string, rows: readonly (readonly string[])[], indicators: string): void;
   sessionState(session: string): SessionState | null;
   startServer(session: string): boolean;
   sessionUp(session: string): boolean | null;
@@ -204,7 +233,7 @@ export type Launch = {
     stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   renameAgent(session: string, pane: string, name: string): boolean;
@@ -311,6 +340,8 @@ export function watchCommand(session: string): string {
 
 const realLaunch: Launch = {
   conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
+  checkSidebarConfig: () => hostConfigCheck(),
+  reloadSidebar: (session) => reloadConfig(session),
   sessionState,
   startServer,
   sessionUp: sessionRunning,
@@ -322,7 +353,8 @@ const realLaunch: Launch = {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -360,6 +392,8 @@ const realLaunch: Launch = {
 export const realSources: UpSources = {
   sessionRunning,
   sessionState,
+  hostSessions: () => sessionList(),
+  sidebarConfigText: (home) => sidebarConfigText(home),
   agents: (session) => agentList(aim(session)),
   workspaces: (session) => workspaceList(aim(session)),
   home: homedir(),
@@ -2694,6 +2728,23 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(fresh.includes(name) ? { fresh: true as const } : {}),
   }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
+  const planSidebar =
+    sources.hostSessions !== undefined ||
+    sources.sidebarConfigText !== undefined ||
+    sources.launch?.applySidebar !== undefined ||
+    sources.launch?.checkSidebarConfig !== undefined ||
+    sources.launch?.reloadSidebar !== undefined;
+  const sidebar = planSidebar
+    ? sidebarStepOf({
+        home: sources.home,
+        root,
+        session,
+        team,
+        now: sources.now?.() ?? new Date(),
+        hostSessions: () => sources.hostSessions?.() ?? null,
+        configText: () => (sources.sidebarConfigText ?? sidebarConfigText)(sources.home),
+      })
+    : null;
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
   const buildPlan = () => upPlan({
@@ -2730,6 +2781,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
+    ...(sidebar === null ? {} : { sidebar }),
   });
 
   /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
@@ -3248,10 +3300,44 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
-        ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
+        ? {
+            reportDisplayAgent: (session: string, pane: string, text: string) =>
+              launch.reportDisplayAgent!(
+                session,
+                pane,
+                text,
+                sidebarPolicy({ home: sources.home, root, team, now: now() }).ttlMs,
+              ),
+          }
         : {}),
       ...(launch.renameWorkspace
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
+        : {}),
+      ...(planSidebar
+        ? {
+            applySidebar:
+              launch.applySidebar ??
+              ((rows, indicators) =>
+                applySidebarLayout(sources.home, rows, indicators, [], {
+                  checkConfig: () => launch.checkSidebarConfig?.() ?? { ok: true, text: 'config: ok' },
+                  reload: () => ({ applied: true, text: 'applied' }),
+                })),
+            reloadSidebar: (targetSession: string) =>
+              launch.reloadSidebar?.(targetSession) ?? { applied: true, text: 'applied' },
+            recordSidebarReload:
+              launch.recordSidebarReload ??
+              ((targetSession, rows, indicators) =>
+                recordSidebarReloads(sources.home, [
+                  {
+                    session: targetSession,
+                    record: {
+                      rows: sidebarRowsWord(rows),
+                      indicators,
+                      at: now().toISOString(),
+                    },
+                  },
+                ])),
+          }
         : {}),
       typeLine: () => false,
       // The bare restored CLI's exit, typed in place by a wrapper seat's relaunch: the same two

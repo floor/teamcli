@@ -1734,6 +1734,22 @@ export const POLICY_OUTPUT_SCHEMA: CommandSchemaSpec = {
   ],
 };
 
+/** Published `--json` output schema for `team checkpoint` (`schema/checkpoint.schema.json`). */
+export const CHECKPOINT_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.checkpoint',
+  fileName: 'checkpoint.schema.json',
+  title: 'team checkpoint --json output',
+  statuses: ['recorded'],
+  required: ['seat', 'path', 'at', 'deadline', 'by'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    at: { type: 'string', minLength: 1 },
+    deadline: { type: 'string', minLength: 1 },
+    by: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Published `--json` output schema for `team restart` (`schema/restart.schema.json`). */
 export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.restart',
@@ -1748,6 +1764,11 @@ export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     // Why the registry holds no record binding the seat, when it does not: the seat runs, but
     // native delivery cannot resolve it and only pull reaches it.
     pull_only: { type: 'string', minLength: 1 },
+    // The handover file the launch was given when a standing checkpoint's file was there.
+    handover: { type: 'string', minLength: 1 },
+    // A checkpoint was on record and no handover file was there: the restart ran from the
+    // previous checkpoint, and the lead is told it may be stale. The value is the ask's path.
+    handover_asked: { type: 'string', minLength: 1 },
   },
 });
 
@@ -3248,6 +3269,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   NEXT_OUTPUT_SCHEMA,
   RELOAD_OUTPUT_SCHEMA,
   INIT_OUTPUT_SCHEMA,
+  CHECKPOINT_OUTPUT_SCHEMA,
   RESTART_OUTPUT_SCHEMA,
   DOWN_OUTPUT_SCHEMA,
   UP_OUTPUT_SCHEMA,
