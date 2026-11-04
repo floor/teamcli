@@ -91,7 +91,7 @@ Fields (`src/commands/messages.ts`):
 | `at` | string | yes | — | ≤0.4 | when the record was written |
 | `body` | string | yes | — | ≤0.4 | the message body |
 | `from` | string | yes | — | ≤0.4 | the sender named on the record |
-| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner and the launch |
+| `from_id` | string \| null | no | `null` | 0.5.0 | the sender's registry agent id (`agt_`), or null for the owner, the watch, the daemon and the launch |
 | `to_id` | string \| null | no | `null` | 0.5.0 | the recipient's registry agent id (`agt_`), never the state's `seat_` handle; null when the registry holds no record for the seat |
 | `rule` | string | yes | — | ≤0.4 | the admission rule the send judged |
 | `thread` | string | yes | — | ≤0.4 | the thread's first message id; a first message is its own thread |

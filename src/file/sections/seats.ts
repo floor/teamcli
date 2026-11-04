@@ -34,6 +34,12 @@ export const SEAT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
  *  keeps loading — the address never means it — and `team check` notes the name. */
 export const LEAD_NAME = 'lead';
 
+/** The daemon's own sender word: a reminder's record and history line read `from: daemon`, with
+ *  no registry id, so no new seat or nickname takes the name — a seat of that name would be
+ *  indistinguishable from the daemon in every record it wrote. A seat already named `daemon`
+ *  keeps loading, like a legacy `lead`. */
+export const DAEMON_NAME = 'daemon';
+
 export const seats: Section = {
   name: 'seats',
   owner: false,
@@ -198,6 +204,10 @@ function readSeats(
     }
     if (nickname === LEAD_NAME) {
       check.fail(nicknameEntry?.value.line ?? line, `${at}: "lead" is reserved: lead@<team> addresses the team's lead, so no nickname takes it`);
+      nickname = undefined;
+    }
+    if (nickname === DAEMON_NAME) {
+      check.fail(nicknameEntry?.value.line ?? line, `${at}: "daemon" is reserved: the machine daemon's reminders send under that name, so no nickname takes it`);
       nickname = undefined;
     }
     if (!fields.get('cli')) check.fail(line, `${at}: cli is required`);
@@ -612,6 +622,9 @@ export function nicknameProblem(
 ): { line: number; message: string } | null {
   if (nickname === LEAD_NAME) {
     return { line: 0, message: '"lead" is reserved: lead@<team> addresses the team\'s lead, so no new name or nickname takes it' };
+  }
+  if (nickname === DAEMON_NAME) {
+    return { line: 0, message: '"daemon" is reserved: the machine daemon\'s reminders send under that name, so no new name or nickname takes it' };
   }
   for (const other of seats) {
     if (other.name === own) continue;

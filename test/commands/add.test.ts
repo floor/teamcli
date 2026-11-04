@@ -373,6 +373,28 @@ describe('team add', () => {
     expect(io.err).not.toContain('is reserved');
   });
 
+  test('refuses a new seat named daemon: the reminder sender owns the word', async () => {
+    // The machine daemon's reminder sends are recorded as `daemon`, with no registry id, so no
+    // new seat may carry the name and be indistinguishable from them.
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['daemon'], io, sources(made))).toBe(2);
+    expect(io.err).toContain(
+      'team add: "daemon" is reserved: the machine daemon\'s reminders send under that name, so no new seat takes it as a name\nUsage: team add <name>',
+    );
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a legacy file that declares a seat named daemon still starts it: the reservation binds new names', async () => {
+    // A file written before the reservation may already carry the word as a seat's name: it
+    // loads, and re-adding it is a restart, never a new name.
+    approve(FILE.replace('    name: worker\n    label: worker\n', '    name: daemon\n    label: daemon\n'));
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['daemon'], io, sources(made))).toBe(0);
+    expect(io.err).not.toContain('is reserved');
+  });
+
   test('the next temporary number is two digits by default and numeric past 9', async () => {
     const made = world();
     const io = testIo(project, owner);

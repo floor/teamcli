@@ -3155,3 +3155,162 @@ describe('the store pass is per root and from the child\'s own start', () => {
     expect(markerNow(done, 'm-done-1')).toBeNull();
   }, 30_000);
 });
+
+describe('the machine reminders under the fleet', () => {
+  test('the machine group is its own child: no routes, the hosted list, and its notes verbatim', async () => {
+    const made = world();
+    const log: string[] = [];
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9100;
+    const fleet = createChoresFleet({
+      home: made.home,
+      beatMs: 100,
+      since: AT,
+      now: () => new Date(NOW),
+      routes: [routeInput(made.root, policy())],
+      machine: { reminders: { hosted: [made.root] } },
+      log: (line) => log.push(line),
+      factory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+    });
+    try {
+      // The first beat starts each group's child; the next one nudges it.
+      fleet.tick(new Date(NOW));
+      fleet.tick(new Date(NOW + 100));
+      expect(configs).toHaveLength(2);
+      const machine = configs.find((input) => input.config.machine !== undefined);
+      const routed = configs.find((input) => input.config.machine === undefined);
+      if (machine === undefined || routed === undefined) throw new Error('the fleet started no route and machine pair');
+      // The machine token serves no root and carries the checkouts the daemon hosts.
+      expect(machine.config.routes).toEqual([]);
+      expect(machine.config.machine).toEqual({ reminders: { hosted: [made.root] } });
+      // A route's child never carries the machine work.
+      expect(routed.config.routes).toHaveLength(1);
+      expect(routed.config.machine).toBeUndefined();
+
+      const machineFake = fakes[configs.indexOf(machine)];
+      const routedFake = fakes[configs.indexOf(routed)];
+      if (machineFake === undefined || routedFake === undefined) throw new Error('the fleet kept no fixture child');
+      // The beat nudges the machine child exactly as it nudges a root's.
+      expect(machineFake.sends.filter((message) => message.type === 'tick')).toHaveLength(1);
+      // Its words are the log's, as written: no root prefix is invented for a machine subject.
+      machineFake.emit({ type: 'reminder-note', text: 'reminders: sent 1, refused 0; late 5s' });
+      expect(log).toContain('reminders: sent 1, refused 0; late 5s');
+      expect(log.some((line) => line.startsWith('chores '))).toBe(false);
+      // The machine group has no row: the route's own row is the only one this reading answers.
+      expect(fleet.stateFor(made.root)?.pid).toBe(routedFake.child.pid);
+    } finally {
+      const stopping = fleet.stop('the test is done');
+      for (const fake of fakes) fake.leave(0, null);
+      await stopping;
+    }
+  }, 10_000);
+
+  test('with the fleet hosted the daemon reads no list itself: the machine child is the reader', async () => {
+    const made = world();
+    let reads = 0;
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9200;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 50,
+      reminders: () => {
+        reads += 1;
+        return [];
+      },
+      reminderHosted: [made.root],
+      choresHosting: true,
+      choresFactory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitUntil(() => configs.some((input) => input.config.machine !== undefined));
+      const machine = configs.find((input) => input.config.machine !== undefined);
+      if (machine === undefined) throw new Error('the daemon started no machine child');
+      expect(machine.config.routes).toEqual([]);
+      expect(machine.config.machine).toEqual({ reminders: { hosted: [made.root] } });
+      // Beats reach the children, and the daemon's own loop read the list none of those times:
+      // the beat it used to run here now runs in the machine child.
+      await waitUntil(() => fakes.some((fake) => fake.sends.some((message) => message.type === 'tick')));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(reads).toBe(0);
+    } finally {
+      // The fixture children take the exit the supervisor's kill asks for, so the close is the
+      // daemon's own wait and not the kill grace standing in for a process that never leaves.
+      for (const fake of fakes) fake.leave(0, null);
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+
+  test('a caller\'s own transport keeps the inline path: no machine child is started', async () => {
+    const made = world();
+    let reads = 0;
+    const configs: SpawnChoresInput[] = [];
+    const fakes: Fake[] = [];
+    let pid = 9300;
+    const started = await startMachineDaemon({
+      home: made.home,
+      roots: [made.root],
+      startedBy: 'manual',
+      version: '0.5.12-chores-test',
+      heartbeatMs: 50,
+      reminders: () => {
+        reads += 1;
+        return [];
+      },
+      reminderSend: () => Promise.resolve({ ok: true, code: 0, id: null, staged: false, text: '' }),
+      choresHosting: true,
+      choresFactory: (input) => {
+        configs.push(input);
+        const fake = fakeChild(pid);
+        pid += 1;
+        fakes.push(fake);
+        return fake.child;
+      },
+      restoreSweep: false,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      // The daemon's own beat reads the list: a transport that cannot cross a pipe keeps the
+      // whole reminder here, and no machine child is built for a reminder this process sends.
+      await waitUntil(() => reads > 0);
+      expect(configs.every((input) => input.config.machine === undefined)).toBe(true);
+    } finally {
+      for (const fake of fakes) fake.leave(0, null);
+      const closed = await Promise.race([
+        started.daemon.close().then(() => true),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
+          timer.unref();
+        }),
+      ]);
+      expect(closed).toBe(true);
+    }
+  }, 30_000);
+});

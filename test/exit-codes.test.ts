@@ -754,6 +754,12 @@ scene('add.reserved-name', async (place) => {
   );
   return show(await added(place, ['lead'], owner, addSources(place)), '"lead" is reserved');
 });
+scene('add.reserved-daemon', async (place) => {
+  // The file's own seats are untouched: `daemon` is new in every file, and the word belongs to
+  // the machine daemon's reminder sends, which carry it as their sender with no registry id.
+  write(place, TWO);
+  return show(await added(place, ['daemon'], owner, addSources(place)), '"daemon" is reserved');
+});
 scene('add.temporary-unexpected', async (place) => show(await added(place, ['extra', '--temporary'], owner, addSources(place)), 'unexpected'));
 scene('add.temporary-flags', async (place) => show(await added(place, ['worker', '--until', 'result:out.md'], owner, addSources(place)), '--until and --worktree'));
 scene('add.not-a-repo', async (place) => show(await added(place, ['worker'], owner, addSources(place)), 'not inside a git repository'), false);
@@ -2766,6 +2772,17 @@ scene('seats.not-yours', async (place) => {
   scene('config.entity.path', async (place) => {
     entities(place);
     return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
+  });
+  scene('config.entity.reminders-problem', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.reminders', '[{name: Daily, at: ["09:00"], text: hi, to: [lead@acme]}]']),
+      'a name is lower-case words and dashes',
+    );
+  });
+  scene('config.entity.reminders-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.reminders', 'not-a-list']), 'is not a YAML list of reminders');
   });
   scene('config.entity.unreadable', async (place) => {
     entities(place);

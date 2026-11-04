@@ -43,7 +43,7 @@ import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type Start
 import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
-import { routeId, routeOf } from '../daemon/routes.ts';
+import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
   systemServiceManager,
   type ServiceInstallFailure,
@@ -57,6 +57,11 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
+import { machineZone, readReminderConfig } from '../reminder/config.ts';
+import { createReminderProvider } from '../reminder/provider.ts';
+import type { ReminderSpec } from '../reminder/run.ts';
+import { readRemindersState } from '../reminder/state.ts';
+import { reminderStatus, type ReminderReading } from '../reminder/status.ts';
 import { pidAlive } from '../state.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
@@ -122,11 +127,23 @@ export type DaemonCommandSources = {
   faultPollMs?: number;
   /** Injected for tests: the wait between result reads, so a scene never sleeps for real. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The configured reminders `status --json` reports, read through the same parser the daemon
+   * runs. Absent, the reader is the entity record's own (`configuredReminders`); a reader that
+   * throws is named in `remindersError` and the daemon's own health still prints, and a refused
+   * entry is named there while the entries that read are still reported. Internal, like the
+   * daemon's own `reminders` input; not a setting and not printed by the one-line status.
+   */
+  reminders?: () => ReminderStatusInput;
   /** Injected for tests: the mailbox router child. The real start uses the router entry. */
   mailboxFactory?: Parameters<typeof startMachineDaemon>[0]['mailboxFactory'];
   /** Injected for tests: retires one shuttle unit. The real install uses the service manager. */
   retireShuttle?: (label: string) => { ok: true } | { ok: false; why: string };
 };
+
+/** What a status reader answers: the reminders that read, and the entries the parser refused as
+ *  one line each — the same words the daemon logs. */
+export type ReminderStatusInput = { specs: readonly ReminderSpec[]; problems?: readonly string[] };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
 export default daemon;
@@ -691,6 +708,50 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
 }
 
 /**
+ * The reminder reading `status --json` carries: the named failure when the reader throws, and
+ * otherwise one entry per configured reminder read from the same state record the tick writes. A
+ * refused entry, and a state record that cannot be read, are named in `error` while the entries
+ * that read are still reported. The one-line status never changes.
+ */
+function remindersForStatus(
+  reader: () => ReminderStatusInput,
+  home: string,
+  now: (() => Date) | undefined,
+): { reminders: ReminderReading[]; error: string | null } {
+  let read: ReminderStatusInput;
+  try {
+    read = reader();
+  } catch (error) {
+    return { reminders: [], error: error instanceof Error ? error.message : String(error) };
+  }
+  const reading = reminderStatus(read.specs, readRemindersState(home), now === undefined ? new Date() : now());
+  const named = [...(read.problems ?? []), ...(reading.unreadable === null ? [] : [reading.unreadable])];
+  return { reminders: reading.reminders, error: named.length === 0 ? null : named.join('; ') };
+}
+
+/**
+ * The entity record as a status reader: every reminder that reads, with the targets left to the
+ * fire (the reading asks only what is scheduled and what the state record says came of it), and
+ * one line per entry the parser refused. An absent or unreadable file names itself the same way
+ * the daemon logs it, so a status the owner runs alone still says what the daemon would skip.
+ */
+function configuredReminders(home: string): () => ReminderStatusInput {
+  return () => {
+    const read = readReminderConfig(home, { defaultZone: machineZone() });
+    return {
+      specs: read.entries.map((entry) => ({
+        name: entry.name,
+        at: entry.at,
+        zone: entry.zone,
+        ...(entry.catchUp === undefined ? {} : { catchUp: entry.catchUp }),
+        targets: [],
+      })),
+      problems: read.problems.map((problem) => problem.why),
+    };
+  };
+}
+
+/**
  * The install's steps, in the neutral words the dry run prints before anything runs: a refresh
  * stops the daemon the service manager holds, the new one is started with a bounded, growing
  * retry, and a start that still fails puts the previous unit back and starts it again. The live
@@ -1031,7 +1092,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       ...(sources.now !== undefined ? { now: sources.now } : {}),
     });
     if (parsed.json) {
-      writeJson(io, 'team.daemon-status', { format: 1, daemon: health });
+      const reminders = remindersForStatus(sources.reminders ?? configuredReminders(home), home, sources.now);
+      writeJson(io, 'team.daemon-status', {
+        format: 1,
+        daemon: health,
+        reminders: reminders.reminders,
+        ...(reminders.error === null ? {} : { remindersError: reminders.error }),
+      });
     } else {
       io.stdout(`${statusLine(health)}\n`);
     }
@@ -1062,10 +1129,27 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // foreground run, and the non-zero exit below hands the restart to the service manager.
     let fatalWhy: string | null = null;
     let endRun: (() => void) | null = null;
+    // The configured list the beat runs: the entity record read on its own stamp, or the
+    // caller's injected reader, whose refused entries are named through the beat's log. The
+    // reader is told which checkouts this daemon hosts, so a reminder whose target lies outside
+    // them is refused when the list is read rather than half-sent at the fire.
+    const hosted = roots.map((root) => canonicalRoot(root)).filter((root): root is string => root !== null);
+    const reminderReader = sources.reminders === undefined
+      ? createReminderProvider({ home, hosted })
+      : (log: (line: string) => void) => {
+          const read = sources.reminders!();
+          for (const problem of read.problems ?? []) log(problem);
+          return read.specs;
+        };
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
       startedBy,
+      reminders: reminderReader,
+      // The same hosted list the reader above was built with, handed to the machine chores
+      // child: the reminder runs there when the fleet is hosted, and its read must refuse a
+      // target outside these checkouts exactly as this process's reader does.
+      reminderHosted: hosted,
       version: sources.version ?? installedVersion(),
       gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
       onFatal: (why: string) => {

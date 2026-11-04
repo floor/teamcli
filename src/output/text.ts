@@ -141,8 +141,9 @@ export function formatTable(spec: TableSpec): string {
 }
 
 const SEAT_NOTE_PREFIX = /^([a-zA-Z0-9][a-zA-Z0-9._-]*): (.+)$/;
-/** Singleton note prefixes that are never grouped as seat names under `groupSeats: true`. */
-export const RESERVED_NOTE_PREFIXES: ReadonlySet<string> = new Set(['watch', 'hold']);
+/** Singleton note prefixes that are never grouped as seat names under `groupSeats: true`. `watch`
+ *  and `daemon` are sender identities rather than seats, and a note they open is theirs alone. */
+export const RESERVED_NOTE_PREFIXES: ReadonlySet<string> = new Set(['watch', 'hold', 'daemon']);
 
 export interface CollapseNotesOptions {
   readonly groupSeats?: boolean;

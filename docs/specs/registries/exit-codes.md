@@ -71,6 +71,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `add.model` | the --model override is not known for the seat's CLI | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.not-a-repo` | not inside a git repository | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.prepared` | the prepared edit does not validate | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
+| `add.reserved-daemon` | a new seat may not be named daemon | unreleased | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.reserved-name` | a new seat may not be named lead | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.seat-name` | a seat name is required | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |
 | `add.temporary-flags` | --like, --until and --worktree need --temporary | present at 0.5.0 | `contract/exit-codes.json` | command `add`; exit `2` |

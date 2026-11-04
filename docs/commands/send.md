@@ -642,6 +642,12 @@ identity line and then the signed body with that header, and the body the messag
 carries it too. The receiver reads who sent a message and why that sender
 was let through; the record carries the sender's ids from day one.
 
+Two internal senders are named by reserved words instead of a seat: the watch's own direct-work
+sends read `from the watch — admitted by: the watch's direct-work authority`, and the machine
+daemon's reminder sends read `from the daemon — admitted by: the daemon's reminder authority`.
+Neither carries an agent id, and neither may address the owner. A reminder's sender is not a
+seat, so a recipient cannot reply to `daemon`.
+
 ## The message-display wake line
 
 A channel push announces a message with a header the `message-display` policy renders, and the

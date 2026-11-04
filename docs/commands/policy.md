@@ -81,6 +81,11 @@ resident size in every heartbeat, so the daemon's record and `team daemon status
 child costs. The daemon reads all four for each hosted root; a chain that cannot be read keeps the
 release defaults.
 
+The machine reminder rides the same fleet as one more supervised child of its own, under the
+release limits: its subject is the machine, not a checkout, so no checkout's word speaks for it
+and `daemon.chores` cannot move it inline. That child runs whenever the daemon runs, and one whose
+entity record names no reminder reads an empty list and sends nothing.
+
 The seven `event-*` policies are the owner's event thresholds: how long an unanswered thread
 stays open (72 hours by default), how many records a thread may hold (50), how many days the
 event log keeps (30), when a held record reaches the lead (600 seconds), when a seat that watches
