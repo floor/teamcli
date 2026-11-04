@@ -3,7 +3,7 @@ import { reportedLiveAgent } from './agent.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
 import {
-  classifyComposer, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
+  classifyComposer, listedPlaceholderEquals, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
 } from '../watch/screen.ts';
 
 /** Why a delivery stopped. Each one is a reading the owner can act on.
@@ -141,8 +141,17 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
 
 /** Whether the box shows exactly `text`. A box that is not the text waits and is refused at the
  *  deadline, never entered on trust. */
-function holdsBox(text: string, box: Box): boolean {
-  const read = readsBack(text, box);
+/** An extra row whose text is exactly one listed placeholder. The empty row is not one: a blank
+ *  row under typed text is still not the line. A row that only starts with the placeholder stays. */
+function withoutListedPlaceholders(cli: string, box: Box): Box {
+  const listed = listedPlaceholderEquals(cli);
+  if (listed.length === 0) return box;
+  const rows = box.rows.filter((row) => !listed.includes(row.trim()));
+  return rows.length === box.rows.length ? box : { ...box, rows };
+}
+
+function holdsBox(text: string, box: Box, cli?: string): boolean {
+  const read = readsBack(text, cli === undefined ? box : withoutListedPlaceholders(cli, box));
   return read.row === null && !read.short;
 }
 
@@ -155,7 +164,7 @@ function boxState(cli: string, text: string, screen: string | undefined, options
   const kind = readScreen(cli, screen, options).kind;
   if (kind === 'unsent') {
     const box = readBox(cli, screen, options);
-    return box !== null && holdsBox(text, box) ? 'ready' : 'wait';
+    return box !== null && holdsBox(text, box, cli) ? 'ready' : 'wait';
   }
   return kind === 'idle' ? 'wait' : 'no';
 }
@@ -173,7 +182,7 @@ export function boxHoldsText(cli: string, text: string, screen: string | undefin
     || (read.kind === 'working' && classifyComposer(cli, screen.split('\n'), options).kind === 'unsent');
   if (!unsent) return false;
   const box = readBox(cli, screen, options);
-  return box !== null && holdsBox(text, box);
+  return box !== null && holdsBox(text, box, cli);
 }
 
 /** The first row of the box that is not `text`'s own — what the box holds that the text does
@@ -183,7 +192,8 @@ export function boxHoldsOther(cli: string, text: string, screen: string | undefi
   if (readScreen(cli, screen, options).kind !== 'unsent') return null;
   const box = readBox(cli, screen, options);
   if (box === null) return null;
-  return holdsBox(text, box) ? null : (readsBack(text, box).row ?? '');
+  const held = withoutListedPlaceholders(cli, box);
+  return holdsBox(text, held) ? null : (readsBack(text, held).row ?? '');
 }
 
 /** Whether the box shows exactly `text` on its input row and then one empty row under it — the

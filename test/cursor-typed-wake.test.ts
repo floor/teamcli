@@ -11,6 +11,7 @@ import { listUnread } from '../src/mcp/inbox.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
+import { composeMessageLine } from '../src/settings/message-display.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
 import { recordBody } from './helpers.ts';
@@ -121,6 +122,24 @@ describe('the cursor typed wake', () => {
       reason: 'the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
     });
     expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a sitting wake line in the cursor box is submitted with Enter and not typed again', async () => {
+    const line = composeMessageLine(
+      'Message from owner (owner@acme): hello',
+      'Read it with: call inbox_check now.',
+    );
+    expect(line).not.toBeNull();
+    if (line === null) return;
+    expect(line.endsWith('Read it with: call inbox_check now.')).toBe(true);
+    const held = UNSENT.replace(/Fix the failing test\s*/, () => line);
+    expect(readScreen('cursor', held).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', line, held)).toBe(true);
+    const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : held));
+    const out = await deliverTypedWake(pane.host, 'pane-1', line, 'cursor', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(1);
   });
 
