@@ -1252,6 +1252,7 @@ scene('check.close-orphans-terminal', async (place) => {
       startOf: () => null,
       ancestorsOf: () => null,
       heldElsewhere: () => new Set<number>(),
+      heldHere: () => new Set<number>(),
       signal: () => false,
       pause: () => {},
     },

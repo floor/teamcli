@@ -194,6 +194,22 @@ export type CodexEndpointCheckSources = {
   runtimeRoot?: string;
 };
 
+/** What one session's panes hold: each pane's shell and the foreground pids that are not it; null
+ *  when the session's agent list or any pane's process reading did not answer. A read that does not
+ *  answer is never read as "no pane holds it". */
+function heldIn(session: string): ReadonlySet<number> | null {
+  const agents = agentList(session);
+  if (agents === null) return null;
+  const held = new Set<number>();
+  for (const agent of agents) {
+    const processes = paneProcessesOf(paneProcessInfo(agent.pane, session));
+    if (processes === null) return null;
+    held.add(processes.shell);
+    for (const pid of processes.foreground) held.add(pid);
+  }
+  return held;
+}
+
 /**
  * The shipped sources. The live read is `status`'s own with one narrowing: `status` reads every
  * agent's screen, a stray's included, and this reads a screen only where this project's state
@@ -273,9 +289,10 @@ export const realCheckSources: CheckSources = {
     ancestorsOf: (pid) => readAncestors(pid)?.map((one) => one.pid) ?? null,
     own: () => readAncestors(process.pid)?.map((one) => one.pid) ?? [process.pid],
   },
-  // The close flow's own readings. Every session but this one is read once per close run: a
-  // process no record names is held only when another session's pane holds it, and a pane list or
-  // pane reading that does not answer means no close, never a guess.
+  // The close flow's own readings. Every session but this one is read once per close run, and this
+  // session's panes are read again immediately before each signal: the question can stand open
+  // while a pane picks a process up. A pane list or pane reading that does not answer means no
+  // close, never a guess.
   closeOrphans: {
     alive: pidAlive,
     commOf: processCommOf,
@@ -287,17 +304,13 @@ export const realCheckSources: CheckSources = {
       const held = new Set<number>();
       for (const other of sessions) {
         if (!other.running || other.name === session) continue;
-        const agents = agentList(other.name);
-        if (agents === null) return null;
-        for (const agent of agents) {
-          const processes = paneProcesses(agent.pane, other.name);
-          if (processes === null) return null;
-          held.add(processes.shell);
-          for (const pid of processes.foreground) held.add(pid);
-        }
+        const set = heldIn(other.name);
+        if (set === null) return null;
+        for (const pid of set) held.add(pid);
       }
       return held;
     },
+    heldHere: (session) => heldIn(session),
     signal: (pid, signal) => {
       try {
         process.kill(pid, signal === 'terminate' ? 'SIGTERM' : 'SIGKILL');

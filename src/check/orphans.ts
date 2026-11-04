@@ -297,6 +297,11 @@ export type OrphanCloseSources = {
    *  when a pane list or a pane reading did not answer. A seat's CLI moved into another session is
    *  alive there, and no record of this session's launches proves otherwise. */
   heldElsewhere(pids: readonly number[], session: string): ReadonlySet<number> | null;
+  /** The pids this session's own panes hold, read anew immediately before each signal; null when
+   *  the session's agent list or a pane reading did not answer. The reading that named the
+   *  candidate was taken before the question, and a pane can pick a process up while it is open:
+   *  the close never signals a process a pane holds now. */
+  heldHere(session: string): ReadonlySet<number> | null;
   /** Sends the stop; false when the system refused it (the process is gone or not ours). */
   signal(pid: number, signal: 'terminate' | 'kill'): boolean;
   pause(ms: number): void;
@@ -332,10 +337,10 @@ function waitGone(pid: number, sources: OrphanCloseSources, ms: number): boolean
 
 /**
  * Closes the orphan candidates that carry the close's proof, after one confirm. Every candidate is
- * re-proven just before it is signalled — still the same pid, still the same CLI, still the same
- * start, and still no pane holding it — so a pid reused or a pane reattached since the reading is
- * left alone. A process that does not answer the first stop is forced, and one that will not stop
- * is left and named.
+ * re-proven immediately before each signal it is sent — still the same pid, still the same CLI,
+ * still the same start, and still no pane of this session holding it — so a pid reused, or a pane
+ * that picked the process up while the question or the grace was open, is left alone. A process
+ * that does not answer the first stop is forced, and one that will not stop is left and named.
  */
 export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
   const closeable = input.candidates.filter((one) => one.closeable);
@@ -358,6 +363,23 @@ export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
   const leave = (candidate: OrphanCandidate, why: string): void => {
     lines.push(`left: pid ${candidate.pid}: ${why}`);
   };
+  /** The proof read immediately before a signal: the same pid, still the same CLI, still the
+   *  same start instant, and no pane of this session holding it. Null when every proof holds;
+   *  otherwise the reason the process is left. A pid reused and a pane that picked the process up
+   *  since the reading both answer here. */
+  const stillTheOne = (candidate: OrphanCandidate): string | null => {
+    const comm = input.sources.commOf(candidate.pid);
+    if (comm === null) return 'it was gone before it could be closed';
+    if (cliOf(comm) !== candidate.cli) return `the pid now runs ${plainLine(comm)}`;
+    const start = input.sources.startOf(candidate.pid);
+    if (start === null || Math.abs(start - candidate.startedAtMs) > SAME_START_MS) {
+      return 'it is not the process the check saw';
+    }
+    const here = input.sources.heldHere(input.session);
+    if (here === null) return "this session's panes could not be read";
+    if (here.has(candidate.pid)) return 'a pane of this session holds it';
+    return null;
+  };
 
   for (const candidate of closeable) {
     const label = candidate.seat === null ? 'no seat record' : `seat ${candidate.seat}`;
@@ -365,23 +387,8 @@ export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
       leave(candidate, 'it was gone before it could be closed');
       continue;
     }
-    const comm = input.sources.commOf(candidate.pid);
-    if (comm === null) {
-      leave(candidate, 'it was gone before it could be closed');
-      continue;
-    }
-    if (cliOf(comm) !== candidate.cli) {
-      leave(candidate, `the pid now runs ${plainLine(comm)}`);
-      continue;
-    }
-    const start = input.sources.startOf(candidate.pid);
-    if (start === null || Math.abs(start - candidate.startedAtMs) > SAME_START_MS) {
-      leave(candidate, 'it is not the process the check saw');
-      continue;
-    }
-    // The same proof the reading needed, read again: no other session's pane holds it, and a
-    // recorded CLI's launch shell is no longer above it. A read that does not answer leaves the
-    // process alone.
+    // The proofs the run can take once: no other session's pane holds it, and a recorded CLI's
+    // launch shell is no longer above it. A read that does not answer leaves the process alone.
     if (elsewhere === null) {
       leave(candidate, 'other panes could not be read');
       continue;
@@ -401,6 +408,11 @@ export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
         continue;
       }
     }
+    const before = stillTheOne(candidate);
+    if (before !== null) {
+      leave(candidate, before);
+      continue;
+    }
     if (!input.sources.signal(candidate.pid, 'terminate')) {
       leave(candidate, 'the system refused the stop');
       continue;
@@ -408,6 +420,13 @@ export function closeOrphans(input: OrphanCloseInput): OrphanCloseResult {
     if (waitGone(candidate.pid, input.sources, CLOSE_WAIT_MS)) {
       lines.push(`closed: pid ${candidate.pid}: ${candidate.cli} (${label})`);
       closed += 1;
+      continue;
+    }
+    // The grace is two seconds long: the proof is read again, so a pid reused and a pane that
+    // picked the process up in the wait are both left rather than forced.
+    const changed = stillTheOne(candidate);
+    if (changed !== null) {
+      leave(candidate, changed);
       continue;
     }
     input.sources.signal(candidate.pid, 'kill');

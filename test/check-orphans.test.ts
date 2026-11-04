@@ -432,6 +432,13 @@ type CloseAnswers = {
   start?: number | null;
   chain?: number[] | null;
   held?: ReadonlySet<number> | null;
+  /** What this session's own panes hold; null means the pane read does not answer. */
+  here?: ReadonlySet<number> | null;
+  /** A pane picks the process up when this signal is sent. */
+  pickUpOn?: 'terminate' | 'kill';
+  /** The pid is reused once the stop is asked for: it now runs this name, or starts then. */
+  commAfterTerminate?: string;
+  startAfterTerminate?: number;
 };
 
 function closing(options: CloseAnswers = {}): {
@@ -441,19 +448,29 @@ function closing(options: CloseAnswers = {}): {
 } {
   const signals: { pid: number; signal: 'terminate' | 'kill' }[] = [];
   const stopOn = options.stopOn ?? 'terminate';
+  const hereUnreadable = options.here === null;
+  const here = new Set<number>(options.here ?? []);
+  let comm = options.comm === undefined ? 'codex' : options.comm;
+  let start = options.start === undefined ? STARTED : options.start;
   let alive = true;
   return {
     signals,
     alive: () => alive,
     sources: {
       alive: () => alive,
-      commOf: () => (options.comm === undefined ? 'codex' : options.comm),
-      startOf: () => (options.start === undefined ? STARTED : options.start),
+      commOf: () => comm,
+      startOf: () => start,
       ancestorsOf: () => (options.chain === undefined ? [200, 1] : options.chain),
       heldElsewhere: () => (options.held === undefined ? new Set<number>() : options.held),
+      heldHere: () => (hereUnreadable ? null : here),
       signal: (pid, signal) => {
         signals.push({ pid, signal });
         if (options.refuse === true) return false;
+        if (signal === options.pickUpOn) here.add(pid);
+        if (signal === 'terminate') {
+          if (options.commAfterTerminate !== undefined) comm = options.commAfterTerminate;
+          if (options.startAfterTerminate !== undefined) start = options.startAfterTerminate;
+        }
         if (signal === stopOn) alive = false;
         return true;
       },
@@ -566,6 +583,61 @@ describe('the close re-proves every candidate just before it signals it', () => 
     expect(signals).toEqual([]);
   });
 
+  test('a pane of this session that picks the process up while the question is open keeps it', () => {
+    // The reading that named this process was taken before the question; a pane can take it in
+    // while the question waits, so this session's panes are read again right before the signal.
+    const close = closing();
+    const here = new Set<number>();
+    const result = closeOrphans({
+      candidates: [candidate({ seat: null, recorded: false, shell: null })],
+      session: 'acme',
+      sources: { ...close.sources, heldHere: () => here },
+      confirm: () => {
+        here.add(200);
+        return true;
+      },
+    });
+    expect(result.lines).toEqual(['left: pid 200: a pane of this session holds it']);
+    expect(result.closed).toBe(0);
+    expect(close.signals).toEqual([]);
+  });
+
+  test("unreadable panes of this session leave the process alone", () => {
+    const { lines, signals } = close([candidate()], { here: null });
+    expect(lines).toEqual(["left: pid 200: this session's panes could not be read"]);
+    expect(signals).toEqual([]);
+  });
+
+  test('a pid reused during the stop wait is not forced', () => {
+    const { lines, closed, signals } = close([candidate()], {
+      stopOn: 'kill',
+      commAfterTerminate: 'zsh',
+    });
+    expect(lines).toEqual(['left: pid 200: the pid now runs zsh']);
+    expect(closed).toBe(0);
+    expect(signals).toEqual([{ pid: 200, signal: 'terminate' }]);
+  });
+
+  test('a start that moved during the stop wait is not forced', () => {
+    const { lines, closed, signals } = close([candidate()], {
+      stopOn: 'kill',
+      startAfterTerminate: STARTED + 60_000,
+    });
+    expect(lines).toEqual(['left: pid 200: it is not the process the check saw']);
+    expect(closed).toBe(0);
+    expect(signals).toEqual([{ pid: 200, signal: 'terminate' }]);
+  });
+
+  test('a pane that picks the process up during the stop wait keeps it from the force', () => {
+    const { lines, closed, signals } = close([candidate()], {
+      stopOn: 'kill',
+      pickUpOn: 'terminate',
+    });
+    expect(lines).toEqual(['left: pid 200: a pane of this session holds it']);
+    expect(closed).toBe(0);
+    expect(signals).toEqual([{ pid: 200, signal: 'terminate' }]);
+  });
+
   test('a process that ignores the first stop is forced', () => {
     const { lines, closed, signals } = close([candidate()], { stopOn: 'kill' });
     expect(lines).toEqual(['forced: pid 200: codex (seat dev-one)']);
@@ -666,6 +738,7 @@ function closeRun(options: {
       startOf: () => (alive ? CLOSE_START : null),
       ancestorsOf: () => [200, 1],
       heldElsewhere: () => new Set<number>(),
+      heldHere: () => new Set<number>(),
       signal: () => {
         alive = false;
         return true;

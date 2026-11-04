@@ -212,9 +212,12 @@ shell proves the CLI left the pane, and a chain that cannot be read names nothin
 the close. It asks one question at a terminal — `team check: close <n> orphan processes? [y/N] `
 — and a no signals nothing (`left: <n> orphan processes: you answered no`). Before each stop it
 re-proves the candidate: the pid still runs the same CLI, its start instant has not moved, no
-other session's pane holds it, and a recorded CLI's launch shell is no longer above it. A stop is
-the terminate signal, then the kill signal for a process that has not gone in two seconds, and
-one more second's wait; every outcome is its own line — `closed: pid <pid>: <cli> (seat <seat>)`,
+other session's pane holds it, no pane of this session holds it — read again right before the
+signal, because the reading that named the candidate was taken before the question — and a
+recorded CLI's launch shell is no longer above it. A stop is the terminate signal, then the
+process's identity and this session's panes are read again, then the kill signal for a process
+that has not gone in two seconds, and one more second's wait; every outcome is its own line —
+`closed: pid <pid>: <cli> (seat <seat>)`,
 `forced: pid <pid>: <cli> (seat <seat>)` for one that needed the kill, and `left: pid <pid>:
 <why>` for one whose proof no longer held, one it could not end, or one the system refused to
 stop. The reading runs again after any close, so the report describes the world the close left,

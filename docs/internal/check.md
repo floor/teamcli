@@ -306,16 +306,23 @@ not touch — and a no signals nothing and says `left: <n> orphan processes: you
 
 Before each signal it re-proves the candidate: the pid is alive and still runs the same CLI, its
 start instant has not moved (within two seconds, the table's own clock second), no other running
-session's pane holds it, and a recorded candidate's launch shell is no longer in its chain. The
-pane proof is one pass for every candidate, read once after the yes (`heldElsewhere` over
-`sessionList`, each other session's agents, and each pane's `paneProcesses`), so a close run never
-asks the machine once per process. A read that does not answer leaves every candidate alone
-(`left: pid <pid>: other panes could not be read`, `its process chain could not be read`), and so
-does a pid gone (`it was gone before it could be closed`), renamed (`the pid now runs <name>`), or
-reused (`it is not the process the check saw`).
+session's pane holds it, a recorded candidate's launch shell is no longer in its chain, and no
+pane of this session holds it. The proof over the other sessions is one pass for every candidate,
+read once after the yes (`heldElsewhere` over `sessionList`, each other session's agents, and each
+pane's `paneProcesses`), so a close run never asks the machine once per process; this session's
+own panes are read again immediately before each signal (`heldHere`), because the reading that
+named the candidate was taken before the question, and a pane can take a process in while the
+question or the wait is open. A read that does not answer leaves every candidate alone (`left: pid
+<pid>: other panes could not be read`, `this session's panes could not be read`, `its process
+chain could not be read`), and so does a pid gone (`it was gone before it could be closed`),
+renamed (`the pid now runs <name>`), reused (`it is not the process the check saw`), or one a pane
+holds (`a pane of this session holds it`).
 
-A stop is the terminate signal, then the kill signal for a process that has not gone in two
-seconds, and one more second's wait. Every outcome is a line: `closed: pid <pid>: <cli> (seat <seat>)`,
+A stop is the terminate signal, the process's identity and this session's panes read again, then
+the kill signal for a process that has not gone in two seconds, and one more second's wait — so a
+pid reused, or a pane that picked the process up, in the grace is left rather than forced. Every
+outcome is a line:
+`closed: pid <pid>: <cli> (seat <seat>)`,
 `forced: pid <pid>: <cli> (seat <seat>)` for one that needed the kill, and `left: pid <pid>:
 <why>` for one that answered neither, one the system refused (`the system refused the stop`), one
 still inside its pane, and each proof above that no longer held. Each line is written to the
