@@ -41,7 +41,9 @@ file, and exits 0.
 The bus reads three of the owner's event thresholds when it starts: how often it reconciles
 (`event-reconcile-interval-seconds`), how much of the event log it keeps
 (`event-retention-days`), and when a held record reaches the lead
-(`event-held-threshold-seconds`). A signed policy source that cannot be read or verified refuses
+(`event-held-threshold-seconds`). The log is kept in segments: the open segment is sealed at the
+`event-segment-mb` size and the next opened, and what is kept in all is bounded by the retention
+window and a fixed retained-size cap — [`team policy`](policy.md) carries the words. A signed policy source that cannot be read or verified refuses
 the start (`team bus: <problem>`, exit 2) rather than running on numbers no level chose.
 
 ## Who may run it
