@@ -87,6 +87,10 @@ const AT = new Date(NOW).toISOString();
 const DIGEST = 'a'.repeat(64);
 const CALLER = { kind: 'seat', name: 'crew-lead', pane: 'p1', session: 'acme-dev' } as const;
 const dirs: string[] = [];
+/** A flat CPU reading: these synthetic children have no process behind them, so the supervisor
+ *  is handed the reading it should judge instead of probing the machine. */
+const flatCpu = (): number => 5_000;
+
 
 /** A fixture child: consumes its token, heartbeats on the beat the token carries, and holds its
  *  own event loop on the first nudge for the stretch `CHORES_FIXTURE_BLOCK_MS` names. */
@@ -535,6 +539,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy()), routeInput(second, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4100 + made2.length * 10);
         made2.push(child);
@@ -571,6 +576,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2, backoffCapMs: 3000 }))],
       log: (text) => log.push(text),
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4200 + made2.length);
         made2.push(child);
@@ -662,6 +668,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4310 + made2.length);
         made2.push(child);
@@ -715,6 +722,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2, backoffCapMs: 30_000 }))],
       log: (text) => log.push(text),
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4320 + made2.length);
         made2.push(child);
@@ -787,6 +795,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4330 + made2.length);
         made2.push(child);
@@ -843,6 +852,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4260 + made2.length);
         made2.push(child);
@@ -880,6 +890,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4270 + made2.length);
         made2.push(child);
@@ -922,6 +933,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4280 + made2.length);
         made2.push(child);
@@ -975,6 +987,7 @@ describe('the chores fleet', () => {
       now: () => new Date(clock.at),
       routes: [routeInput(made.root, policy({ missedBeats: 2, backoffCapMs: 3000 }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const child = fakeChild(4250 + made2.length);
         made2.push(child);
@@ -1034,6 +1047,7 @@ describe('the chores fleet', () => {
       now: () => new Date(NOW),
       routes: [routeInput(made.root, policy({ mode: 'inline' }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         spawned += 1;
         return fakeChild(4300).child;
@@ -1078,6 +1092,7 @@ describe('the chores fleet', () => {
         routeInput(second, policy({ mode: 'shared', sliceMs: 500, missedBeats: 5 })),
       ],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         inputs.push(input);
         return fake.child;
@@ -1182,6 +1197,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [{ ...routeInput(made.root, policy()), stateDir: join(made.root, '.agents') }],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: (input) => {
         inputs.push(input);
         return fake.child;
@@ -1232,6 +1248,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(clock.at),
       routes: [{ ...routeInput(made.root, policy()), stateDir: join(made.root, '.agents') }],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         const fake = fakeChild(4565 + made2.length);
         made2.push(fake);
@@ -1303,6 +1320,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [routeInput(made.root, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => fake.child,
     });
     fleet.tick(new Date(NOW));
@@ -1326,6 +1344,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [routeInput(made.root, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       presenceDeadlineMs: 25,
       factory: () => fake.child,
     });
@@ -1386,6 +1405,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [routeInput(made.root, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       killGraceMs: 10,
       factory: () => fake.child,
     });
@@ -1410,6 +1430,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [routeInput(inline.root, policy({ mode: 'inline' }))],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => {
         spawned += 1;
         return fakeChild(4580).child;
@@ -1433,6 +1454,7 @@ describe('the fleet presence nudge', () => {
         watch: { teamFile: join(made.root, '.agents', 'team.yaml'), presence: true },
       }],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => fake.child,
     });
     // The handle exists before any child has started, so the daemon never builds a second watch
@@ -1515,6 +1537,7 @@ describe('the fleet presence nudge', () => {
       now: () => new Date(NOW),
       routes: [routeInput(made.root, policy())],
       log: () => {},
+      cpuTimeOf: flatCpu,
       factory: () => fake.child,
     });
     fleet.tick(new Date(NOW));

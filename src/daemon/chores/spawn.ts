@@ -37,8 +37,10 @@ export type ChoresChild = {
   send(message: ChoresHostMessage): boolean;
   /** Listens for the child's messages, notes and exit; the returned function unsubscribes. */
   subscribe(listener: (event: ChoresChildEvent) => void): () => void;
-  /** Ends the child: terminate, then force after `graceMs`. Idempotent and never throws. */
-  kill(why: string, graceMs?: number): void;
+  /** Ends the child: terminate, then force after `graceMs`. `evenIfWorking` asks for the forced
+   *  end even when the process is still consuming CPU, which an ordinary end must never do: the
+   *  hung ceiling is the one caller that asks. Idempotent and never throws. */
+  kill(why: string, graceMs?: number, options?: { evenIfWorking?: boolean }): void;
   /** Settles when the child's process is gone, however it left. Never rejects. */
   readonly exited: Promise<void>;
 };
