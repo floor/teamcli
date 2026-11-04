@@ -190,7 +190,7 @@ interface BunFfi {
   FFIType: { i32: unknown; u32: unknown; cstring: unknown; ptr: unknown };
 }
 
-/** Shape of `node:ffi` used when the chores child runs under Node with `--experimental-ffi`. */
+/** Shape of `node:ffi` when available in the host Node runtime. */
 interface NodeFfi {
   dlopen: (
     library: string,
