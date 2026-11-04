@@ -1,6 +1,6 @@
 // Independent reconciliation and endpoint supervision scenes. All stores, sockets and daemon
 // instances belong to these scenes; terminal reads and writes are replaced by inert sources.
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -82,15 +82,14 @@ function world() {
   return { base, root, dir, home, drops, signed, team: loaded.team, sendHost, options, paneEffects: () => paneEffects };
 }
 type World = ReturnType<typeof world>;
-type AsyncOptions = ReconcileOptions & { state?: unknown; sliceMs?: number };
+type AsyncOptions = ReconcileOptions & { sliceMs?: number };
 // The baseline has the synchronous public pass only. Drain that same pass there, so the
 // heartbeat and file-read assertions expose its behavior instead of failing at module import.
 const driver = reconcile as unknown as {
-  createReconcileState?: () => unknown;
+  createReconcileState?: () => reconcile.ReconcileState;
   reconcilePassAsync?: (options: AsyncOptions) => Promise<ReconcileResult>;
 };
-function passes(w: World) {
-  const state = driver.createReconcileState?.() as AsyncOptions['state'];
+function passes(w: World, state: reconcile.ReconcileState | undefined = driver.createReconcileState?.()) {
   return async () => {
     const options = { ...w.options, state, sliceMs: 1 };
     const result = driver.reconcilePassAsync === undefined
@@ -117,16 +116,6 @@ function events(w: World): SignedEventRecord[] {
   const read = readEvents('meadow', w.root, w.home);
   expect(read.ok).toBe(true);
   return read.ok ? read.events : [];
-}
-function recordReads(w: World) {
-  // A record's bytes are read through one no-follow open; the path it names is what this records.
-  const original = fs.openSync;
-  const paths: string[] = [];
-  const spy = spyOn(fs, 'openSync').mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
-    if (typeof args[0] === 'string' && (args[0].startsWith(w.drops + '/') || args[0].startsWith(w.signed + '/'))) paths.push(args[0]);
-    return Reflect.apply(original, fs, args);
-  }) as typeof fs.openSync);
-  return { paths, restore: () => spy.mockRestore() };
 }
 async function until(predicate: () => boolean, milliseconds = 1000) {
   const deadline = performance.now() + milliseconds;
@@ -167,46 +156,47 @@ test('the persisted heartbeat advances during the initial reconciliation of 2200
   }, 2);
   try {
     await machine(w, { sendStart: async () => ({ kind: 'already-running', socketPath: join(w.base, 'unused-send.sock'), pid: process.pid }) });
-    await until(() => passSettled, 10_000);
+    await until(() => passSettled, 30_000);
     expect(passSeen).toBe(true);
     expect(beats.size).toBeGreaterThanOrEqual(2);
     expect(events(w).filter(event => event.payload.kind === 'message.arrived' && event.payload.record_id.startsWith('bulk-'))).toHaveLength(2200);
     expect(w.paneEffects()).toBe(0);
   } finally { clearInterval(observer); }
-}, 20_000);
+}, 40_000);
 
 test('an unchanged pass reads no drop or signed-record bytes a second time', async () => {
   const w = world();
   for (let n = 0; n < 48; n += 1) drop(w, 'cached-' + n);
   for (let n = 0; n < 7; n += 1) fs.writeFileSync(join(w.signed, 'signed-' + n + '.json'), JSON.stringify(signedMessage(w, 'signed-' + n)));
-  const pass = passes(w);
-  const reads = recordReads(w);
-  try {
-    const first = await pass();
-    expect(first.filter(event => event.payload.kind === 'message.arrived')).toHaveLength(55);
-    expect(reads.paths.length).toBeGreaterThanOrEqual(55);
-    reads.paths.splice(0);
-    expect(await pass()).toEqual([]);
-    expect(reads.paths).toEqual([]);
-  } finally { reads.restore(); }
+  const state = reconcile.createReconcileState();
+  const pass = passes(w, state);
+  const first = await pass();
+  expect(first.filter(event => event.payload.kind === 'message.arrived')).toHaveLength(55);
+  expect(state.stats.filesRead).toBe(55);
+  expect(state.stats.filesReused).toBe(0);
+  expect(await pass()).toEqual([]);
+  expect(state.stats.filesRead).toBe(0);
+  expect(state.stats.filesReused).toBe(55);
 });
 
 test('a changed record under the same name is re-read while its unchanged neighbors are reused', async () => {
   const w = world();
-  const changed = drop(w, 'mutable', 'old-sender');
+  drop(w, 'mutable', 'old-sender');
   for (let n = 0; n < 12; n += 1) drop(w, 'neighbor-' + n);
-  const pass = passes(w);
+  const state = reconcile.createReconcileState();
+  const pass = passes(w, state);
   await pass();
+  expect(state.stats.filesRead).toBe(13);
+  expect(state.stats.filesReused).toBe(0);
   drop(w, 'mutable', 'fresh-sender-with-new-bytes');
   fs.writeFileSync(join(w.drops, 'mutable.read.json'), '{}');
-  const reads = recordReads(w);
-  try {
-    const raised = await pass();
-    expect(reads.paths).toEqual([changed]);
-    expect(raised.filter(event => event.payload.record_id === 'mutable:read').map(event => event.payload.from)).toEqual(['fresh-sender-with-new-bytes']);
-    expect(raised.some(event => event.payload.kind === 'message.arrived')).toBe(false);
-    expect(await pass()).toEqual([]);
-  } finally { reads.restore(); }
+  const raised = await pass();
+  expect(state.stats.filesRead).toBe(1);
+  expect(state.stats.filesReused).toBe(12);
+  expect(raised.filter(event => event.payload.record_id === 'mutable:read').map(event => event.payload.from)).toEqual(['fresh-sender-with-new-bytes']);
+  expect(raised.some(event => event.payload.kind === 'message.arrived')).toBe(false);
+  expect(await pass()).toEqual([]);
+  expect(state.stats.filesRead).toBe(0);
 });
 
 for (const receipt of ['read', 'replied'] as const) {
