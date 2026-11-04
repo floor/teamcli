@@ -206,6 +206,97 @@ seats:
     expect(edited).toContain('  - name: helper-2\n    label: helper-2\n    cli: claude-code\n');
   });
 
+  test('copying a nicknamed seat drops nickname so the edited file validates without a duplicate nickname', () => {
+    const text = [
+      'format: 1',
+      'project: acme',
+      'coordinator: lead',
+      'operator: lead',
+      'workspace:',
+      '  mode: shared',
+      'seats:',
+      '  - role: coordinator',
+      '    name: lead',
+      '    label: lead',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude',
+      '  - role: implementer',
+      '    name: builder-5',
+      '    label: "Orion · builder"',
+      '    nickname: Orion',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude',
+      '',
+    ].join('\n');
+    const copied = copySeat(text, 'builder-5', 'builder-6');
+    const validated = validateTeamFile(copied);
+    expect(validated.ok ? '' : validated.errors.map((e) => e.message).join('; ')).toBe('');
+    expect(copied.match(/nickname: Orion/g)).toHaveLength(1);
+    expect(takeOut(copied, 'builder-6')).toBe(text);
+  });
+
+  test('a seat written on a bare "-" line is found, and a copy drops nickname and any comment on the dash', () => {
+    const text = [
+      'format: 1',
+      'project: acme',
+      'coordinator: lead',
+      'operator: lead',
+      'workspace:',
+      '  mode: shared',
+      'seats:',
+      '  - role: coordinator',
+      '    name: lead',
+      '    label: lead',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude',
+      '  - # edited by config set',
+      '    role: implementer',
+      '    name: builder-5',
+      '    label: "Orion · builder"',
+      '    nickname: Orion',
+      '    cli: claude-code',
+      '    vendor: anthropic',
+      '    model: Claude Opus',
+      '    version: "5.5"',
+      '    launch: claude',
+      '  -',
+      '    role: reviewer',
+      '    name: reviewer-1',
+      '    label: reviewer-1',
+      '    cli: codex',
+      '    vendor: openai',
+      '    model: GPT',
+      '    version: "6.4"',
+      '    launch: codex',
+      '',
+    ].join('\n');
+    expect(seatBlocks(text).map((block) => block.name)).toEqual(['lead', 'builder-5', 'reviewer-1']);
+    expect(hasSeat(text, 'builder-5')).toBe(true);
+    expect(hasSeat(text, 'reviewer-1')).toBe(true);
+    const copied = copySeat(text, 'builder-5', 'builder-6');
+    expect(hasSeat(copied, 'builder-6')).toBe(true);
+    expect(copied).toContain([
+      '  -',
+      '    role: implementer',
+      '    name: builder-6',
+      '    label: "builder-6"',
+      '    cli: claude-code',
+    ].join('\n'));
+    expect(copied.match(/nickname: Orion/g)).toHaveLength(1);
+    expect(copied.match(/# edited by config set/g)).toHaveLength(1);
+    expect(validateTeamFile(copied).ok).toBe(true);
+    expect(takeOut(copied, 'builder-6')).toBe(text);
+  });
+
   test('restoring one removed instance of a count entry inserts that instance only', () => {
     const approved = `format: 1
 project: acme
