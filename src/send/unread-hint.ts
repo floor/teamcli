@@ -180,16 +180,32 @@ export function noteUnread(
 export function clearUnread(dropDir: string, id: string): void {
   try {
     if (!NAME.test(id)) return;
-    const map = readMap(dropDir);
-    let changed = false;
-    for (const [peer, entry] of Object.entries(map.unread)) {
-      const entries = entry.entries.filter((one) => one.id !== id);
-      if (entries.length === entry.entries.length) continue;
-      changed = true;
-      if (entries.length === 0) delete map.unread[peer];
-      else map.unread[peer] = { entries };
+    // Lock when the folder's seat lock is free, like the drop-side write: the clear and a landing
+    // drop then serialise, and a read that races one still ends with the hint verifying correctly
+    // (the sweep marks nothing for an id that is already read).
+    const folder = dropFolder(dropDir);
+    let lock: ReturnType<typeof acquireSeatLock> | null = null;
+    if (folder !== null) {
+      try {
+        lock = acquireSeatLock(folder.dir, folder.session, folder.seat);
+      } catch {
+        lock = null;
+      }
     }
-    if (changed) writeMap(dropDir, map);
+    try {
+      const map = readMap(dropDir);
+      let changed = false;
+      for (const [peer, entry] of Object.entries(map.unread)) {
+        const entries = entry.entries.filter((one) => one.id !== id);
+        if (entries.length === entry.entries.length) continue;
+        changed = true;
+        if (entries.length === 0) delete map.unread[peer];
+        else map.unread[peer] = { entries };
+      }
+      if (changed) writeMap(dropDir, map);
+    } finally {
+      if (lock !== null && 'release' in lock) lock.release();
+    }
   } catch {
     // The receipt is the message's proof; the hint's leftover is settled by the next sweep.
   }
