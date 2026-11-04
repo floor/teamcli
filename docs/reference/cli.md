@@ -2985,7 +2985,7 @@ Hidden: no
 
 Usage:
 
-    team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
@@ -3005,6 +3005,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--resume` | yes | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `-h` | no | no | yes |

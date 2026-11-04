@@ -87,7 +87,7 @@ import { nativePushBindingFor } from '../send/push.ts';
 import { cliWordList, conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
+import { pinnedSeatSession, recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { latestCheckpoint } from '../checkpoint/checkpoint.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
@@ -105,10 +105,10 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
-export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
-The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --file and --session are the owner's and take no --client), and is never the owner.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --fresh, --resume, --file and --session are the owner's and take no --client), and is never the owner.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -271,18 +271,26 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'fresh', 'dry-run', 'json']);
-  const clientProblem = args.error === undefined && args.rest.length === 1
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json']);
+  const resumeProblem = args.error === undefined && args.values.resume !== undefined
+    ? args.values.resume.trim() === ''
+      ? '--resume requires a session id'
+      : (args.flags.has('abandon') || args.flags.has('fresh'))
+        ? '--resume cannot be combined with --abandon or --fresh'
+        : null
+    : null;
+  const clientProblem = args.error === undefined && args.rest.length === 1 && resumeProblem === null
     ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
-      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
-        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon and --fresh are the owner's and take no --client"
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.values.resume !== undefined || args.flags.has('abandon') || args.flags.has('fresh'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session, --abandon, --fresh and --resume are not for --client"
         : null)
     : null;
-  if (args.error || args.rest.length !== 1 || clientProblem !== null) {
-    const reason = args.error ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
+  if (args.error || args.rest.length !== 1 || resumeProblem !== null || clientProblem !== null) {
+    const reason = args.error ?? resumeProblem ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
     return usage(out, json, reason);
   }
   const name = args.rest[0] ?? '';
+  const pinnedResume = args.values.resume;
   const abandon = args.flags.has('abandon');
   // `--fresh` decides the conversation only: it is not `--abandon`, and never changes what the
   // stop may do to a pane.
@@ -558,7 +566,34 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     : boundSession.kind === 'bound' && boundSession.recorded.launch
       ? { id: boundSession.recorded.sessionId, launch: boundSession.recorded.launch }
       : undefined;
-  if (ownSession.kind === 'refused') {
+  if (pinnedResume !== undefined) {
+    const pinnedRead = pinnedSeatSession({
+      home,
+      root,
+      herdrSession: session,
+      project: team.project,
+      seat: declared,
+      state: recordedSeat,
+      sessionId: pinnedResume,
+    });
+    if (pinnedRead.kind !== 'bound') {
+      return notReadyRefused(
+        out,
+        json,
+        `${name}: cannot resume session ${plainLine(pinnedResume)} (${pinnedRead.why}); left as it is`,
+      );
+    }
+    const pinnedLaunch = pinnedRead.recorded.launch ?? declared.launch;
+    const carried = resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
+    if (carried.kind !== 'line') {
+      return notReadyRefused(
+        out,
+        json,
+        `${name}: cannot resume session ${plainLine(pinnedResume)} (${carried.why}); left as it is`,
+      );
+    }
+    resume = pinnedResume;
+  } else if (ownSession.kind === 'refused') {
     noResume(ownSession.why);
   } else if (resumeCandidate !== undefined) {
     const recordedPane = recordedSeat?.pane;
@@ -656,6 +691,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(pinnedResume === undefined ? {} : { pinnedResume: true }),
     ...(resumeNote === undefined ? {} : { resumeNote }),
     ...(continuity === undefined ? {} : { continuity }),
     // The sign-off this run lifts is cleared in the same write that carries the launch: after
@@ -766,6 +802,8 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** True when `resume` was explicitly pinned via `--resume <cli-session-id>`. */
+  pinnedResume?: boolean;
   /** Plain words for the pre-close context line when `resume` is absent: no recorded
    *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
    *  The line then states why the relaunch starts a fresh conversation. */
@@ -1021,19 +1059,36 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and this one no longer names the conversation this run would start with, so the launch goes
     // out fresh and says why. A restart never resumes an id the current records do not bind.
     if (input.command === 'restart' && resumed !== undefined) {
-      // The same reader the resume was chosen with: the registry binding, refused by a state
-      // that names another id. A state copy that merely names none no longer cancels the resume.
-      const freshOwn = recordedSeatContinuity({
-        home,
-        root,
-        herdrSession: session,
-        seat: declared,
-        state: freshRecorded,
-      });
+      // The same reader the resume was chosen with: the registry binding (or the pinned session
+      // check when `--resume` was passed), refused by a state that names another id. A state copy
+      // that merely names none no longer cancels the resume.
+      const freshOwn = input.pinnedResume
+        ? pinnedSeatSession({
+            home,
+            root,
+            herdrSession: session,
+            project: team.project,
+            seat: declared,
+            state: freshRecorded,
+            sessionId: resumed,
+          })
+        : recordedSeatContinuity({
+            home,
+            root,
+            herdrSession: session,
+            seat: declared,
+            state: freshRecorded,
+          });
       if (freshOwn.kind !== 'bound' || freshOwn.recorded.sessionId !== resumed) {
         const why = freshOwn.kind === 'bound'
           ? 'the seat record changed before the launch'
           : freshOwn.why;
+        if (input.pinnedResume) {
+          return {
+            kind: 'not-ready',
+            message: `${name}: cannot resume session ${plainLine(resumed)} (${why}); left as it is`,
+          };
+        }
         planSeat.launch = declaredLaunch;
         resumed = undefined;
         continuitySession = undefined;

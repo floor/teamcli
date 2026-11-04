@@ -6214,6 +6214,12 @@
         },
         {
           "hidden": false,
+          "name": "--resume",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -6242,7 +6248,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team restart <seat> [--abandon] [--fresh] [--dry-run] [--session <name>] [--file <path>] [--json]",
+        "team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]"
       ],
       "who": {

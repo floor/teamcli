@@ -4,7 +4,9 @@
 // state this launch wrote. The record is offered as a resume id only while both name the same
 // agent, seat, team, CLI and id: a record that does not is foreign or stale, and no resume is
 // offered from it. No CLI home, transcript, credential or session file is read here.
+import { readAllSessions, readStoreSessions } from '../sessions/registry.ts';
 import type { SeatState } from '../state.ts';
+import { storePath } from '../store/store.ts';
 import { findAgent, type Agent } from './agents.ts';
 import { teamIdOf } from './teams.ts';
 
@@ -259,6 +261,103 @@ export function recordedSeatRecord(input: {
 }): RecordedSeatRecordRead {
   const record = readSeatRecord(input);
   return record.kind === 'bound' ? { kind: 'bound', agent: record.agent } : record;
+}
+
+/**
+ * Resolves a caller-pinned `--resume <cli-session-id>` for `seat` against team-owned records:
+ * the seat's agent record and the session registry (`sessions.jsonl`). Refuses when the token is
+ * malformed, the seat's agent record is refused or disagrees with state, or the pinned session id
+ * belongs to another team, seat, terminal-host session, or CLI, or is not recorded for this seat.
+ */
+export function pinnedSeatSession(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  project: string;
+  seat: { name: string; cli: string };
+  state: SeatBindingState | undefined;
+  sessionId: string;
+}): RecordedSeatSessionRead {
+  const { sessionId } = input;
+  if (!SESSION_TOKEN.test(sessionId)) {
+    return { kind: 'refused', why: 'the session id is not one session token' };
+  }
+  const record = readSeatRecord(input);
+  if (record.kind === 'refused') return record;
+  if (record.kind === 'bound') {
+    const live = record.state?.agent_session;
+    const current = record.agent.reach.agent_session;
+    if (
+      live !== undefined &&
+      live !== '' &&
+      current !== null &&
+      current !== undefined &&
+      current !== '' &&
+      live !== current
+    ) {
+      return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
+    }
+    if (current === sessionId && live === sessionId) {
+      return { kind: 'bound', recorded: recordedOf({ agent: record.agent, id: sessionId }) };
+    }
+  }
+  const storeRead = readStoreSessions(storePath(input.project, input.root, input.home), input.home);
+  const matching = storeRead.ok ? storeRead.sessions.filter((one) => one.cli_session === sessionId) : [];
+  const allRead = matching.length > 0 ? null : readAllSessions(input.home);
+  const candidates =
+    matching.length > 0
+      ? matching
+      : allRead !== null && allRead.ok
+        ? allRead.sessions.filter((one) => one.cli_session === sessionId)
+        : [];
+  const own = candidates.filter(
+    (one) =>
+      one.team === input.project &&
+      one.seat === input.seat.name &&
+      one.herdr_session === input.herdrSession &&
+      one.cli === input.seat.cli,
+  );
+  if (own.length > 0) {
+    if (record.kind === 'bound') {
+      return { kind: 'bound', recorded: recordedOf({ agent: record.agent, id: sessionId }) };
+    }
+    return {
+      kind: 'bound',
+      recorded: {
+        agentId: '',
+        seatHandle: input.state?.id ?? null,
+        sessionId,
+        team: teamIdOf(input.root),
+        seat: input.seat.name,
+        cli: input.seat.cli,
+        herdrSession: input.herdrSession,
+        pane: null,
+        address: null,
+      },
+    };
+  }
+  const foreign = candidates.at(-1);
+  if (foreign !== undefined) {
+    if (foreign.team !== input.project) {
+      return { kind: 'refused', why: `session ${sessionId} belongs to team ${foreign.team}` };
+    }
+    if (foreign.seat !== input.seat.name) {
+      return { kind: 'refused', why: `session ${sessionId} belongs to seat ${foreign.seat}` };
+    }
+    if (foreign.herdr_session !== input.herdrSession) {
+      return {
+        kind: 'refused',
+        why: `session ${sessionId} was recorded in terminal-host session ${foreign.herdr_session}`,
+      };
+    }
+    if (foreign.cli !== input.seat.cli) {
+      return {
+        kind: 'refused',
+        why: `session ${sessionId} ran ${foreign.cli}, the seat now declares ${input.seat.cli}`,
+      };
+    }
+  }
+  return { kind: 'refused', why: `session ${sessionId} is not a recorded session of ${input.seat.name}` };
 }
 
 function recordedOf(read: { agent: Agent; id: string }): RecordedSeatSession {
