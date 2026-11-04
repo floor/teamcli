@@ -76,8 +76,12 @@ body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
 carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
-[`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
-and the signed record keeps the sender's registry id apart from it. A `waiting` row writes no
+[`sender_name`](../team-file.md#sender_name) word asks, followed by `[unverified sender]` unless
+the claim verifies — only the seat's current general seat brief does — and a body whose sender
+does not verify opens with its attribution line marked. `--json` carries the record's own `from`
+with `sender_verified` and `sender_trust` beside it, and the signed record keeps the sender's
+registry id apart from it.
+A `waiting` row writes no
 receipt: it says the record is there for its own mailbox's reader, and a seat's run carries no
 body for it. The owner's run is read-only over the whole session and does carry the verified body
 on a `waiting` row; a record that does not verify carries none, whichever the caller. `--json`

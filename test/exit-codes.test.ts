@@ -5383,6 +5383,32 @@ scene('team.restore-entry-refused', async (place) => {
   }
   return show(ran, 'the token name is not one this daemon writes');
 });
+// The mailbox router child is its own program too: started with no token, or with a token it
+// cannot read and spend, it routes nothing and says so from a process of its own.
+scene('team.mailbox-entry-refused', async (place) => {
+  const entry = fileURLToPath(new URL('../src/daemon/mailbox/entry.ts', import.meta.url));
+  const runEntry = (argv: string[]): Ran => {
+    try {
+      execFileSync(process.execPath, [entry, ...argv], {
+        cwd: place.root,
+        env: { ...process.env, HOME: place.home },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return { code: 0, out: '', err: '' };
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: unknown };
+      return {
+        code: failed.status ?? -1,
+        out: '',
+        err: typeof failed.stderr === 'string' ? failed.stderr : String(failed.stderr ?? ''),
+      };
+    }
+  };
+  const noToken = show(runEntry([]), 'the mailbox router child has no readable one-use token');
+  show(runEntry([join(place.base, 'missing-token')]), 'the mailbox router child has no readable one-use token');
+  return noToken;
+});
 scene('daemon.fault-usage', async (place) =>
   show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));
 scene('daemon.fault-root', async (place) =>

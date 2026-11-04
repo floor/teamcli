@@ -38,6 +38,7 @@ import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RU
 import { heldAt } from '../launch/rules-file.ts';
 import { currentClaimIn, listUnread, readMessage, type BriefRead } from '../mcp/inbox.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { verifySenderClaim } from '../send/sender-claim.ts';
 import { readState } from '../state.ts';
 import {
   contextLine,
@@ -101,6 +102,10 @@ export type DropRow = {
   /** The sender's registry id when the drop is a signed record; the table resolves it to the
    *  project's readable name. A raw drop has no id, and its first line is already a headline. */
   from_id: string | null;
+  /** Whether the sender claim verifies: only the seat's current general seat brief does. Every
+   *  other record was signed with the shared checkout key, which every seat can read, so its
+   *  sender is a claim the listing marks. */
+  sender_verified: boolean;
   received: string;
   path: string;
 };
@@ -293,6 +298,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (key !== undefined && context !== undefined && isRead(dropDir, name, context, key, binding)) continue;
     let from: string | null = null;
     let fromId: string | null = null;
+    let senderVerified = false;
     let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
     try {
       const text = readFileSync(path, 'utf8');
@@ -304,6 +310,10 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
         if (key === undefined || verifyRecord(record, key)) {
           from = record.payload.from;
           fromId = record.payload.from_id;
+          // Only a record this key verified can carry a verified claim, and only the seat's
+          // current general seat brief does. Everything else is a shared-key claim.
+          senderVerified = key !== undefined
+            && verifySenderClaim(record.payload, { briefClaim: claim }).verified;
           if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
             launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
           }
@@ -320,7 +330,7 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
       && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
       continue;
     }
-    rows.push({ id: name, from, from_id: fromId, received: stat.mtime.toISOString(), path });
+    rows.push({ id: name, from, from_id: fromId, sender_verified: senderVerified, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -329,9 +339,12 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
 }
 
 /** The row's sender as the project's `sender_name` asks for. A record's `from` is the seat, and
- *  its registry id lets the name resolve; a raw drop's first line is already a headline. */
+ *  its registry id lets the name resolve; a raw drop's first line is already a headline. A claim
+ *  that does not verify is marked: the name is what the drop says, not who it is. */
 function readableFrom(row: DropRow, naming: SenderNaming): string | null {
-  return row.from === null ? null : senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  if (row.from === null) return null;
+  const name = senderDisplayName({ seat: row.from, id: row.from_id }, naming);
+  return row.sender_verified ? name : `${name} (unverified)`;
 }
 
 /** `from <sender> — <path>`, the one line `--follow` prints per new drop. */
@@ -583,7 +596,12 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         project: loaded.team.project,
         session,
         seat,
-        drops: rows.map((row) => ({ from: row.from, received: row.received, path: row.path })),
+        drops: rows.map((row) => ({
+          from: row.from,
+          sender_verified: row.sender_verified,
+          received: row.received,
+          path: row.path,
+        })),
         counts: { drops: rows.length },
       });
     } else {

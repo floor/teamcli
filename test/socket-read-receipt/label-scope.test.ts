@@ -1,8 +1,8 @@
 // The label fallback's scope edges: a blank label, a padded label, and the fields that are not
 // the label. `label` means the seat's declared TeamCLI `label:` field in team.yaml — never the
 // CLI display, model or version. A blank label, and a name that is empty after trimming, fall
-// through to the seat name; a padded label is trimmed. The opening line is display only, so the
-// body attribution stays exactly as it was.
+// through to the seat name; a padded label is trimmed. The display line is display only, so the
+// body attribution stays exactly as it was; the claim banner precedes it.
 import { afterEach, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,7 +50,7 @@ test('a blank written label falls back to the seat name', async () => {
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
 });
 
@@ -66,7 +66,7 @@ test('a padded written label is trimmed before it is read', async () => {
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[0]).toBe('Message from Bea (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from Bea (helper@acme)');
   // Display only: the body keeps the seat name when no nickname stands.
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Bea');
@@ -85,6 +85,6 @@ test('the CLI display, model and version are never the label name', async () => 
   expect(await runSend(['lead', 'a note'], helperIo(one), host)).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
 });

@@ -187,10 +187,13 @@ test('an accepted socket frame names a seat sender by nickname and seat address'
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
   expect(frame.id).toBe(record.id);
-  // The accepted frame's first line is the display header alone: no colon, no summary, no rule.
+  // The frame opens with the unverified-claim banner; the display header follows it alone on its
+  // line: no colon, no summary, no rule.
   const lines = frame.content.split('\n');
-  expect(lines[0]).toBe('Message from Bea (helper@acme)');
+  expect(lines[0]).toBe('[unverified sender: claimed helper]');
   expect(lines[1]).toBe('');
+  expect(lines[2]).toBe('Message from Bea (helper@acme)');
+  expect(lines[3]).toBe('');
   // Display only: the signed record keeps its own attribution line, and the header is not in it.
   expect(record.body.startsWith('from Bea — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from Bea');
@@ -213,7 +216,7 @@ test('an accepted socket frame falls back to the seat name when no nickname stan
   expect(code).toBe(0);
   const frame = frameOf(host.frames);
   const record = recordOf(drops);
-  expect(frame.content.split('\n')[0]).toBe('Message from helper (helper@acme)');
+  expect(frame.content.split('\n')[2]).toBe('Message from helper (helper@acme)');
   expect(frame.content.split('\n').at(-1)).toBe(`Answer with team reply ${record.id} "…" (this marks it read), or team ack ${record.id} if no answer is needed.`);
   expect(record.body.startsWith('from helper — admitted by: ')).toBe(true);
   expect(record.raw).not.toContain('Message from helper');

@@ -4,13 +4,22 @@
 import { readFileSync, unlinkSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
+/** The child has no token it can prove was minted for this start: it refuses and says so. */
+function refuse(): never {
+  process.stderr.write('team daemon: the mailbox router child has no readable one-use token; it routed nothing\n');
+  // exit: team.mailbox-entry-refused
+  process.exit(1);
+}
+
 const token = process.argv[2];
-if (token === undefined || token === '') process.exit(1);
+if (token === undefined || token === '') {
+  refuse();
+}
 try {
   readFileSync(token);
   unlinkSync(token);
 } catch {
-  process.exit(1);
+  refuse();
 }
 
 const lines = createInterface({ input: process.stdin });
