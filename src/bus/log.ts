@@ -29,7 +29,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { createHash, type KeyObject } from 'node:crypto';
+import { createHash, type Hash, type KeyObject } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
@@ -614,23 +614,202 @@ type ReadCheckpoint = {
   seq: number;
   digest: string;
   events: SignedEventRecord[];
+  /** Where the digested bytes end, when they are one contiguous run from the start of the
+   *  retained log (`null` otherwise): the caught-up read hashes just those bytes instead of
+   *  parsing every retained line to rebuild the digest. */
+  prefix: PrefixMark | null;
 };
+
+type PrefixMark = { file: number; end: number; parsed: number };
 
 const readCheckpoints = new Map<string, ReadCheckpoint>();
 
-type RetainedLine = { raw: string; parsed: SignedEventRecord | null };
+type RetainedLine = { file: number; end: number; raw: string; parsed: SignedEventRecord | null };
 
-/** SHA-256 over the raw lines of every record at or below `upTo`, in retained order. File
- *  boundaries are not part of the digest: a rotation that keeps every byte keeps the digest, while
- *  a segment dropped or a file rewritten changes it. */
-function prefixDigest(lines: RetainedLine[], upTo: number): string {
+/** SHA-256 over the raw lines of every record at or below `upTo`, in retained order, yielding a
+ *  slice at a time. File boundaries are not part of the digest: a rotation that keeps every byte
+ *  keeps the digest, while a segment dropped or a file rewritten changes it. */
+function* prefixDigestSteps(lines: RetainedLine[], upTo: number): Generator<void, string, void> {
   const hash = createHash('sha256');
+  let seen = 0;
   for (const line of lines) {
+    seen += 1;
+    if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
     if (line.parsed === null || line.parsed.payload.seq > upTo) continue;
     hash.update(line.raw, 'utf8');
     hash.update('\n', 'utf8');
   }
   return hash.digest('hex');
+}
+
+/** The checkpoint's digest, and the byte run it covers when that run is contiguous from the start
+ *  of the retained log. Only a record that parsed and sits at or below `upTo` is digested, so a
+ *  run containing an unparsable or higher line is not a byte range and carries no mark; the next
+ *  read then parses in full, exactly as before. */
+function* prefixDigestAndMarkSteps(
+  lines: RetainedLine[],
+  upTo: number,
+): Generator<void, { digest: string; prefix: PrefixMark | null }, void> {
+  const hash = createHash('sha256');
+  let parsed = 0;
+  let last: { file: number; end: number } | null = null;
+  let gap = false;
+  let contiguous = true;
+  let seen = 0;
+  for (const line of lines) {
+    seen += 1;
+    if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
+    if (line.parsed === null || line.parsed.payload.seq > upTo) {
+      gap = true;
+      continue;
+    }
+    // An excluded line anywhere before a digested one means the digested bytes are not the run
+    // from the file's start, so no byte range can stand in for them.
+    if (gap) contiguous = false;
+    gap = false;
+    hash.update(line.raw, 'utf8');
+    hash.update('\n', 'utf8');
+    parsed += 1;
+    last = { file: line.file, end: line.end };
+  }
+  const digest = hash.digest('hex');
+  return {
+    digest,
+    prefix: contiguous && last !== null ? { file: last.file, end: last.end, parsed } : null,
+  };
+}
+
+const PREFIX_HASH_CHUNK = 1 << 20;
+
+/** Hashes the byte run a checkpoint's mark covers, reproducing the per-line digest exactly: each
+ *  covered line's raw bytes and the newline the digest appends after it. Returns the un-finalized
+ *  hash beside its digest, so a read can continue it with the appended lines and learn the next
+ *  checkpoint's digest without hashing the prefix twice. Null when the run cannot be read. */
+function* prefixHashSteps(
+  texts: (string | null)[],
+  prefix: PrefixMark,
+): Generator<void, { hash: Hash; digest: string } | null, void> {
+  if (prefix.file >= texts.length) return null;
+  const hash = createHash('sha256');
+  for (let file = 0; file <= prefix.file; file += 1) {
+    const text = texts[file];
+    if (text === undefined || text === null) return null;
+    const end = file === prefix.file ? prefix.end : text.length;
+    if (end > text.length) return null;
+    let at = 0;
+    while (at < end) {
+      const stop = Math.min(end, at + PREFIX_HASH_CHUNK);
+      hash.update(text.slice(at, stop), 'utf8');
+      at = stop;
+      yield;
+    }
+    // The digest appends a newline after every line including the last of a file, so a file
+    // whose last line has no newline contributes one more byte.
+    if (end > 0 && text[end - 1] !== '\n') hash.update('\n', 'utf8');
+  }
+  try {
+    return { hash, digest: hash.copy().digest('hex') };
+  } catch {
+    // No copy in this runtime: the caller reads in full rather than hashing twice.
+    return null;
+  }
+}
+
+/** The caught-up read: the in-memory checkpoint's digest still covers the retained bytes it was
+ *  built from, so only the lines after its mark are parsed and checked, and only those over its
+ *  sequence are checked against the key. Null when the bytes no longer hash to the checkpoint
+ *  (an append that is really a rewrite, a trim, a rotation), and the caller verifies in full. */
+type IncrementalRead = {
+  events: SignedEventRecord[];
+  unverified: number;
+  checked: number;
+  digest: string;
+  prefix: PrefixMark | null;
+};
+
+function* incrementalReadSteps(
+  texts: (string | null)[],
+  checkpoint: ReadCheckpoint & { prefix: PrefixMark },
+  keyState: ReturnType<typeof messageKeyState>,
+): Generator<void, IncrementalRead | null, void> {
+  const hashed = yield* prefixHashSteps(texts, checkpoint.prefix);
+  if (hashed === null || hashed.digest !== checkpoint.digest) return null;
+  const events = checkpoint.events.slice();
+  let unverified = 0;
+  let checked = 0;
+  let prefixParsed = checkpoint.prefix.parsed;
+  let tailBroken = 0;
+  const tail: RetainedLine[] = [];
+  for (let file = checkpoint.prefix.file; file < texts.length; file += 1) {
+    const text = texts[file];
+    if (text === null || text === undefined) continue;
+    let position = file === checkpoint.prefix.file ? checkpoint.prefix.end : 0;
+    if (position > text.length) return null;
+    let seen = 0;
+    while (position < text.length) {
+      const newline = text.indexOf('\n', position);
+      const end = newline < 0 ? text.length : newline;
+      const raw = text.slice(position, end);
+      position = newline < 0 ? text.length : newline + 1;
+      if (raw.trim() === '') continue;
+      tail.push({ file, end: position, raw, parsed: parseSignedEventLine(raw) });
+      seen += 1;
+      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
+    }
+  }
+  for (const line of tail) {
+    if (line.parsed === null) {
+      tailBroken += 1;
+      continue;
+    }
+    if (line.parsed.payload.seq <= checkpoint.seq) {
+      prefixParsed += 1;
+      continue;
+    }
+    checked += 1;
+    if (
+      keyState.kind !== 'key' ||
+      !verifyDomain(EVENT_DOMAIN, line.parsed.payload as unknown as Json, line.parsed.signature, keyState.key)
+    ) {
+      unverified += 1;
+      continue;
+    }
+    events.push(line.parsed);
+  }
+  // A parsed record at or below the checkpoint's sequence that the checkpoint does not hold was
+  // unverified when it was built, and its bytes have not changed since, so it still is.
+  unverified += prefixParsed - checkpoint.events.length;
+  unverified += tailBroken;
+  const highest = events.reduce((max, event) => Math.max(max, event.payload.seq), 0);
+  if (tail.length === 0) {
+    return { events, unverified, checked, digest: checkpoint.digest, prefix: checkpoint.prefix };
+  }
+  let digest = checkpoint.digest;
+  let prefix: PrefixMark | null = checkpoint.prefix;
+  let qualifying = 0;
+  let gap = false;
+  let contiguous = true;
+  let last: { file: number; end: number } | null = null;
+  for (const line of tail) {
+    if (line.parsed === null || line.parsed.payload.seq > highest) {
+      gap = true;
+      continue;
+    }
+    if (gap) contiguous = false;
+    gap = false;
+    hashed.hash.update(line.raw, 'utf8');
+    hashed.hash.update('\n', 'utf8');
+    qualifying += 1;
+    last = { file: line.file, end: line.end };
+  }
+  digest = hashed.hash.digest('hex');
+  prefix =
+    qualifying === 0
+      ? checkpoint.prefix
+      : contiguous && last !== null
+        ? { file: last.file, end: last.end, parsed: checkpoint.prefix.parsed + qualifying }
+        : null;
+  return { events, unverified, checked, digest, prefix };
 }
 
 /** The verification checkpoint as it survives its process: the same key print and prefix digest
@@ -723,6 +902,46 @@ function writeStoredCheckpoint(storeDir: string, fields: CheckpointFields, key: 
   }
 }
 
+/** The retained lines one slice of a read parses, verifies or hashes before yielding, and the
+ *  budget a sliced read may hold the loop before it gives a turn back. A slice stays in the tens
+ *  of milliseconds on a retained log at the size cap. */
+const READ_EVENTS_SLICE_LINES = 1_000;
+const READ_EVENTS_SLICE_MS = 8;
+
+/** What this process last read from one retained store: the files it read, their stamps, and the
+ *  verified result. A read whose files are all unchanged answers from memory. Anything else — a
+ *  rotation, an append, a dropped segment, a rewritten file, a key change — falls back to the
+ *  retained-line read: an append is not distinguishable from an in-place rewrite by stamp alone
+ *  (both change size and time, and a rewrite keeps the inode), and only re-reading the retained
+ *  lines re-checks the bytes the verified digest covers. */
+type ReadIndex = {
+  keyPrint: string;
+  kept: number;
+  files: { path: string; stamp: LogFileStamp | null }[];
+  result: Extract<EventReadResult, { ok: true }>;
+};
+
+const readIndexes = new Map<string, ReadIndex>();
+
+function drainSteps<T>(steps: Generator<void, T, void>): T {
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+  }
+}
+
+/** Drains a sliced read, giving the event loop a turn whenever a slice has used its budget. */
+async function driveSteps<T>(steps: Generator<void, T, void>): Promise<T> {
+  let since = performance.now();
+  for (;;) {
+    const next = steps.next();
+    if (next.done) return next.value;
+    if (performance.now() - since < READ_EVENTS_SLICE_MS) continue;
+    await new Promise<void>((done) => setImmediate(done));
+    since = performance.now();
+  }
+}
+
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
  *  verifying each record's signature against the checkout's message key. Unverified or malformed
  *  lines are counted in `unverified` and never returned as events.
@@ -740,6 +959,26 @@ export function readEvents(
   home: string,
   options: { kept?: number } = {},
 ): EventReadResult {
+  return drainSteps(readEventsSteps(project, root, home, options));
+}
+
+/** The same read, sliced: a read of a large retained log answers its caller without holding the
+ *  event loop for the whole verification. */
+export async function readEventsSliced(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): Promise<EventReadResult> {
+  return driveSteps(readEventsSteps(project, root, home, options));
+}
+
+export function* readEventsSteps(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): Generator<void, EventReadResult, void> {
   const kept = options.kept ?? EVENT_LOG_KEPT;
   const storeDir = storePath(project, root, home);
   const stateRoot = storesFolder(home);
@@ -756,29 +995,93 @@ export function readEvents(
   }
   files.push(path);
 
-  const lines: RetainedLine[] = [];
   for (const candidate of files) {
     const problem = fileProblem(candidate);
     if (problem !== null) return { ok: false, reason: problem };
-    if (heldAt(candidate).kind === 'missing') continue;
-    const text = readNoFollow(candidate);
-    if (text === null) return { ok: false, reason: 'the event log could not be read' };
-    for (const rawLine of text.split('\n')) {
-      if (rawLine.trim() === '') continue;
-      lines.push({ raw: rawLine, parsed: parseSignedEventLine(rawLine) });
-    }
   }
 
   const keyState = messageKeyState(home);
   const keyPrint = keyPrintOf(home);
   const cacheKey = `${storeDir}\u0000${String(kept)}`;
+  const stamps = files.map((candidate) => fileStamp(candidate));
+  const remember = (result: Extract<EventReadResult, { ok: true }>): void => {
+    readIndexes.set(cacheKey, {
+      keyPrint,
+      kept,
+      files: files.map((candidate, at) => ({ path: candidate, stamp: stamps[at] ?? null })),
+      result,
+    });
+  };
+
+  const cached = readIndexes.get(cacheKey);
+  const sameShape =
+    cached !== undefined &&
+    keyState.kind === 'key' &&
+    cached.keyPrint === keyPrint &&
+    cached.kept === kept &&
+    cached.files.length === files.length &&
+    cached.files.every((file, at) => file.path === files[at]);
+  if (
+    sameShape &&
+    cached !== undefined &&
+    cached.files.every((file, at) => sameStamp(file.stamp, stamps[at] ?? null))
+  ) {
+    // No retained byte moved since this process read and verified them: the answer is the one
+    // read then, and nothing was checked by this call.
+    return { ...cached.result, checked: 0, full: false };
+  }
+
+  // Snapshot first: every retained file's bytes are read before the first yield, so a rotation
+  // between two files cannot drop a middle segment and leave a silent hole in this read.
+  const texts: (string | null)[] = [];
+  for (const candidate of files) {
+    if (heldAt(candidate).kind === 'missing') {
+      texts.push(null);
+      continue;
+    }
+    const text = readNoFollow(candidate);
+    if (text === null) return { ok: false, reason: 'the event log could not be read' };
+    texts.push(text);
+  }
+
   const checkpoint = readCheckpoints.get(cacheKey);
 
-  const verifyAll = (): { events: SignedEventRecord[]; unverified: number; checked: number } => {
+  let incremental: IncrementalRead | null = null;
+  if (checkpoint !== undefined && checkpoint.keyPrint === keyPrint && checkpoint.prefix !== null) {
+    incremental = yield* incrementalReadSteps(texts, { ...checkpoint, prefix: checkpoint.prefix }, keyState);
+  }
+
+  const lines: RetainedLine[] = [];
+  if (incremental === null) {
+    for (const [file, text] of texts.entries()) {
+      if (text === null) continue;
+      let position = 0;
+      let seen = 0;
+      while (position < text.length) {
+        const newline = text.indexOf('\n', position);
+        const end = newline < 0 ? text.length : newline;
+        const rawLine = text.slice(position, end);
+        position = newline < 0 ? text.length : newline + 1;
+        if (rawLine.trim() === '') continue;
+        lines.push({ file, end: position, raw: rawLine, parsed: parseSignedEventLine(rawLine) });
+        seen += 1;
+        if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
+      }
+    }
+  }
+
+  const verifyAll = function* (): Generator<
+    void,
+    { events: SignedEventRecord[]; unverified: number; checked: number },
+    void
+  > {
     const verified: SignedEventRecord[] = [];
     let unverified = 0;
     let checked = 0;
+    let seen = 0;
     for (const line of lines) {
+      seen += 1;
+      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
       if (line.parsed === null) {
         unverified += 1;
         continue;
@@ -798,11 +1101,29 @@ export function readEvents(
   let checked: number;
   let full = true;
   const stored = readStoredCheckpoint(storeDir, keyState);
-  const matched =
-    checkpoint !== undefined &&
-    checkpoint.keyPrint === keyPrint &&
-    prefixDigest(lines, checkpoint.seq) === checkpoint.digest;
-  if (matched && checkpoint !== undefined) {
+  let matched = false;
+  if (incremental === null && checkpoint !== undefined && checkpoint.keyPrint === keyPrint) {
+    matched = (yield* prefixDigestSteps(lines, checkpoint.seq)) === checkpoint.digest;
+  }
+  let storedMatched = false;
+  if (
+    incremental === null &&
+    stored !== null &&
+    keyState.kind === 'key' &&
+    stored.keyPrint === keyPrint &&
+    stored.kept === kept &&
+    stored.store === storeDir
+  ) {
+    storedMatched = (yield* prefixDigestSteps(lines, stored.seq)) === stored.digest;
+  }
+  if (incremental !== null) {
+    // The checkpoint's bytes still hash to its digest: only the lines after its mark were parsed,
+    // and only the records over its sequence were checked against the key.
+    events = incremental.events;
+    unverified = incremental.unverified;
+    checked = incremental.checked;
+    full = false;
+  } else if (matched && checkpoint !== undefined) {
     // Every retained record at or below the checkpoint's sequence is byte for byte the one it was
     // verified as; only the records past it are checked now. A parsed record at or below the
     // sequence that the checkpoint does not hold was unverified when it was built, and the bytes
@@ -812,7 +1133,10 @@ export function readEvents(
     unverified = 0;
     checked = 0;
     let prefixParsed = 0;
+    let seen = 0;
     for (const line of lines) {
+      seen += 1;
+      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
       if (line.parsed === null) {
         unverified += 1;
         continue;
@@ -829,14 +1153,7 @@ export function readEvents(
       events.push(line.parsed);
     }
     unverified += prefixParsed - checkpoint.events.length;
-  } else if (
-    stored !== null &&
-    keyState.kind === 'key' &&
-    stored.keyPrint === keyPrint &&
-    stored.kept === kept &&
-    stored.store === storeDir &&
-    prefixDigest(lines, stored.seq) === stored.digest
-  ) {
+  } else if (storedMatched && stored !== null && keyState.kind === 'key') {
     // Another process verified every retained record at or below this sequence on bytes that
     // still hash to its digest, and it writes the file only when that read left nothing
     // unverified, so the whole prefix is one verified block. The file's signature verified under
@@ -848,7 +1165,10 @@ export function readEvents(
     events = [];
     unverified = 0;
     checked = 0;
+    let seen = 0;
     for (const line of lines) {
+      seen += 1;
+      if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
       if (line.parsed === null) {
         unverified += 1;
         continue;
@@ -865,12 +1185,22 @@ export function readEvents(
       events.push(line.parsed);
     }
   } else {
-    ({ events, unverified, checked } = verifyAll());
+    ({ events, unverified, checked } = yield* verifyAll());
   }
 
   const highest = events.reduce((max, event) => Math.max(max, event.payload.seq), 0);
-  const digest = prefixDigest(lines, highest);
-  readCheckpoints.set(cacheKey, { keyPrint, seq: highest, digest, events: events.slice() });
+  let digested: { digest: string; prefix: PrefixMark | null } | null =
+    incremental === null ? null : { digest: incremental.digest, prefix: incremental.prefix };
+  if (digested === null) {
+    digested = yield* prefixDigestAndMarkSteps(lines, highest);
+  }
+  readCheckpoints.set(cacheKey, {
+    keyPrint,
+    seq: highest,
+    digest: digested.digest,
+    events: events.slice(),
+    prefix: digested.prefix,
+  });
 
   // What this read verified is what the next process may lean on. A checkpoint cannot record which
   // prefix records were unverified, so the file is written only when this read left none; a real
@@ -880,18 +1210,35 @@ export function readEvents(
     unverified === 0 &&
     keyState.kind === 'key' &&
     highest >= 1 &&
-    (stored === null || stored.seq !== highest || stored.digest !== digest)
+    (stored === null || stored.seq !== highest || stored.digest !== digested.digest)
   ) {
     writeStoredCheckpoint(
       storeDir,
-      { format: VERIFY_CHECKPOINT_FORMAT, keyPrint, kept, seq: highest, digest, store: storeDir },
+      { format: VERIFY_CHECKPOINT_FORMAT, keyPrint, kept, seq: highest, digest: digested.digest, store: storeDir },
       keyState.key,
     );
   }
 
   const oldestSeq = events.length > 0 ? events[0]!.payload.seq : null;
   const newestSeq = events.length > 0 ? events[events.length - 1]!.payload.seq : null;
-  return { ok: true, events, unverified, checked, full, oldestSeq, newestSeq, path };
+  const result: Extract<EventReadResult, { ok: true }> = {
+    ok: true,
+    events,
+    unverified,
+    checked,
+    full,
+    oldestSeq,
+    newestSeq,
+    path,
+  };
+  if (keyState.kind === 'key' && unverified === 0) {
+    // The next read of this store, if no retained byte moved, may answer from this result. A read
+    // that left a line unverified is not kept, so that line is checked again on the next read.
+    remember(result);
+  } else {
+    readIndexes.delete(cacheKey);
+  }
+  return result;
 }
 
 /** Whether the retained `team.event-log-dropped` records cover every sequence in `from`..`to`.
@@ -925,7 +1272,29 @@ export function readEventsFromCursor(
   cursor: number,
   options: { kept?: number } = {},
 ): CursorReadResult {
-  const read = readEvents(project, root, home, options);
+  return drainSteps(readEventsFromCursorSteps(project, root, home, cursor, options));
+}
+
+/** The same cursor read, sliced: a busy or cold large retained log never holds the event loop for
+ *  the whole scan. */
+export async function readEventsFromCursorSliced(
+  project: string,
+  root: string,
+  home: string,
+  cursor: number,
+  options: { kept?: number } = {},
+): Promise<CursorReadResult> {
+  return driveSteps(readEventsFromCursorSteps(project, root, home, cursor, options));
+}
+
+export function* readEventsFromCursorSteps(
+  project: string,
+  root: string,
+  home: string,
+  cursor: number,
+  options: { kept?: number } = {},
+): Generator<void, CursorReadResult, void> {
+  const read = yield* readEventsSteps(project, root, home, options);
   if (!read.ok) return read;
   const { events, oldestSeq, newestSeq } = read;
   if (cursor > 0 && oldestSeq !== null && cursor + 1 < oldestSeq) {
@@ -941,7 +1310,13 @@ export function readEventsFromCursor(
         : {}),
     };
   }
-  const unseen = events.filter((entry) => entry.payload.seq > cursor);
+  const unseen: SignedEventRecord[] = [];
+  let seen = 0;
+  for (const entry of events) {
+    seen += 1;
+    if (seen % READ_EVENTS_SLICE_LINES === 0) yield;
+    if (entry.payload.seq > cursor) unseen.push(entry);
+  }
   const nextCursor = unseen.length > 0 ? unseen[unseen.length - 1]!.payload.seq : (newestSeq !== null && newestSeq > cursor ? newestSeq : cursor);
   return {
     ok: true,
@@ -956,9 +1331,19 @@ export function readEventsFromCursor(
   };
 }
 
-/** One retained log file as the append index last saw it: identity and size, so an unchanged file
- *  is not read again and a file that only grew is read from where the index stopped. */
-type LogFileStamp = { ino: number; size: number; mtimeMs: number };
+/** One retained log file as the append index last saw it: identity, size and both change times, so
+ *  an unchanged file is not read again and a file that only grew is read from where the index
+ *  stopped. The inode change time is kept because a writer can put a file's size and modification
+ *  time back after rewriting it in place; only the change time cannot be restored. */
+type LogFileStamp = { ino: number; size: number; mtimeMs: number; ctimeMs: number };
+
+/** Where one retained line starts: the index of its file in retained order and the byte offset of
+ *  its first character. */
+type LinePlace = { file: number; offset: number };
+
+/** The places a record id was seen at: one line, or several when the id was written more than
+ *  once (another kind or session may hold the same id; retention never rewrites a kept line). */
+type IdPlaces = LinePlace | LinePlace[];
 
 /** One append's dedupe key and the id a line would spell to hold it. */
 type WantedKey = { key: string; recordId: string };
@@ -979,11 +1364,39 @@ type AppendIndex = {
   covered: Set<string>;
   /** Every possible key is covered: the whole retained log was verified. */
   coveredAll: boolean;
+  /** Every record id the retained lines spell, with the place of each line that spells it. One
+   *  walk over the retained bytes builds it; a key searched later reads only its own lines
+   *  instead of re-reading the log. */
+  ids: Map<string, IdPlaces>;
+  /** Where the live file's complete lines end: the next tail read starts here, so a line a writer
+   *  left half-written is read whole once it completes. */
+  offset: number;
   newestSeq: number | null;
   path: string;
 };
 
 const appendIndexes = new Map<string, AppendIndex>();
+
+/** What the append index has read since this process started or the last reset: whole retained
+ *  files and tails of them, the single lines a place lookup fetched, and the bytes all of those
+ *  held. A key this index has not searched for costs one line after the one-pass id map is
+ *  built, never a pass over the files. */
+let appendIndexFileReads = 0;
+let appendIndexLineReads = 0;
+let appendIndexBytesRead = 0;
+
+/** The append index's read counts. A diagnostic, and the witness a test reads to hold the index
+ *  to one pass over the retained bytes: the bytes it read for a whole first pass stay near the
+ *  size of the retained log instead of growing with every key the pass appends. */
+export function appendIndexReads(): { files: number; lines: number; bytes: number } {
+  return { files: appendIndexFileReads, lines: appendIndexLineReads, bytes: appendIndexBytesRead };
+}
+
+export function resetAppendIndexReads(): void {
+  appendIndexFileReads = 0;
+  appendIndexLineReads = 0;
+  appendIndexBytesRead = 0;
+}
 
 /** The append locks this process holds, by lock directory. Append is synchronous, so a set is
  *  the whole reentrancy state: the nested drop declaration's append runs under the lock its
@@ -1018,7 +1431,7 @@ function fileStamp(path: string): LogFileStamp | null {
   if (heldAt(path).kind !== 'file') return null;
   try {
     const stat = statSync(path);
-    return { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs };
+    return { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
   } catch {
     return null;
   }
@@ -1026,7 +1439,7 @@ function fileStamp(path: string): LogFileStamp | null {
 
 function sameStamp(a: LogFileStamp | null, b: LogFileStamp | null): boolean {
   if (a === null || b === null) return a === b;
-  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  return a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
 
 /** The message key the index was built under: a key change invalidates every verification. */
@@ -1090,40 +1503,162 @@ function verifyInto(
   return out;
 }
 
-/** The last record in one stretch of the log that verifies: the walk starts at the end and stops
- *  at the first verified line, so the newest sequence costs one verification per file instead of
- *  one per record. Null when the stretch holds no verified record, and the caller then looks at
- *  an older file exactly as a full scan would. */
-function lastVerifiedRecord(
-  lines: string[],
+const RECORD_ID_MARK = Buffer.from('"record_id"', 'utf8');
+const BYTE_QUOTE = 0x22;
+const BYTE_COLON = 0x3a;
+const BYTE_TAB = 0x09;
+const BYTE_SPACE = 0x20;
+const BYTE_NEWLINE = 0x0a;
+
+function addPlace(into: Map<string, IdPlaces>, recordId: string, place: LinePlace): void {
+  const held = into.get(recordId);
+  if (held === undefined) into.set(recordId, place);
+  else if (Array.isArray(held)) held.push(place);
+  else into.set(recordId, [held, place]);
+}
+
+/** Indexes one stretch of retained bytes by the record id every line spells, recording where
+ *  each line starts (`base` is where the stretch starts in its file). A line this code wrote
+ *  holds `"record_id"` and the id literally — every admitted id is an ASCII token
+ *  (`EVENT_RECORD_ID`), so `JSON.stringify` escapes none of its characters — and every
+ *  occurrence in a line is taken, so an id quoted inside another field cannot hide the real
+ *  one. A place is only a candidate: the line is parsed and its signature verified when a key
+ *  is searched. */
+function indexRecordIds(bytes: Buffer, file: number, base: number, into: Map<string, IdPlaces>): void {
+  let lineStart = 0;
+  for (;;) {
+    const newline = bytes.indexOf(BYTE_NEWLINE, lineStart);
+    const lineEnd = newline < 0 ? bytes.length : newline;
+    let mark = bytes.indexOf(RECORD_ID_MARK, lineStart);
+    while (mark >= 0 && mark < lineEnd) {
+      let at = mark + RECORD_ID_MARK.length;
+      while (at < lineEnd && (bytes[at] === BYTE_SPACE || bytes[at] === BYTE_TAB)) at += 1;
+      if (at < lineEnd && bytes[at] === BYTE_COLON) {
+        at += 1;
+        while (at < lineEnd && (bytes[at] === BYTE_SPACE || bytes[at] === BYTE_TAB)) at += 1;
+        if (at < lineEnd && bytes[at] === BYTE_QUOTE) {
+          const close = bytes.indexOf(BYTE_QUOTE, at + 1);
+          if (close > at + 1 && close < lineEnd) {
+            const recordId = bytes.toString('utf8', at + 1, close);
+            if (EVENT_RECORD_ID.test(recordId)) addPlace(into, recordId, { file, offset: base + lineStart });
+            mark = bytes.indexOf(RECORD_ID_MARK, close + 1);
+            continue;
+          }
+        }
+      }
+      mark = bytes.indexOf(RECORD_ID_MARK, mark + 1);
+    }
+    if (newline < 0) break;
+    lineStart = newline + 1;
+  }
+}
+
+/** Reads one whole retained file without following a link. Null when it cannot be read that way. */
+function readBytesNoFollow(path: string): Buffer | null {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    const chunks: Buffer[] = [];
+    const buf = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    return Buffer.concat(chunks);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The line that starts at `offset` in one retained file, without its newline, read without
+ *  following a link. Null when the file no longer holds a line there. */
+function readLineAt(path: string, offset: number): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size <= offset) return null;
+    const chunks: Buffer[] = [];
+    const buf = Buffer.alloc(8192);
+    let position = offset;
+    while (position < stat.size) {
+      const n = readSync(fd, buf, 0, Math.min(buf.length, stat.size - position), position);
+      if (n === 0) break;
+      const newline = buf.subarray(0, n).indexOf(BYTE_NEWLINE);
+      if (newline >= 0) {
+        chunks.push(Buffer.from(buf.subarray(0, newline)));
+        return Buffer.concat(chunks).toString('utf8');
+      }
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+      position += n;
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The last line of one stretch that verifies, walked backwards from the end, so a file of any
+ *  size costs one parse when its newest line is a record — the ordinary case. Null when the
+ *  stretch holds no verified record, and the caller then looks at an older file exactly as a
+ *  full scan would. */
+function lastVerifiedLineOf(
+  bytes: Buffer,
   keyState: ReturnType<typeof messageKeyState>,
 ): SignedEventRecord | null {
   if (keyState.kind !== 'key') return null;
-  for (let at = lines.length - 1; at >= 0; at--) {
-    const raw = lines[at]!;
-    if (raw.trim() === '') continue;
-    const parsed = parseSignedEventLine(raw);
-    if (parsed === null) continue;
-    if (verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
-      return parsed;
+  let end = bytes.length;
+  while (end > 0) {
+    while (end > 0 && (bytes[end - 1] === BYTE_NEWLINE || bytes[end - 1] === 0x0d)) end -= 1;
+    if (end === 0) break;
+    const start = bytes.lastIndexOf(BYTE_NEWLINE, end - 1) + 1;
+    const raw = bytes.toString('utf8', start, end);
+    if (raw.trim() !== '') {
+      const parsed = parseSignedEventLine(raw);
+      if (parsed !== null && verifyDomain(EVENT_DOMAIN, parsed.payload as unknown as Json, parsed.signature, keyState.key)) {
+        return parsed;
+      }
     }
+    end = start;
   }
   return null;
 }
 
-/** The first record in one stretch of the log that verifies under `wanted.key`. Only a line that
- *  spells the wanted id literally is parsed: every id this log admits is a generated token
- *  (`EVENT_RECORD_ID`, enforced by `parseEventPayload`), so `JSON.stringify` escapes none of its
- *  characters and a line this code wrote for that id always holds it as a substring. A matching
- *  line that does not verify is skipped, exactly as the full scan skips it. */
-function findVerifiedRecord(
-  lines: string[],
+/** The first retained record for `wanted`, read at the places the id map holds for its record id
+ *  and checked exactly as a scan checks a line: parse, the same key, a verifying signature.
+ *  Places are in retained order, so the first match is the one a full scan finds. */
+function findIndexedRecord(
+  index: AppendIndex,
+  files: string[],
   wanted: WantedKey,
   keyState: ReturnType<typeof messageKeyState>,
 ): SignedEventRecord | null {
   if (keyState.kind !== 'key') return null;
-  for (const raw of lines) {
-    if (raw === '' || !raw.includes(wanted.recordId)) continue;
+  const held = index.ids.get(wanted.recordId);
+  if (held === undefined) return null;
+  const places = Array.isArray(held) ? held : [held];
+  for (const place of places) {
+    const path = files[place.file];
+    if (path === undefined) continue;
+    appendIndexLineReads += 1;
+    const raw = readLineAt(path, place.offset);
+    if (raw === null) continue;
+    appendIndexBytesRead += Buffer.byteLength(raw, 'utf8');
     const parsed = parseSignedEventLine(raw);
     if (parsed === null) continue;
     if (eventKey(parsed.payload) !== wanted.key) continue;
@@ -1195,73 +1730,83 @@ function appendIndexOf(
     cached.files[last] !== null &&
     stamps[last] !== null &&
     cached.files[last]!.ino === stamps[last]!.ino &&
-    stamps[last]!.size >= cached.files[last]!.size;
+    stamps[last]!.size > cached.offset;
   if (cached !== undefined && grew) {
-    const previousSize = cached.files[last]!.size;
-    const tail = readTailNoFollow(path, previousSize);
+    // Only the live file moved, and only forward: the bytes past the last complete line are read
+    // once, verified, and added to the id map, instead of re-reading the retained files.
+    const tail = readTailNoFollow(path, cached.offset);
+    appendIndexFileReads += 1;
+    if (tail !== null) appendIndexBytesRead += Buffer.byteLength(tail, 'utf8');
     if (tail !== null && (tail === '' || tail.endsWith('\n'))) {
+      const bytes = Buffer.from(tail, 'utf8');
       const fresh = verifyInto(tail, keyState, cached.duplicates, cached.covered);
       if (fresh.length > 0) cached.newestSeq = fresh[fresh.length - 1]!.payload.seq;
+      indexRecordIds(bytes, last, cached.offset, cached.ids);
+      cached.offset += bytes.length;
       cached.files[last] = fileStamp(path) ?? stamps[last] ?? null;
       if (answers(cached)) return { ok: true, index: cached };
       if (wantedKey !== null) return extendIndex(cached, files, wantedKey, keyState);
     }
   }
 
-  // No index this process can use. A whole-key map reads and verifies every retained line; the
-  // ordinary request reads each file once and verifies the newest line of each (for the sequence)
-  // and the lines that can hold the wanted record, and nothing else.
+  // No index this process can use: one walk over each retained file builds the id map (where
+  // every line starts), the newest verified sequence, and — for a whole-key request — the first
+  // verified record of every key. A key searched later reads only the lines its id starts.
   const index: AppendIndex = {
     keyPrint,
     files: stamps,
     duplicates: new Map(),
     covered: new Set(),
     coveredAll: wantAll,
+    ids: new Map(),
+    offset: 0,
     newestSeq: null,
     path,
   };
-  for (const candidate of files) {
+  for (const [at, candidate] of files.entries()) {
     if (heldAt(candidate).kind === 'missing') continue;
-    const text = readNoFollow(candidate);
-    if (text === null) return { ok: false, reason: 'the event log could not be read' };
+    appendIndexFileReads += 1;
+    const bytes = readBytesNoFollow(candidate);
+    if (bytes === null) return { ok: false, reason: 'the event log could not be read' };
+    appendIndexBytesRead += bytes.length;
+    indexRecordIds(bytes, at, 0, index.ids);
     if (wantAll) {
-      const verified = verifyInto(text, keyState, index.duplicates, index.covered);
+      const verified = verifyInto(bytes.toString('utf8'), keyState, index.duplicates, index.covered);
       if (verified.length > 0) index.newestSeq = verified[verified.length - 1]!.payload.seq;
       continue;
     }
-    const lines = text.split('\n');
-    const newest = lastVerifiedRecord(lines, keyState);
+    const newest = lastVerifiedLineOf(bytes, keyState);
     if (newest !== null) index.newestSeq = newest.payload.seq;
-    if (wantedKey !== null && !index.duplicates.has(wantedKey.key)) {
-      const found = findVerifiedRecord(lines, wantedKey, keyState);
-      if (found !== null) index.duplicates.set(wantedKey.key, found);
+    if (at === last) {
+      // Only the live file can end in a line a writer is still finishing; the next tail read
+      // starts at the last complete line so that line comes back whole.
+      const complete = bytes.length > 0 && bytes[bytes.length - 1] !== BYTE_NEWLINE
+        ? bytes.lastIndexOf(BYTE_NEWLINE) + 1
+        : bytes.length;
+      index.offset = Math.max(0, complete);
     }
   }
-  if (wantedKey !== null) index.covered.add(wantedKey.key);
+  if (wantedKey !== null) {
+    const found = findIndexedRecord(index, files, wantedKey, keyState);
+    if (found !== null) index.duplicates.set(wantedKey.key, found);
+    index.covered.add(wantedKey.key);
+  }
   appendIndexes.set(cacheKey, index);
   return { ok: true, index };
 }
 
-/** Answers an index for a key this process has not searched for yet: one pass over the retained
- *  files, verifying only the lines that can hold it. The newest sequence stays as the index has
- *  it: the caller already matched the file stamps this pass reads, under the event lock. */
+/** Answers an index for a key this process has not searched for yet: one lookup in the id map and
+ *  a read of the lines that id starts, instead of a pass over the retained files. The newest
+ *  sequence stays as the index has it: the caller already matched the file stamps under the event
+ *  lock. */
 function extendIndex(
   index: AppendIndex,
   files: string[],
   wanted: WantedKey,
   keyState: ReturnType<typeof messageKeyState>,
-): { ok: true; index: AppendIndex } | { ok: false; reason: string } {
-  for (const candidate of files) {
-    if (heldAt(candidate).kind === 'missing') continue;
-    const text = readNoFollow(candidate);
-    if (text === null) return { ok: false, reason: 'the event log could not be read' };
-    const found = findVerifiedRecord(text.split('\n'), wanted, keyState);
-    if (found !== null) {
-      index.duplicates.set(wanted.key, found);
-      index.covered.add(wanted.key);
-      return { ok: true, index };
-    }
-  }
+): { ok: true; index: AppendIndex } {
+  const found = findIndexedRecord(index, files, wanted, keyState);
+  if (found !== null) index.duplicates.set(wanted.key, found);
   index.covered.add(wanted.key);
   return { ok: true, index };
 }

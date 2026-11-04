@@ -59,7 +59,8 @@ import {
   parseEventPayload,
   parseSignedEventLine,
   pruneEventLog,
-  readEventsFromCursor,
+  readEventsFromCursorSliced,
+  type CursorReadResult,
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
@@ -616,6 +617,14 @@ type LiveSubscriber = {
   queue: string[];
   flushing: boolean;
   bufferLimit: number;
+  /** Records fanned out while this subscriber's catch-up read runs, before its answer is built:
+   *  the subscription is registered before the read so nothing appended during it can slip
+   *  between the answer snapshot and the live feed. Null once the answer is built, when fanOut
+   *  goes back to the queue. The list is capped at `bufferLimit`; past it the read's answer is a
+   *  `gap`, exactly as a full queue's is. */
+  holding: { seq: number; line: string }[] | null;
+  /** The sequence of the record that overflowed the holding list, if one did. */
+  heldOverflowAt: number | null;
 };
 
 type SubscriberClaim = { kind: 'seat'; seat: string } | { kind: 'refused'; message: string };
@@ -837,6 +846,19 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       deliver(record);
       for (const sub of subscribers) {
         if (!matchesSubscriber(record, sub.seat, sub.kinds, routingTeam, input.additiveRouting, resolveSeat)) continue;
+        if (sub.holding !== null) {
+          // The subscriber's catch-up read is still running. Hold the record for the answer
+          // instead of writing it first: the answer carries everything up to its cursor, and the
+          // held records past that cursor follow it in order. Overflow is remembered, not
+          // answered here, because the read's own answer is what the subscriber is waiting for.
+          if (sub.heldOverflowAt !== null) continue;
+          if (sub.holding.length >= sub.bufferLimit) {
+            sub.heldOverflowAt = record.payload.seq;
+            continue;
+          }
+          sub.holding.push({ seq: record.payload.seq, line: encodeBusLine({ ok: true, kind: 'event', event: record }) });
+          continue;
+        }
         if (sub.queue.length >= sub.bufferLimit) {
           // Bounded per-subscriber buffer overflow: send `gap` so the subscriber resyncs from
           // durable records rather than dropping an event silently (Amendment 01 §4.2).
@@ -1073,11 +1095,20 @@ function serveBusConnection(
     const line = buffer.slice(0, at);
     buffer = '';
     socket.setTimeout(0);
-    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
+    dispatchBusRequest(socket, line, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam).catch(
+      (error: unknown) => {
+        input.stderr(`team bus: the request failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        socket.destroy();
+      },
+    );
   });
 }
 
-function dispatchBusRequest(
+/** Serves one request. Synchronous except for a subscribe's catch-up read, which is sliced: the
+ *  read gives the event loop a turn, so a follower's first answer never holds the bus for a large
+ *  retained log, and the holding list the subscription registers with keeps the window between
+ *  that read and the live feed exact. */
+async function dispatchBusRequest(
   socket: Socket,
   line: string,
   input: StartBusInput,
@@ -1088,7 +1119,7 @@ function dispatchBusRequest(
   fanOut: (record: SignedEventRecord) => void,
   resolveSeat: SeatRecipientResolver,
   routingTeam: TeamRoutingRoles,
-): void {
+): Promise<void> {
   const request = parseBusRequest(line);
   if (!request) {
     answerOnce(socket, { ok: false, at: 'caller', message: UNKNOWN_REQUEST });
@@ -1231,14 +1262,56 @@ function dispatchBusRequest(
     }
   }
 
-  const fromCursor = readEventsFromCursor(input.team.project, input.root, home, request.cursor, {
-    kept: input.keptLogFiles,
-  });
+  // The subscription is registered before the read, with a holding list: an append that lands
+  // while the sliced read gives the loop a turn is held for the answer instead of fanning out
+  // first, so no record inside the answer's window is written twice and none past its cursor is
+  // lost between the answer snapshot and the live feed.
+  const follow = request.follow === true;
+  const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
+  const sub: LiveSubscriber | null = follow
+    ? {
+        socket,
+        seat,
+        kinds: selfKinds,
+        queue: [],
+        flushing: false,
+        bufferLimit,
+        holding: [],
+        heldOverflowAt: null,
+      }
+    : null;
+  if (sub !== null) {
+    subscribers.add(sub);
+    socket.once('close', () => subscribers.delete(sub));
+  }
+  const dropSub = (): void => {
+    if (sub !== null) subscribers.delete(sub);
+  };
+
+  let fromCursor: CursorReadResult;
+  try {
+    fromCursor = await readEventsFromCursorSliced(input.team.project, input.root, home, request.cursor, {
+      kept: input.keptLogFiles,
+    });
+  } catch {
+    dropSub();
+    answerOnce(socket, { ok: false, at: 'write', message: 'the event log could not be read' });
+    return;
+  }
+  // The socket may have closed while the read gave the loop a turn; its close listener has
+  // removed the subscriber, and this deletes it if the listener has not run yet.
+  if (socket.destroyed) {
+    dropSub();
+    return;
+  }
+  if (sub !== null && !subscribers.has(sub)) return;
   if (!fromCursor.ok) {
+    dropSub();
     answerOnce(socket, { ok: false, at: 'write', message: fromCursor.reason });
     return;
   }
   if (fromCursor.kind === 'gap') {
+    dropSub();
     answerOnce(socket, {
       ok: true,
       kind: 'gap',
@@ -1255,7 +1328,6 @@ function dispatchBusRequest(
     return;
   }
 
-  const selfKinds = request.kinds !== undefined ? new Set<EventKind>(request.kinds) : null;
   const matching = fromCursor.events.filter((rec) =>
     matchesSubscriber(rec, seat, selfKinds, routingTeam, input.additiveRouting, resolveSeat),
   );
@@ -1264,6 +1336,7 @@ function dispatchBusRequest(
     // The window names the records it covers: the oldest this subscriber still needs, and the
     // newest one read — not merely the newest one it matched. The reset cursor has to step past
     // the records of other kinds at the end of the window too.
+    dropSub();
     const oldest = matching[0]!.payload.seq;
     const newest = fromCursor.events[fromCursor.events.length - 1]!.payload.seq;
     answerOnce(socket, {
@@ -1275,7 +1348,15 @@ function dispatchBusRequest(
     return;
   }
 
-  if (request.follow !== true) {
+  if (sub !== null && sub.heldOverflowAt !== null) {
+    // More records were held during the read than a subscription may carry: answer the same
+    // `gap` a full queue answers, so the subscriber resyncs instead of losing one silently.
+    dropSub();
+    answerOnce(socket, { ok: true, kind: 'gap', oldest_seq: sub.heldOverflowAt, newest_seq: sub.heldOverflowAt });
+    return;
+  }
+
+  if (sub === null) {
     answerOnce(socket, {
       ok: true,
       kind: 'events',
@@ -1285,23 +1366,21 @@ function dispatchBusRequest(
     return;
   }
 
-  const sub: LiveSubscriber = {
-    socket,
-    seat,
-    kinds: selfKinds,
-    queue: [
-      encodeBusLine({
-        ok: true,
-        kind: 'events',
-        events: matching,
-        cursor: fromCursor.cursor,
-      }),
-    ],
-    flushing: false,
-    bufferLimit,
-  };
-  subscribers.add(sub);
-  socket.once('close', () => subscribers.delete(sub));
+  // Seed the answer, then the records held past its cursor, then hand the subscriber back to the
+  // live queue — all in one turn, so nothing this read did not cover can be fanned out between
+  // the last held record and the first queued one.
+  sub.queue.push(
+    encodeBusLine({
+      ok: true,
+      kind: 'events',
+      events: matching,
+      cursor: fromCursor.cursor,
+    }),
+  );
+  for (const entry of sub.holding ?? []) {
+    if (entry.seq > fromCursor.cursor) sub.queue.push(entry.line);
+  }
+  sub.holding = null;
   flushSubscriber(sub, subscribers);
 }
 
