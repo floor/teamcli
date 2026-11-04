@@ -219,7 +219,10 @@ function dropDir(root: string, seat: string): string {
 }
 
 function dropped(root: string, seat: string): string {
-  return join(dropDir(root, seat), readdirSync(dropDir(root, seat)).sort()[0] as string);
+  const dir = dropDir(root, seat);
+  const name = readdirSync(dir).find((entry) => MESSAGE_ID.test(entry));
+  if (name === undefined) throw new Error(`no message file dropped for ${seat}`);
+  return join(dir, name);
 }
 
 /** A live listener beside the lead's inbox: this process's pid and the fixture's own seat,
