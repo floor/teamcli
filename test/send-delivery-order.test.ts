@@ -81,7 +81,7 @@ afterEach(async () => {
  *  Every seat keeps its CLI's launch shape: the lead and `own` run Claude Code (`own` setting its
  *  own settings, so no hook is installed), `native` runs codex, and `watcherless` runs muse — a
  *  CLI whose profile carries neither a hook nor an MCP inbox, so it watches nothing at all. */
-function teamYaml(root: string, lobby: string, extra: { top?: string; lead?: string; watchless?: string; own?: string } = {}): string {
+function teamYaml(root: string, lobby: string, extra: { top?: string; lead?: string; watchless?: string; own?: string; native?: string } = {}): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -114,7 +114,7 @@ ${extra.lead ?? ''}  - role: implementer
     model: Test
     version: "1"
     launch: codex -m test
-  - role: reviewer
+${extra.native ?? ''}  - role: reviewer
     name: watcherless
     cli: muse
     vendor: test
@@ -131,7 +131,7 @@ ${extra.watchless ?? ''}  - role: reviewer
 ${extra.own ?? ''}${extra.top ?? ''}`;
 }
 
-function world(extra: { top?: string; lead?: string; watchless?: string; own?: string; entity?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
+function world(extra: { top?: string; lead?: string; watchless?: string; own?: string; entity?: string; native?: string } = {}): { root: string; dir: string; sockets: string; home: string; team: TeamFile } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-walk-')));
   const root = join(base, 'acme');
   const dir = join(root, '.agents');
@@ -374,6 +374,23 @@ describe('the walk records the channel and the legs it skipped', () => {
     const entry = lastEntry(w.root, w.home);
     expect(entry.via).toBe('drop');
     expect(Object.keys(entry).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+  });
+
+  test('a seat whose only word is the retired alias reports the implied defaults exactly as with no word', async () => {
+    // The alias-only level declares nothing in the chain, so no order is declared and every
+    // implied default stands — the socket explanation row a no-word seat's report carries
+    // included, not suppressed by a word that names no leg at all.
+    const w = world({ lead: '    delivery_order: [mcp-inbox]\n' });
+    const host = walker(w);
+    const io = owner(w.root);
+
+    expect(await runSend(['lead', 'hello', '--json'], io, host)).toBe(0);
+
+    const doc = JSON.parse(io.out) as { delivery: { leg: string; state: string; reason?: string }[] };
+    expect(doc.delivery).toEqual([
+      { leg: 'socket', state: 'skipped', reason: 'the receiving Claude session does not declare crossSessionInbound accept (human-launched or launch without --settings; owner CLI settings are not read)' },
+      { leg: 'drop', state: 'attempted' },
+    ]);
   });
 
   test('a codex seat walks the implied native-first order: native fails, nothing is typed, and the bus inbox keeps it', async () => {
@@ -793,7 +810,9 @@ describe('the chain is read from the files when the host hands none in', () => {
       },
     });
     expect(asked).toEqual([teamIdOf(w.root)]);
-    expect(chain).toEqual({ project: ['mcp-inbox', 'typed'] });
+    // The record keeps the word an older build wrote; the chain never carries the alias —
+    // the level holds the live legs the word names.
+    expect(chain).toEqual({ project: ['typed'] });
   });
 
   test('a signed entity policy is the entity’s word', () => {
@@ -967,6 +986,15 @@ describe('a seat that declares no word takes the one its shape implies', () => {
     const w = world();
     expect(deliveryChainOf({ root: w.root, seat: 'native', home: w.home, projectOfTeam: () => null }))
       .toEqual({});
+  });
+
+  test('a word naming only the retired alias declares nothing: the shape answers as with no word', () => {
+    const w = world({ watchless: '    delivery_order: [mcp-inbox]\n' });
+    // The alias is dropped before the chain is built, so the level is absent — never an empty
+    // word — and the seat walks exactly what it walks with no order at all: its shape's own
+    // word, drop left out for a CLI that watches nothing.
+    expect(deliveryChainOf({ root: w.root, seat: 'watcherless', home: w.home, projectOfTeam: () => null }))
+      .toEqual({ seat: ['typed'] });
   });
 
   test('a word the file declares is the seat’s own, never replaced by the shape', () => {
