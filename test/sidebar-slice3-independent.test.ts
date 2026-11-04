@@ -324,6 +324,8 @@ describe('sidebar slice 3', () => {
         paneText: () => '',
         foreground: () => [],
         shellBack: () => false,
+        sleep: async () => {},
+        now: () => NOW,
       } satisfies Launch,
     };
 
