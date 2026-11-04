@@ -65,7 +65,7 @@ export function seatBlocks(text: string): SeatBlock[] {
       flush(i);
       break;
     }
-    if (/^\s*-\s+/.test(line)) {
+    if (/^\s*-(?:\s|$)/.test(line)) {
       if (itemIndent < 0) itemIndent = indent(line);
       if (indent(line) > itemIndent) continue;
       flush(i);
@@ -193,10 +193,10 @@ export function takeOut(text: string, name: string): string {
 /**
  * Copies `fromName`'s entry as a new entry named `toName`. A counted source is split first. The
  * copy carries the entry's fields and no comments or blank lines — a note written beside the
- * source stays with it — drops `count:` and `stopped: true` (it is one seat that starts now),
- * and is named and titled `toName`; a source with no `label:` gains one. It sits directly under
- * the source's last field, so the source's trailing blank lines and comments stay where they
- * were and `takeOut(text, toName)` gives back `text`.
+ * source stays with it — drops `count:`, `nickname:` and `stopped: true` (it is one seat that
+ * starts now, with no persona), and is named and titled `toName`; a source with no `label:`
+ * gains one. It sits directly under the source's last field, so the source's trailing blank
+ * lines and comments stay where they were and `takeOut(text, toName)` gives back `text`.
  */
 export function copySeat(text: string, fromName: string, toName: string): string {
   const ready = prepared(text, fromName);
@@ -205,7 +205,8 @@ export function copySeat(text: string, fromName: string, toName: string): string
   const end = fieldEnd(lines);
   const copied = lines.slice(0, end).flatMap((line) => {
     if (line.trim() === '' || /^\s*#/.test(line)) return [];
-    if (/^\s*count:/.test(line)) return [];
+    if (/^\s*-\s*(?:#.*)?$/.test(line)) return [`${' '.repeat(indent(line))}-`];
+    if (/^\s*(?:count|nickname):/.test(line)) return [];
     if (/^\s*(?:-\s+)?name:/.test(line)) return [setValue(line, toName)];
     if (/^\s*label:/.test(line)) return [setValue(line, toName)];
     if (/^\s*stopped:\s*(?:true|yes)\s*(?:#.*)?$/.test(line)) return [];

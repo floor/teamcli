@@ -96,9 +96,9 @@ seats:
     nickname: skip
     cli: claude-code
     vendor: anthropic
-    model: Claude Sonnet
+    model: Claude Opus
     version: "5.5"
-    launch: claude --model claude-sonnet-5-5
+    launch: claude --model claude-opus-5-5
   - role: implementer
     name: row
     label: row
@@ -299,6 +299,24 @@ describe('a declared copy writes one entry and leaves the rest', () => {
     const entry = text.slice(text.indexOf('name: apprentice'), text.indexOf('name: apprentice') + 400);
     expect(entry).not.toContain('claude-opus');
   });
+
+  test('a copy of a nicknamed seat drops the source nickname so the new seat takes no persona', async () => {
+    const before = readFileSync(teamPath(), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['apprentice', '--like', 'skipper'], io, sources(made)), io.out + io.err).toBe(0);
+    const text = readFileSync(teamPath(), 'utf8');
+    expect(text).toContain('    name: apprentice\n    label: apprentice\n    cli: claude-code\n');
+    expect(text.match(/nickname: skip/g)).toHaveLength(1);
+    expect(takeOut(text, 'apprentice')).toBe(before);
+    const loaded = loadTeamFile(project, { home });
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) {
+      expect(loaded.team.seats.find((seat) => seat.name === 'skipper')?.nickname).toBe('skip');
+      expect(loaded.team.seats.find((seat) => seat.name === 'apprentice')?.nickname).toBeUndefined();
+    }
+    expect(made.creates).toEqual(['apprentice']);
+  });
 });
 
 describe('a copy onto a name the file already declares is refused before any write', () => {
@@ -334,16 +352,6 @@ describe('a copy onto a name the file already declares is refused before any wri
     expect(await runAdd(['lead', '--like', 'spare'], io, sources(made))).toBe(2);
     expect(io.err).toBe(`team add: "lead" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name\n${USAGE}`);
     expect(readFileSync(teamPath(), 'utf8')).toBe(variant);
-    expect(made.creates).toEqual([]);
-  });
-
-  test('a copy that would repeat the source nickname is refused by the file check', async () => {
-    const before = readFileSync(teamPath(), 'utf8');
-    const made = world();
-    const io = testIo(project, owner);
-    expect(await runAdd(['apprentice', '--like', 'skipper'], io, sources(made))).toBe(2);
-    expect(io.err).toContain('two seats have the nickname "skip"');
-    expect(readFileSync(teamPath(), 'utf8')).toBe(before);
     expect(made.creates).toEqual([]);
   });
 
