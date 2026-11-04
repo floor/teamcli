@@ -30,11 +30,13 @@ import {
   pressEnter,
   reportDisplayAgent,
   sendKey,
+  SIDEBAR_TTL_CAP_MS,
   typeText,
   workspaceClose,
   workspaceCreate,
   workspacePanes,
 } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { cleanedIo } from '../io.ts';
 import {
@@ -130,7 +132,8 @@ const realLaunch: Launch = {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, aim(session), ttlMs),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
   agentPanes(session) {
@@ -745,7 +748,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       renameAgent: (current, pane, next) => launch.renameAgent(current, pane, next),
-      reportDisplayAgent: (current, pane, text) => launch.reportDisplayAgent?.(current, pane, text) ?? true,
+      reportDisplayAgent: (current, pane, text) =>
+        launch.reportDisplayAgent?.(
+          current,
+          pane,
+          text,
+          home === undefined
+            ? SIDEBAR_TTL_CAP_MS
+            : sidebarPolicy({ home, root, team, now: sources.now ? sources.now() : new Date() }).ttlMs,
+        ) ?? true,
       closeWorkspace(current, workspace) {
         const ok = launch.closeWorkspace(current, workspace);
         if (ok) closed = true;

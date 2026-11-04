@@ -6,6 +6,7 @@
 // costs one pane read per seat per tick and no output. Observed ≠ file is the label's business
 // only: nothing here writes the file, and a seat whose observed value differs is reported by the
 // pass's own checks, not by the sweep.
+import { SIDEBAR_TTL_CAP_MS } from '../herdr.ts';
 import type { LabelSeat } from '../labels/observe.ts';
 import { observeLabel } from '../labels/observe.ts';
 import type { Memory } from './pass.ts';
@@ -25,9 +26,17 @@ export function labelSweep(input: {
   /** One pane's text as it reads now: the reading line 2 is built from. */
   read: (pane: string) => string | null | undefined;
   /** Line 2 of the pane's label; false leaves the memory untouched, as the pass does. */
-  report: (pane: string, text: string) => boolean;
+  report: (pane: string, text: string, ttlMs?: number) => boolean;
+  /** Clock reading in ms, paired with `refreshMs` so an unchanged line is re-reported once the
+   *  refresh window has elapsed. */
+  now?: number;
+  /** Cadence in ms (`daemon.sidebar-refresh-ms`) after which an unchanged line is re-reported. */
+  refreshMs?: number;
+  /** Metadata TTL in ms (`daemon.sidebar-ttl-ms`, defaulted to `SIDEBAR_TTL_CAP_MS`) forwarded to
+   *  `report`. */
+  ttlMs?: number;
 }): { reported: SweptLabel[]; failed: SweptLabel[] } {
-  const { seats, agents, memory, read, report } = input;
+  const { seats, agents, memory, read, report, now, refreshMs, ttlMs = SIDEBAR_TTL_CAP_MS } = input;
   const reported: SweptLabel[] = [];
   const failed: SweptLabel[] = [];
   for (const agent of agents) {
@@ -37,10 +46,15 @@ export function labelSweep(input: {
     const slot = (memory.seatLabels[seat.name] ??= {});
     const live = observeLabel(seat, read(agent.pane) ?? undefined, slot.effort);
     if (live.effort) slot.effort = live.effort;
-    if (slot.line === live.line) continue;
+    const stale =
+      now !== undefined &&
+      refreshMs !== undefined &&
+      (slot.reportedAt === undefined || now - slot.reportedAt >= refreshMs);
+    if (slot.line === live.line && !stale) continue;
     const swept = { name: seat.name, pane: agent.pane, line: live.line };
-    if (report(agent.pane, live.line)) {
+    if (report(agent.pane, live.line, ttlMs)) {
       slot.line = live.line;
+      if (now !== undefined) slot.reportedAt = now;
       reported.push(swept);
     } else {
       failed.push(swept);

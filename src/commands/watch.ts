@@ -14,7 +14,8 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, foregroundArgv0, PANE_WINDOW, paneForeground, paneProcessInfoAsync, paneProcesses, paneProcessesOf, paneRead, paneReadAsync, paneRun, reportDisplayAgent, SIDEBAR_TTL_CAP_MS, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { sidebarPolicy } from '../settings/sidebar-policy.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -192,7 +193,7 @@ export type WatchSources = {
   /** Sidebar line 1. False is one line and the next pass tries the same title again. */
   renameWorkspace?(session: string, workspace: string, label: string): boolean;
   /** Sidebar line 2. False is one line and the next pass tries the same text again. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** The home whose store holds the override file. Absent in a test that does not set one. */
   home?: string;
   /** The unacked-record read this pass rings and reports from: a scan of every drop and legacy
@@ -414,7 +415,8 @@ export const realWatchSources: WatchSources = {
   home: homedir(),
   swapSources: restartSources,
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, session === 'default' ? undefined : session),
-  reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, session === 'default' ? undefined : session),
+  reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
+    reportDisplayAgent(pane, text, session === 'default' ? undefined : session, ttlMs),
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, session === 'default' ? undefined : session),
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
@@ -906,6 +908,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // spent, the panes not reached stay unread for this pass, and the awaited read resumes at
       // its cursor next pass.
       const limits = watchReadLimits(team, root, sources.home, sources.now());
+      const sidebar = sidebarPolicy(
+        sources.home === undefined
+          ? { home: '', root, team: null }
+          : { home: sources.home, root, team, now: sources.now() },
+      );
       const gate = readGate(() => sources.now().getTime(), limits, hosted?.signal);
       // Before the one whole-session read: a beat overdue from the last pass lands here, so the
       // other hosted routes are renewed going into a call that can hold the loop for seconds.
@@ -1331,8 +1338,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             else say(`${label.name}: its title was not reported`, false);
           }
           if (label.displayAgent && sources.reportDisplayAgent) {
-            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent)) slot.line = label.displayAgent;
-            else say(`${label.name}: its display was not reported`, false);
+            if (sources.reportDisplayAgent(session, label.pane, label.displayAgent, sidebar.ttlMs)) {
+              slot.line = label.displayAgent;
+              slot.reportedAt = now;
+            } else say(`${label.name}: its display was not reported`, false);
           }
         }
         if (!foreign && statusEngine !== undefined) {
@@ -1623,7 +1632,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           agents: last.agents,
           memory,
           read: (pane) => sources.screen(pane, session),
-          report: (pane, text) => sources.reportDisplayAgent?.(session, pane, text) ?? false,
+          report: (pane, text, ttlMs) =>
+            sources.reportDisplayAgent?.(session, pane, text, ttlMs ?? sidebar.ttlMs) ?? false,
+          now: sources.now().getTime(),
+          refreshMs: sidebar.refreshMs,
+          ttlMs: sidebar.ttlMs,
         });
         for (const seat of failed) say(`${seat.name}: its display was not reported`, false);
       };

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { ConfigReload, HerdrAgent, PaneProcesses, SidebarApply } from '../herdr.ts';
+import { SIDEBAR_TTL_CAP_MS, type ConfigReload, type HerdrAgent, type PaneProcesses, type SidebarApply } from '../herdr.ts';
 
 function saveTextFile(path: string, text: string): boolean {
   try {
@@ -118,7 +118,7 @@ export type Host = {
    */
   registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
-  reportDisplayAgent?(session: string, pane: string, text: string): boolean;
+  reportDisplayAgent?(session: string, pane: string, text: string, ttlMs?: number): boolean;
   /** Writes the terminal host's sidebar layout (`sidebar` op): backup, one-pass splice of both
    *  keys, validate through the host, roll back from the bytes held in memory. The sessions to
    *  reload are their own steps, so the apply takes none here. Absent on a host that writes no
@@ -1206,7 +1206,7 @@ export async function executePlan(
         if (applied.kind === 'refused') {
           held = true;
           abort = true;
-          const tail = applied.restored ? '' : ' (and the prior config could not be restored)';
+          const tail = applied.restored ? '' : ' (the config was left untouched)';
           const what = `the terminal host's sidebar layout was refused: ${applied.reason}${tail}`;
           host.say(`sidebar: ${what}\n`);
           host.log('sidebar', what);
@@ -2118,7 +2118,11 @@ export async function executePlan(
         }
         // Line 2, after the name. Absent on a host that does not launch seats. A call that
         // fails is one line; the seat stays named, and nothing here reads the owner's terminal.
-        if (op.displayAgent && host.reportDisplayAgent && !host.reportDisplayAgent(session, here.pane, op.displayAgent)) {
+        if (
+          op.displayAgent &&
+          host.reportDisplayAgent &&
+          !host.reportDisplayAgent(session, here.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
+        ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;
@@ -2128,7 +2132,10 @@ export async function executePlan(
         if (host.renameWorkspace && !host.renameWorkspace(session, op.workspace, op.title)) {
           sayForSeat(op.seat, `${op.seat}: its title was not reported\n`);
         }
-        if (host.reportDisplayAgent && !host.reportDisplayAgent(session, op.pane, op.displayAgent)) {
+        if (
+          host.reportDisplayAgent &&
+          !host.reportDisplayAgent(session, op.pane, op.displayAgent, SIDEBAR_TTL_CAP_MS)
+        ) {
           sayForSeat(op.seat, `${op.seat}: its display was not reported\n`);
         }
         break;

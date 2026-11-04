@@ -105,10 +105,12 @@ export type Memory = {
   // takes the record off the list.
   mailboxTold: Set<string>;
   // Sidebar lines this process has pushed, and the last effort word a screen showed. `title`
-  // and `line` are written only after herdr accepts the call. `effort` is the word last seen,
-  // which a screen that shows none does not clear. A restarted watch has none, so the first
-  // cycle paints every running seat again.
-  seatLabels: Record<string, { title?: string; line?: string; effort?: string }>;
+  // and `line` are written only after herdr accepts the call, with `reportedAt` recording the
+  // clock reading (ms) of the last accepted `line` report so the sweep can re-report an unchanged
+  // line once the refresh window elapses. `effort` is the word last seen, which a screen that
+  // shows none does not clear. A restarted watch has none, so the first cycle paints every running
+  // seat again.
+  seatLabels: Record<string, { title?: string; line?: string; effort?: string; reportedAt?: number }>;
 };
 
 export function newMemory(): Memory {

@@ -127,4 +127,52 @@ describe('the sweep between passes', () => {
     expect(swept.reported).toEqual([{ name: 'claude-coordinator-acme', pane: 'w1:p1', line: 'Claude Sonnet 4.5 default' }]);
     expect(pushed).toEqual(['w1:p1 Claude Sonnet 4.5 default']);
   });
+
+  test('an unchanged line is re-reported once the refresh window elapses, recording reportedAt and forwarding ttlMs', () => {
+    const memory = newMemory();
+    const calls: { pane: string; text: string; ttlMs: number | undefined }[] = [];
+    const report = (pane: string, text: string, ttlMs?: number) => {
+      calls.push({ pane, text, ttlMs });
+      return true;
+    };
+    const read = () => 'Opus 5.5\n';
+    const sweepAgents = [{ name: 'claude-coordinator-acme', pane: 'pane-1' }];
+    const refreshMs = 21_600_000;
+    const ttlMs = 86_400_000;
+
+    // Initial report at t = 1_000 records reportedAt = 1_000.
+    const first = labelSweep({ seats: [seat], agents: sweepAgents, memory, read, report, now: 1_000, refreshMs, ttlMs });
+    expect(first.reported).toEqual([{ name: 'claude-coordinator-acme', pane: 'pane-1', line: 'Opus 5.5 default' }]);
+    expect(memory.seatLabels['claude-coordinator-acme']?.reportedAt).toBe(1_000);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ pane: 'pane-1', text: 'Opus 5.5 default', ttlMs });
+
+    // Before the refresh window elapses (t = 1_000 + refreshMs - 1), the unchanged line is skipped.
+    expect(
+      labelSweep({ seats: [seat], agents: sweepAgents, memory, read, report, now: 1_000 + refreshMs - 1, refreshMs, ttlMs }),
+    ).toEqual({ reported: [], failed: [] });
+    expect(calls).toHaveLength(1);
+
+    // At the refresh boundary (t = 1_000 + refreshMs), the unchanged line is re-reported and reportedAt advances.
+    const refreshed = labelSweep({
+      seats: [seat],
+      agents: sweepAgents,
+      memory,
+      read,
+      report,
+      now: 1_000 + refreshMs,
+      refreshMs,
+      ttlMs,
+    });
+    expect(refreshed.reported).toEqual([{ name: 'claude-coordinator-acme', pane: 'pane-1', line: 'Opus 5.5 default' }]);
+    expect(memory.seatLabels['claude-coordinator-acme']?.reportedAt).toBe(1_000 + refreshMs);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({ pane: 'pane-1', text: 'Opus 5.5 default', ttlMs });
+
+    // Immediately after, inside the new window, it is silent again.
+    expect(
+      labelSweep({ seats: [seat], agents: sweepAgents, memory, read, report, now: 1_000 + refreshMs + 5_000, refreshMs, ttlMs }),
+    ).toEqual({ reported: [], failed: [] });
+    expect(calls).toHaveLength(2);
+  });
 });
