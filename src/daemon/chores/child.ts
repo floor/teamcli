@@ -21,6 +21,7 @@ import type { ReminderProvider } from '../../reminder/provider.ts';
 import type { ReminderSend, ReminderSpec } from '../../reminder/run.ts';
 import { createFallbackPass } from './fallback.ts';
 import { createPresencePass, type ChoresPresencePass } from './presence.ts';
+import { createSidebarPass } from './sidebar.ts';
 import type { ChoresWatch, ChoresWatchInput } from './watch.ts';
 import type { WatchSources } from '../../commands/watch.ts';
 import { runWatchdogSlice, watchdogState, type WatchdogSeat, type WatchdogState } from '../../seat-health/pass.ts';
@@ -61,8 +62,12 @@ export type ServeChoresChildInput = {
   stdout: NodeJS.WritableStream;
   now?: () => Date;
   /** The real chores. The default is the fallback sweep this step moved here; the presence
-   *  steps are the second set. A test injects its own to observe the budget and the notes. */
+   *  steps are the second set, and the sidebar display refresh is the third. A test injects its
+   *  own to observe the budget and the notes. */
   pass?: ChoresPass;
+  /** The sidebar display-agent TTL refresh pass. A test injects its own; when `pass` is
+   *  injected alone to observe slice scheduling, this is skipped unless explicitly provided. */
+  sidebar?: ChoresPass;
   /** The presence steps (activity, reconcile, publisher). A test injects its own. */
   presence?: ChoresPresencePass;
   /** The machine reminder's own seams: the list reader and the transport. A test injects its
@@ -167,6 +172,7 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
   const { config } = input;
   const now = input.now ?? (() => new Date());
   const pass = input.pass ?? createFallbackPass(config);
+  const sidebar = input.sidebar ?? (input.pass === undefined ? createSidebarPass(config) : null);
   const presence = input.presence ?? createPresencePass(config);
   const stdout = input.stdout;
   const stdin = input.stdin;
@@ -269,9 +275,13 @@ export async function serveChoresChild(input: ServeChoresChildInput): Promise<nu
    *  never delays the report another root has already finished. */
   const runOne = (route: ChoresChildRoute, at: string): Promise<void> => (async (): Promise<void> => {
     const startedAt = now().getTime();
+    const instant = new Date(at);
     let notes: string[];
     try {
-      notes = await pass({ route, at: new Date(at), slices });
+      notes = [...(await pass({ route, at: instant, slices }))];
+      if (sidebar !== null && !slices.stopping()) {
+        notes.push(...(await sidebar({ route, at: instant, slices })));
+      }
     } catch (error) {
       // One root's failure is that root's own: the sibling roots still run, and the daemon log
       // names this one through the note list.
