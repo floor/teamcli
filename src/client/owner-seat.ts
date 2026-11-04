@@ -561,6 +561,7 @@ export function signOwnerLater(
   store: OwnerSeatKeyStore,
   reason: string,
   assertion?: { authenticator_data: string; client_data_json: string; signature: string },
+  now: Date = new Date(),
 ): { ok: true; signed: SignedOwnerLater } | { ok: false; why: string } {
   const from = Date.parse(created);
   const until = Date.parse(later.until);
@@ -575,7 +576,7 @@ export function signOwnerLater(
     ? (record.signers.length === 1 ? record.signers[0] : undefined)
     : record.signers.find((s) => s.name === signerName);
   if (signer === undefined) return { ok: false, why: signerName === undefined ? `name the signer with --signer (${record.signers.map((s) => s.name).join(', ')})` : `"${signerName}" is not a registered owner signer` };
-  const accepted = acceptedSigners(home, record);
+  const accepted = acceptedSigners(home, record, now);
   if ('why' in accepted) return { ok: false, why: accepted.why };
   if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
   if (signer.type === 'webauthn') {

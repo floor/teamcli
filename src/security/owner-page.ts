@@ -8,19 +8,21 @@
 // - register a passkey as an owner signer (the existing Secure Enclave signer confirms with Touch ID);
 // - sign the waiting security-profile proposal;
 // - answer a waiting team-create request, a grant, or a team import / add / up request
-//   (approve once, always allow, or deny; the posted word stays oui / always / non).
+//   (approve once, always allow, or deny; the posted word stays oui / always / non);
+// - answer later, tomorrow or a weekday to a card: a signed deferral hides it until then and
+//   gives it one more answer window after, approving nothing.
 // Every API call carries the per-run token from the link and must come to Host localhost:<port>.
 
 import { msg } from '../client/grant-messages.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-link.ts';
-import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { addOwnerSigner, answerDeadline, deferralUntil, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, signOwnerLater, type AnswerWindow, type OwnerSeatKeyStore, type OwnerSeatLater } from '../client/owner-seat.ts';
 import { grantCard, ownerActionCard, ownerActionDetails, teamCreateCard, teamCreateDetails } from '../client/approval-card.ts';
-import { actionRequestsFolder, approveTeamCreate, type TeamCreateParams } from '../client/team-create.ts';
-import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTIONS, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
-import { approveAsOwnerSeat, GRANT_REQUEST_ID_PATTERN, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
-import { existsSync, readFileSync } from 'node:fs';
+import { actionRequestsFolder, approveTeamCreate, TEAM_CREATE_TTL_MS, type TeamCreateParams } from '../client/team-create.ts';
+import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, OWNER_ACTION_TTL_MS, OWNER_ACTIONS, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
+import { answerChoiceOf, approveAsOwnerSeat, deferUntilOf, GRANT_REQUEST_ID_PATTERN, GRANT_REQUEST_TTL_MS, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { openRequestLink } from '../client/request-link.ts';
 import { join } from 'node:path';
 import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
@@ -142,21 +144,48 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const signerOfCredential = (credentialId: string) => readOwnerSeat(home)?.signers.find((s) => s.type === 'webauthn' && s.credential_id === credentialId);
   const assertionOf = (a: Assertion) => ({ authenticator_data: a.authenticatorData, client_data_json: a.clientDataJSON, signature: derB64urlToHex(a.signature) });
 
-  // A request already answered, or past its fifteen minutes, is not shown again.
-  const answeredOrExpired = (id: string): boolean => {
+  // A request's own binding: the hash a deferral must name, the creation instant the cap counts
+  // from, and the window's end. A grant is stored signed ({ grant_request, signature }): its
+  // fields are inside; reading only the top level hid every pending grant from the page.
+  const recordWindow = (id: string): { folder: string; kind: OwnerSeatLater['kind']; window: AnswerWindow; team: string | null; entity: string | undefined } | null => {
+    const grant = GRANT_REQUEST_ID_PATTERN.test(id);
+    const action = OWNER_ACTION_ID_PATTERN.test(id);
+    const folder = grant ? grantRequestsFolder(home) : actionRequestsFolder(home);
+    try {
+      const raw = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8')) as Record<string, unknown> & { grant_request?: unknown };
+      const inner = (typeof raw.grant_request === 'object' && raw.grant_request !== null ? raw.grant_request : raw) as Record<string, unknown>;
+      const params = (typeof inner.params === 'object' && inner.params !== null ? inner.params : {}) as Record<string, unknown>;
+      if (typeof inner.created !== 'string' || typeof inner.params_sha256 !== 'string') return null;
+      if (inner.expires_at !== null && typeof inner.expires_at !== 'string') return null;
+      return {
+        folder,
+        kind: grant ? 'grant' : action ? 'owner-action' : 'team-create',
+        window: { params_sha256: inner.params_sha256, created: inner.created, expires_at: inner.expires_at },
+        team: action && typeof params.team === 'string' ? params.team : null,
+        entity: grant && typeof params.entity === 'string' ? params.entity : undefined,
+      };
+    } catch {
+      return null;
+    }
+  };
+  const ttlOf = (id: string) => GRANT_REQUEST_ID_PATTERN.test(id) ? GRANT_REQUEST_TTL_MS : OWNER_ACTION_ID_PATTERN.test(id) ? OWNER_ACTION_TTL_MS : TEAM_CREATE_TTL_MS;
+  // A request already answered, past its deadline, or deferred and not yet returned is not shown.
+  const answeredOrHidden = (id: string): boolean => {
     const folder = GRANT_REQUEST_ID_PATTERN.test(id) ? grantRequestsFolder(home) : actionRequestsFolder(home);
     try {
       if (existsSync(join(folder, `${id}.seat-answer.json`))) return true;
       if (GRANT_REQUEST_ID_PATTERN.test(id) && (existsSync(join(folder, `${id}.answer.json`)) || existsSync(join(folder, `${id}.used`)))) return true;
-      // A grant request is stored signed ({ grant_request, signature }): its expiry is inside.
-      // Reading only the top level hid every pending grant from the page.
-      const raw = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8')) as { expires_at?: string | null; grant_request?: { expires_at?: string | null } };
-      const expires = raw.grant_request !== undefined && typeof raw.grant_request === 'object' && raw.grant_request !== null ? raw.grant_request.expires_at : raw.expires_at;
-      if (expires === null) return false;
-      return typeof expires !== 'string' || Date.parse(expires) <= now().getTime();
     } catch {
       return true;
     }
+    const resolved = recordWindow(id);
+    if (resolved === null) return true;
+    const at = now();
+    // The same deadline every reader compares, so a verified deferral extends the page too; a
+    // request refused at its deadline is hidden, exactly as the readers refuse it.
+    if (!(answerDeadline(home, resolved.folder, id, resolved.window, store, at, ttlOf(id), resolved.entity) > at.getTime())) return true;
+    const until = deferralUntil(home, resolved.folder, id, resolved.window, store, at, resolved.entity);
+    return until !== null && at.getTime() < until;
   };
   // One answer route: a grant id (gr_), an owner-action id (oa_), or a team-create id (tc_).
   const approveAny = (
@@ -169,6 +198,55 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     if (OWNER_ACTION_ID_PATTERN.test(id)) return approveOwnerAction(home, id, word, store, at, via);
     return approveTeamCreate(home, id, word, store, at, via);
   };
+  // A later word is never an answer: it writes one signed deferral, and nothing is approved,
+  // denied or spent. Expiry is judged first, so an expired card says so rather than offering a
+  // return time it could not honour.
+  const deferAny = (
+    id: string,
+    word: string,
+    at: Date,
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+  ): { ok: true; choice: 'later'; until: string } | { ok: false; why: string } => {
+    const resolved = recordWindow(id);
+    if (resolved === null) return { ok: false, why: `request ${id} has no readable record to defer` };
+    if (!(answerDeadline(home, resolved.folder, id, resolved.window, store, at, ttlOf(id), resolved.entity) > at.getTime())) {
+      return { ok: false, why: `request ${id} expired at ${resolved.window.expires_at}` };
+    }
+    const until = deferUntilOf(word, at);
+    if (until === null) return { ok: false, why: `"${word.trim()}" is not a later word: answer later, tomorrow, or a day (monday to sunday), or oui/approved/yes, always, or non/deny to decide` };
+    const later: OwnerSeatLater = {
+      kind: resolved.kind,
+      request_id: id,
+      params_sha256: resolved.window.params_sha256,
+      until: until.toISOString(),
+      word: word.trim().toLowerCase(),
+      team: resolved.team,
+      seat: 'owner',
+      at: at.toISOString(),
+    };
+    const signed = signOwnerLater(home, later, resolved.window.created, via.signer, store, `Defer ${id} until ${later.until}`, via.assertion, at);
+    if (!signed.ok) return signed;
+    writeFileSync(join(resolved.folder, `${id}.later.json`), `${JSON.stringify(signed.signed, null, 2)}\n`);
+    return { ok: true, choice: 'later', until: later.until };
+  };
+  // The words that approve and deny go to the approval route; every other word is offered to the
+  // later table, which answers a word it does not know by naming the words it does.
+  const answerOrDefer = (
+    id: string,
+    word: string,
+    at: Date,
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+  ) => answerChoiceOf(word) === null ? deferAny(id, word, at, via) : approveAny(id, word, at, via);
+  // The three later buttons, each with the exact instant it returns the card.
+  const deferChoices = (): Record<string, string> => {
+    const from = now();
+    const out: Record<string, string> = {};
+    for (const word of ['later', 'tomorrow', 'monday']) {
+      const at = deferUntilOf(word, from);
+      if (at !== null) out[word] = at.toISOString();
+    }
+    return out;
+  };
   // The page signs with a passkey: the first webauthn owner signer is the one the prompt names.
   const webauthnSignerName = () => readOwnerSeat(home)?.signers.find((s) => s.type === 'webauthn')?.name ?? null;
   const state = () => {
@@ -180,8 +258,8 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       proposal: proposal === null ? null : { profile: proposal.profile, expires: proposal.expires, signer: proposal.signer, challenge: securityProfileChallenge(proposal) },
       requests: ownerSeatMessages(home)
         .filter((m) => SHOWN_KINDS.has((m as { kind?: string }).kind ?? ''))
-        .filter((m) => !answeredOrExpired(m.request_id))
-        .map((m) => ownerPageRequest(m as { request_id: string; text?: string; kind?: string; summary?: unknown }, GRANT_REQUEST_ID_PATTERN.test(m.request_id) ? pendingGrantPrompt(home, m.request_id, now(), webauthnSignerName()) : null)),
+        .filter((m) => !answeredOrHidden(m.request_id))
+        .map((m) => ({ ...ownerPageRequest(m as { request_id: string; text?: string; kind?: string; summary?: unknown }, GRANT_REQUEST_ID_PATTERN.test(m.request_id) ? pendingGrantPrompt(home, m.request_id, now(), webauthnSignerName()) : null), defer: deferChoices() })),
       rp_id: OWNER_PAGE_RP_ID,
     };
   };
@@ -235,7 +313,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       if (signer === undefined) return { status: 400, body: { error: 'unknown passkey' } };
       const at = now();
       // Asked without an assertion, the signer names the exact challenge; nothing is written.
-      const probe = approveAny(id, word, at, { signer: signer.name });
+      const probe = answerOrDefer(id, word, at, { signer: signer.name });
       const challenge = !probe.ok ? /sign challenge (\S+)/.exec(probe.why)?.[1] : undefined;
       if (challenge === undefined) return { status: 400, body: { error: probe.ok ? 'unexpected' : probe.why } };
       pendingAnswers.set(`${id}:${word}:${signer.name}`, { at, challenge });
@@ -247,19 +325,21 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const pending = signer === undefined ? undefined : pendingAnswers.get(`${a.id}:${a.word}:${signer.name}`);
       if (signer === undefined || pending === undefined) return { status: 400, body: { error: 'no challenge was issued for this answer' } };
       pendingAnswers.delete(`${a.id}:${a.word}:${signer.name}`);
-      const answered = approveAny(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a) });
-      return answered.ok ? { status: 200, body: { ok: true, choice: answered.choice } } : { status: 400, body: { error: answered.why } };
+      const answered = answerOrDefer(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a) });
+      return answered.ok
+        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until } : {}) } }
+        : { status: 400, body: { error: answered.why } };
     },
   };
 
   // One-request link sessions: opened once with the link's nonce, bound to that one request id,
   // in memory only, never longer than the request. A session reads that card and may ask for an
-  // answer; the answer is written only by approveAsOwnerSeat, which needs an owner-signer signature.
+  // answer; the answer or deferral is written only by an owner-signer signature.
   const linkSessions = new Map<string, { id: string; until: number }>();
   const LINK_SESSION_MS = 15 * 60_000;
   const sessionFor = (id: string, b: Record<string, unknown>): boolean => {
     const s = linkSessions.get(String(b.session ?? ''));
-    return s !== undefined && s.id === id && s.until > now().getTime() && !answeredOrExpired(id);
+    return s !== undefined && s.id === id && s.until > now().getTime() && !answeredOrHidden(id);
   };
   const cardOf = (id: string) => {
     const message = ownerSeatMessages(home).find((m) => m.request_id === id) as { request_id: string; text?: string; kind?: string; summary?: unknown } | undefined;
@@ -269,7 +349,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const linkRoute = (method: string, id: string, action: string, b: Record<string, unknown>): { status: number; body: unknown } => {
     if (method === 'POST' && action === 'open') {
       const opened = openRequestLink(home, id, String(b.nonce ?? ''), now());
-      if (!opened.ok || answeredOrExpired(id)) return { status: 403, body: { error: opened.ok ? 'this request is already answered or expired' : opened.why } };
+      if (!opened.ok || answeredOrHidden(id)) return { status: 403, body: { error: opened.ok ? 'this request is already answered, deferred or expired' : opened.why } };
       const session = randomBytes(18).toString('base64url');
       linkSessions.set(session, { id, until: now().getTime() + LINK_SESSION_MS });
       const seat = readOwnerSeat(home);
@@ -283,8 +363,10 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       // The Mac's Secure Enclave signer: Touch ID in the owner's session signs the answer.
       const signer = readOwnerSeat(home)?.signers.find((x) => x.type === 'mac-keystore');
       if (signer === undefined) return { status: 400, body: { error: 'no Touch ID signer on the owner seat' } };
-      const answered = approveAsOwnerSeat(home, id, word, store, now(), { signer: signer.name });
-      return answered.ok ? { status: 200, body: { ok: true, choice: answered.choice } } : { status: 400, body: { error: answered.why } };
+      const answered = answerOrDefer(id, word, now(), { signer: signer.name });
+      return answered.ok
+        ? { status: 200, body: { ok: true, choice: answered.choice, ...('until' in answered ? { until: answered.until } : {}) } }
+        : { status: 400, body: { error: answered.why } };
     }
     return { status: 404, body: { error: 'not found' } };
   };
@@ -424,7 +506,7 @@ async function load() {
     if (r.id.startsWith('gr_')) {
       const always = r.onceOnly ? '' : '<button data-w="always">${msg('page.always_allow')}</button>';
       const details = '<details><summary>${msg('page.details')}</summary><p class="hint">' + esc(r.details || '') + '</p></details>';
-      const d = card('<b>' + esc(r.title || '${msg('page.title.grant')}') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<button data-w="oui">${msg('page.approve_once')}</button>' + always + '<button data-w="non">${msg('page.deny')}</button>');
+      const d = card('<b>' + esc(r.title || '${msg('page.title.grant')}') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<button data-w="oui">${msg('page.approve_once')}</button>' + always + '<button data-w="non">${msg('page.deny')}</button>' + '<button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>');
       d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
       continue;
     }
@@ -433,7 +515,7 @@ async function load() {
       : 'Approve once is a one-time approval. A migration needs that. Always allow also permits later runs of the same action in this folder.';
     const details = r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '';
     const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
-    const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>');
+    const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + esc(r.description) + '</p>' + scope + details + '<p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button><button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>');
     d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
   }
 }
@@ -478,7 +560,7 @@ async function answer(word) {
   const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
   const d = document.getElementById('card'); d.className = 'card';
   const scope = r.scope ? '<p class="hint">' + esc(r.scope) + '</p>' : '';
-  d.innerHTML = '<b>' + esc(r.title) + '</b><p>' + esc(r.description) + '</p>' + scope + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>';
+  d.innerHTML = '<b>' + esc(r.title) + '</b><p>' + esc(r.description) + '</p>' + scope + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button><button data-w="later">Later</button><button data-w="tomorrow">Tomorrow</button><button data-w="monday">Monday</button>';
   d.querySelectorAll('button').forEach(b => b.onclick = () => answer(b.dataset.w).catch(e => log('Refused: ' + e.message)));
 })().catch(e => log(e.message));
 </script></body></html>
