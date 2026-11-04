@@ -190,6 +190,27 @@ export function eventLogPath(project: string, root: string, home: string): strin
   return join(storePath(project, root, home), EVENT_LOG_FILE);
 }
 
+/** The bytes the retained set holds on disk: the live segment and every sealed slot inside the
+ *  reader's bound, the same files `readEvents` walks. A slot that is not a regular file of this
+ *  user's contributes nothing; the size is a stat, never a read, so a near-cap note costs one
+ *  stat per retained slot and never touches a segment's bytes. */
+export function retainedLogBytes(
+  project: string,
+  root: string,
+  home: string,
+  options: { kept?: number } = {},
+): number {
+  const kept = options.kept ?? eventLogSettingsFor(root, home).kept;
+  const path = join(storePath(project, root, home), EVENT_LOG_FILE);
+  let total = 0;
+  for (let n = kept - 1; n >= 0; n--) {
+    const at = n === 0 ? path : `${path}.${String(n)}`;
+    if (heldAt(at).kind !== 'file') continue;
+    total += sizeOfFile(at);
+  }
+  return total;
+}
+
 function ladderProblem(at: string): string | null {
   const held = heldAt(at);
   if (held.kind === 'missing') return null;
