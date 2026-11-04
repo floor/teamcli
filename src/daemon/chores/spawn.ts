@@ -38,9 +38,11 @@ export type ChoresChild = {
   send(message: ChoresHostMessage): boolean;
   /** Listens for the child's messages, notes and exit; the returned function unsubscribes. */
   subscribe(listener: (event: ChoresChildEvent) => void): () => void;
-  /** Ends the child: terminate, then force after `graceMs`. `evenIfWorking` asks for the forced
-   *  end even when the process is still consuming CPU, which an ordinary end must never do: the
-   *  hung ceiling is the one caller that asks. Idempotent and never throws. */
+  /** Ends the child: terminate, then force after `graceMs` unless the machine is still charging it
+   *  CPU. `evenIfWorking` asks for the forced end even then, which an ordinary end must never do:
+   *  the hung ceiling and the daemon's stop are the callers that ask. A child that answers an
+   *  ordinary request with a beat withdraws it; a deliberate request may upgrade one the handle is
+   *  still holding, and one request is in flight at a time. Never throws. */
   kill(why: string, graceMs?: number, options?: { evenIfWorking?: boolean }): void;
   /** Settles when the child's process is gone, however it left. Never rejects. */
   readonly exited: Promise<void>;
@@ -88,6 +90,13 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   const entry = input.entry ?? choresEntryOf();
   const listeners = new Set<(event: ChoresChildEvent) => void>();
   let settled = false;
+  /** An end request is out and its forced end has not been decided. */
+  let killPending = false;
+  /** This request may force a child that is still consuming CPU (the hung ceiling, the stop). */
+  let killDeliberate = false;
+  /** The request's reason, carried into the stand-down note. */
+  let killWhy = '';
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
   /** The process has exited. A beat may still be in flight when this turns true, so `send`
    *  reads it together with the input stream's own state. */
   let gone = false;
@@ -110,6 +119,11 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   const settle = (): void => {
     if (settled) return;
     settled = true;
+    killPending = false;
+    if (killTimer !== null) {
+      clearTimeout(killTimer);
+      killTimer = null;
+    }
     resolveExited();
   };
 
@@ -152,56 +166,86 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     return refuse(`the chores child could not be started: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  let killed = false;
   const cpuTimeOf = input.cpuTimeOf ?? processCpuTimeOf;
   const kill = (
     why: string,
     graceMs: number = DEFAULT_KILL_GRACE_MS,
     options?: { evenIfWorking?: boolean },
   ): void => {
-    if (killed || settled) return;
-    killed = true;
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // Already gone; the exit below settles the handle.
+    if (settled) return;
+    const deliberate = options?.evenIfWorking === true;
+    if (killPending) {
+      // One request at a time. A deliberate end may upgrade a request the handle is still holding
+      // for a child that keeps consuming CPU: the caller (the hung ceiling, the daemon's stop)
+      // has decided the child must not outlive it, and waits a fresh grace from this reading.
+      if (!deliberate || killDeliberate) return;
+      killDeliberate = true;
+      if (killTimer !== null) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+    } else {
+      killPending = true;
+      killDeliberate = deliberate;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // Already gone; the exit below settles the handle.
+      }
+      emit({ kind: 'note', text: `the child was ended: ${why}` });
     }
+    killWhy = why;
     // The forced end is the last resort, not the first: a child the machine is still charging CPU
     // time is working, however silent it is, and forcing it is what turns a loaded machine into a
     // storm of replacements. Each grace re-reads that one fact, and only a child charged nothing
     // across a grace is forced. A reading that cannot be taken is no evidence either way, so the
     // handle keeps its ordinary behaviour there and forces when the grace expires. The hung
-    // ceiling is the one caller that asks for a forced end while the child is still working.
+    // ceiling and the daemon's stop ask for a forced end while the child is still working.
     const pid = child.pid ?? null;
     let baseline = pid === null ? null : cpuTimeOf(pid);
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    const wait = Math.max(1, graceMs);
+    let sparedLogged = false;
     const decide = (): void => {
-      if (settled) return;
+      if (settled || !killPending) return;
+      killTimer = null;
       const now = pid === null ? null : cpuTimeOf(pid);
       const working =
-        options?.evenIfWorking !== true &&
+        !killDeliberate &&
         baseline !== null &&
         now !== null &&
         now - baseline > CPU_PROGRESS_EPSILON_MS;
       if (working) {
         baseline = now;
-        emit({ kind: 'note', text: `the child is still consuming CPU; not forcing it: ${why}` });
-        timer = setTimeout(decide, Math.max(1, graceMs));
-        timer.unref();
+        if (!sparedLogged) {
+          sparedLogged = true;
+          emit({ kind: 'note', text: `the child is still consuming CPU; not forcing it: ${killWhy}` });
+        }
+        killTimer = setTimeout(decide, wait);
+        killTimer.unref();
         return;
       }
+      killPending = false;
       try {
         child.kill('SIGKILL');
       } catch {
         // Already gone.
       }
     };
-    timer = setTimeout(decide, Math.max(1, graceMs));
-    timer.unref();
-    void exited.then(() => {
-      if (timer !== null) clearTimeout(timer);
-    });
-    emit({ kind: 'note', text: `the child was ended: ${why}` });
+    killTimer = setTimeout(decide, wait);
+    killTimer.unref();
+  };
+
+  /** A child asked to end that answers with a beat is alive and working: an ordinary request is
+   *  withdrawn and the supervisor takes the child back into service. A deliberate request is not
+   *  withdrawn, because a stop and the hung ceiling must not leave a child behind. */
+  const standDown = (): void => {
+    if (!killPending || killDeliberate) return;
+    killPending = false;
+    if (killTimer !== null) {
+      clearTimeout(killTimer);
+      killTimer = null;
+    }
+    emit({ kind: 'note', text: `the child answered its end request; not forcing it: ${killWhy}` });
   };
 
   // Every stream this handle writes to or reads from carries an error listener from the moment
@@ -237,6 +281,9 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
         emit({ kind: 'note', text: 'a child frame was not a message the daemon understands' });
         continue;
       }
+      // A beat is the child saying it is alive and working; an ordinary end request in flight is
+      // withdrawn before the supervisor hears the beat, so its row and the handle agree.
+      if (message.type === 'heartbeat') standDown();
       emit({ kind: 'message', message });
     }
     if (stdoutBuffer.length > CHORES_FRAME_LIMIT) {

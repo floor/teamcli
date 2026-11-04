@@ -333,7 +333,24 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // A child that is being ended, or whose process has already left, gets no beat: its pipe has
   // no reader, and the write that follows is the daemon's own fault, not the child's. The exit
   // settles the group and schedules the replacement; this beat has nothing to say to it.
-  if (group.killing || !child.alive) return;
+  //
+  // A child the handle spared from an ordinary end request because its CPU kept advancing is
+  // still running and still out of service. Its row says it is still working, and the hung
+  // ceiling is what ends it: silence alone is never a reason to force it, so at the ceiling the
+  // supervisor asks again, this time for a forced end. The ceiling sentence in the row marks a
+  // deliberate end already asked for; this beat must not log or ask for it twice.
+  if (group.killing || !child.alive) {
+    if (
+      group.killing &&
+      child.alive &&
+      !stalled &&
+      group.rowWhy === null &&
+      ms - (group.lastBeatReadMs ?? group.startedAtMs) >= HUNG_CEILING_MS
+    ) {
+      endAtCeiling(input, group, child, `the child has not beaten for ${String(HUNG_CEILING_MS)} ms while its CPU kept advancing`);
+    }
+    return;
+  }
   child.send({ type: 'tick', id: `${String(ms)}-${String(group.restarts)}`, at: at.toISOString() });
   // A beat that itself arrived late is the daemon's own loop having been held, not a child that
   // stopped beating: the heartbeats sent during the stall are still unread in its pipe, and a
@@ -552,10 +569,15 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       const readAt = input.now().getTime();
       // A child the daemon asked to end that answers with a beat is still working: the handle's
       // guard withholds the forced end from a child that keeps consuming CPU, and the supervisor
-      // must not leave a live child out of service forever. The end request is withdrawn and the
-      // next late window is judged afresh. A child that was in teardown anyway exits on its own,
-      // and that exit still schedules the replacement exactly as before.
-      if (group.killing) {
+      // must not leave a live child out of service forever. An ordinary end request is withdrawn
+      // and the next late window is judged afresh. A child that was in teardown anyway exits on
+      // its own, and that exit still schedules the replacement exactly as before.
+      //
+      // A deliberate end is not withdrawn: the hung ceiling's request is already going to force
+      // the child, so a beat inside its grace must not put a child that is about to be forced
+      // back into service. The ceiling sentence in the row marks that deliberate request; the
+      // generic bookkeeping below clears it, and `killing` then falls back to the ceiling's reason.
+      if (group.killing && group.rowWhy === null) {
         group.killing = false;
         group.why = null;
       }

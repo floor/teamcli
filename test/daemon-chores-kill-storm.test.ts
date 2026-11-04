@@ -606,4 +606,114 @@ describe('chores supervisor liveness by progress', () => {
       expect(starts[index]! - starts[index - 1]!).toBeGreaterThanOrEqual(60_000);
     }
   });
+
+  test('9. a child asked to end that keeps running without a beat is ended as a hung loop at the ceiling', async () => {
+    const { home, roots } = makeWorld(['root-survivor']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 9000 };
+    const spawned: Fake[] = [];
+    const logs: string[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: (text) => logs.push(text),
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(7000 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000));
+    tickAt(10_000);
+    tickAt(15_000);
+    tickAt(20_000);
+    expect(child.killCalls).toHaveLength(1);
+    // The child survives the end request — the handle withheld the forced end because the process
+    // was still consuming CPU — and never speaks again. It is not forgotten: ten minutes of
+    // silence past its last beat ends it as a hung loop, with a forced end this time.
+    for (let offsetMs = 25_000; offsetMs <= 600_000; offsetMs += 5000) {
+      cpu.ms += 300;
+      tickAt(offsetMs);
+      expect(child.killCalls).toHaveLength(1);
+    }
+    cpu.ms += 300;
+    tickAt(605_000);
+    expect(child.killCalls).toHaveLength(2);
+    expect(child.killCalls[1]?.options?.evenIfWorking).toBe(true);
+    expect(child.killCalls[1]?.why).toContain('while its CPU kept advancing');
+    expect(fleet.stateFor(root)?.why).toContain('not beaten for 600000 ms');
+    expect(logs.some((line) => line.includes('hung loop'))).toBe(true);
+  });
+
+  test('10. a beat while the ceiling end is still in force does not take the child back into service', async () => {
+    const { home, roots } = makeWorld(['root-ceiling-speaks']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 9000 };
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(7200 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000));
+    tickAt(10_000);
+    tickAt(15_000);
+    tickAt(20_000);
+    expect(child.killCalls).toHaveLength(1);
+    for (let offsetMs = 25_000; offsetMs <= 600_000; offsetMs += 5000) {
+      cpu.ms += 300;
+      tickAt(offsetMs);
+    }
+    cpu.ms += 300;
+    tickAt(605_000);
+    expect(child.killCalls).toHaveLength(2);
+    expect(child.killCalls[1]?.options?.evenIfWorking).toBe(true);
+
+    // The child speaks once more while the forced end's grace is still running. A deliberate end
+    // is not withdrawn by a beat: the child is still going to be forced, so it must not be sent a
+    // tick again and its row must keep naming the hung loop until it leaves.
+    const ticked = child.sends.length;
+    child.emit(beat(NOW + 605_000));
+    tickAt(610_000);
+    expect(child.sends).toHaveLength(ticked);
+    expect(child.killCalls).toHaveLength(2);
+    expect(fleet.stateFor(root)?.why).toContain('not beaten for 600000 ms');
+  });
 });

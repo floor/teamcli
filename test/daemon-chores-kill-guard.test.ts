@@ -12,6 +12,7 @@ import { spawnChoresChild, type ChoresChild } from '../src/daemon/chores/spawn.t
 
 const AT = '2026-11-04T02:00:00.000Z';
 const FIXTURE = join(import.meta.dir, 'fixtures', 'chores-stubborn-child.ts');
+const ANSWERING = join(import.meta.dir, 'fixtures', 'chores-answering-child.ts');
 const dirs: string[] = [];
 const live: ChoresChild[] = [];
 
@@ -31,11 +32,15 @@ function configFor(home: string): ChoresChildConfig {
 }
 
 /** Starts the fixture child and waits until it has installed its signal handler. */
-async function start(home: string, cpuTimeOf: () => number): Promise<{ child: ChoresChild; notes: string[] }> {
+async function start(
+  home: string,
+  cpuTimeOf: () => number,
+  entry: string = FIXTURE,
+): Promise<{ child: ChoresChild; notes: string[] }> {
   const ready = join(home, 'fixture-ready');
   const child = spawnChoresChild({
     config: configFor(home),
-    entry: FIXTURE,
+    entry,
     env: { CHORES_SCENE_READY: ready },
     cpuTimeOf,
   });
@@ -106,6 +111,32 @@ describe('chores child handle forced-end guard', () => {
     });
     const deadline = Date.now() + 5_000;
     while (child.alive && Date.now() < deadline) await Bun.sleep(25);
+    expect(child.alive).toBe(false);
+    await child.exited;
+  });
+
+  test('4. a child that answers its end request is not forced, and a later deliberate end still forces it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'team-chores-guard-'));
+    dirs.push(home);
+    const cpu = runningCpu();
+    const { child, notes } = await start(home, cpu.read, ANSWERING);
+
+    child.kill('the scene ends it', 100);
+    const answered = Date.now() + 3_000;
+    while (!notes.some((line) => line.includes('answered its end request')) && Date.now() < answered) {
+      await Bun.sleep(20);
+    }
+    expect(notes.some((line) => line.includes('answered its end request'))).toBe(true);
+    // The handle stood down: a child that is still talking is not forced when its CPU goes quiet.
+    cpu.stop();
+    await Bun.sleep(350);
+    expect(child.alive).toBe(true);
+
+    // A deliberate end is not withdrawn: the hung ceiling and the daemon's stop must not leave a
+    // child behind, so this request forces even a child that answered.
+    child.kill('the scene forces it', 100, { evenIfWorking: true });
+    const death = Date.now() + 5_000;
+    while (child.alive && Date.now() < death) await Bun.sleep(25);
     expect(child.alive).toBe(false);
     await child.exited;
   });
