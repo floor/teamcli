@@ -278,7 +278,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   vault_root: 'vault-root',
   entity_orchestrator: 'entity-orchestrator',
   'chain.topology.entity.orchestrator': 'entity-orchestrator',
-  // The lead rules the owner decided on 2026-11-03 (OD-20261103-03), in the spellings a team
+  // The lead rules the owner decided on 2026-11-03, in the spellings a team
   // writes them and the kebab-case canonical names of this catalogue.
   entity_main_orchestrator_relays_owner: 'entity.main-orchestrator.relays-owner',
   'entity.main_orchestrator.relays_owner': 'entity.main-orchestrator.relays-owner',
@@ -420,7 +420,7 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   return null;
 }
 
-/** `lead-gates`: which placed roles dev mode admits to the owner-only gates (ruling D5, A3). */
+/** `lead-gates`: which placed roles dev mode admits to the owner-only gates. */
 export type LeadGatesValue = 'lead' | 'lead+operator';
 
 /** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
@@ -1282,7 +1282,7 @@ function sidebarRefreshProblem(raw: unknown): string | null {
  * sourced directly from `src/settings/inherit.ts`.
  */
 /**
- * The owner's reserved scope, in four words (OD-20261103-03(4)): public releases, spending,
+ * The owner's reserved scope, in four words: public releases, spending,
  * credentials, and the owner's machine. The machine's gloss names what it covers, so a rule
  * that prints the list never leaves "the machine" to be read as "any act on it": it is the
  * system's own settings and accounts, logins, keychain and hardware, never a checkout, a seat
@@ -2298,7 +2298,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: () => true,
   },
   // What the owner keeps, in four words, printed in every seat's generated rules below the
-  // line that says what belongs to the teams (OD-20261103-03(4)). A list, `;`- or
+  // line that says what belongs to the teams. A list, `;`- or
   // `,`-separated on the command line; set it to change the words, never to make the rule
   // disappear. The four default words are also the floor: a set value may add words, and the
   // scope in force puts any floor word it left out back in, so no level narrows what the

@@ -123,7 +123,7 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
     if (args.flags.has('request') || args.values.approval !== undefined) return bad('--via issues from a held grant; it takes no owner-seat flags');
     // The pane guard, judged before the parent grant or the holder's key is opened (see
     // ../client/pane-guard.ts): a caller inside a team pane never issues from a client key. It is a
-    // machine guard: no dev-mode setting lifts it (OD-20261019-49).
+    // machine guard: no dev-mode setting lifts it.
     const pane = clientPaneGuard(io);
     out = pane.ok
       ? issueHeldGeneralGrant(home, resolve(io.cwd, args.values.via), resolve(io.cwd, args.values.key), input, now)

@@ -415,6 +415,12 @@ test('a recorded conversation that is not on disk is launched fresh, with a note
   expect(ran[0]?.command).toContain('--session-id');
   expect(held?.stage).toBe('ready');
   expect(held?.agent_session).toBe(sessionFor(ran[0]?.command ?? '') ?? undefined);
+  // The launch's own write: the fresh pane's process identity is the seat's pane root. `team
+  // register` may repeat this record; only a launch the daemon started (or the owner's walk)
+  // makes one.
+  const paneProcess = made.panes.get(held?.pane ?? '')?.process;
+  expect(paneProcess).toBeDefined();
+  expect(held?.launched).toEqual({ shell: paneProcess!.shell, cli: paneProcess!.foreground });
   expect(`${io.out}${io.err}`).toContain(`its recorded conversation ${SES_A} is not on disk; launched a fresh one`);
   // The fallback is evidence, not just a stderr line: the team log keeps it after the terminal
   // is gone.

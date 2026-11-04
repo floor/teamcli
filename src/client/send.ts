@@ -223,7 +223,7 @@ export async function runClientSend(
   if (body.trim() === '') return usage('a message is required');
 
   // The pane guard, judged before the grant or the key is opened: a caller inside a team pane
-  // never signs as the client. It is a machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  // never signs as the client. It is a machine guard: no dev-mode setting lifts it.
   const pane = clientPaneGuard(io);
   if (!pane.ok) {
     if (json) io.stdout(`${document({ error: { code: 'send.client-pane', message: pane.why } })}\n`);

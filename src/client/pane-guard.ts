@@ -10,7 +10,7 @@
 // the own doors of `up`, `init` and `config` are deliberately not placed: an owner tool applies
 // changes under a general grant from inside a team pane, and the grant's own bounds cover it.
 //
-// This is a machine guard, and no dev-mode setting lifts it (OD-20261019-49): a lift would hand a
+// This is a machine guard, and no dev-mode setting lifts it: a lift would hand a
 // seat's own process the key the guard exists to keep out of it, which is exactly the boundary the
 // owner's widening left in place. Every mode refuses a pane caller alike; the repair is the
 // client's own shell, outside the terminal host.

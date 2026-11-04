@@ -4092,6 +4092,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.launch-only",
+      "meaning": "a caller other than the owner would record the pane root",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.many-agents",
       "meaning": "the session has more than one agent with that name",
       "trigger": "team register worker"

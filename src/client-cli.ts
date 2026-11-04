@@ -396,7 +396,7 @@ export function runClientGrantRequestMode(rawIo: Io, io: Io, args: Args, json: b
   };
   // The pane guard, judged before the master grant or any key file is opened (see
   // src/client/pane-guard.ts): a caller inside a team pane never issues from a client key. It is a
-  // machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  // machine guard: no dev-mode setting lifts it.
   const pane = clientPaneGuard(io);
   if (!pane.ok) return refuse(pane.why);
   const key = clientPublicInput(args.values['public-key']!, io.cwd);

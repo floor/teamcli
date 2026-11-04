@@ -110,13 +110,18 @@ ${scope.map((act) => `    - ${act}`).join('\n')}
 `;
 }
 
-function record(seats: Record<string, { pane: string; workspace: string }>): void {
+function record(seats: Record<string, { pane: string; workspace: string; launched?: { shell: number; cli: number[] } }>): void {
   updateState(dir, (file) => {
     file.sessions.alpha = {
       ...emptySession(),
       seats: Object.fromEntries(Object.entries(seats).map(([name, seat]) => [
         name,
-        { stage: 'ready' as const, pane: seat.pane, workspace: seat.workspace },
+        {
+          stage: 'ready' as const,
+          pane: seat.pane,
+          workspace: seat.workspace,
+          ...(seat.launched === undefined ? {} : { launched: seat.launched }),
+        },
       ])),
     };
   });
@@ -400,14 +405,18 @@ describe('the up row (owner-or-leads)', () => {
 });
 
 describe('the register row (owner-or-own-team)', () => {
-  test('a plain seat of this team registers another seat of its session', async () => {
+  test('a plain seat of this team refreshes another seat of its session', async () => {
     // The implementer holds no `leads`; `register`'s own row admits it anyway — it belongs to
-    // the team whose record it writes.
-    record({ worker: { pane: 'worker-pane', workspace: 'worker-ws' } });
+    // the team whose record it writes. What an admitted seat may write is the refresh: the pane
+    // root is the launch's own, and a seat's run records none (the launch-only gate).
+    record({
+      worker: { pane: 'worker-pane', workspace: 'worker-ws' },
+      pilot: { pane: 'pilot-pane', workspace: 'pilot-ws', launched: { shell: 400, cli: [401] } },
+    });
     const io = testIo(root, seatCaller('worker', 'worker-pane'));
     const code = await runRegister(['pilot'], io, registerSources([['worker', 'worker-pane'], ['pilot', 'pilot-pane']]));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('pilot: registered — pane pilot-pane; nothing was launched\n');
+    expect(io.out).toContain('pilot: already registered — pane pilot-pane');
     expect(readState(dir).sessions.alpha?.seats.pilot?.pane).toBe('pilot-pane');
     expect(readState(dir).sessions.alpha?.seats.pilot?.stage).toBe('ready');
   });
@@ -456,15 +465,19 @@ describe('the register row (owner-or-own-team)', () => {
     expect(io.out).toContain('pilot: registered — pane pilot-pane; nothing was launched\n');
   });
 
-  test('an admitted orchestrator registers where a grant leaves `up` out, and logs no grant line', async () => {
+  test('an admitted orchestrator refreshes where a grant leaves `up` out, and logs no grant line', async () => {
     // The row lists the orchestrator; the grant lists `down` alone. Asked before the map rule,
-    // its refusal would block this run while a plain worker's passes.
+    // its refusal would block this run while a plain worker's passes. The record it refreshes
+    // holds the launch's identity, which the live pane still matches.
     approve(grantedText(['down']));
-    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    record({
+      lead: { pane: 'lead-pane', workspace: 'lead-ws' },
+      pilot: { pane: 'pilot-pane', workspace: 'pilot-ws', launched: { shell: 400, cli: [401] } },
+    });
     const io = testIo(root, seatCaller('lead', 'lead-pane'));
     const code = await runRegister(['pilot'], io, registerSources([['lead', 'lead-pane'], ['pilot', 'pilot-pane']]));
     expect(code, io.err).toBe(0);
-    expect(io.out).toContain('pilot: registered — pane pilot-pane; nothing was launched\n');
+    expect(io.out).toContain('pilot: already registered — pane pilot-pane');
     expect(readState(dir).sessions.alpha?.seats.pilot?.pane).toBe('pilot-pane');
     const log = existsSync(join(dir, LOG_FILE)) ? readFileSync(join(dir, LOG_FILE), 'utf8') : '';
     expect(log).not.toContain('grant [grant]');
@@ -472,7 +485,10 @@ describe('the register row (owner-or-own-team)', () => {
 
   test('an admitted orchestrator writes no grant audit line even where the grant would have passed', async () => {
     approve(grantedText(['up']));
-    record({ lead: { pane: 'lead-pane', workspace: 'lead-ws' } });
+    record({
+      lead: { pane: 'lead-pane', workspace: 'lead-ws' },
+      pilot: { pane: 'pilot-pane', workspace: 'pilot-ws', launched: { shell: 400, cli: [401] } },
+    });
     const io = testIo(root, seatCaller('lead', 'lead-pane'));
     const code = await runRegister(['pilot'], io, registerSources([['lead', 'lead-pane'], ['pilot', 'pilot-pane']]));
     expect(code, io.err).toBe(0);

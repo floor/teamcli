@@ -177,7 +177,7 @@ Rules the form carries (the amendment's commitment 3.4, restated for the reader 
 
 ### 3.10. Client grants and the seats they reach
 
-A client grant (`team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>]`) admits an agent running outside the session multiplexer to `team send` as its own signed principal, never as the owner (OD-20261019-37).
+A client grant (`team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>]`) admits an agent running outside the session multiplexer to `team send` as its own signed principal, never as the owner (owner decision, 2026-10-19).
 
 **Before (0.5.4 and earlier).** The first client slice admitted exactly one principal and one destination, fixed in code (`src/client/records.ts`): one client id, one entity, one seat (`orchestrator`). Issuance, the stored record's decoder and the send resolver each compared against those constants, so a client could reach only the orchestrator of that one entity; any other seat needed a relay through it.
 

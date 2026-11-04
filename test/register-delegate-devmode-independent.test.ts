@@ -1,7 +1,8 @@
 // Independent coverage for `team register` under dev mode when the caller is a delegate pane
 // the team file names: the delegation's approval precondition folds exactly as it does for
 // `up`, `add` and `remove`, and the run says so once. Everything after that precondition stays
-// enforced — the entry must still name `up` in its command list — and a run in force is still
+// enforced — the entry must still name `up` in its command list, and the pane root must already
+// be one the record's launch wrote (`register.launch-only`) — and a run in force is still
 // the bare refusal it always was. A dry run folds the same precondition into its preview and
 // writes nothing.
 //
@@ -16,7 +17,7 @@ import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readAgents } from '../src/registry/agents.ts';
-import { LOG_FILE, readState, STATE_FILE } from '../src/state.ts';
+import { emptySession, LOG_FILE, mintSeatId, readState, STATE_FILE, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-21T07:30:00Z');
@@ -81,6 +82,21 @@ delegates:
   return { base, home, root, dir, file };
 }
 
+/** The launch identity the daemon or the owner's launch wrote for `lead` on `PANE`. A delegate
+ *  may repeat a record whose process identity the live pane still matches, never record a new
+ *  pane root (`register.launch-only`). */
+function seedLeadLaunch(w: World): void {
+  updateState(w.dir, (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      id: mintSeatId(),
+      stage: 'launched',
+      pane: PANE,
+      cli: 'claude-code',
+      launched: { shell: 400, cli: [401] },
+    };
+  });
+}
+
 /** The agent herdr reports for the seat: a pane running a program in front of its own shell. */
 function seatAgent(): HerdrAgent {
   return { name: 'lead', agent: 'claude', pane: PANE, workspace: WORKSPACE, status: 'idle', cwd: null, session: 'claude-session-1' };
@@ -94,6 +110,10 @@ function sources(w: World): RegisterSources {
     processInfo: () => ({ shell: 400, foreground: [401] }),
     foreground: () => ['claude'],
     paneText: () => CLAUDE_IDLE,
+    renameWorkspace: () => true,
+    reportDisplayAgent: () => true,
+    renameAgent: () => true,
+    refreshAddress: () => ({ address: null }),
     now: () => NOW,
   };
 }
@@ -120,6 +140,21 @@ test('dev mode folds the delegate approval precondition and the run records the 
   const w = world();
   // The delegate evidence reads herdr: no agents is a clean external pane.
   setHerdrRun(() => ({ agents: [] }));
+
+  // Without a launch-recorded process identity on the pane, even a folded delegate run is refused
+  // by `register.launch-only` before any state or registry record is written.
+  const unseeded = await register(w, ['lead'], { dev: true, caller: DELEGATE });
+  expect(unseeded.code).toBe(1);
+  expect(unseeded.err).toContain(`team register: warning: ${APPROVAL}`);
+  expect(unseeded.err).toContain(
+    `lead: pane ${PANE} is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr`,
+  );
+  expect(readAgents(w.home)).toHaveLength(0);
+  expect(existsSync(join(w.dir, STATE_FILE))).toBe(false);
+
+  // With the launch identity seeded on the record, the delegate repeats that identity and
+  // completes registration with the dev-mode fold recorded.
+  seedLeadLaunch(w);
   const r = await register(w, ['lead'], { dev: true, caller: DELEGATE });
   expect(r.code).toBe(0);
   // The live complaint, now a warning that names the file it stands behind.
@@ -159,9 +194,25 @@ test('dev mode folds only the approval: a delegate entry without `up` still refu
 test('a dev-mode dry run previews the folded precondition and writes nothing', async () => {
   const w = world();
   setHerdrRun(() => ({ agents: [] }));
+
+  // On an unseeded pane, the dry run previews the folded approval warning and the launch-only
+  // refusal with the owner's unblock command, writing nothing.
+  const unseeded = await register(w, ['lead', '--dry-run'], { dev: true, caller: DELEGATE });
+  expect(unseeded.code).toBe(1);
+  expect(unseeded.out).toContain(`! warning: ${APPROVAL}`);
+  expect(unseeded.out).toContain(
+    `! register would refuse: lead: pane ${PANE} is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr`,
+  );
+  expect(unseeded.out).toContain('! to unblock: the owner runs `team register lead` from a terminal outside herdr');
+  expect(written(w)).toEqual(NOTHING);
+
+  // With the launch identity seeded on the record, the dry run previews the folded precondition
+  // and the registration plan without writing any agent record or log line.
+  seedLeadLaunch(w);
   const r = await register(w, ['lead', '--dry-run'], { dev: true, caller: DELEGATE });
   expect(r.code).toBe(0);
   expect(r.out).toContain(`! warning: ${APPROVAL}`);
   expect(r.out).toContain('nothing would be launched');
-  expect(written(w)).toEqual(NOTHING);
+  expect(written(w)).toEqual({ state: true, agents: 0, log: false });
+  expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('launched');
 });

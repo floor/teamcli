@@ -1,4 +1,4 @@
-// The `lead-gates` policy (ruling D5, owner answer A3): the file's own `operator:` place is
+// The `lead-gates` policy: the file's own `operator:` place is
 // admitted to five of the dev-mode lead gates — `check --repair`, `remove --abandon`,
 // `down --abandon`, `policy set` and `policy unset`, `daemon restart` — and to `team answer`,
 // while dev mode is on and the effective value reads `lead+operator` for the caller's chain.

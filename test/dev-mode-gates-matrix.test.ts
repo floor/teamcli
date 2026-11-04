@@ -2,8 +2,8 @@
 // (a log line beside it, on every command the list names) and the run continues past it; unset,
 // every gate refuses as always. The owner gates are not caller gates: `grant`, `delegate`,
 // `revoke`, `approve`, `policy`, `check --repair`, `remove`/`down --abandon`, `broker`, `tempo`
-// and the daemon's three verbs stay the owner's, except that the owner's widening
-// (OD-20261019-49) admits one placed orchestrator while dev mode is on. The table scene at the
+// and the daemon's three verbs stay the owner's, except that the owner's dev-mode widening
+// admits one placed orchestrator while dev mode is on. The table scene at the
 // end pins every lift the widening makes — plus the installer designation the task host admits —
 // and every guard it never lifts: the client pane guard, the load guard, the swap gate and the
 // public actions. Every file, caller and pane below is synthetic.
@@ -932,7 +932,7 @@ test("up: an owner's run under a governing on owes no warning and no dev mark", 
 });
 
 // --- the widening's table ---------------------------------------------------------------------
-// One row per lift OD-20261019-49 makes, and one per guard it never lifts. The caller lifts are
+// One row per lift the dev-mode widening makes, and one per guard it never lifts. The caller lifts are
 // the one list read at the top of this file. The owner lifts are one admission,
 // `devModeOwnerLift`: reached at the cwd by `devModeOwnerLiftAtCwd`, and after the file is read
 // by `devModeOwnerLift` directly. The installer row is the task host's own admission of an

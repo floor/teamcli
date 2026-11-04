@@ -25,7 +25,7 @@ thread, not the invitation: it admits a reply on any open thread, and a thread i
 is closed or the clock or the cap ends it.
 
 A seat's answer to the entity's main orchestrator is the one reply the main orchestrator's reach
-admits in return (OD-20261103-02), and it is bound to the record that reach wrote. The answered
+admits in return, and it is bound to the record that reach wrote. The answered
 record must verify, sit in the caller's own folder and name the caller as its recipient, and it
 must have been sent by the lead of the entity's head team — the team whose project is the entity
 itself, the seat that team's live file names its orchestrator. The reply stays on that record's

@@ -626,6 +626,9 @@ describe('team restart <seat>', () => {
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
     });
     const { sources, did } = makeHarness(fixture);
+    // The relaunched pane's own reading: a shell and the CLI in front of it. The restart writes
+    // it as the seat's new identity — the write `team register` may repeat, never make.
+    sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
     const io = testIo(fixture.root, { kind: 'owner' });
 
     const code = await runRestart(['worker'], io, sources);
@@ -643,6 +646,10 @@ describe('team restart <seat>', () => {
     expect(after?.stage).toBe('ready');
     expect(after?.pane).toBe('pane-new');
     expect(after?.id).toBe('seat_0123456789ab');
+    // The launch's own write: the relaunched pane's process identity is the seat's new pane root.
+    // `team register` may repeat this record; only a launch the daemon started (or the owner's
+    // walk) makes one.
+    expect(after?.launched).toEqual({ shell: 300, cli: [301] });
 
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
@@ -1599,7 +1606,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  // The entity's main orchestrator reaches the entity's teams as their lead (OD-02), and the
+  // The entity's main orchestrator stands as, and reaches as, each team lead, and the
   // proof is its own head team's record, live file and recorded pane — never its seat name. The
   // target team's lead is named `orchestrator` too, so the name alone would refuse the pair.
   test("the entity's main orchestrator restarts a team's seat named like itself", async () => {
