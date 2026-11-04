@@ -1,6 +1,7 @@
 // One alias ask: a signed drop through the command's send, that send's own wake, a wait, and
 // a verify before anything is returned. This module holds no key and types nothing. The send
 // seam is admitted as the asking principal. A provided type writer is never called.
+import type { SignedRecord } from '../../send/record.ts';
 import {
   mailboxRouterPolicyProblem,
   type MailboxRouterPolicy,
@@ -50,13 +51,15 @@ export type MailboxAskInput = {
   body: string;
   /** The asking principal. The send is admitted as this identity, never as the daemon. */
   principal: string;
+  /** A record this principal's own process already signed. The send seam carries it. */
+  signed?: SignedRecord;
   caller: MailboxAskCaller;
   policy: MailboxRouterPolicy;
   /** The seat's unread window, in seconds. Twice this is the bound when the policy sets none. */
   unreadWindowSeconds: number;
   now(): number;
   sleep(ms: number): Promise<void>;
-  send(input: { principal: string; to: string; body: string }): Promise<MailboxSendResult>;
+  send(input: { principal: string; to: string; body: string; signed?: SignedRecord }): Promise<MailboxSendResult>;
   readReply(messageId: string): MailboxReplyRead;
   writeMailbox(input: { principal: string; messageId: string; bytes: string }): void;
   /** Called once, when the synchronous answer is known. A bridge call hears it at 120s, while
@@ -77,6 +80,15 @@ function boundMs(policy: MailboxRouterPolicy, unreadWindowSeconds: number): numb
 
 function deskSeat(address: string): boolean {
   return address.startsWith('desk@');
+}
+
+function sendInput(input: MailboxAskInput, to: string): { principal: string; to: string; body: string; signed?: SignedRecord } {
+  return {
+    principal: input.principal,
+    to,
+    body: input.body,
+    ...(input.signed !== undefined ? { signed: input.signed } : {}),
+  };
 }
 
 function refused(why: string): MailboxAskResult {
@@ -179,11 +191,7 @@ async function runOnce(input: MailboxAskInput): Promise<MailboxAskResult> {
     tell(result.sync);
     return result;
   }
-  const first = await input.send({
-    principal: input.principal,
-    to: route.address,
-    body: input.body,
-  });
+  const first = await input.send(sendInput(input, route.address));
   if (!first.ok) {
     const result = refused(first.why);
     tell(result.sync);
@@ -197,11 +205,7 @@ async function runOnce(input: MailboxAskInput): Promise<MailboxAskResult> {
     tell(result.sync);
     return result;
   }
-  const second = await input.send({
-    principal: input.principal,
-    to: route.fallback,
-    body: input.body,
-  });
+  const second = await input.send(sendInput(input, route.fallback));
   if (!second.ok) {
     const result = refused(second.why);
     tell(result.sync);
