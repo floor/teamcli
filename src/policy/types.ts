@@ -13,6 +13,8 @@ import {
   DEFAULT_STATE_THRESHOLDS,
   DELIVERY_LEGS,
   DELIVERY_ORDER,
+  isMessagingStore,
+  MESSAGING_STORE,
   LEGACY_ORDER_WORDS,
   parseSeatNumberingValue,
   SEAT_NUMBERING_DEFAULT_VALUE,
@@ -20,6 +22,7 @@ import {
   STATE_THRESHOLDS,
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
+  type MessagingStore,
 } from '../settings/inherit.ts';
 import {
   MESSAGE_DISPLAY_DEFAULT,
@@ -106,6 +109,7 @@ export const ENFORCED_POLICY_NAMES = [
   'liveness-idle-lead-seconds',
   'liveness-idle-owner-seconds',
   'delivery-order',
+  'messaging.store',
   'delivery-timeout',
   'delivery-escalation',
   'brief-transport',
@@ -192,6 +196,8 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   idle_owner_seconds: 'liveness-idle-owner-seconds',
   'idle-owner-seconds': 'liveness-idle-owner-seconds',
   delivery_order: 'delivery-order',
+  messaging_store: 'messaging.store',
+  'messaging-store': 'messaging.store',
   delivery_timeout: 'delivery-timeout',
   delivery_escalation: 'delivery-escalation',
   brief_transport: 'brief-transport',
@@ -1089,6 +1095,10 @@ export const OWNER_RESERVED_SCOPE_DEFAULT = [
   "the owner's machine",
 ] as const;
 
+/** How durable a `messaging.store` word is: the lower the rank, the more the send keeps. A word
+ *  is within another when it is at least as durable, so tightening runs toward `first`. */
+const STORE_DURABILITY: Readonly<Record<MessagingStore, number>> = { first: 0, parallel: 1, none: 2 };
+
 export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<any>>> = {
   'dev-mode': {
     name: 'dev-mode',
@@ -1205,6 +1215,23 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     isWithin: (lower: readonly DeliveryLeg[], higher: readonly DeliveryLeg[]) =>
       lower.length > 0
       && lower.every((leg, idx) => (leg === 'native' || leg === 'socket' || leg === 'headless-resume' || leg === 'session' || higher.includes(leg)) && lower.indexOf(leg) === idx),
+  },
+  // The store a send leaves behind for the receiving seat (`messaging.store` in a team file,
+  // ADR D8). `first` writes the signed record into the recipient's folder before the walk wakes
+  // it; `parallel` starts the write and the first wake together and ends the send only when both
+  // settle; `none` never stores the record, and the frame carries the same signed bytes so the
+  // receiver verifies them as today. Durability is the safe side: first is tighter than
+  // parallel, parallel tighter than none, and a level moves a seat toward first freely; moving
+  // toward none is the loosening the setting's own levels list decides (`MESSAGING_STORE`).
+  'messaging.store': {
+    name: 'messaging.store',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team', 'seat'],
+    looseningLevels: MESSAGING_STORE.looseningLevels as readonly PolicyLevel[],
+    defaultValue: MESSAGING_STORE.fallback,
+    gateLifting: false,
+    parseValue: (raw: unknown) => (isMessagingStore(raw) ? raw : null),
+    isWithin: (lower: MessagingStore, higher: MessagingStore) => STORE_DURABILITY[lower] <= STORE_DURABILITY[higher],
   },
   // The attempt budget per route: one map, `route=<seconds>` entries separated by commas. It is
   // the TOTAL budget for one attempt at that route — probe, connect, write and any receipt the

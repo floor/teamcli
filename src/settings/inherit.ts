@@ -374,6 +374,69 @@ export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
 };
 
 /**
+ * A word setting: one value from a closed list, declared once per feature with the catalogue
+ * policy it is, the value when no level declares one, and the levels allowed to loosen it. Which
+ * word tightens and which loosens is the catalogue policy's to say (its `isWithin`); tightening
+ * is allowed at every level and needs no listing. A word equal to the value in force is no word
+ * at all.
+ */
+export type WordSettingSpec<W extends string> = {
+  /** The spelling the setting is written under in a team file and a report. */
+  name: string;
+  /** The catalogue policy this setting is, in canonical kebab-case. */
+  policy: string;
+  /** The value when nothing declares it. */
+  fallback: W;
+  /** The levels allowed to loosen this setting. */
+  looseningLevels: readonly SettingLevel[];
+};
+
+/** One level's word on a word setting: the level that holds it, the word it declares, and when
+ *  the word stops counting (an expired word is unset at its level). */
+export type WordDeclaration<W extends string = string> = { level: SettingLevel; value: W; expiry?: string | null };
+
+/** The declarations a chain of per-level words holds, in inheritance order; a level the chain
+ *  says nothing about is left out, and so is a level given `undefined`. */
+export function wordDeclarationsOf<W extends string>(declared: Partial<Record<SettingLevel, W | undefined>>): WordDeclaration<W>[] {
+  const out: WordDeclaration<W>[] = [];
+  for (const level of SETTING_LEVELS) {
+    const value = declared[level];
+    if (value !== undefined) out.push({ level, value });
+  }
+  return out;
+}
+
+/**
+ * The store a send leaves behind for the receiving seat, as that seat's chain — entity, project,
+ * team, seat — declares it. `first` is the shape every send walks today: the signed record is
+ * written into the recipient's folder before the walk wakes it, and a wake that never lands
+ * leaves the copy where the watch's retry, the unread re-wake and the read receipt find it.
+ * `parallel` starts the same write and the first wake together, and ends the send only when both
+ * settle. `none` never stores the record: the frame carries the same signed bytes, so the
+ * receiver verifies sender and integrity exactly as today, and what the sender gives up is the
+ * retry, the unread re-wake, the read receipt and the `queued, not woken` flag.
+ *
+ * Durability is the safe side: `first` is tighter than `parallel`, which is tighter than `none`.
+ * Any level may move a seat toward `first`; moving toward less durability is the loosening, and
+ * only the levels this setting lists may do it — the entity and the project, the scopes that
+ * decide for everyone beneath them. The team and the seat may always close the door again.
+ */
+export const MESSAGING_STORES = ['first', 'parallel', 'none'] as const;
+export type MessagingStore = (typeof MESSAGING_STORES)[number];
+
+/** Whether a declared word is one of the three. */
+export function isMessagingStore(value: unknown): value is MessagingStore {
+  return typeof value === 'string' && (MESSAGING_STORES as readonly string[]).includes(value);
+}
+
+export const MESSAGING_STORE: WordSettingSpec<MessagingStore> = {
+  name: 'messaging.store',
+  policy: 'messaging.store',
+  fallback: 'first',
+  looseningLevels: ['entity', 'project'],
+};
+
+/**
  * How a seat's number is written at the front of its name: `width` is the digit count the number
  * is padded to — 1 to 4, or `'auto'` for the smallest width that holds the team's largest number —
  * and `separator` stands between the number and the rest of the name. The advised policy

@@ -609,6 +609,51 @@ export function signRecord(payload: RecordPayload, home: string): SignedRecord {
   return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
+/** The exact text a staged record holds: pretty-printed JSON and one newline. This is what
+ *  `stageSendRecord` writes, and what a `messaging.store: none` frame carries in place of the
+ *  stored copy — the receiver verifies the same bytes either way. */
+export function recordTextOf(signed: SignedRecord): string {
+  return `${JSON.stringify(signed, null, 2)}\n`;
+}
+
+/**
+ * A signed record carried inside a frame instead of the receiver's folder
+ * (`messaging.store: none`). The frame is the only copy, so a reader verifies exactly what it
+ * would have read from the drop folder: the bytes under the frame's `record` field, parsed as
+ * one signed record and checked against the home's message key. A frame with no carried record,
+ * a field that is not JSON text, and a record whose bytes were changed after signing are all
+ * refusals with their own sentence — the last one is what the tampered-frame scene pins.
+ */
+export function carriedRecordOf(
+  frame: string,
+  home: string,
+): { ok: true; record: SignedRecord } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(frame);
+  } catch {
+    return { ok: false, reason: 'the frame is not a JSON frame' };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'the frame is not a JSON object' };
+  }
+  const carried = (parsed as { record?: unknown }).record;
+  if (typeof carried !== 'string' || carried === '') {
+    return { ok: false, reason: 'the frame carries no signed record' };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(carried);
+  } catch {
+    return { ok: false, reason: 'the carried record is not JSON text' };
+  }
+  const auth = recordAuthOf(value, messageKeyOf(home));
+  if (auth.kind === 'ok') return { ok: true, record: auth.value };
+  if (auth.kind === 'tampered') return { ok: false, reason: "the carried record does not verify with this home's key" };
+  if (auth.kind === 'unsupported') return { ok: false, reason: `the carried record is not one this version reads: ${auth.reason}` };
+  return { ok: false, reason: 'the carried record is not a signed record' };
+}
+
 /**
  * The use gate for a record: true only when the signature covers the payload as parsed and
  * every signed field is one this version reads. A record carrying signed fields this version

@@ -141,6 +141,14 @@ bus is serving the root to finish it, one line says how many wait:
 A bus that serves the root draws no line: its own pass records the outcome. The line never
 reports a post as delivered, and it never enters the total or the exit.
 
+A seat whose chain declares `messaging.store: none` is named on the same pass, one line per seat:
+the line says its sends keep no copy, that a socket frame still carries the signed record's bytes
+a receiver verifies, and what the copy would have carried — the retry, the unread re-wake, the
+read receipt and the `queued, not woken` flag. For a seat the file marks `human` the line says a
+send to it is refused instead, because a person's pane is reached by the stored copy alone. The
+word is a choice, never a fault, so like every note here it does not enter the total or the exit
+([the team file](../team-file.md#messagingstore)).
+
 The nightly harness's latest per-leg result is read on the same pass: `pingpong-legs.json` in the
 team's state folder, `.agents` in the project, and nothing else — the check never starts a run,
 and a team that has not run the nightly draws no finding for a missing file. A class is over when
