@@ -63,3 +63,23 @@ on port 7392, that link shows only that request's card, without the page token. 
 single-use, bound to the request and expires with it; it grants nothing, and an answer from the
 card still needs an owner-signer signature. See `docs/commands/grant.md`.
 
+## The later answer
+
+Every card offers **Later**, **Tomorrow** and **Monday** beside its decisions. A later word is
+not an approval: it writes one signed deferral beside the request (`<request-id>.later.json`),
+bound to the request id and its parameter hash, and approves, denies and spends nothing.
+
+- The card is hidden until the return instant and lists again at it, with one more full answer
+  window (fifteen minutes) after that. The request's original window is not otherwise extended.
+- `later` returns after four hours; `tomorrow` and a weekday return at 08:00 local time, the next
+  one that is still ahead.
+- No deferral reaches past the request's creation + 7 days: a return time later than that is
+  refused when it is asked for, and a record that names one anyway is honoured only to the cap.
+- A deferral that does not verify — an unsigned or forged record, one signed by a signer the
+  owner-signers policy does not accept, or one bound to another request or parameter hash — hides
+  nothing and extends nothing.
+- When the card belongs to a blocked team, that team's lead gets one plain note: it is from the
+  owner page, says that the request waits until the return instant, and claims nothing about the
+  owner's identity. A team-create card names no team yet, so it leaves no note; a team this build
+  cannot resolve keeps the deferral and says that no lead was told.
+

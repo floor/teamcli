@@ -379,6 +379,57 @@ function ecdsaOk(publicKey: string, data: Buffer, signature: string): boolean {
   }
 }
 
+/** The signer of a signed record, confirmed: registered, accepted by the entity's owner-signers
+ *  policy, and its key read back from the credential store. */
+function verifyingSigner(
+  home: string,
+  record: OwnerSeatRecord,
+  signerName: string,
+  store: OwnerSeatKeyStore,
+  now: Date,
+  entity: string | undefined,
+): { ok: true; signer: OwnerSigner; publicKey: string } | { ok: false; why: string } {
+  const signer = record.signers.find((s) => s.name === signerName);
+  if (signer === undefined) return { ok: false, why: `"${signerName}" is not a registered owner signer` };
+  const accepted = acceptedSigners(home, record, now, entity ?? record.entity);
+  if ('why' in accepted) return { ok: false, why: accepted.why };
+  if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
+  const confirmed = confirmedSignerKey(signer, store);
+  if (!confirmed.ok) return confirmed;
+  return { ok: true, signer, publicKey: confirmed.publicKey };
+}
+
+/** One signature (or WebAuthn assertion) under a confirmed signer, over exactly these bytes. */
+function signatureOk(
+  signer: OwnerSigner,
+  publicKey: string,
+  bytes: Buffer,
+  challenge: string,
+  signature: string,
+  webauthn: { authenticator_data: string; client_data_json: string } | undefined,
+  what: string,
+): { ok: true } | { ok: false; why: string } {
+  if (signer.type === 'mac-keystore') {
+    if (!ecdsaOk(publicKey, bytes, signature)) return { ok: false, why: `the ${what} does not verify under the owner seat's key for signer "${signer.name}"` };
+    return { ok: true };
+  }
+  if (webauthn === undefined) return { ok: false, why: `signer "${signer.name}" is a passkey; the ${what} carries no assertion` };
+  let clientData: { type?: string; challenge?: string };
+  const authData = Buffer.from(webauthn.authenticator_data, 'base64url');
+  const clientJson = Buffer.from(webauthn.client_data_json, 'base64url');
+  try {
+    clientData = JSON.parse(clientJson.toString('utf8'));
+  } catch {
+    return { ok: false, why: 'the passkey assertion carries no readable client data' };
+  }
+  if (clientData.type !== 'webauthn.get' || clientData.challenge !== challenge) return { ok: false, why: `the passkey assertion is not over this ${what}` };
+  if (authData.length < 37 || !authData.subarray(0, 32).equals(createHash('sha256').update(signer.rp_id ?? '').digest())) return { ok: false, why: 'the passkey assertion is for another relying party' };
+  if ((authData[32]! & 0x01) === 0) return { ok: false, why: 'the passkey assertion carries no user presence' };
+  const data = Buffer.concat([authData, createHash('sha256').update(clientJson).digest()]);
+  if (!ecdsaOk(publicKey, data, signature)) return { ok: false, why: `the passkey assertion does not verify under signer "${signer.name}"` };
+  return { ok: true };
+}
+
 /**
  * Verifies one signed answer: its signer is registered and accepted by policy, the signer's key is
  * confirmed against the credential store, and the signature (or WebAuthn assertion, with its
@@ -389,34 +440,12 @@ export function verifyOwnerAnswer(home: string, signed: SignedOwnerAnswer, store
   if (record === null) return { ok: false, why: 'an owner-seat answer exists but no owner seat is registered to verify it' };
   const answer = signed.owner_seat_answer;
   if (answer === undefined || typeof signed.signature !== 'string' || typeof signed.signer !== 'string') return { ok: false, why: 'the owner-seat answer is not signed' };
-  const signer = record.signers.find((s) => s.name === signed.signer);
-  if (signer === undefined) return { ok: false, why: `"${signed.signer}" is not a registered owner signer` };
-  const accepted = acceptedSigners(home, record, now, entity ?? record.entity);
-  if ('why' in accepted) return { ok: false, why: accepted.why };
-  if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
-  const confirmed = confirmedSignerKey(signer, store);
-  if (!confirmed.ok) return confirmed;
+  const who = verifyingSigner(home, record, signed.signer, store, now, entity);
+  if (!who.ok) return who;
   if (answer.team !== record.team || answer.seat !== 'owner') return { ok: false, why: 'the owner-seat answer names another seat' };
-  if (signer.type === 'mac-keystore') {
-    if (!ecdsaOk(confirmed.publicKey, ownerSeatAnswerBytes(answer), signed.signature)) return { ok: false, why: `the answer does not verify under the owner seat's key for signer "${signer.name}"` };
-  } else {
-    const w = signed.webauthn;
-    if (w === undefined) return { ok: false, why: `signer "${signer.name}" is a passkey; the answer carries no assertion` };
-    let clientData: { type?: string; challenge?: string };
-    const authData = Buffer.from(w.authenticator_data, 'base64url');
-    const clientJson = Buffer.from(w.client_data_json, 'base64url');
-    try {
-      clientData = JSON.parse(clientJson.toString('utf8'));
-    } catch {
-      return { ok: false, why: 'the passkey assertion carries no readable client data' };
-    }
-    if (clientData.type !== 'webauthn.get' || clientData.challenge !== webauthnChallenge(answer)) return { ok: false, why: 'the passkey assertion is not over this answer' };
-    if (authData.length < 37 || !authData.subarray(0, 32).equals(createHash('sha256').update(signer.rp_id ?? '').digest())) return { ok: false, why: 'the passkey assertion is for another relying party' };
-    if ((authData[32]! & 0x01) === 0) return { ok: false, why: 'the passkey assertion carries no user presence' };
-    const data = Buffer.concat([authData, createHash('sha256').update(clientJson).digest()]);
-    if (!ecdsaOk(confirmed.publicKey, data, signed.signature)) return { ok: false, why: `the passkey assertion does not verify under signer "${signer.name}"` };
-  }
-  return { ok: true, answer, signer };
+  const sig = signatureOk(who.signer, who.publicKey, ownerSeatAnswerBytes(answer), webauthnChallenge(answer), signed.signature, signed.webauthn, 'answer');
+  if (!sig.ok) return sig;
+  return { ok: true, answer, signer: who.signer };
 }
 
 /** Signs an answer with a `mac-keystore` signer (user-presence prompt). A `webauthn` signer signs
@@ -442,4 +471,179 @@ export function signOwnerAnswer(home: string, answer: OwnerSeatAnswer, signerNam
   const signed = store.sign(signer.label, ownerSeatAnswerBytes(answer), reason);
   if (!signed.ok) return signed;
   return { ok: true, signed: { owner_seat_answer: answer, signer: signer.name, signature: signed.signature } };
+}
+
+// The later answer: a signed deferral is not an approval. It hides one request until a return
+// instant, extends that request's answer window by one normal window after it, and changes nothing
+// else. A signed record names the request id and its parameter hash, a verified record alone counts,
+// and no record may put the return instant past the request's creation + 7 days.
+
+export const OWNER_SEAT_LATER_DOMAIN = 'team-owner-seat-later-v1\n';
+export const OWNER_SEAT_LATER_CAP_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type OwnerSeatLater = {
+  kind: 'grant' | 'team-create' | 'owner-action';
+  request_id: string;
+  params_sha256: string;
+  /** The return instant: the item is hidden before it and listed at it. */
+  until: string;
+  /** The word the owner answered (`later`, `tomorrow`, a weekday), kept for display. */
+  word: string;
+  /** The blocked team, when the request names one; team-create has none. */
+  team: string | null;
+  seat: 'owner';
+  at: string;
+};
+
+export function ownerSeatLaterBytes(later: OwnerSeatLater): Buffer {
+  const canonical = {
+    kind: later.kind, request_id: later.request_id, params_sha256: later.params_sha256, until: later.until,
+    word: later.word, team: later.team ?? null, seat: later.seat, at: later.at,
+  };
+  return Buffer.from(OWNER_SEAT_LATER_DOMAIN + JSON.stringify(canonical), 'utf8');
+}
+
+/** The WebAuthn challenge a deferral is signed under: base64url SHA-256 of the record bytes. */
+export function webauthnLaterChallenge(later: OwnerSeatLater): string {
+  return createHash('sha256').update(ownerSeatLaterBytes(later)).digest('base64url');
+}
+
+export type SignedOwnerLater = {
+  owner_seat_later: OwnerSeatLater;
+  signer: string;
+  signature: string;
+  /** webauthn signers: the assertion's authenticator data and client data JSON (base64url). */
+  webauthn?: { authenticator_data: string; client_data_json: string };
+};
+
+function isLaterRecord(value: unknown): value is OwnerSeatLater {
+  if (value === null || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (v.kind === 'grant' || v.kind === 'team-create' || v.kind === 'owner-action')
+    && typeof v.request_id === 'string' && v.request_id !== ''
+    && typeof v.params_sha256 === 'string'
+    && typeof v.until === 'string' && Number.isFinite(Date.parse(v.until))
+    && typeof v.word === 'string'
+    && (v.team === null || typeof v.team === 'string')
+    && v.seat === 'owner'
+    && typeof v.at === 'string' && Number.isFinite(Date.parse(v.at));
+}
+
+/**
+ * Verifies one signed deferral: its signer is registered and accepted by policy, the signer's key is
+ * confirmed against the credential store, and the signature holds over exactly this record. The
+ * return instant is not judged here; the 7-day cap is applied where the record is read.
+ */
+export function verifyOwnerLater(home: string, signed: SignedOwnerLater, store: OwnerSeatKeyStore, now: Date = new Date(), entity?: string): { ok: true; later: OwnerSeatLater; signer: OwnerSigner } | { ok: false; why: string } {
+  const record = readOwnerSeat(home);
+  if (record === null) return { ok: false, why: 'an owner-seat deferral exists but no owner seat is registered to verify it' };
+  if (signed === null || typeof signed !== 'object') return { ok: false, why: 'the owner-seat deferral is not signed' };
+  const later = signed.owner_seat_later as unknown;
+  if (!isLaterRecord(later) || typeof signed.signature !== 'string' || typeof signed.signer !== 'string') return { ok: false, why: 'the owner-seat deferral is not signed' };
+  const who = verifyingSigner(home, record, signed.signer, store, now, entity);
+  if (!who.ok) return who;
+  if (later.seat !== 'owner') return { ok: false, why: 'the owner-seat deferral names another seat' };
+  const sig = signatureOk(who.signer, who.publicKey, ownerSeatLaterBytes(later), webauthnLaterChallenge(later), signed.signature, signed.webauthn, 'deferral');
+  if (!sig.ok) return sig;
+  return { ok: true, later, signer: who.signer };
+}
+
+/**
+ * Signs one deferral with the owner seat. The cap is judged first, before the signer is chosen or
+ * any user-presence prompt or passkey challenge starts: an instant past the request's creation +
+ * 7 days is refused outright, so no gesture is spent on a record the readers would never honour.
+ */
+export function signOwnerLater(
+  home: string,
+  later: OwnerSeatLater,
+  created: string,
+  signerName: string | undefined,
+  store: OwnerSeatKeyStore,
+  reason: string,
+  assertion?: { authenticator_data: string; client_data_json: string; signature: string },
+  now: Date = new Date(),
+): { ok: true; signed: SignedOwnerLater } | { ok: false; why: string } {
+  const from = Date.parse(created);
+  const until = Date.parse(later.until);
+  if (!Number.isFinite(from)) return { ok: false, why: `"${created}" is not the request's creation time` };
+  if (!Number.isFinite(until)) return { ok: false, why: `"${later.until}" is not a return time` };
+  if (until > from + OWNER_SEAT_LATER_CAP_MS) {
+    return { ok: false, why: `the return time ${later.until} is past the 7-day cap: no later than ${new Date(from + OWNER_SEAT_LATER_CAP_MS).toISOString()}` };
+  }
+  const record = readOwnerSeat(home);
+  if (record === null) return { ok: false, why: 'no owner seat is registered: the owner runs team grant --add-owner-seat --team <team> --signer <name>' };
+  const signer = signerName === undefined
+    ? (record.signers.length === 1 ? record.signers[0] : undefined)
+    : record.signers.find((s) => s.name === signerName);
+  if (signer === undefined) return { ok: false, why: signerName === undefined ? `name the signer with --signer (${record.signers.map((s) => s.name).join(', ')})` : `"${signerName}" is not a registered owner signer` };
+  const accepted = acceptedSigners(home, record, now);
+  if ('why' in accepted) return { ok: false, why: accepted.why };
+  if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
+  if (signer.type === 'webauthn') {
+    if (assertion === undefined) return { ok: false, why: `signer "${signer.name}" is a passkey: sign challenge ${webauthnLaterChallenge(later)} and pass --assertion <file>` };
+    return { ok: true, signed: { owner_seat_later: later, signer: signer.name, signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } } };
+  }
+  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
+  const signed = store.sign(signer.label, ownerSeatLaterBytes(later), reason);
+  if (!signed.ok) return signed;
+  return { ok: true, signed: { owner_seat_later: later, signer: signer.name, signature: signed.signature } };
+}
+
+/** One request's binding, as its own record states it: the signed parameter hash, the creation
+ *  time (the cap counts from it), and the window's end (`null` when it never expires). */
+export type AnswerWindow = { params_sha256: string; created: string; expires_at: string | null };
+
+/**
+ * The verified return instant of `id`'s deferral, clamped to the request's creation + 7 days, or
+ * `null` when there is no record that verifies and binds to this id and parameter hash. Never a
+ * plain read: a forged, unsigned, misbound or unaccepted record returns `null`.
+ */
+export function deferralUntil(
+  home: string,
+  folder: string,
+  id: string,
+  window: AnswerWindow,
+  store: OwnerSeatKeyStore,
+  now: Date = new Date(),
+  entity?: string,
+): number | null {
+  let signed: SignedOwnerLater;
+  try {
+    signed = JSON.parse(readFileSync(join(folder, `${id}.later.json`), 'utf8')) as SignedOwnerLater;
+  } catch {
+    return null;
+  }
+  const verified = verifyOwnerLater(home, signed, store, now, entity);
+  if (!verified.ok) return null;
+  const later = verified.later;
+  if (later.request_id !== id || later.params_sha256 !== window.params_sha256) return null;
+  const until = Date.parse(later.until);
+  const created = Date.parse(window.created);
+  if (!Number.isFinite(until) || !Number.isFinite(created)) return null;
+  return Math.min(until, created + OWNER_SEAT_LATER_CAP_MS);
+}
+
+/**
+ * The instant one request stops accepting an answer, as every reader compares it:
+ * `expires_at`, extended by a verified deferral to one normal answer window after the clamped
+ * return instant — `max(expires_at, min(until, created + 7 days) + ttlMs)`. The extra window is
+ * required because readers refuse at `deadline <= now`; without it a card would return unanswerable.
+ * A request that never expires (`null`) stays that way, and a record that does not verify changes
+ * nothing.
+ */
+export function answerDeadline(
+  home: string,
+  folder: string,
+  id: string,
+  window: AnswerWindow,
+  store: OwnerSeatKeyStore,
+  now: Date,
+  ttlMs: number,
+  entity?: string,
+): number {
+  if (window.expires_at === null) return Infinity;
+  const base = Date.parse(window.expires_at);
+  const until = deferralUntil(home, folder, id, window, store, now, entity);
+  if (until === null) return base;
+  return Math.max(base, until + ttlMs);
 }
