@@ -34,7 +34,9 @@
 // doubling, capped at one minute. At the bound the retry stops and the report is what speaks. A
 // profile whose terminal-host status is unreliable is not gated on that status for this leg,
 // because the typed wake reads the composer itself twice and types only into an empty idle
-// prompt; `watch_wake: off` keeps the drop-file leg for that seat.
+// prompt. A box that already holds exactly the wake's line is submitted with Enter and not
+// typed again; any other unsent text is left. `watch_wake: off` keeps the drop-file leg for
+// that seat.
 //
 // The markers are reservations made before their effect, never reminders written after it:
 // `<id>.wake` is linked into place exclusively before a line is typed, and `<id>.reported` before
@@ -59,6 +61,7 @@ import { dirname, join } from 'node:path';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { postArrivalWebhook } from '../bus/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
+import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
 import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
@@ -530,10 +533,11 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A profile the terminal host cannot report faithfully names its own screen as the seat's
     // state, so the typed retry trusts that reading rather than the host's word; the drop-file
     // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
-    // idle prompt at both reads lets it type, so a draft is still never typed over.
+    // idle prompt at both reads lets it type. A box that already holds exactly this wake's line
+    // is submitted below; any other draft is left, so a draft is still never typed over.
     if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
     const kind = readScreen(seat.cli, screen).kind;
-    if (retry === null ? (kind !== 'idle' && kind !== 'unsent') : kind !== 'idle') continue;
+    if (kind !== 'idle' && kind !== 'unsent') continue;
     const lock = acquireSeatLock(scene.dir, scene.session, seat.name);
     if (!('release' in lock)) continue;
     try {
@@ -560,6 +564,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const wakeHint = linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
       const line = readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
+      // The typed retry submits a box that already holds exactly its line, and leaves every
+      // other draft. The check is this pass's own look; the wake reads the box again.
+      if (retry !== null && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
       // earlier attempt whose effect is unknown, and no second line is typed for it.

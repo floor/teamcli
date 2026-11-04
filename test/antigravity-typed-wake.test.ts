@@ -2,7 +2,7 @@
 // test/fixtures/antigravity/1.4.12/: the empty idle box, the same box under a compacted
 // transcript, the braille spinner row of a running turn, and the `/exit` completion frame whose
 // box holds `/exit`. The gate is the profile's own screens: nothing is typed unless two reads
-// showed the empty idle prompt, and the completion frame is a box holding text, so it refuses.
+// showed the empty idle prompt. A box that already holds exactly the line is submitted with Enter and not typed again. The completion frame is a box holding other text, so it refuses.
 // The scenes below script the pane; no CLI runs and no key leaves the process.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -39,6 +39,13 @@ const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
 function holding(text: string): string {
   return IDLE.replace(/\n>\n(─+)\n/, (_match, rule: string) => `\n> ${text}\n${rule}\n`);
 }
+
+/** The same frame with one extra row under the typed line, inside the box, before the closing rule. */
+function holdingUnder(text: string, under: string): string {
+  return IDLE.replace(/\n>\n(─+)\n/, (_match, rule: string) => `\n> ${text}\n  ${under}\n${rule}\n`);
+}
+
+const TASKS_HINT = '/tasks shows your open tasks';
 
 /** The captured working frame with `text` still in the composer. The spinner row keeps the
  *  screen working; the composer read is unsent while the line sits there. */
@@ -186,6 +193,59 @@ describe('the antigravity typed wake: the profile’s own screens gate the keys'
     const pane = wakeFake((read) => (read === 0 ? IDLE : EXIT_UNSENT));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
     expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the second read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a box that already holds the line is submitted with Enter and not typed again', async () => {
+    const held = holding(LINE);
+    expect(readScreen('antigravity', held).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', LINE, held)).toBe(true);
+    const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : held));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('the typed line plus the exact tasks hint row is submitted', async () => {
+    const drawn = holdingUnder(LINE, TASKS_HINT);
+    expect(readScreen('antigravity', drawn).kind).toBe('unsent');
+    expect(boxHoldsText('antigravity', LINE, drawn)).toBe(true);
+    const pane = wakeFake((read, enters) => (read < 2 ? IDLE : enters > 0 ? WORKING : drawn));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('the typed line plus a row that only starts like the tasks hint gets no Enter', async () => {
+    const drawn = holdingUnder(LINE, `${TASKS_HINT} now`);
+    expect(boxHoldsText('antigravity', LINE, drawn)).toBe(false);
+    const pane = wakeFake((read) => (read < 2 ? IDLE : drawn));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(out.delivered).toBe(false);
+    expect(out.tries).toBe(0);
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a sitting line plus the exact tasks hint row is submitted and not typed again', async () => {
+    const drawn = holdingUnder(LINE, TASKS_HINT);
+    const pane = wakeFake((_read, enters) => (enters > 0 ? WORKING : drawn));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(out).toEqual({ delivered: true, typed: true, tries: 1, reason: 'the working screen showed after 1 Enter' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a sitting line whose second read is other text gets no Enter', async () => {
+    const held = holding(LINE);
+    const pane = wakeFake((read) => (read === 0 ? held : EXIT_UNSENT));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'antigravity', FAST);
+    expect(out.delivered).toBe(false);
+    expect(out.tries).toBe(0);
+    expect(out.typed).toBe(false);
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });

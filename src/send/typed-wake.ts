@@ -134,7 +134,8 @@ async function pollSubmitted(
  * Types one trigger line into the profile's idle composer and presses Enter, then waits for the
  * profile's working screen. Both idle reads happen before any key goes out, spaced by a settle:
  * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
- * nothing typed. After the line is typed, Enter is pressed only into a box that reads back as
+ * nothing typed. A box that already holds exactly the line is not typed again: Enter is pressed
+ * into it. After the line is typed, Enter is pressed only into a box that reads back as
  * exactly that line; a box that is empty, holds other text or cannot be read gets no Enter.
  * The host's Enter is the submit key, not a Return on the text, and the first one waits
  * until two reads show that same drawn line. A line longer than the composer cap, or a line
@@ -159,32 +160,47 @@ export async function deliverTypedWake(
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
   const verifyMs = options.verifyMs ?? WAKE_VERIFY_MS;
-  const first = seenOf(cli, host.read(pane));
-  if (first !== 'idle') {
-    return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
+  const opening = host.read(pane);
+  const first = seenOf(cli, opening);
+  // The line is already the whole box. Press Enter into it; do not type it a second time.
+  const alreadyHeld = opening !== null && first === 'unsent' && boxHoldsText(cli, line, opening);
+  let typedLine = false;
+  let screen: string | null;
+  if (alreadyHeld) {
+    screen = opening;
+  } else {
+    if (first !== 'idle') {
+      return { delivered: false, typed: false, tries: 0, reason: `the first read showed ${first}, not an empty idle prompt; nothing was typed` };
+    }
+    await host.wait(settleMs);
+    const second = seenOf(cli, host.read(pane));
+    if (second !== 'idle') {
+      return { delivered: false, typed: false, tries: 0, reason: `the second read showed ${second}, not an empty idle prompt; nothing was typed` };
+    }
+    if (!host.type(pane, line)) {
+      return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
+    }
+    typedLine = true;
+    await host.wait(enterSettleMs);
+    screen = host.read(pane);
   }
-  await host.wait(settleMs);
-  const second = seenOf(cli, host.read(pane));
-  if (second !== 'idle') {
-    return { delivered: false, typed: false, tries: 0, reason: `the second read showed ${second}, not an empty idle prompt; nothing was typed` };
-  }
-  if (!host.type(pane, line)) {
-    return { delivered: false, typed: false, tries: 0, reason: 'the pane did not take the line; nothing was typed' };
-  }
-  await host.wait(enterSettleMs);
   let tries = 0;
-  let screen = host.read(pane);
   let previous: string | null = null;
+  let previousHeld = false;
   let settleLooks = 0;
+  const keyed = (): boolean => typedLine || tries > 0;
   const heldReason = (kind: string, pressed: boolean): string => {
     const why = kind === 'unsent' ? 'the box held text other than the line' : `the screen read ${kind}`;
-    return pressed ? `${why} and no working screen showed` : `${why} after the line was typed; no Enter was pressed`;
+    if (pressed) return `${why} and no working screen showed`;
+    return typedLine
+      ? `${why} after the line was typed; no Enter was pressed`
+      : `${why}; no Enter was pressed`;
   };
   for (;;) {
     if (screen === null) {
       return {
         delivered: false,
-        typed: true,
+        typed: keyed(),
         tries,
         reason: tries === 0
           ? 'the screen could not be read after the line was typed; no Enter was pressed'
@@ -194,24 +210,26 @@ export async function deliverTypedWake(
     const kind = readScreen(cli, screen).kind;
     if (kind === 'working') {
       if (tries === 0) {
-        return { delivered: false, typed: true, tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
+        return { delivered: false, typed: keyed(), tries, reason: 'a working screen showed before any Enter, so the line was not submitted by this wake; no Enter was pressed' };
       }
       if (boxHoldsText(cli, line, screen)) {
-        return { delivered: false, typed: true, tries, reason: stillHeldReason(tries) };
+        return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
       }
-      return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     const holds = boxHoldsText(cli, line, screen);
-    // The first Enter waits until two reads draw the same line. A row that is still rendering,
-    // or a row that settles on something else, is not pressed.
-    if (tries === 0 && !(holds && previous === screen)) {
-      if (!holds && previous === screen) {
-        return { delivered: false, typed: true, tries, reason: heldReason(kind, false) };
+    // The first Enter waits until two reads agree. After a fresh typing, the two reads are the
+    // same screen, so a row that is still rendering is not pressed. A line already in the box
+    // agrees when both reads hold exactly that line, and the rest of the screen may change.
+    const agreed = holds && (alreadyHeld ? previousHeld : previous === screen);
+    if (tries === 0 && !agreed) {
+      if (!holds && (alreadyHeld ? previousHeld : previous === screen)) {
+        return { delivered: false, typed: keyed(), tries, reason: heldReason(kind, false) };
       }
       if (settleLooks >= LINE_SETTLE_LOOKS) {
         return {
           delivered: false,
-          typed: true,
+          typed: keyed(),
           tries,
           reason: holds
             ? 'the drawn line did not settle; no Enter was pressed'
@@ -219,20 +237,21 @@ export async function deliverTypedWake(
         };
       }
       previous = screen;
+      previousHeld = holds;
       settleLooks += 1;
       await host.wait(enterSettleMs);
       screen = host.read(pane);
       continue;
     }
     if (!holds) {
-      return { delivered: false, typed: true, tries, reason: heldReason(kind, tries > 0) };
+      return { delivered: false, typed: keyed(), tries, reason: heldReason(kind, tries > 0) };
     }
     if (tries >= MAX_WAKE_ENTERS) {
-      return { delivered: false, typed: true, tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
+      return { delivered: false, typed: keyed(), tries, reason: `the line stayed in the box through ${String(tries)} Enters and no working screen showed` };
     }
     // Muse and Antigravity submit with Enter. The host's enter is that key, not Return.
     if (!host.enter(pane)) {
-      return { delivered: false, typed: true, tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
+      return { delivered: false, typed: keyed(), tries, reason: 'the pane did not take the Enter; no further Enter was pressed' };
     }
     tries += 1;
     const after = host.read(pane);
@@ -245,10 +264,10 @@ export async function deliverTypedWake(
     }
     const ack = await pollSubmitted(host, pane, cli, line, pollMs, verifyMs);
     if (ack === 'submitted') {
-      return { delivered: true, typed: true, tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
+      return { delivered: true, typed: keyed(), tries, reason: `the working screen showed after ${String(tries)} Enter${tries === 1 ? '' : 's'}` };
     }
     if (ack === 'held') {
-      return { delivered: false, typed: true, tries, reason: stillHeldReason(tries) };
+      return { delivered: false, typed: keyed(), tries, reason: stillHeldReason(tries) };
     }
     screen = host.read(pane);
     previous = screen;
