@@ -290,4 +290,91 @@ describe('the runtime-home migration', () => {
     expect(readFileSync(join(at(home, 'atlas-810'), 'a.txt'), 'utf8')).toBe('alpha\n');
     expect(readFileSync(join(lobbyDir(home), 'desk-810', 'b.txt'), 'utf8')).toBe('bravo\n');
   });
+
+  test('a link anywhere in the parent chain refuses the whole step, and nothing moves', () => {
+    // The lobby itself is a link into an outside folder.
+    const home = homeOf();
+    const outside = join(base, 'outside-lobby');
+    mkdirSync(join(outside, 'atlas-810'), { recursive: true });
+    writeFileSync(join(outside, 'atlas-810', 'a.txt'), 'alpha\n');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    symlinkSync(outside, lobbyDir(home));
+    const report = migrateRuntimeHome(home, quiet);
+    expect(report.moved).toEqual([]);
+    expect(report.refused.map((one) => one.name)).toEqual(['atlas-810']);
+    expect(report.refused[0]!.why).toContain('link');
+    expect(readFileSync(join(outside, 'atlas-810', 'a.txt'), 'utf8')).toBe('alpha\n');
+    expect(existsSync(at(home, 'atlas-810'))).toBe(false);
+
+    // runtime/kits is a link into an outside folder.
+    const home2 = homeOf();
+    kit(home2, 'atlas-810', { 'a.txt': 'alpha\n' });
+    const outsideKits = join(base, 'outside-kits');
+    mkdirSync(outsideKits, { recursive: true });
+    mkdirSync(join(home2, '.config', 'team', 'runtime'), { recursive: true });
+    symlinkSync(outsideKits, runtimeKitsDir(home2));
+    const report2 = migrateRuntimeHome(home2, quiet);
+    expect(report2.moved).toEqual([]);
+    expect(report2.refused.map((one) => one.name)).toEqual(['atlas-810']);
+    expect(readFileSync(join(lobbyDir(home2), 'atlas-810', 'a.txt'), 'utf8')).toBe('alpha\n');
+    expect(readdirSync(outsideKits)).toEqual([]);
+  });
+
+  test('a folder owned by another user refuses the step', () => {
+    const home = homeOf();
+    kit(home, 'atlas-810', { 'a.txt': 'alpha\n' });
+    const otherUser: RuntimeMigrationSources = { ...quiet, uid: () => lstatSync(lobbyDir(home)).uid + 1 };
+    const report = migrateRuntimeHome(home, otherUser);
+    expect(report.moved).toEqual([]);
+    expect(report.refused.map((one) => one.name)).toEqual(['atlas-810']);
+    expect(report.refused[0]!.why).toContain('another user');
+    expect(readFileSync(join(lobbyDir(home), 'atlas-810', 'a.txt'), 'utf8')).toBe('alpha\n');
+    expect(existsSync(at(home, 'atlas-810'))).toBe(false);
+  });
+
+  test('undo refuses a note entry naming any path but the pinned pair, and moves nothing', () => {
+    const home = homeOf();
+    kit(home, 'atlas-810', { 'a.txt': 'alpha\n' });
+    migrateRuntimeHome(home, quiet);
+    const forged = JSON.parse(readFileSync(runtimeMigrationNotePath(home), 'utf8')) as { moved: { name: string; from: string; to: string }[] };
+    const outside = join(base, 'elsewhere');
+    forged.moved[0]!.from = outside;
+    writeFileSync(runtimeMigrationNotePath(home), `${JSON.stringify(forged)}\n`);
+    const undone = undoRuntimeHomeMigration(home, quiet);
+    expect(undone.movedBack).toEqual([]);
+    expect(undone.refused.map((one) => one.name)).toEqual(['atlas-810']);
+    expect(undone.refused[0]!.why).toContain('pinned');
+    expect(readFileSync(join(at(home, 'atlas-810'), 'a.txt'), 'utf8')).toBe('alpha\n');
+    expect(existsSync(outside)).toBe(false);
+    expect(existsSync(join(lobbyDir(home), 'atlas-810'))).toBe(false);
+  });
+
+  test('an undo copy that dies mid-way is swept from the lobby on re-run', () => {
+    const home = homeOf();
+    kit(home, 'atlas-810', { 'a.txt': 'alpha\n', 'b.txt': 'bravo\n' });
+    migrateRuntimeHome(home, quiet);
+    const exdev = (copyFile: RuntimeMigrationSources['copyFile']): RuntimeMigrationSources => ({
+      ...quiet,
+      rename: (from, to) => {
+        if (!from.includes('.moving-')) throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+        renameSync(from, to);
+      },
+      ...(copyFile === undefined ? {} : { copyFile }),
+    });
+    let copies = 0;
+    const crashing = undoRuntimeHomeMigration(home, exdev((from, to) => {
+      copies += 1;
+      if (copies > 1) throw new Error('a made-up mid-copy death');
+      writeFileSync(to, readFileSync(from));
+    }));
+    expect(crashing.movedBack).toEqual([]);
+    expect(readdirSync(lobbyDir(home)).some((name) => name.includes('.moving-'))).toBe(true);
+    expect(existsSync(join(lobbyDir(home), 'atlas-810'))).toBe(false);
+
+    const finished = undoRuntimeHomeMigration(home, exdev(undefined));
+    expect(finished.movedBack).toEqual(['atlas-810']);
+    expect(readdirSync(lobbyDir(home)).some((name) => name.includes('.moving-'))).toBe(false);
+    expect(readFileSync(join(lobbyDir(home), 'atlas-810', 'b.txt'), 'utf8')).toBe('bravo\n');
+    expect(existsSync(at(home, 'atlas-810'))).toBe(false);
+  });
 });

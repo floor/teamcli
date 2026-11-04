@@ -70,6 +70,8 @@ export type RuntimeMigrationSources = {
   rename?: (from: string, to: string) => void;
   /** Injected by a test: one file's copy, so a mid-copy death is a scene. */
   copyFile?: (from: string, to: string) => void;
+  /** Injected by a test: this process's user id, so another user's folder is a scene. */
+  uid?: () => number;
 };
 
 export type RuntimeMigrationUndoReport = {
@@ -245,6 +247,27 @@ function holdingUnit(folder: string, sources: RuntimeMigrationSources): string |
 }
 
 /**
+ * The parent chain this step may act through: every existing component under home on
+ * the way to the leaf must be a real folder this user owns. A link anywhere — the
+ * lobby, the runtime home, its kits folder — is refused before anything is created
+ * or removed through it, and so is anything owned by another user. Components that
+ * do not stand yet will be made by this step, owned by this user.
+ */
+function chainProblem(home: string, leaf: string, sources: RuntimeMigrationSources): string | null {
+  const uid = sources.uid?.() ?? (typeof process.getuid === 'function' ? process.getuid() : null);
+  const below = leaf.slice(home.length).split('/').filter((part) => part !== '');
+  let at = home;
+  for (const part of below) {
+    at = join(at, part);
+    const stat = statOrNull(at);
+    if (stat === null) continue;
+    if (stat.isSymbolicLink()) return `${at} is a link; links are never followed or moved through`;
+    if (uid !== null && stat.uid !== uid) return `${at} is owned by another user`;
+  }
+  return null;
+}
+
+/**
  * Moves the listed kit folders from the machine lobby into the runtime home. With
  * `dryRun`, the same report is computed and nothing is moved or written.
  */
@@ -261,6 +284,16 @@ export function migrateRuntimeHome(
     moved: [], alreadyMoved: [], held: [], refused: [], later: [], guardLines: [], complete: true, dryRun,
   };
   const note = readNote(home);
+  // The chains are judged before anything is made or swept through them: a link or a
+  // stranger's folder above either home refuses every folder that stands to move.
+  const chain = chainProblem(home, lobby, sources) ?? chainProblem(home, kits, sources);
+  if (chain !== null) {
+    for (const name of RUNTIME_KIT_FOLDERS) {
+      if (statOrNull(join(lobby, name)) !== null) report.refused.push({ name, why: chain });
+    }
+    report.complete = report.refused.length === 0;
+    return report;
+  }
   if (!dryRun) {
     mkdirSync(kits, { recursive: true, mode: 0o700 });
     sweepTemps(kits);
@@ -279,6 +312,11 @@ export function migrateRuntimeHome(
     }
     if (source.isSymbolicLink() || !source.isDirectory()) {
       report.refused.push({ name, why: `the lobby path ${from} is not a folder this step may move` });
+      continue;
+    }
+    const leafChain = chainProblem(home, from, sources) ?? chainProblem(home, to, sources);
+    if (leafChain !== null) {
+      report.refused.push({ name, why: leafChain });
       continue;
     }
     if (target !== null) {
@@ -358,13 +396,38 @@ export function undoRuntimeHomeMigration(
   const report: RuntimeMigrationUndoReport = { movedBack: [], held: [], refused: [], guardLines: [], dryRun };
   const note = readNote(home);
   const named = new Set(sources.guardDirsNamed?.() ?? []);
-  if (!dryRun) mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  const kits = runtimeKitsDir(home);
+  // The chains are judged before anything is made or swept through them, as the
+  // forward move judges them; only then is a half-copied temp of an earlier undo
+  // swept from the lobby, the mirror of the forward sweep.
+  const chain = chainProblem(home, lobby, sources) ?? chainProblem(home, kits, sources);
+  if (!dryRun) {
+    if (chain === null) {
+      mkdirSync(lobby, { recursive: true, mode: 0o700 });
+      sweepTemps(lobby);
+    }
+  }
   // The step's own list order, like the forward move.
   const ordered = RUNTIME_KIT_FOLDERS
     .map((name) => note.moved.find((entry) => entry.name === name))
     .filter((entry) => entry !== undefined);
   for (const entry of ordered) {
     const { name, from, to } = entry;
+    // The note is a record, not an instruction: only the pinned pair this step itself
+    // writes may move. An entry naming any other path is refused whole.
+    if (from !== join(lobby, name) || to !== join(kits, name)) {
+      report.refused.push({ name, why: `${name}'s note entry names paths other than the pinned pair; nothing was moved` });
+      continue;
+    }
+    if (chain !== null) {
+      report.refused.push({ name, why: chain });
+      continue;
+    }
+    const leafChain = chainProblem(home, from, sources) ?? chainProblem(home, to, sources);
+    if (leafChain !== null) {
+      report.refused.push({ name, why: leafChain });
+      continue;
+    }
     const target = statOrNull(to);
     const source = statOrNull(from);
     if (target === null) {
