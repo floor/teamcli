@@ -1,12 +1,10 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import type { TeamFile } from '../file/types.ts';
 import {
   applySidebarLayout,
   DEFAULT_SIDEBAR_ROWS,
   hostConfigCheck,
   hostConfigPath,
-  isHostAdapterMocked,
   readSidebarConfig,
   reloadConfig,
   renderSidebarTomlBlock,
@@ -76,9 +74,8 @@ export const realSidebarCheckSources: CheckSidebarSources = {
   reloadSession: (session) => reloadConfig(session),
 };
 
-function hasLayoutSeam(sidebar: CheckSidebarSources | undefined, home: string | undefined): boolean {
+function hasLayoutSeam(sidebar: CheckSidebarSources | undefined): boolean {
   if (sidebar === undefined) return false;
-  if (sidebar === realSidebarCheckSources) return home === homedir();
   if (Object.keys(sidebar).length === 0) return true;
   return (
     sidebar.configText !== undefined ||
@@ -94,8 +91,7 @@ function hasLayoutSeam(sidebar: CheckSidebarSources | undefined, home: string | 
 
 /**
  * Whether a check run exercises the sidebar config and session-reload checks: true whenever
- * `sources.sidebar` carries a layout seam (or `realCheckSources` runs against the real home),
- * when the adapter has a fake runner installed, or when `home` carries a host config, a reload
+ * `sources.sidebar` carries a layout seam, or when `home` carries a host config, a reload
  * record store, or a non-default sidebar policy. Legacy unit scenes that pass a bare
  * `{ live, branch, standing, now, home }` without any sidebar state stay untouched.
  */
@@ -106,7 +102,7 @@ export function isSidebarCheckActive(
   now: Date,
   sidebar: CheckSidebarSources | undefined,
 ): boolean {
-  if (hasLayoutSeam(sidebar, home) || isHostAdapterMocked()) return true;
+  if (hasLayoutSeam(sidebar)) return true;
   if (home === undefined) return false;
   if (existsSync(hostConfigPath(home)) || existsSync(sidebarReloadsFile(home))) return true;
   const resolved = sidebarPolicy({ home, root, team, now });
@@ -120,8 +116,8 @@ export function isSidebarCheckActive(
 /**
  * Reads `pane list --workspace <id>` once per distinct workspace of running seats that hold a
  * recorded pane, returning a map from `pane` id to `displayAgent` (`undefined` when the pane is
- * present in `pane list` with no `display_agent` field). Returns `null` when no `pane list`
- * source is wired or reachable, so legacy fixtures keep their existing `live.agents` reading.
+ * present in `pane list` with no `display_agent` field). Returns `null` when `pane list`
+ * cannot be read, so callers fall back to `live.agents`.
  */
 export function readSeatPaneDisplays(
   session: string,
@@ -129,21 +125,11 @@ export function readSeatPaneDisplays(
   state: SessionState,
   live: Live,
   sidebar: CheckSidebarSources | undefined,
-  home?: string,
 ): ReadonlyMap<string, string | undefined> | null {
   if (!live.running) return null;
   const reader =
-    sidebar !== undefined && sidebar !== realSidebarCheckSources
-      ? (sidebar.paneDisplays ??
-        (isHostAdapterMocked()
-          ? (s: string, w: string) => workspacePaneDisplays(w, s === 'default' ? undefined : s)
-          : undefined))
-      : sidebar === realSidebarCheckSources && (home === homedir() || isHostAdapterMocked())
-        ? realSidebarCheckSources.paneDisplays
-        : isHostAdapterMocked()
-          ? (s: string, w: string) => workspacePaneDisplays(w, s === 'default' ? undefined : s)
-          : undefined;
-  if (reader === undefined) return null;
+    sidebar?.paneDisplays ??
+    ((s: string, w: string) => workspacePaneDisplays(w, s === 'default' ? undefined : s));
 
   const workspaces = new Set<string>();
   for (const seat of team.seats) {
@@ -178,14 +164,11 @@ function entityRunningSessions(
 ): string[] {
   if (hostSessions === null) return [];
   const known = new Set<string>([currentSession, team.session]);
-  let hasRegisteredTeams = false;
   try {
     const teams = readTeams(home);
-    const entries = Object.entries(teams);
-    hasRegisteredTeams = entries.length > 0;
     const own = teamIdOf(root);
     const entity = team.entity ?? null;
-    for (const [id, record] of entries) {
+    for (const [id, record] of Object.entries(teams)) {
       if (id !== own && (entity === null || record.entity !== entity)) continue;
       known.add(record.session);
       for (const lobby of Object.keys(record.lobbies ?? {})) known.add(lobby);
@@ -193,10 +176,13 @@ function entityRunningSessions(
   } catch {
     // Unreadable team registry is named by registryDifferences; fall back to known sessions.
   }
+  for (const recordedSession of Object.keys(safeReadReloads(home))) {
+    known.add(recordedSession);
+  }
   return [
     ...new Set(
       hostSessions
-        .filter((one) => one.running && (!hasRegisteredTeams || known.has(one.name)))
+        .filter((one) => one.running && known.has(one.name))
         .map((one) => one.name),
     ),
   ].sort();
@@ -276,7 +262,7 @@ function evaluateSidebar(
   const readSessions =
     sidebar?.sessions ??
     sidebar?.hostSessions ??
-    (isHostAdapterMocked() ? () => sessionList() : () => null);
+    (() => sessionList());
   const runningSessions = entityRunningSessions(home, root, team, currentSession, readSessions());
   const reloads = safeReadReloads(home);
   const sessionDiffs: { session: string; what: string }[] = [];
@@ -338,13 +324,11 @@ export function repairSidebarLayout(input: {
     return EMPTY_SIDEBAR_REPAIR;
   }
 
-  const checkConfig =
-    sidebar?.checkConfig ??
-    (isHostAdapterMocked() ? () => hostConfigCheck() : () => ({ ok: true, text: 'config: ok' }));
+  const checkConfig = sidebar?.checkConfig ?? (() => hostConfigCheck());
   const reload =
     sidebar?.reloadSession ??
     sidebar?.reload ??
-    (isHostAdapterMocked() ? (s: string) => reloadConfig(s) : () => ({ applied: true, text: 'applied' }));
+    ((s: string) => reloadConfig(s));
   const recordReloads =
     sidebar?.recordReloads ??
     ((targetHome, entries) => recordSidebarReloads(targetHome, entries));

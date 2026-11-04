@@ -10,6 +10,8 @@ import {
   DEFAULT_SIDEBAR_ROWS,
   hostConfigPath,
   renderSidebarTomlBlock,
+  setCaptureExec,
+  setHerdrRun,
   SIDEBAR_TTL_CAP_MS,
 } from '../src/herdr.ts';
 import { sidebarRowsWord, writePolicySet } from '../src/policy/index.ts';
@@ -58,6 +60,8 @@ const DEFAULT_TOML_BLOCK = renderSidebarTomlBlock(DEFAULT_SIDEBAR_ROWS, 'symbols
 
 const tempDirs: string[] = [];
 afterEach(() => {
+  setCaptureExec(null);
+  setHerdrRun(null);
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -138,6 +142,7 @@ function runCheck(
     caller?: Parameters<typeof testIo>[1];
     live?: Live;
     sidebar?: CheckSidebarSources;
+    rawSidebar?: CheckSidebarSources;
     reportDisplayAgent?: (session: string, pane: string, text: string, ttlMs?: number) => boolean;
   } = {},
 ): { code: number; out: string; stdout: string; stderr: string } {
@@ -161,11 +166,12 @@ function runCheck(
         agents: () => liveSession.agents,
       },
       ...(options.reportDisplayAgent === undefined ? {} : { reportDisplayAgent: options.reportDisplayAgent }),
-      sidebar: {
-        sessions: () => [{ name: 'acme-acme-app', running: true }],
-        paneDisplays: () => [{ pane: 'pane-lead', workspace: 'ws-lead', displayAgent: LEAD_DISPLAY }],
-        ...(options.sidebar ?? {}),
-      },
+      sidebar:
+        options.rawSidebar ?? {
+          sessions: () => [{ name: 'acme-acme-app', running: true }],
+          paneDisplays: () => [{ pane: 'pane-lead', workspace: 'ws-lead', displayAgent: LEAD_DISPLAY }],
+          ...(options.sidebar ?? {}),
+        },
     },
   );
   return { code, out: `${io.out}${io.err}`, stdout: io.out, stderr: io.err };
@@ -462,5 +468,83 @@ describe('sidebar check and --repair (Test 9)', () => {
     expect(nonOwner.stderr).toContain("team check: --repair is the owner's");
     expect(existsSync(cfgPath)).toBe(false);
     expect(readSidebarReloads(home)).toEqual({});
+  });
+
+  test('an omitted host method on the sidebar seam calls the adapter, never a fake ok', () => {
+    const { root, home } = setupWorld({ writeValidConfig: false, recordCurrentReload: false });
+    const cfgPath = hostConfigPath(home);
+    mkdirSync(join(cfgPath, '..'), { recursive: true });
+    const priorBytes = '# owner config before repair\n';
+    writeFileSync(cfgPath, priorBytes, { mode: 0o600 });
+
+    const captureCalls: string[][] = [];
+    const runCalls: { args: string[]; session?: string }[] = [];
+    let configCheckOk = false;
+
+    setCaptureExec((args) => {
+      captureCalls.push(args);
+      if (args[0] === 'session' && args[1] === 'list') {
+        return JSON.stringify({ sessions: [{ name: 'acme-acme-app', running: true }] });
+      }
+      if (args[0] === 'config' && args[1] === 'check') {
+        if (!configCheckOk) {
+          const err = new Error('config check failed') as Error & { stdout?: string };
+          err.stdout = 'config: issues found (adapter rejected config)';
+          throw err;
+        }
+        return 'config: ok\n';
+      }
+      if (args.includes('reload-config')) {
+        return JSON.stringify({ error: { message: 'adapter reload refused' } });
+      }
+      if (args.includes('report-metadata')) {
+        return JSON.stringify({ error: { message: 'adapter metadata refused' } });
+      }
+      return '';
+    });
+
+    setHerdrRun((args, session) => {
+      runCalls.push({ args, ...(session === undefined ? {} : { session }) });
+      if (args[0] === 'pane' && args[1] === 'list') {
+        return { panes: [{ pane_id: 'pane-lead', workspace_id: 'ws-lead' }] };
+      }
+      if (args[0] === 'server' && args[1] === 'reload-config') {
+        return { status: 'failed', diagnostics: ['adapter reload refused'] };
+      }
+      return null;
+    });
+
+    // 1. With sidebar: {} (checkConfig, reloadSession, sessions, paneDisplays all omitted),
+    //    --repair calls the adapter's config check, sees its refusal (never a fake ok), and rolls back.
+    const first = runCheck(root, home, {
+      repair: true,
+      live: buildLive(undefined),
+      rawSidebar: {},
+    });
+    expect(first.code).toBe(1);
+    expect(captureCalls.some((c) => c[0] === 'config' && c[1] === 'check')).toBe(true);
+    expect(captureCalls.some((c) => c[0] === 'session' && c[1] === 'list')).toBe(true);
+    expect(runCalls.some((c) => c.args[0] === 'pane' && c.args[1] === 'list')).toBe(true);
+    expect(first.out).toContain("sidebar: the terminal host's config was not updated");
+    expect(readFileSync(cfgPath, 'utf8')).toBe(priorBytes);
+
+    // 2. When config check succeeds on the adapter but reload-config refuses on the adapter,
+    //    --repair with sidebar: {} calls the adapter's reload-config and reports the refusal (never a fake ok).
+    configCheckOk = true;
+    const second = runCheck(root, home, {
+      repair: true,
+      live: buildLive(undefined),
+      rawSidebar: {},
+    });
+    expect(second.code).toBe(1);
+    expect(
+      runCalls.some((c) => c.args[0] === 'server' && c.args[1] === 'reload-config' && c.session === 'acme-acme-app'),
+    ).toBe(true);
+    expect(second.out).toContain('session "acme-acme-app": sidebar config reload was refused');
+    expect(second.out).toContain('adapter reload refused');
+    expect(second.out).toContain('difference: session "acme-acme-app": no TeamCLI reload recorded at the current layout');
+    expect(second.out).toContain(
+      `difference: lead: its sidebar display line is missing or expired; the file's line is "${LEAD_DISPLAY}"`,
+    );
   });
 });

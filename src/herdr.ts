@@ -347,17 +347,9 @@ export function sessionList(): HerdrSession[] | null {
     if (customRun !== null) {
       const res = customRun(['session', 'list', '--json']);
       if (typeof res === 'string') return sessionsOf(res);
-      if (res && typeof res === 'object') return sessionsOf(JSON.stringify(res));
+      if (res !== null && typeof res === 'object') return sessionsOf(JSON.stringify(res));
     }
-    if (captureExec !== shellCaptureExec) {
-      return sessionsOf(captureExec(['session', 'list', '--json']));
-    }
-    const out = execFileSync('herdr', ['session', 'list', '--json'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    });
-    return sessionsOf(out);
+    return sessionsOf(captureExec(['session', 'list', '--json']));
   } catch {
     return null;
   }
@@ -406,11 +398,6 @@ let captureExec: CaptureExec = shellCaptureExec;
 /** Swaps the process call the metadata calls make; null restores the real one. */
 export function setCaptureExec(exec: CaptureExec | null): void {
   captureExec = exec ?? shellCaptureExec;
-}
-
-/** Whether a test has installed a fake process runner (`setHerdrRun` or `setCaptureExec`). */
-export function isHostAdapterMocked(): boolean {
-  return customRun !== null || captureExec !== shellCaptureExec;
 }
 
 // What a herdr command printed, or null when it did not run. Exit status is not the answer: a

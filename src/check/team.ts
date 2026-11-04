@@ -415,7 +415,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // writes, so the comparison below reads the sidebar the repair left; a session herdr no
     // longer answers keeps the first read, and its rows stand.
     const after = whole.sessions[session] ?? emptySession();
-    const prePaneDisplays = readSeatPaneDisplays(session, team, after, live, sources.sidebar, sources.home);
+    const prePaneDisplays = readSeatPaneDisplays(session, team, after, live, sources.sidebar);
     const drifts = labelDrifts(team, after, live, prePaneDisplays);
     if (drifts.length > 0) {
       const sidebarTtlMs =
@@ -427,7 +427,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     }
   }
   const state = whole.sessions[session] ?? emptySession();
-  const paneDisplays = readSeatPaneDisplays(session, team, state, live, sources.sidebar, sources.home);
+  const paneDisplays = readSeatPaneDisplays(session, team, state, live, sources.sidebar);
   const sidebarChecked = sidebarLayoutDifferences({
     home: sources.home,
     root,
