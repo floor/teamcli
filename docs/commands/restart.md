@@ -29,6 +29,11 @@ refused, never replaced or followed — [`team brief rollout --apply`](brief.md)
 delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
 the restart goes on; [`team check`](check.md) names the seat.
 
+A restarted seat's fresh workspace sits at the sidebar's end; the automatic order pass then
+runs on its own when the out-of-order tail is idle, or this command's answer carries its one
+hint line — [`team order`](order.md) says how the pass decides, and how the sidebar policy's
+manage word silences it.
+
 ## After a restore
 
 The team a restart reads is proven by one of three authorities, in order: the team this session

@@ -22,7 +22,9 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `client-bundles`,
 `client-grant-max-duration`, `daemon.fallback-backlog-above`, `daemon.fallback-backlog-limit`,
 `daemon.chores`, `daemon.chores-slice-ms`, `daemon.chores-missed-beats`,
-`daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`).
+`daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`,
+`workspace.sidebar.rows`, `workspace.sidebar.manage`, `workspace.sidebar.status_indicators`,
+`daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -158,6 +160,26 @@ router's own constant, not a value here. All three words take the entity and tea
 A team file that cannot be read refuses the whole read — the router never answers the release
 defaults over a team it could not read — and `team check` names the rule a word broke, with the
 `team policy unset` repair that clears it.
+
+Five words govern the terminal host's sidebar; all five take the entity, project and team
+levels, and a chain that cannot be read leaves the release defaults in force — the sidebar is
+presentation, and an unreadable word never blocks a launch. `workspace.sidebar.manage` is
+whether `team` may touch the host's config for the sidebar at all: `on`, the release default,
+lets the marked sidebar block and the marked status-indicator key be spliced in, back up first
+and rolled back on a refused check; `off` is absolute — no write is made, and a lower level may
+switch managing off but never back on against a level that said `off`. `workspace.sidebar.rows`
+is the layout itself: rows joined by `;`, tokens by `,`, each token one of `state_icon`,
+`machine`, `workspace`, `tab`, `state_text`, `agent` (the YAML list of token lists reads the
+same way); unset, it is today's layout, `state_icon,machine,workspace,tab` over `state_text,agent`.
+Any parsed layout is as strict as any other, so the nearest level chooses.
+`workspace.sidebar.status_indicators` is which status indicator the host draws beside an agent —
+`symbols`, the release default, or `dots`, the host's own closed vocabulary.
+`daemon.sidebar-ttl-ms` is how long a pane's reported sidebar metadata lives before it lapses:
+whole milliseconds from 1000, one day (86400000, the host's own cap) when nothing declares it;
+a word above the cap is clamped to it when read rather than refused, and a shorter ttl is the
+tighter word. `daemon.sidebar-refresh-ms` is how often the sidebar line is re-reported to stay
+inside that ttl: whole milliseconds from one minute to seven days, six hours (21600000) when
+nothing declares it; a shorter interval is the tighter word.
 
 Four advised words shape the rules every seat reads at launch; they lift no gate and grant no
 power. `leads.pane-actions` and `leads.self-service` (each `on` by default, at the entity,
