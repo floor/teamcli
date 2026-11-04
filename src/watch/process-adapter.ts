@@ -13,10 +13,15 @@
 // on this machine. The column is `[[days-]hours:]minutes:seconds`, with an optional fraction of
 // a second.
 //
+// The CPU fact is asked asynchronously: the query starts a process of its own, and a daemon that
+// waited for it on its loop would let one slow query hold everything it serves. The probe is
+// bounded — a query that has not answered inside its timeout is killed — and the caller hears
+// null, which is no evidence either way rather than a reading.
+//
 // A test hands the core a fake adapter through this same interface; a scene never runs these
 // commands.
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { readlinkSync } from 'node:fs';
 
 /** The one fact this adapter answers: the working folder of the process at `pid`, or null when
@@ -45,10 +50,25 @@ export const processWorkingFolderOf: WorkingFolderReader = (pid) => {
   }
 };
 
-/** The CPU-time fact: milliseconds this machine has charged the process at `pid`, or null when
- *  the process is gone or its time cannot be read. A caller judges a worker by whether this
- *  number rose between two readings; the probe itself carries no policy. */
-export type ProcessCpuTimeReader = (pid: number) => number | null;
+/** One answer to the CPU-time question, or the promise of one. The daemon's probe starts a
+ *  process, so it answers later; a scene may answer on the caller's stack. */
+export type ProcessCpuTimeReading = number | null | Promise<number | null>;
+
+/** How the CPU-time fact is asked by a caller that must not hold its own loop for it. */
+export type ProcessCpuTimeProbe = (pid: number) => ProcessCpuTimeReading;
+
+/** Whether a reading will arrive later. A probe is the only such reader, so the caller decides
+ *  once whether to wait for it or to judge on the spot. */
+export function isAsyncCpuReading(value: ProcessCpuTimeReading): value is Promise<number | null> {
+  return value !== null && typeof value === 'object' && typeof value.then === 'function';
+}
+
+/** How long the probe waits for the process table before it gives up: long enough for a loaded
+ *  machine's answer, short enough to arrive inside one daemon beat. Measured on this machine,
+ *  `execFile('/bin/sleep', ['5'], { timeout: 300, killSignal: 'SIGKILL' })` answered its callback
+ *  after 319 ms with `signal: 'SIGKILL'`, `killed: true` and no exit code: a query that outlives
+ *  the timeout is killed and reads as no reading. */
+export const CPU_PROBE_TIMEOUT_MS = 2_000;
 
 /** Reads one time-column value as milliseconds. Exported for its own scene: the shapes are fixed
  *  by the query, so the parser needs no process behind it. */
@@ -73,14 +93,18 @@ export function parseCpuTime(text: string): number | null {
   return ((days * 24 + hours) * 60 + minutes) * 60_000 + Math.round(seconds * 1000);
 }
 
-export const processCpuTimeOf: ProcessCpuTimeReader = (pid) => {
-  try {
-    const text = execFileSync('ps', ['-o', 'time=', '-p', String(pid)], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return parseCpuTime(text);
-  } catch {
-    return null;
-  }
-};
+export const processCpuTimeAsync: ProcessCpuTimeProbe = (pid) =>
+  new Promise((resolve) => {
+    try {
+      execFile(
+        'ps',
+        ['-o', 'time=', '-p', String(pid)],
+        { encoding: 'utf8', timeout: CPU_PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' },
+        (error, stdout) => {
+          resolve(error === null ? parseCpuTime(stdout) : null);
+        },
+      );
+    } catch {
+      resolve(null);
+    }
+  });

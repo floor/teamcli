@@ -34,7 +34,7 @@ function configFor(home: string): ChoresChildConfig {
 /** Starts the fixture child and waits until it has installed its signal handler. */
 async function start(
   home: string,
-  cpuTimeOf: () => number,
+  cpuTimeOf: () => number | null,
   entry: string = FIXTURE,
 ): Promise<{ child: ChoresChild; notes: string[] }> {
   const ready = join(home, 'fixture-ready');
@@ -135,6 +135,25 @@ describe('chores child handle forced-end guard', () => {
     // A deliberate end is not withdrawn: the hung ceiling and the daemon's stop must not leave a
     // child behind, so this request forces even a child that answered.
     child.kill('the scene forces it', 100, { evenIfWorking: true });
+    const death = Date.now() + 5_000;
+    while (child.alive && Date.now() < death) await Bun.sleep(25);
+    expect(child.alive).toBe(false);
+    await child.exited;
+  });
+
+  test('5. a reading that fails during the grace is no evidence: the handle defers instead of forcing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'team-chores-guard-'));
+    dirs.push(home);
+    let reading: number | null = null;
+    const { child, notes } = await start(home, () => reading);
+
+    child.kill('the scene ends it', 100);
+    await Bun.sleep(250);
+    expect(child.alive).toBe(true);
+    expect(notes.some((line) => line.includes('could not be read'))).toBe(true);
+
+    // A reading that recovers is only a baseline; one grace later the flat window forces the end.
+    reading = 900;
     const death = Date.now() + 5_000;
     while (child.alive && Date.now() < death) await Bun.sleep(25);
     expect(child.alive).toBe(false);

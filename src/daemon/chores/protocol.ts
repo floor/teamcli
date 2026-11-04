@@ -133,6 +133,11 @@ export type ChoresChildMessage =
       busy: string | null;
       /** The child's own marker cache at this beat; null when its frame carried none. */
       markerCache: ChoresMarkerCache | null;
+      /** The CPU time the machine has charged this child, in milliseconds, as the child read it
+       *  from its own process at this beat. The supervisor judges a silent child against the
+       *  latest number it has heard, so a healthy beat costs the daemon no process query; absent
+       *  on an older child's frame, which is no reason to drop the beat. */
+      cpuMs?: number | null;
     }
   | { type: 'pass'; passes: ChoresRootPass[] }
   | {
@@ -323,12 +328,21 @@ export function readChildMessage(raw: Record<string, unknown>): ChoresChildMessa
         markerCache = readMarkerCache(raw.markerCache);
         if (markerCache === null) return null;
       }
+      // The child's own CPU total is display-and-liveness evidence, never frame validity: a
+      // frame without the field is an older child's beat, and one that carries a malformed value
+      // is dropped like any other malformed reading.
+      let cpuMs: number | null = null;
+      if (raw.cpuMs !== undefined && raw.cpuMs !== null) {
+        if (typeof raw.cpuMs !== 'number' || !Number.isFinite(raw.cpuMs) || raw.cpuMs < 0) return null;
+        cpuMs = raw.cpuMs;
+      }
       return {
         type: 'heartbeat',
         at: raw.at,
         rssBytes: raw.rssBytes,
         busy: raw.busy as string | null,
         markerCache,
+        cpuMs,
       };
     }
     case 'pass': {

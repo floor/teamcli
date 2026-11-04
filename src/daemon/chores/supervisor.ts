@@ -16,7 +16,11 @@
 // turn, so one root's backlog delays another root's chores by a slice.
 import type { TeamFile } from '../../file/types.ts';
 import type { HostedWatchState } from '../../watch/hosted.ts';
-import { processCpuTimeOf, type ProcessCpuTimeReader } from '../../watch/process-adapter.ts';
+import {
+  isAsyncCpuReading,
+  processCpuTimeAsync,
+  type ProcessCpuTimeProbe,
+} from '../../watch/process-adapter.ts';
 import { routeId, type HostedRoute } from '../routes.ts';
 import type { DaemonChoresState } from '../state.ts';
 import type { HostedWatch } from '../watch.ts';
@@ -64,11 +68,14 @@ export type ChoresFleetInput = {
   factory?: (input: SpawnChoresInput) => ChoresChild;
   /** How long a terminated child gets before it is forced. */
   killGraceMs?: number;
-  /** Reads the CPU time the machine has charged a process, in milliseconds. A late child is
-   *  judged by whether this rose between two readings: work the machine charged is progress,
-   *  whatever the child's own beats say. Defaults to the process adapter; a test injects a fake
-   *  reading because its synthetic children have no process behind them. */
-  cpuTimeOf?: ProcessCpuTimeReader;
+  /** Reads the CPU time the machine has charged a process, in milliseconds. It is asked only
+   *  for a child that has gone silent, and asynchronously: a healthy child reports its own CPU
+   *  total in every heartbeat, so no beat starts a process. A late child is judged by whether
+   *  this reading rose above its last reported total: work the machine charged is progress,
+   *  whatever the child's own beats say. Defaults to the process adapter's bounded probe; a test
+   *  injects a fake reading (at once, or as a promise) because its synthetic children have no
+   *  process behind them. */
+  cpuTimeOf?: ProcessCpuTimeProbe;
   /** How long a presence answer waits for the child before the daemon gives it up and holds the
    *  route's seats for that pass. A child that stopped answering must not hold the pass forever;
    *  the child's late answer is dropped as one for a nudge no longer pending. */
@@ -177,10 +184,20 @@ type Group = {
   backoff: number;
   /** Heartbeats this child has sent since it started; the second one proves a run. */
   beats: number;
-  /** The CPU time the machine had charged this child at the last reading — its start, a
-   *  heartbeat read, or the last late decision. Progress is judged only between two numeric
-   *  readings; null means no reading was available, which is never evidence against the child. */
+  /** The CPU total this child last reported in a heartbeat, in milliseconds, and when this
+   *  daemon read that frame. The child answers this about itself, so a healthy beat costs the
+   *  daemon no process query at all. */
   cpuSampleMs: number | null;
+  cpuSampleAtMs: number | null;
+  /** The last reading a probe took of this child, and when. A probe is the daemon's only
+   *  process-table read for liveness: one at a start, and one for a child that has gone silent. */
+  probeCpuMs: number | null;
+  probeCpuAtMs: number | null;
+  /** A probe is out for this child; no second one starts until it answers. */
+  probePending: boolean;
+  /** Bumped when the child speaks, leaves, or the daemon's loop stalls: a probe answer for a
+   *  window that has since closed is dropped rather than judged. */
+  judgeToken: number;
   /** Why a late child is being kept rather than ended: its CPU advanced, or no reading could
    *  prove it stopped. Null when the child is not being spared. */
   spareWhy: string | null;
@@ -256,6 +273,11 @@ function createGroup(input: ChoresFleetInput, routes: ChoresRouteInput[], mode: 
     backoff: 0,
     beats: 0,
     cpuSampleMs: null,
+    cpuSampleAtMs: null,
+    probeCpuMs: null,
+    probeCpuAtMs: null,
+    probePending: false,
+    judgeToken: 0,
     spareWhy: null,
     rowWhy: null,
     spareLogged: false,
@@ -362,6 +384,11 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // and no judgement would ever run.
   if (stalled) {
     group.lastBeatReadMs = ms;
+    // The silence this tick could have judged is the daemon's own held loop, not the child's:
+    // a probe that was out for that window is dropped, and the next on-time judgement measures
+    // from this clock.
+    group.judgeToken += 1;
+    group.probePending = false;
     return;
   }
   // A child that has not been read beating twice since it started has no beat clock to judge: its
@@ -372,25 +399,13 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   if (group.beats < 2) {
     if (ms - group.startedAtMs < STARTUP_DEADLINE_MS) return;
     const situation = `the child did not beat twice within ${String(STARTUP_DEADLINE_MS)} ms of its start`;
-    const judgement = judgeProgress(input, group, child);
-    if (judgement.progressed) {
-      if (ms - group.startedAtMs >= HUNG_CEILING_MS) {
-        endAtCeiling(input, group, child, `the child has not beaten for ${String(HUNG_CEILING_MS)} ms while its CPU kept advancing`);
-        return;
-      }
-      spareLate(input, group, situation, judgement);
-      return;
-    }
-    if (judgement.unproven) {
-      spareLate(input, group, situation, judgement);
-      return;
-    }
-    group.spareWhy = null;
-    group.spareLogged = false;
-    group.killing = true;
-    group.why = situation;
-    input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
-    child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+    requestJudgement(
+      input,
+      group,
+      child,
+      { spare: situation, end: situation },
+      group.startedAtMs + HUNG_CEILING_MS,
+    );
     return;
   }
   // Silence is measured from when this daemon last read a beat, never from the beat's own `at`:
@@ -404,61 +419,148 @@ function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boo
   // reading is ended on silence alone. A child kept this way is ended at the hung ceiling if it
   // never speaks again, so the rule delays an end without granting one forever.
   const spoken = `the child has missed ${String(missed)} heartbeat${missed === 1 ? '' : 's'}`;
-  const judgement = judgeProgress(input, group, child);
-  if (judgement.progressed) {
-    if (ms - (group.lastBeatReadMs ?? group.startedAtMs) >= HUNG_CEILING_MS) {
+  requestJudgement(
+    input,
+    group,
+    child,
+    { spare: spoken, end: `the child missed ${String(group.policy.missedBeats)} heartbeats` },
+    (group.lastBeatReadMs ?? group.startedAtMs) + HUNG_CEILING_MS,
+  );
+}
+
+/** One reading of the child's CPU, or null when there is no pid or the probe cannot read it. */
+/** The most recent CPU reading this group holds for its child, whichever source took it. The
+ *  child's own heartbeat and a probe read the same total of the same process; the later one is
+ *  the baseline the next probe is compared with, so a child that spoke after a probe is judged
+ *  against its own fresher number, and one that has been silent since is judged against the
+ *  probe that last looked at it. */
+function cpuBaseline(group: Group): { ms: number; at: number } | null {
+  const reported =
+    group.cpuSampleMs !== null && group.cpuSampleAtMs !== null
+      ? { ms: group.cpuSampleMs, at: group.cpuSampleAtMs }
+      : null;
+  const probed =
+    group.probeCpuMs !== null && group.probeCpuAtMs !== null
+      ? { ms: group.probeCpuMs, at: group.probeCpuAtMs }
+      : null;
+  if (reported === null) return probed;
+  if (probed === null) return reported;
+  return reported.at >= probed.at ? reported : probed;
+}
+
+/** What a late child is judged on: the sentence its spare carries and the one its end does. */
+type LateSituation = { spare: string; end: string };
+
+type ProgressJudgement =
+  | { kind: 'progressed'; deltaMs: number }
+  | { kind: 'flat'; deltaMs: number }
+  | { kind: 'unproven'; why: 'unreadable' | 'no-baseline' | 'backwards' };
+
+/**
+ * Asks the process table whether a child that has gone silent is still working, without holding
+ * the daemon's loop: the probe starts a process of its own, so its answer arrives after the tick
+ * that asked for it. At most one probe is in flight for a group. A heartbeat, an exit or a held
+ * loop closes the window the probe was asked about, and its late answer is dropped rather than
+ * judged against a window that no longer exists. A reading that cannot be taken is no evidence
+ * either way: the child is spared, never ended on it.
+ */
+function requestJudgement(
+  input: ChoresFleetInput,
+  group: Group,
+  child: ChoresChild,
+  situation: LateSituation,
+  ceilingAtMs: number,
+): void {
+  if (group.probePending) return;
+  const previous = cpuBaseline(group);
+  const pid = child.pid;
+  const probe = input.cpuTimeOf ?? processCpuTimeAsync;
+  let answer: ReturnType<ProcessCpuTimeProbe>;
+  try {
+    answer = pid === null ? null : probe(pid);
+  } catch {
+    answer = null;
+  }
+  group.probePending = true;
+  const token = group.judgeToken;
+  const finish = (now: number | null): void => {
+    if (group.child !== child || group.judgeToken !== token) return;
+    group.probePending = false;
+    if (group.stopping) return;
+    // The probe is the freshest reading the group holds, whether or not it decides anything: a
+    // child whose reading was only a baseline must not be compared with a stale start again.
+    if (now !== null) {
+      group.probeCpuMs = now;
+      group.probeCpuAtMs = input.now().getTime();
+    }
+    applyJudgement(input, group, child, situation, ceilingAtMs, previous, now);
+  };
+  if (isAsyncCpuReading(answer)) {
+    answer.then(finish, () => finish(null));
+    return;
+  }
+  finish(answer);
+}
+
+function judgeReading(previous: { ms: number; at: number } | null, now: number | null): ProgressJudgement {
+  if (now === null) return { kind: 'unproven', why: 'unreadable' };
+  if (previous === null) return { kind: 'unproven', why: 'no-baseline' };
+  const deltaMs = now - previous.ms;
+  // A reading that went backwards is not a flat window: nothing about the same process's total
+  // can shrink, so the two numbers are not comparable and neither is evidence against the child.
+  if (deltaMs < 0) return { kind: 'unproven', why: 'backwards' };
+  return deltaMs > CPU_PROGRESS_EPSILON_MS ? { kind: 'progressed', deltaMs } : { kind: 'flat', deltaMs };
+}
+
+function applyJudgement(
+  input: ChoresFleetInput,
+  group: Group,
+  child: ChoresChild,
+  situation: LateSituation,
+  ceilingAtMs: number,
+  previous: { ms: number; at: number } | null,
+  now: number | null,
+): void {
+  // The window may have closed while the answer was out: the child spoke, left, was already
+  // being ended, or the daemon is stopping. Only the window the probe was asked about is judged.
+  if (group.child !== child || group.killing || !child.alive || group.stopping) return;
+  const judgement = judgeReading(previous, now);
+  if (judgement.kind === 'progressed') {
+    if (input.now().getTime() >= ceilingAtMs) {
       endAtCeiling(input, group, child, `the child has not beaten for ${String(HUNG_CEILING_MS)} ms while its CPU kept advancing`);
       return;
     }
-    spareLate(input, group, spoken, judgement);
+    spareLate(input, group, situation.spare, judgement);
     return;
   }
-  if (judgement.unproven) {
-    spareLate(input, group, spoken, judgement);
+  if (judgement.kind !== 'flat') {
+    spareLate(input, group, situation.spare, judgement);
     return;
   }
+  // A child spared in an earlier window that is flat now changed state between the two
+  // judgements; the log names that change, so this end is not read as a kill of a working child.
+  const wasSpared = group.spareWhy !== null;
   group.spareWhy = null;
   group.spareLogged = false;
   group.killing = true;
-  group.why = `the child missed ${String(group.policy.missedBeats)} heartbeats`;
+  group.why = situation.end;
+  if (wasSpared) input.log(`chores ${rootList(group)}: the child's CPU stopped advancing; ending it`);
   input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
   child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
 }
 
-/** One reading of the child's CPU, or null when there is no pid or the probe cannot read it. */
-function sampleCpu(input: ChoresFleetInput, child: ChoresChild): number | null {
-  const pid = child.pid;
-  if (pid === null) return null;
-  return (input.cpuTimeOf ?? processCpuTimeOf)(pid);
-}
-
-type ProgressJudgement = {
-  /** The CPU rose across the window the decision is about. */
-  progressed: boolean;
-  /** Neither a previous nor a current reading is available: no evidence either way. */
-  unproven: boolean;
-  deltaMs: number | null;
-};
-
-/**
- * Samples the child's CPU now and compares it with the last reading. `unproven` covers both a
- * missing baseline and a failed reading: neither is evidence that the child stopped. The
- * baseline moves to every numeric reading, so a child that worked earlier and then stopped is
- * ended on the first flat window after it stopped, not kept forever by its earlier work.
- */
-function judgeProgress(input: ChoresFleetInput, group: Group, child: ChoresChild): ProgressJudgement {
-  const now = sampleCpu(input, child);
-  const previous = group.cpuSampleMs;
-  if (now !== null) group.cpuSampleMs = now;
-  if (now === null || previous === null) return { progressed: false, unproven: true, deltaMs: null };
-  const deltaMs = now - previous;
-  return { progressed: deltaMs > CPU_PROGRESS_EPSILON_MS, unproven: false, deltaMs };
-}
+type SpareJudgement = Extract<ProgressJudgement, { kind: 'progressed' } | { kind: 'unproven' }>;
 
 /** Keeps a late child: the row carries the reason and the log carries it once per episode. */
-function spareLate(input: ChoresFleetInput, group: Group, situation: string, judgement: ProgressJudgement): void {
-  if (judgement.unproven) {
-    group.spareWhy = `${situation} and its CPU could not be read`;
+function spareLate(input: ChoresFleetInput, group: Group, situation: string, judgement: SpareJudgement): void {
+  if (judgement.kind === 'unproven') {
+    const why =
+      judgement.why === 'unreadable'
+        ? 'its CPU could not be read'
+        : judgement.why === 'no-baseline'
+          ? 'there was no earlier CPU reading to compare'
+          : 'its CPU reading went backwards';
+    group.spareWhy = `${situation} and ${why}`;
     if (group.spareLogged) return;
     group.spareLogged = true;
     input.log(`chores ${rootList(group)}: ${group.spareWhy}; keeping it`);
@@ -528,13 +630,21 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.ready = false;
   group.killing = false;
   group.beats = 0;
-  group.cpuSampleMs = sampleCpu(input, child);
+  group.cpuSampleMs = null;
+  group.cpuSampleAtMs = null;
+  group.probeCpuMs = null;
+  group.probeCpuAtMs = null;
+  group.probePending = false;
+  group.judgeToken += 1;
   group.spareWhy = null;
   group.rowWhy = null;
   group.spareLogged = false;
   group.lastExit = null;
   group.startedOnce = true;
   group.why = null;
+  // A child that has not spoken yet is judged against its own start: the one baseline read this
+  // group takes without a heartbeat to carry it. It is asynchronous and happens once per start.
+  startBaseline(input, group, child);
   // A replacement starts with no proved run: every watched root reads starting, effects closed,
   // until the new child reports its own first state. Its chore row starts empty for the same
   // reason: this process has run nothing for the root and holds no marker stamps yet.
@@ -544,6 +654,35 @@ function startGroup(input: ChoresFleetInput, group: Group, at: Date): void {
   group.markerCache = null;
   group.unsubscribe = child.subscribe((event) => onChildEvent(input, group, child, event));
   void child.exited.then(() => onChildExit(input, group, child));
+}
+
+/**
+ * Takes the one process-table reading a start needs: a child that has not spoken yet has no
+ * heartbeat to carry its CPU, and a start that never beats must still be judged against its own
+ * start rather than spared until the ceiling. The read is the bounded probe, never a query on
+ * the daemon's loop, and a scene's reader may answer at once. A start that speaks before the
+ * answer arrives has already given the group a fresher number; this one is kept only as an older
+ * baseline, and the timestamp comparison in `cpuBaseline` prefers the child's own report.
+ */
+function startBaseline(input: ChoresFleetInput, group: Group, child: ChoresChild): void {
+  const pid = child.pid;
+  if (pid === null) return;
+  let answer: ReturnType<ProcessCpuTimeProbe>;
+  try {
+    answer = (input.cpuTimeOf ?? processCpuTimeAsync)(pid);
+  } catch {
+    return;
+  }
+  const keep = (value: number | null): void => {
+    if (group.child !== child || value === null) return;
+    group.probeCpuMs = value;
+    group.probeCpuAtMs = input.now().getTime();
+  };
+  if (isAsyncCpuReading(answer)) {
+    answer.then(keep, () => {});
+    return;
+  }
+  keep(answer);
 }
 
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
@@ -581,6 +720,11 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
         group.killing = false;
         group.why = null;
       }
+      // A beat closes the window a probe may still be judging: its answer is for a child that
+      // has spoken since, and is dropped. The beat also carries the child's own CPU total, so
+      // the baseline for the next late decision costs no process query at all.
+      group.judgeToken += 1;
+      group.probePending = false;
       group.lastBeatReadMs = readAt;
       group.lastBeatMs = Date.parse(message.at);
       if (!Number.isFinite(group.lastBeatMs)) group.lastBeatMs = readAt;
@@ -588,10 +732,10 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       group.busy = message.busy;
       group.markerCache = message.markerCache;
       group.beats += 1;
-      // The heartbeat read is where the next late decision's baseline comes from: the CPU the
-      // machine had charged at the moment the child last spoke. A new beat also ends any late
-      // episode, so the next one logs its own reason.
-      group.cpuSampleMs = sampleCpu(input, child);
+      if (typeof message.cpuMs === 'number' && Number.isFinite(message.cpuMs)) {
+        group.cpuSampleMs = message.cpuMs;
+        group.cpuSampleAtMs = readAt;
+      }
       group.spareWhy = null;
       group.rowWhy = null;
       group.spareLogged = false;
@@ -663,6 +807,11 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   group.lastBeatMs = null;
   group.lastBeatReadMs = null;
   group.cpuSampleMs = null;
+  group.cpuSampleAtMs = null;
+  group.probeCpuMs = null;
+  group.probeCpuAtMs = null;
+  group.probePending = false;
+  group.judgeToken += 1;
   group.spareWhy = null;
   group.rowWhy = null;
   group.spareLogged = false;

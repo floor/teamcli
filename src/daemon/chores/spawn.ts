@@ -12,7 +12,11 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { processCpuTimeOf, type ProcessCpuTimeReader } from '../../watch/process-adapter.ts';
+import {
+  isAsyncCpuReading,
+  processCpuTimeAsync,
+  type ProcessCpuTimeProbe,
+} from '../../watch/process-adapter.ts';
 import {
   CHORES_FRAME_LIMIT,
   parseChoresFrame,
@@ -55,10 +59,12 @@ export type SpawnChoresInput = {
   entry?: string;
   /** Extra environment for the child. `HOME` is always the config's home. */
   env?: Record<string, string>;
-  /** Reads the CPU time the machine has charged a process, in milliseconds. The handle re-reads
-   *  it at each grace before it forces an end; a test injects a fake because its fixture child's
-   *  own CPU would make the decision depend on the machine. */
-  cpuTimeOf?: ProcessCpuTimeReader;
+  /** Reads the CPU time the machine has charged a process, in milliseconds. The handle reads it
+   *  before an end request and again at each grace before it forces; the answer may arrive later
+   *  (the daemon's probe starts a process), and the handle never holds a loop for it. A test
+   *  injects a fake because its fixture child's own CPU would make the decision depend on the
+   *  machine; that fake may answer at once. */
+  cpuTimeOf?: ProcessCpuTimeProbe;
 };
 
 /** How long a terminated child gets before it is forced. */
@@ -97,6 +103,9 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   /** The request's reason, carried into the stand-down note. */
   let killWhy = '';
   let killTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Which end request the grace clock belongs to: an answer read for an older request is
+   *  dropped when it arrives, so it can never decide the one now in flight. */
+  let killGeneration = 0;
   /** The process has exited. A beat may still be in flight when this turns true, so `send`
    *  reads it together with the input stream's own state. */
   let gone = false;
@@ -166,7 +175,20 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     return refuse(`the chores child could not be started: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const cpuTimeOf = input.cpuTimeOf ?? processCpuTimeOf;
+  const cpuTimeOf = input.cpuTimeOf ?? processCpuTimeAsync;
+  /** One CPU reading, always answered later: the daemon's probe starts a process, and a scene's
+   *  reader may answer at once. A failed or unreadable answer is null. */
+  const readCpu = (pid: number | null): Promise<number | null> => {
+    if (pid === null) return Promise.resolve(null);
+    try {
+      const answer = cpuTimeOf(pid);
+      if (isAsyncCpuReading(answer)) return answer.then((value) => value, () => null);
+      return Promise.resolve(answer);
+    } catch {
+      return Promise.resolve(null);
+    }
+  };
+
   const kill = (
     why: string,
     graceMs: number = DEFAULT_KILL_GRACE_MS,
@@ -180,6 +202,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
       // has decided the child must not outlive it, and waits a fresh grace from this reading.
       if (!deliberate || killDeliberate) return;
       killDeliberate = true;
+      killGeneration += 1;
       if (killTimer !== null) {
         clearTimeout(killTimer);
         killTimer = null;
@@ -187,6 +210,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     } else {
       killPending = true;
       killDeliberate = deliberate;
+      killGeneration += 1;
       try {
         child.kill('SIGTERM');
       } catch {
@@ -197,33 +221,26 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
     killWhy = why;
     // The forced end is the last resort, not the first: a child the machine is still charging CPU
     // time is working, however silent it is, and forcing it is what turns a loaded machine into a
-    // storm of replacements. Each grace re-reads that one fact, and only a child charged nothing
-    // across a grace is forced. A reading that cannot be taken is no evidence either way, so the
-    // handle keeps its ordinary behaviour there and forces when the grace expires. The hung
-    // ceiling and the daemon's stop ask for a forced end while the child is still working.
+    // storm of replacements. Each grace re-reads that one fact, asynchronously, and only a child
+    // charged nothing across a grace is forced. A reading that cannot be taken is no evidence
+    // either way, so an ordinary request defers instead of forcing on it; the hung ceiling and
+    // the daemon's stop ask deliberately and are the callers that may force a child that still
+    // works or cannot be read. Each request carries a generation, so an answer that arrives after
+    // the request was withdrawn or upgraded is dropped rather than applied to the new one.
     const pid = child.pid ?? null;
-    let baseline = pid === null ? null : cpuTimeOf(pid);
     const wait = Math.max(1, graceMs);
+    const request = killGeneration;
+    let baseline: number | null = null;
+    const baselineRead = readCpu(pid).then((value) => {
+      if (settled || !killPending || request !== killGeneration) return;
+      baseline = value;
+    });
     let sparedLogged = false;
-    const decide = (): void => {
-      if (settled || !killPending) return;
-      killTimer = null;
-      const now = pid === null ? null : cpuTimeOf(pid);
-      const working =
-        !killDeliberate &&
-        baseline !== null &&
-        now !== null &&
-        now - baseline > CPU_PROGRESS_EPSILON_MS;
-      if (working) {
-        baseline = now;
-        if (!sparedLogged) {
-          sparedLogged = true;
-          emit({ kind: 'note', text: `the child is still consuming CPU; not forcing it: ${killWhy}` });
-        }
-        killTimer = setTimeout(decide, wait);
-        killTimer.unref();
-        return;
-      }
+    let unreadLogged = false;
+    let forced = false;
+    const force = (): void => {
+      if (forced) return;
+      forced = true;
       killPending = false;
       try {
         child.kill('SIGKILL');
@@ -231,8 +248,60 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
         // Already gone.
       }
     };
-    killTimer = setTimeout(decide, wait);
-    killTimer.unref();
+    const arm = (generation: number): void => {
+      killTimer = setTimeout(() => {
+        void decide(generation);
+      }, wait);
+      killTimer.unref();
+    };
+    const decide = async (generation: number): Promise<void> => {
+      if (settled || !killPending || generation !== killGeneration) return;
+      killTimer = null;
+      await baselineRead;
+      if (settled || !killPending || generation !== killGeneration) return;
+      const now = await readCpu(pid);
+      if (settled || !killPending || generation !== killGeneration) return;
+      if (killDeliberate) {
+        force();
+        return;
+      }
+      if (now === null) {
+        if (!unreadLogged) {
+          unreadLogged = true;
+          emit({ kind: 'note', text: `the child's CPU could not be read; not forcing it: ${killWhy}` });
+        }
+        arm(generation);
+        return;
+      }
+      if (baseline === null) {
+        // The first reading of a request whose baseline could not be taken is only a baseline:
+        // the next grace decides on a window whose two ends this handle has both read.
+        baseline = now;
+        arm(generation);
+        return;
+      }
+      if (now - baseline > CPU_PROGRESS_EPSILON_MS) {
+        baseline = now;
+        if (!sparedLogged) {
+          sparedLogged = true;
+          emit({ kind: 'note', text: `the child is still consuming CPU; not forcing it: ${killWhy}` });
+        }
+        arm(generation);
+        return;
+      }
+      if (now < baseline) {
+        // The same process's total cannot shrink, so these two numbers are not comparable, and
+        // that is no evidence that the child stopped.
+        if (!unreadLogged) {
+          unreadLogged = true;
+          emit({ kind: 'note', text: `the child's CPU could not be read; not forcing it: ${killWhy}` });
+        }
+        arm(generation);
+        return;
+      }
+      force();
+    };
+    arm(request);
   };
 
   /** A child asked to end that answers with a beat is alive and working: an ordinary request is

@@ -157,8 +157,15 @@ function fakeChild(pid: number, root: string, spawnedAtMs: number): Fake {
   };
 }
 
-function beat(atMs: number): ChoresChildMessage {
-  return { type: 'heartbeat', at: new Date(atMs).toISOString(), rssBytes: RSS, busy: null, markerCache: null };
+function beat(atMs: number, cpuMs: number | null = null): ChoresChildMessage {
+  return {
+    type: 'heartbeat',
+    at: new Date(atMs).toISOString(),
+    rssBytes: RSS,
+    busy: null,
+    markerCache: null,
+    cpuMs,
+  };
 }
 
 describe('chores supervisor liveness by progress', () => {
@@ -715,5 +722,252 @@ describe('chores supervisor liveness by progress', () => {
     expect(child.sends).toHaveLength(ticked);
     expect(child.killCalls).toHaveLength(2);
     expect(fleet.stateFor(root)?.why).toContain('not beaten for 600000 ms');
+  });
+
+  test('11. a healthy heartbeat costs no CPU probe: the child carries its own reading', async () => {
+    const { home, roots } = makeWorld(['root-no-probe']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 20_000 };
+    let probes = 0;
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => {
+        probes += 1;
+        return cpu.ms;
+      },
+      factory: (input) => {
+        const child = fakeChild(7300 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    expect(probes).toBe(1);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    for (const offsetMs of [0, 5000, 10_000, 15_000, 20_000, 25_000, 30_000]) {
+      if (offsetMs > 0) tickAt(offsetMs);
+      cpu.ms += 400;
+      child.emit(beat(NOW + offsetMs, cpu.ms));
+    }
+
+    // Every beat above carried the child's own CPU total, so the daemon read the process table
+    // only for the one baseline it took at the start.
+    expect(probes).toBe(1);
+    expect(fleet.stateFor(root)).toMatchObject({ state: 'ok', missed: 0, restarts: 0 });
+  });
+
+  test('12. the CPU total a heartbeat carries is the baseline a later probe is judged against', async () => {
+    const { home, roots } = makeWorld(['root-frame-baseline']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 10_000 };
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(7400 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    // The start baseline is 10 000; the child's own frame says it has since done 40 000 ms more,
+    // and the machine's total holds there while it stops beating.
+    cpu.ms = 50_000;
+    child.emit(beat(NOW, cpu.ms));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000, cpu.ms));
+    for (const offsetMs of [10_000, 15_000, 20_000]) tickAt(offsetMs);
+
+    // A probe that reads the same total the child last reported proves no progress: the frame's
+    // number, not the stale start reading, is the baseline.
+    expect(child.kills).toEqual(['the child missed 2 heartbeats']);
+  });
+
+  test('13. heartbeats drained after a held loop cost no probe, and the next judgement costs one', async () => {
+    const { home, roots } = makeWorld(['root-drained']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 30_000 };
+    let probes = 0;
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      cpuTimeOf: () => {
+        probes += 1;
+        return cpu.ms;
+      },
+      factory: (input) => {
+        const child = fakeChild(7500 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW, cpu.ms));
+    tickAt(5000);
+    cpu.ms = 31_000;
+    child.emit(beat(NOW + 5000, cpu.ms));
+
+    // The daemon's loop is held for three beats. Its next tick only moves the read clock; the
+    // heartbeats the child wrote meanwhile are read afterwards, as a held pipe delivers them.
+    tickAt(25_000);
+    const before = probes;
+    for (const at of [26_000, 27_000, 28_000, 29_000, 30_000]) child.emit(beat(at, cpu.ms));
+    expect(probes).toBe(before);
+    tickAt(30_000);
+    expect(probes).toBe(before);
+
+    // The first tick that finds the child truly overdue judges it once, not once per drained beat.
+    tickAt(35_000);
+    tickAt(40_000);
+    expect(probes).toBe(before + 1);
+  });
+
+  test('14. a silent child is judged when its asynchronous probe answers, with one probe in flight', async () => {
+    const { home, roots } = makeWorld(['root-async-probe']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    let probes = 0;
+    const answers: ((value: number | null) => void)[] = [];
+    const spawned: Fake[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: () => {},
+      // The probe spawns a process, so its answer arrives later than the tick that asked for it.
+      cpuTimeOf: () => {
+        probes += 1;
+        return new Promise<number | null>((resolve) => answers.push(resolve));
+      },
+      factory: (input) => {
+        const child = fakeChild(7600 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    expect(probes).toBe(1);
+    answers.shift()!(10_000);
+    await Promise.resolve();
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW, 10_000));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000, 10_000));
+    tickAt(10_000);
+    tickAt(15_000);
+    tickAt(20_000);
+
+    // A judgement is out and nothing has been decided on a reading that has not arrived.
+    expect(probes).toBe(2);
+    expect(child.kills).toEqual([]);
+    tickAt(25_000);
+    tickAt(30_000);
+    expect(probes).toBe(2);
+
+    // The answer is the same total the child last reported: no progress, so the child is ended.
+    answers.shift()!(10_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(child.kills).toEqual(['the child missed 2 heartbeats']);
+  });
+
+  test("15. a spared child whose CPU later goes flat is named as stopped before it is ended", async () => {
+    const { home, roots } = makeWorld(['root-spare-then-flat']);
+    const root = roots[0]!;
+    const clock = { at: NOW };
+    const cpu = { ms: 10_000 };
+    const spawned: Fake[] = [];
+    const logs: string[] = [];
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: (text) => logs.push(text),
+      cpuTimeOf: () => cpu.ms,
+      factory: (input) => {
+        const child = fakeChild(7700 + spawned.length, input.config.routes[0]!.root, clock.at);
+        spawned.push(child);
+        return child.child;
+      },
+    });
+
+    const tickAt = (offsetMs: number): void => {
+      clock.at = NOW + offsetMs;
+      fleet.tick(new Date(clock.at));
+    };
+
+    tickAt(0);
+    const child = spawned[0]!;
+    child.emit({ type: 'ready', pid: child.pid, at: AT });
+    child.emit(beat(NOW));
+    tickAt(5000);
+    child.emit(beat(NOW + 5000));
+    for (const offsetMs of [10_000, 15_000, 20_000]) {
+      cpu.ms += 500;
+      tickAt(offsetMs);
+    }
+    // Late, but the machine was charging it: the child is spared, and the row says it works.
+    expect(child.kills).toEqual([]);
+    expect(fleet.stateFor(root)?.why).toContain('still working');
+
+    // The work stops. The next judgement is flat, and the log names the change of state before
+    // the ordinary end, so a reading of the log can tell this end from a kill of a working child.
+    tickAt(25_000);
+    expect(child.kills).toEqual(['the child missed 2 heartbeats']);
+    expect(logs.some((line) => line.includes("the child's CPU stopped advancing; ending it"))).toBe(true);
   });
 });
