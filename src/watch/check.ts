@@ -222,10 +222,17 @@ export const CHECK_NAMES = [
   'load',
   'memory',
   'disk',
-  'swap-free',
   'swap-growth',
   'budget',
 ] as const;
+
+// Checks this build no longer runs, kept as known names so a file written while they ran still
+// loads: `watch.checks` accepts the name, carries it in the file's list exactly as written
+// (the canonical record and the `watch.checks` fingerprint digest that list, so dropping it
+// would move signed approvals), reports it deprecated, and runs nothing for it.
+// `swap-free` reported free swap under `machine.swap_free_min`; free swap decides nothing now —
+// the OS keeps swap nearly full while memory is free — so the check is gone.
+export const RETIRED_CHECK_NAMES = ['swap-free'] as const;
 
 // The checks the file cannot turn off (RFC 0002 § 4.2): the six whose condition is the one
 // thing the watch exists for — a missing seat, a wrong model, a seat the entity's rule refuses,

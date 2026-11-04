@@ -37,7 +37,7 @@ A `console` fence may carry:
 | `caller=<owner\|a seat's name\|agent>` | who runs the block's commands; a `fixture` fence sets it for the whole page |
 | `reply="<text>"` | what the seat answers a waited `team send` in this block: with it, the wait prints the reply; without it, the seat stays silent and the wait times out |
 | `screens="<seat>=<screen>[,…]"` | what those seats' panes show for this block: `idle`, `working`, `permission`, `trust`, `question`, `unsent`, `unknown` |
-| `machine=<calm\|tight\|small-swap>` | the machine's load, free memory, free disk and swap, for this block (`small-swap`: a 1GB swap in total, under the default check) |
+| `machine=<calm\|tight>` | the machine's load, free memory, free disk and swap, for this block |
 | `tools="<cli>=<state>[,…]"` | one CLI's install and login state for this block: `fine`, `missing`, `old`, `logged-out`, `unread` |
 | `herdr=<running\|absent\|stopped\|none>` | the session's state in herdr for this block |
 

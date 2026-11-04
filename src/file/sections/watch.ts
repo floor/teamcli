@@ -1,4 +1,4 @@
-import { ALWAYS_ON, CHECK_NAMES } from '../../watch/check.ts';
+import { ALWAYS_ON, CHECK_NAMES, RETIRED_CHECK_NAMES } from '../../watch/check.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import type { Check } from '../check.ts';
 import type { TeamFile } from '../types.ts';
@@ -69,9 +69,9 @@ export const watch: Section = {
       },
       checks: {
         type: 'object',
-        propertyNames: { enum: CHECK_NAMES.filter((name) => !ALWAYS_ON.includes(name)) },
+        propertyNames: { enum: [...CHECK_NAMES.filter((name) => !ALWAYS_ON.includes(name)), ...RETIRED_CHECK_NAMES] },
         additionalProperties: { const: 'off' },
-        $comment: 'the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too',
+        $comment: 'the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated',
       },
     },
   },
@@ -154,6 +154,24 @@ function readChecks(entry: YamlEntry | undefined, check: Check): string[] {
     return off;
   }
   for (const item of node.entries) {
+    // A retired check is read and carried exactly as written: refusing it would refuse a
+    // file written while the check ran, and dropping it would change this list — which the
+    // canonical record carries and the `watch.checks` fingerprint digests — under approvals
+    // already signed over it. It stays in `off`, no check runs for it, and `team check`
+    // names it deprecated with its repair. Only `off` ever was a setting, and still is.
+    if ((RETIRED_CHECK_NAMES as readonly string[]).includes(item.key)) {
+      if (item.value.kind === 'scalar' && item.value.value === 'off') {
+        off.push(item.key);
+        check.deprecations.push({
+          line: item.line,
+          message: `\`${item.key}\` is not a check any more: free swap is not reported`,
+          repair: `remove ${item.key} from watch.checks in {file}`,
+        });
+      } else {
+        check.fail(item.line, `watch.checks.${item.key} must be off: the only setting is off`);
+      }
+      continue;
+    }
     if (!(CHECK_NAMES as readonly string[]).includes(item.key)) {
       check.fail(item.line, `unknown check "${item.key}" in watch.checks: the checks are ${CHECK_NAMES.join(', ')}`);
       continue;

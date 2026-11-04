@@ -115,7 +115,8 @@
         },
         "swap_free_min": {
           "type": "string",
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$"
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(MB|GB|TB)$",
+          "deprecated": true
         },
         "swap_growth_max": {
           "type": "string",
@@ -477,15 +478,15 @@
               "load",
               "memory",
               "disk",
-              "swap-free",
               "swap-growth",
-              "budget"
+              "budget",
+              "swap-free"
             ]
           },
           "additionalProperties": {
             "const": "off"
           },
-          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too"
+          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated"
         }
       }
     },
