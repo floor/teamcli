@@ -70,7 +70,7 @@ export function resolveWorkSettings(
     landingMode: effective<LandingMode>(chain, 'landing-mode', 'batch'),
     vaultRoot: vault.value === '' ? { value: null, from: vault.from } : { value: expandVaultRoot(vault.value, options.home), from: vault.from },
     entityOrchestrator: effective<EntityOrchestrator>(chain, 'entity-orchestrator', 'auto'),
-    relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'on'),
+    relaysOwner: effective<OnOff>(chain, 'entity.main-orchestrator.relays-owner', 'off'),
     paneActions: effective<OnOff>(chain, 'leads.pane-actions', 'on'),
     leadSelfService: effective<OnOff>(chain, 'leads.self-service', 'on'),
     ownerReservedScope: effective<readonly string[]>(chain, 'owner.reserved-scope', OWNER_RESERVED_SCOPE_DEFAULT),
@@ -131,7 +131,7 @@ function scopeText(item: string): string {
 export function policyRuleLines(work: WorkSettings | null, audience: RulesAudience): string[] {
   const lines: string[] = [];
   const orchestrator = work?.entityOrchestrator.value ?? 'auto';
-  if (audience.entity && orchestrator !== 'off' && (work?.relaysOwner.value ?? 'on') === 'on') {
+  if (audience.entity && orchestrator !== 'off' && (work?.relaysOwner.value ?? 'off') === 'on') {
     lines.push("A decision the entity's main orchestrator relays from the owner quotes the owner and cites its owner-decisions entry: act on it without asking again.");
   }
   if (audience.lead && (work?.paneActions.value ?? 'on') === 'on') {
