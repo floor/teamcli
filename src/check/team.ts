@@ -84,6 +84,7 @@ import { overridesInForceOf } from '../profiles/overrides.ts';
 import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
   loadAndResolvePolicyChain,
+  mailboxRouterPolicyProblems,
   readProjectPolicySource,
   readSeatPolicySource,
   readTeamPolicySource,
@@ -2381,6 +2382,13 @@ function policyCheck(
       ) {
         continue;
       }
+      if (
+        (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') &&
+        refusal.policy.startsWith('router.')
+      ) {
+        // The router's own reader re-judges its words below, naming the rule each one broke.
+        continue;
+      }
       const isUnsigned =
         (refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true;
       differences.push({
@@ -2389,6 +2397,20 @@ function policyCheck(
         ...(isUnsigned ? {} : { owner: true }),
       });
     }
+  }
+
+  // The router's three words are re-read by their own reader: their rules span words (a team may
+  // add an alias for its own seats but never retarget one the entity places, and an entity
+  // alias's fallback belongs to the entity alone), which the chain's ordering cannot name. Each
+  // problem names the level whose word broke the rule, so each difference carries its own
+  // `team policy unset` repair. A seat may not set these words at all, so the seat chains above
+  // keep refusing one found there.
+  for (const problem of mailboxRouterPolicyProblems(root, home, now, team)) {
+    differences.push({
+      what: problem.why,
+      repair: `team policy unset ${problem.level} ${problem.name}`,
+      owner: true,
+    });
   }
 
   const teamId = teamIdOf(root);

@@ -137,6 +137,18 @@ export {
 } from './owner-reply.ts';
 
 export {
+  mailboxRouterPolicyProblem,
+  mailboxRouterPolicyProblems,
+  readMailboxRouterPolicy,
+  MAILBOX_ROUTER_ALIAS_DEFAULTS,
+  MAILBOX_ROUTER_FALLBACK_DEFAULTS,
+  type MailboxRouterPolicyRead,
+  type MailboxRouterPolicyValue,
+  type MailboxRouterProblem,
+  type MailboxRouterRoute,
+} from './router.ts';
+
+export {
   OWNER_REPLY_DEFAULT,
   OWNER_REPLY_FLOOR_ENTITY,
   ownerReplyToValueProblem,
