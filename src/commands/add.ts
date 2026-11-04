@@ -22,7 +22,8 @@ import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
+import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
+import { setSeatStopped } from '../file/stopped-mark.ts';
 import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -1303,7 +1304,11 @@ function declaredSeat(
   // with the reason rather than walk a plan that would skip the only seat it was asked to add.
   if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   let edited = current;
-  if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
+  if (seat.stopped || seatIsStopped(edited, name)) {
+    const cleared = setSeatStopped(edited, name, false);
+    if (!cleared.ok) return { id: 'add.not-restored', error: `couldn't clear the stopped mark on ${name} in ${place}: ${cleared.why}` };
+    edited = cleared.text;
+  }
   const again = validateTeamFile(edited, { home, fs });
   const restored = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
   if (!restored) return { id: 'add.not-restored', error: `couldn't put ${name} back into ${place}` };
