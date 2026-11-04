@@ -211,6 +211,27 @@ describe('muse launch and captured screens', () => {
     expect(boxHoldsText('muse', '/goal ship the release', draft)).toBe(true);
   });
 
+  test('a faint prose hint is an empty box, and the same words without the faint attribute are a draft', () => {
+    const prose = 'Ask to monitor a running build or log and get pinged on changes';
+    const tasks = '/tasks shows workflows, subagents and terminals in one place';
+    const dim = fixture1411('prose-hint-dim');
+    const slash = fixture1411('tasks-hint-dim');
+    const plain = fixture1411('prose-hint-plain');
+    const color = fixture1411('prose-hint-color');
+    expect(readScreen('muse', dim).kind).toBe('idle');
+    expect(readBox('muse', dim)).toBeNull();
+    expect(boxHoldsText('muse', prose, dim)).toBe(false);
+    expect(readScreen('muse', slash).kind).toBe('idle');
+    expect(readBox('muse', slash)).toBeNull();
+    expect(boxHoldsText('muse', tasks, slash)).toBe(false);
+    expect(readScreen('muse', plain).kind).toBe('unsent');
+    expect(readBox('muse', plain)?.first).toBe(prose);
+    expect(boxHoldsText('muse', prose, plain)).toBe(true);
+    expect(readScreen('muse', color).kind).toBe('unsent');
+    expect(readBox('muse', color)?.first).toBe(prose);
+    expect(boxHoldsText('muse', prose, color)).toBe(true);
+  });
+
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {
     const patterns = quotaFor('muse');
     expect(patterns.map((pattern) => [pattern.account, pattern.window])).toEqual([
