@@ -52,8 +52,9 @@ import { DEFAULT_HELD_THRESHOLD_SECONDS } from './kinds.ts';
 import {
   appendEvent,
   EVENT_LOG_KEPT,
-  readEvents,
+  readEventsSteps,
   type EventAppendInput,
+  type EventReadResult,
   type SignedEventRecord,
 } from './log.ts';
 import { isOwnerDigestRecord } from './owner.ts';
@@ -407,14 +408,16 @@ export function* reconcileSteps(options: ReconcileOptions): Generator<void, Reco
   // The retained log is read as a whole only when one of its files changed. Until then the
   // dedupe sets it produced are still exactly the log's answer, and the log read — which parses
   // every retained line — is skipped.
-  let existing: ReturnType<typeof readEvents>;
+  let existing: EventReadResult;
   let cachedLog = state.log;
   if (cachedLog !== null) {
     const stamp = retainedStamp(cachedLog.path, cachedLog.kept);
     if (stamp !== cachedLog.stamp) cachedLog = null;
   }
   if (cachedLog === null) {
-    existing = readEvents(project, root, home, { kept: options.kept });
+    // The read is drained here, in slices: a large cold log gives the caller's driver a turn
+    // between slices instead of holding the loop for the whole verification.
+    existing = yield* readEventsSteps(project, root, home, { kept: options.kept });
     if (!existing.ok) return existing;
     const kept = options.kept ?? EVENT_LOG_KEPT;
     cachedLog = {
