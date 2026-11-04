@@ -345,6 +345,27 @@ function replacedProcessRefused(out: Io, json: boolean, name: string, pane: stri
   return 1;
 }
 
+/**
+ * The pane root is the launch's own write: the daemon's launch, or the owner's walk. A caller
+ * other than the owner may repeat an identity the record already holds and this pane still
+ * matches; a new one — a first record, a record that predates the identity, or a replaced
+ * process — is not that caller's to make. `register.replaced` stays the owner's refusal on the
+ * already path: the same live fact, said to the only caller that could have recorded it.
+ */
+function launchOnlyRefused(out: Io, json: boolean, name: string, pane: string, dry: boolean, unblock: string): number {
+  const line = `${plainLine(name)}: pane ${plainLine(pane)} is not a process identity this record's launch wrote; only the owner records a pane root, from a terminal outside herdr`;
+  if (json) {
+    refuse(out, true, 'register', { id: 'register.launch-only', message: line, repair: null });
+  } else if (dry) {
+    out.stdout(`! register would refuse: ${plainText(line)}\n`);
+    out.stdout(`! to unblock: ${plainText(unblock)}\n`);
+  } else {
+    out.stderr(`team register: ${line}\n`);
+  }
+  // exit: register.launch-only
+  return 1;
+}
+
 function handleHeldRefused(out: Io, json: boolean, name: string, id: string, holder: string): number {
   refuse(out, json, 'register', {
     id: 'register.handle-held',
@@ -429,6 +450,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const words = ['team register', shellQuote(name)];
     if (values.session !== undefined) words.push('--session', shellQuote(values.session));
     return `a seat of this team runs \`${words.join(' ')}\` from its own pane (the owner runs it from this folder, at a terminal outside herdr)`;
+  };
+  // The pane root's own way out: the owner's run, which is a launch's own authority for this
+  // record even where the seat stands elsewhere.
+  const unblockRoot = (values: { session?: string }): string => {
+    const words = ['team register', shellQuote(name)];
+    if (values.session !== undefined) words.push('--session', shellQuote(values.session));
+    return `the owner runs \`${words.join(' ')}\` from a terminal outside herdr`;
   };
 
   const walked = walkCaller(io);
@@ -644,6 +672,20 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     : listed === undefined || listed.agent === null ? null : [listed.agent];
   if (!reportedLiveAgent(live, profile.processNames)) {
     return cliRefused(io, json, name, pane, seat.cli);
+  }
+
+  // The pane root this run would write is the launch's own: the process identity of the pane the
+  // daemon launched, or the owner's walk recorded. A caller other than the owner — a seat of this
+  // team, a delegate, a grant — may repeat the identity its record already holds and this live
+  // pane still matches (a run in the seat's own unchanged pane, the pane `team restart` wrote), and it
+  // may do everything else this command does; it may not make a root. A record that predates the
+  // identity, a first record, and a replaced process are all that refusal. The gate sits on both
+  // writes below: the already path's completion of a missing identity, and the adopt write. It is
+  // the record's own evidence, not the caller gate's, so dev mode does not fold it: a folded
+  // caller still records no root.
+  const rootContinuity = seatProcessVerdict(held?.launched, procs);
+  if (rootContinuity !== 'same' && !mayLaunchSeats(walked)) {
+    return launchOnlyRefused(io, json, name, pane, dry, unblockRoot(args.values));
   }
 
   // Already recorded on this pane, and ready: the seat is not relaunched and its screen is not

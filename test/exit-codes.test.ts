@@ -7543,6 +7543,13 @@ scene('register.handle-held', async (place) => {
   });
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "the id its record holds (seat_0123456789ab) is worker's handle");
 });
+scene('register.launch-only', async (place) => {
+  write(place, TEAM);
+  // The seat stands on its recorded pane, and the record holds no process identity: its own
+  // run would record the pane root, and that write is the launch's or the owner's walk's.
+  recordLead(place);
+  return show(await registered(place, ['lead'], leadSeat, { agents: () => [agent('lead')] }), 'only the owner records a pane root');
+});
 scene('register.no-seat', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['missing']), 'no seat "missing"');
