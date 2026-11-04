@@ -149,8 +149,9 @@ screen:
     rule: '^[─━]{2}(?: [^─━]+ )?[─━]{8,}$'
     footers:
       - '^\s{2}\S.*\s·\s.*$'
-    # The rotating hints are faint. A dim row is a hint when it is one of the lines below or a
-    # `/command …` hint; a draft, including one that starts with `/`, is not faint and stays text.
+    # Rotating hints are faint. An all-faint row after the prompt is the empty box.
+    # A row that is not all faint is text, including a draft that starts with `/`.
+    # The equals lines are the plain-read fallback. The rotation is not added to them.
     placeholder_style: dim
     placeholders:
       - equals: ''
@@ -160,10 +161,8 @@ screen:
       # The pane's rotating prompt hint, drawn greyed in the input row between the Voice input
       # rules; confirmed on a running 1.4.11 pane, which drew it as the box's whole input.
       - equals: 'Tab queues or steers while a run is active'
-      # A plain read of the /goal hint. The dim shape below covers the rest of the rotation,
-      # including `/loop`, so this one line is not the whole rule.
+      # A plain read of the /goal hint. These equals lines stay exact.
       - equals: '/goal pins a session objective with a progress bar'
-      - shape: slash-hint
     # 1.4.14 draws a completion row of its own under the input row, inside the box, for the text
     # being typed — `  /exit  Quit when idle` for `/exit` (muse-unsent-ansi.txt). The row is the
     # pane's, not text: it is left out of the box's rows, so the box reads back as the typed text

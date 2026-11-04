@@ -34,6 +34,10 @@
   and the workspace line is written as `<workspace>`; every frame row keeps the capture's own
   width (border rows 150 columns, the status row 149). It reads as `idle`, and it pins the
   singular and plural edited-file counts on every family (test/launch/cursor.test.ts).
+- `drawing.txt` and `drawing-settled.txt`: not new captures. Each is `unsent.txt` with the
+  draft replaced. `drawing.txt` holds `Read`, a row still rendering. `drawing-settled.txt`
+  holds `Read /t/mail/abc and do that.`, the same row after it has stopped changing. They pin
+  that Enter waits for two equal reads of the settled row.
 
 ## Not produced
 
