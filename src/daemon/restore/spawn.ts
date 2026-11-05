@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RestoreSweepResult } from '../../launch/restore-sweep.ts';
-import { discardRestoreInherit, writeRestoreInherit } from './token.ts';
+import { discardRestoreInherit, restoreDoorText, writeRestoreDoor } from './token.ts';
 
 /** The result kinds a child may report. A line naming anything else is not a result. */
 const RESULT_KINDS = new Set(['no-recorded-session', 'lock-held', 'not-running', 'unreadable', 'refused', 'ran']);
@@ -103,28 +103,50 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
   if (entry === null) throw new Error('the program entry for a restore child was not found');
   if (aborted()) throw new Error('the restore pass was not started because the daemon is closing');
 
-  let nonce: string;
+  let minted: { nonce: string; secret: string };
   try {
-    nonce = writeRestoreInherit({
+    minted = writeRestoreDoor({
       version: 1,
       home: input.home,
       root: input.root,
       ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+      daemonPid: process.pid,
     });
   } catch (error) {
     throw new Error(`the restore token could not be written: ${reasonOf(error)}`);
   }
+  const { nonce, secret } = minted;
 
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.root,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: input.home },
     });
   } catch (error) {
     discardRestoreInherit(input.home, nonce);
     throw new Error(`the restore child could not be started: ${reasonOf(error)}`);
+  }
+  const door = child.stdio[3];
+  if (door === null || door === undefined || !('end' in door)) {
+    try {
+      child.kill('SIGTERM');
+    } catch {}
+    discardRestoreInherit(input.home, nonce);
+    throw new Error('the restore child could not open its inherited door descriptor');
+  }
+  door.on('error', () => {
+    // A child that exits before reading its door raises EPIPE here; its exit handler settles the run.
+  });
+  try {
+    door.end(restoreDoorText(nonce, secret));
+  } catch (error) {
+    try {
+      child.kill('SIGTERM');
+    } catch {}
+    discardRestoreInherit(input.home, nonce);
+    throw new Error(`the restore door could not be written: ${reasonOf(error)}`);
   }
 
   let settled = false;
