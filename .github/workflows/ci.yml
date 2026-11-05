@@ -96,8 +96,9 @@ jobs:
       - run: bun run readme:check
       # Every tracked test file belongs to exactly one full-suite shard
       # (scripts/ci-shard-assignment.json): a test file with no shard is red, never silently
-      # unrun.
+      # unrun. Every lane-classifier rule must match real tracked files.
       - run: bun run ci:shard:check
+      - run: bun scripts/ci-classify-lane.ts --check
 
   pr-tests:
     if: github.event_name == 'pull_request'
@@ -119,11 +120,18 @@ jobs:
         with:
           node-version: 22.23.3
       - run: bun install --frozen-lockfile
-      - name: Select the tests this diff can reach
+      - name: Classify lane and select the tests this diff can reach
         id: select
         env:
+          EVENT: ${{ github.event_name }}
           BASE: ${{ github.base_ref }}
-        run: bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
+        run: |
+          lane="$(bun scripts/ci-classify-lane.ts --base "origin/$BASE" --event "$EVENT" --github-output "$GITHUB_OUTPUT")"
+          if [ "$lane" = routine ]; then
+            SELECT_DEPTH=2 bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
+          else
+            bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
+          fi
       # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
       - name: Run the selected tests (shard ${{ matrix.shard }} of 6)
         env:
@@ -234,8 +242,10 @@ jobs:
       - run: bun run public-names:check
       - run: bun run exit-codes:check
       - run: bun run readme:check
-      # Every tracked test file belongs to exactly one shard of the full suite.
+      # Every tracked test file belongs to exactly one shard of the full suite, and every
+      # lane-classifier rule matches real tracked files.
       - run: bun run ci:shard:check
+      - run: bun scripts/ci-classify-lane.ts --check
 
   full-tests:
     if: github.event_name != 'pull_request'
@@ -269,8 +279,19 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
+          RUNNER_OS: ${{ matrix.os }}
           SHARD: ${{ matrix.shard }}
         run: |
+          lane="$(bun scripts/ci-classify-lane.ts --before "$BEFORE" --event "$EVENT")"
+          if [ "$RUNNER_OS" = macos-latest ] && [ "$lane" = routine ]; then
+            if [ "$SHARD" = 0 ]; then
+              echo "Routine lane on macOS: running CLI smoke test on shard 0."
+              bun test ./test/cli-smoke.test.ts
+            else
+              echo "Routine lane on macOS: covered by ubuntu-latest full suite and macOS shard 0 smoke."
+            fi
+            exit 0
+          fi
           if [ "$EVENT" = schedule ]; then
             export TEAM_NIGHTLY_STRESS=1
           elif [ "$EVENT" = push ]; then

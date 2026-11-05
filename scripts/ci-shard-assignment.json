@@ -162,6 +162,7 @@
     "test/checkpoint-record.test.ts": 5,
     "test/child-exec.test.ts": 4,
     "test/chores-kill-storm-independent.test.ts": 3,
+    "test/ci-classify-lane.test.ts": 0,
     "test/ci-shard-tests.test.ts": 0,
     "test/ci-up-warning-independent.test.ts": 4,
     "test/clean-printed-doc-boundaries.test.ts": 5,
