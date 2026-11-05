@@ -364,7 +364,7 @@
 "test/docs/check-old-spelling-boundaries.test.ts":31,
 "test/docs/effort-warning-boundaries.test.ts":3,
 "test/docs/harness-attributes-boundaries.test.ts":2,
-"test/docs/limit-sentence.test.ts":0,
+"test/docs/limit-sentence.test.ts":1,
 "test/docs/list-seats-boundary-sentence.test.ts":1,
 "test/docs/pretrust-boundaries.test.ts":4,
 "test/docs/restart-boundaries.test.ts":81,
@@ -579,7 +579,7 @@
 "test/mailbox-router-policy.test.ts":19,
 "test/main-orchestrator-reach.test.ts":6,
 "test/mcp-channel-server.test.ts":1340,
-"test/mcp-discover.test.ts":0,
+"test/mcp-discover.test.ts":1,
 "test/mcp-inbox-server.test.ts":233,
 "test/mcp-register.test.ts":102,
 "test/mcp-serve-publication-gate.test.ts":1164,
@@ -1047,7 +1047,7 @@
 "test/workflow/core-coverage.test.ts":11,
 "test/workflow/core.test.ts":10,
 "test/workflow/dry-acceptance/acceptance.test.ts":26,
-"test/workflow/dry/no-write.test.ts":0,
+"test/workflow/dry/no-write.test.ts":2,
 "test/workflow/dry/run.test.ts":14,
 "test/workflow/dry/script.test.ts":2,
 "test/workflow/error-path-same-destination.test.ts":12,
@@ -1078,5 +1078,5 @@
 "test/wrapper-push-route.test.ts":336,
 "test/yaml-own-keys.test.ts":2,
 "test/yaml.test.ts":7,
-"test/zz-src-home.test.ts":0
+"test/zz-src-home.test.ts":1
 }

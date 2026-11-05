@@ -74,12 +74,12 @@ export function weights(files: string[], timings: Record<string, number>, size: 
     .filter((r) => Number.isFinite(r))
     .sort((a, b) => a - b);
   const rate = rates.length ? rates[Math.floor(rates.length / 2)]! : 0.1;
-  const one = (f: string) => timings[f] ?? Math.max(1, Math.round(size(f) * rate));
+  const one = (f: string) => Math.max(1, timings[f] ?? Math.round(size(f) * rate));
   return new Map(
     files.map((u) => {
       const [f, part] = u.split('#') as [string, string | undefined];
       // A part's own recorded time first (part 0 carries the whole-repo checks), else 1/n of the file.
-      return [u, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f))];
+      return [u, Math.max(1, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f)))];
     }),
   );
 }
@@ -317,7 +317,7 @@ export function unitTimesFromJunit(xml: string, label?: string): Record<string, 
     const name = /\bname="([^"]+)"/.exec(tag)?.[1];
     const seconds = /\btime="([0-9.]+)"/.exec(tag)?.[1];
     if (name === undefined || seconds === undefined) continue;
-    const ms = Math.round(Number(seconds) * 1000);
+    const ms = Math.max(1, Math.round(Number(seconds) * 1000));
     if (label === undefined) times[name] = (times[name] ?? 0) + ms;
     else sum += ms;
   }
