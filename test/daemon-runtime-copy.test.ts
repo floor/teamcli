@@ -89,12 +89,12 @@ function hookFile(root: string, session: string, seat: string, command: string):
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 
 /** The injected manager: every load is accepted and recorded, and no command runs. */
-function managerIn(calls: string[]): ReturnType<typeof darwinServiceManager> {
+function managerIn(calls: string[], accountHome: string = join(bases[bases.length - 1] ?? '', 'home')): ReturnType<typeof darwinServiceManager> {
   const runner: ServiceRunner = (_command, args) => {
     calls.push(args[0] ?? '');
     return { ...OK };
   };
-  return darwinServiceManager({ runner, uid: 501, sleep: () => {} });
+  return darwinServiceManager({ runner, uid: 501, accountHome, sleep: () => {} });
 }
 
 const ANSWERING: DaemonHealth = {
@@ -119,6 +119,7 @@ function sourcesOf(
 ): DaemonCommandSources {
   return {
     home,
+    accountHome: home,
     program,
     version: 'test',
     service,

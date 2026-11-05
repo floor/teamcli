@@ -176,9 +176,13 @@ function synthetic(script: Script): { runner: ServiceRunner; calls: string[] } {
 }
 
 /** The live adapter with the platform's command replaced and every wait recorded, not slept. */
-function managerWith(script: Script, sleeps: number[] = []): { manager: ServiceManager; calls: string[] } {
+function managerWith(
+  script: Script,
+  sleeps: number[] = [],
+  accountHome: string = join(bases[bases.length - 1] ?? '', 'home'),
+): { manager: ServiceManager; calls: string[] } {
   const { runner, calls } = synthetic(script);
-  const manager = darwinServiceManager({ runner, uid: 501, sleep: (ms) => sleeps.push(ms) });
+  const manager = darwinServiceManager({ runner, uid: 501, accountHome, sleep: (ms) => sleeps.push(ms) });
   return { manager, calls };
 }
 
@@ -214,6 +218,7 @@ function sourcesOf(
   if (!existsSync(join(home, 'app', 'v2', 'cli.js'))) programFiles(home, 'v2');
   return {
     home,
+    accountHome: home,
     program: { execPath: EXEC, entry: join(home, 'app', 'v2', 'cli.js') },
     version: 'test',
     service,
@@ -312,7 +317,7 @@ describe('a load that fails every time puts the previous unit back', () => {
       running = readFileSync(retained ?? '/nonexistent', 'utf8') === 'old known-good bytes';
       return { ...OK };
     };
-    const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
+    const manager = darwinServiceManager({ runner, uid: 501, accountHome: home, sleep: () => {} });
 
     // The package is upgraded in place; the copy the earlier unit names is untouched.
     writeFileSync(entry, 'new broken bytes');

@@ -250,12 +250,13 @@ async function startWith(
     }
     return { status: 0, stdout: '', stderr: '' };
   };
-  const manager = systemServiceManager({ platform: 'darwin', uid, sleep: () => {}, runner });
+  const manager = systemServiceManager({ platform: 'darwin', uid, accountHome: home, sleep: () => {}, runner });
   if (manager === null) throw new Error('the darwin adapter did not answer');
   const io = testIo(root, { kind: 'owner-no-tty' });
   const started: StartInput[] = [];
   const code = await runDaemon(['run', '--started-by', 'service-manager', '--root', root], io, {
     home,
+    accountHome: home,
     service: manager,
     start: async (input) => {
       started.push(input);

@@ -19,9 +19,9 @@
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
@@ -40,7 +40,7 @@ import {
 import { daemonHealth } from '../daemon/health.ts';
 import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
-import { DAEMON_LABEL } from '../daemon/paths.ts';
+import { DAEMON_LABEL, daemonLabel } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import {
   migrateRuntimeHome,
@@ -74,9 +74,9 @@ import { version as installedVersion, gitHead as installedGitHead } from '../ver
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
        team daemon restart [--dry-run] [--json]
-       team daemon uninstall [--json]
+       team daemon uninstall [--home <folder>] [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
@@ -110,6 +110,8 @@ refused, 2 when the invocation or a named root can't be read.
 export type DaemonCommandSources = {
   /** Injected for tests: a synthetic user home. */
   home?: string;
+  /** Injected for tests: the login account home directory. */
+  accountHome?: string;
   /** Injected for tests: the neutral service manager, never the live adapter. */
   service?: ServiceManager | null;
   /** Injected for tests: the daemon start. */
@@ -160,6 +162,7 @@ export default daemon;
 type Parsed = {
   verb: string | undefined;
   known: boolean;
+  home: string | undefined;
   roots: string[];
   route: string | undefined;
   json: boolean;
@@ -174,7 +177,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -206,6 +209,7 @@ function parse(argv: string[]): Parsed {
   return {
     verb,
     known,
+    home: args.values['home'],
     roots,
     route: args.values['route'],
     json: args.flags.has('json'),
@@ -235,6 +239,7 @@ function verbProblem(parsed: Parsed): string | null {
     if (parsed.inherited === undefined || parsed.inherited === '') {
       return 'chores is started only by the daemon, with its one-use token';
     }
+    if (parsed.home !== undefined) return 'chores takes no --home';
     if (parsed.roots.length > 0) return 'chores takes no --root';
     if (parsed.startedBy !== undefined) return 'chores takes no --started-by';
     if (parsed.route !== undefined) return 'chores takes no --route';
@@ -242,6 +247,9 @@ function verbProblem(parsed: Parsed): string | null {
     return null;
   }
   if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
+  if (parsed.verb !== 'install' && parsed.verb !== 'uninstall' && parsed.home !== undefined) {
+    return '--home belongs to install or uninstall';
+  }
   if (parsed.verb === 'fault-watch' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (parsed.verb === 'fault-watch') {
     if (parsed.roots.length === 0) return 'fault-watch needs --root <folder>';
@@ -412,7 +420,10 @@ function sameWords(unit: readonly string[], own: readonly string[]): boolean {
  * the manager's exec, exactly as it can rewrite the unit file.
  */
 function serviceManaged(io: Io, home: string, sources: DaemonCommandSources, json: boolean): boolean {
-  const manager = sources.service !== undefined ? sources.service : systemServiceManager();
+  const manager =
+    sources.service !== undefined
+      ? sources.service
+      : systemServiceManager(sources.accountHome !== undefined ? { accountHome: sources.accountHome } : {});
   const refusal = (id: string, checked: string): false => {
     const message = `only the owner or the system's service manager starts the machine daemon: ${checked}`;
     refuse(io, json, 'daemon', { id, message, repair: null });
@@ -421,11 +432,19 @@ function serviceManaged(io: Io, home: string, sources: DaemonCommandSources, jso
   if (manager === null) {
     return refusal('daemon.service-managed.unit', 'no unit file of this daemon\'s own can be read on this platform');
   }
+  const account =
+    sources.accountHome !== undefined
+      ? sources.accountHome
+      : manager.accountHome !== undefined
+        ? manager.accountHome()
+        : home;
+  const expectedLabel = daemonLabel(home, account);
   const unit = manager.unit(home);
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   if (
     unit === null
-    || unit.label !== DAEMON_LABEL
+    || expectedLabel === null
+    || unit.label !== expectedLabel
     || uid === null
     || unit.ownerUid !== uid
     || unit.mode === null
@@ -1113,15 +1132,95 @@ async function runInheritedChores(parsed: Parsed, home: string, io: Io, sources:
   });
 }
 
+function hasUserSymlinkComponent(target: string): boolean {
+  const parts = resolve(target).split(sep).filter((part) => part !== '');
+  let at: string = sep;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
+    at = join(at, part);
+    if (index === 0 && (part === 'var' || part === 'tmp' || part === 'etc')) continue;
+    try {
+      if (lstatSync(at).isSymbolicLink()) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+function settledHome(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function isAccountHome(targetHome: string, account: string | null): boolean {
+  if (account === null || account === '') return false;
+  return settledHome(targetHome) === settledHome(account);
+}
+
+function homeTargetProblem(
+  raw: string,
+  cwd: string,
+): { ok: true; target: string; realTarget: string } | { ok: false; why: string } {
+  if (raw === '') return { ok: false, why: '--home takes a folder' };
+  if (raw.endsWith('/') || raw.endsWith(sep)) {
+    return { ok: false, why: '--home takes a folder without a trailing slash' };
+  }
+  const target = resolve(cwd, raw);
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(target);
+  } catch {
+    return { ok: false, why: `--home "${raw}" cannot be resolved` };
+  }
+  if (stat.isSymbolicLink() || hasUserSymlinkComponent(target)) {
+    return { ok: false, why: `--home "${raw}" is a symbolic link; name the folder itself` };
+  }
+  if (!stat.isDirectory()) return { ok: false, why: `--home "${raw}" is not a folder` };
+  try {
+    return { ok: true, target, realTarget: realpathSync(target) };
+  } catch {
+    return { ok: false, why: `--home "${raw}" cannot be resolved` };
+  }
+}
+
+function resolveAccount(
+  account: string | null,
+  injectedAccount: boolean,
+): { ok: true; realAccount: string } | { ok: false; why: string } {
+  if (account === null || account === '' || !account.startsWith('/')) {
+    return { ok: false, why: 'the account home could not be read' };
+  }
+  try {
+    return { ok: true, realAccount: realpathSync(account) };
+  } catch {
+    if (injectedAccount) return { ok: true, realAccount: resolve(account) };
+    return { ok: false, why: 'the account home could not be resolved' };
+  }
+}
+
+function usageRefused(io: Io, parsed: Parsed, message: string): number {
+  refuse(io, parsed.json, 'daemon', { id: 'daemon.usage', message, repair: null, usage: USAGE });
+  // exit: daemon.usage
+  return 2;
+}
+
+function uninstallFailed(io: Io, parsed: Parsed, message: string): number {
+  refuse(io, parsed.json, 'daemon', { id: 'daemon.uninstall-failed', message, repair: null });
+  // exit: daemon.uninstall-failed
+  return 1;
+}
+
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const home = sources.home ?? homedir();
   const parsed = parse(argv);
   const problem = verbProblem(parsed);
   if (problem !== null) {
-    refuse(io, parsed.json, 'daemon', { id: 'daemon.usage', message: problem, repair: null, usage: USAGE });
-    // exit: daemon.usage
-    return 2;
+    return usageRefused(io, parsed, problem);
   }
 
   if (parsed.verb === 'chores') {
@@ -1278,7 +1377,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return await faultWatch(parsed, io, sources, home);
   }
 
-  const manager = sources.service !== undefined ? sources.service : systemServiceManager();
+  const manager =
+    sources.service !== undefined
+      ? sources.service
+      : systemServiceManager(sources.accountHome !== undefined ? { accountHome: sources.accountHome } : {});
   if (manager === null) {
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.service-unavailable',
@@ -1293,13 +1395,39 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return await restartInstalled(manager, io, parsed, home, sources);
   }
 
+  let targetHome = home;
+  let realTargetHome: string | null = null;
+  if (parsed.home !== undefined) {
+    const checkedHome = homeTargetProblem(parsed.home, io.cwd);
+    if (!checkedHome.ok) {
+      return usageRefused(io, parsed, checkedHome.why);
+    }
+    targetHome = checkedHome.target;
+    realTargetHome = checkedHome.realTarget;
+  }
+
+  const account =
+    sources.accountHome !== undefined
+      ? sources.accountHome
+      : manager.accountHome !== undefined
+        ? manager.accountHome()
+        : home;
+  const checkedAccount = resolveAccount(account, sources.accountHome !== undefined);
+  if (!checkedAccount.ok) {
+    if (parsed.verb === 'uninstall') {
+      return uninstallFailed(io, parsed, checkedAccount.why);
+    }
+    return installFailed(io, parsed, { id: 'daemon.install-failed', message: checkedAccount.why, repair: null });
+  }
+  if (realTargetHome !== null && realTargetHome === checkedAccount.realAccount) {
+    return usageRefused(io, parsed, '--home may not name the account home');
+  }
+
   if (parsed.verb === 'uninstall') {
-    const removed = manager.uninstall(home);
+    const removed = manager.uninstall(targetHome);
     if (!removed.ok) {
-      appendDaemonLog(home, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
-      refuse(io, parsed.json, 'daemon', { id: 'daemon.uninstall-failed', message: removed.why, repair: null });
-      // exit: daemon.uninstall-failed
-      return 1;
+      appendDaemonLog(targetHome, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
+      return uninstallFailed(io, parsed, removed.why);
     }
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
@@ -1320,7 +1448,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   // install
-  const named = rootsOf(parsed, io, home);
+  const named = rootsOf(parsed, io, targetHome);
   if ('problem' in named) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.no-root', message: named.problem, repair: null });
     // exit: daemon.no-root
@@ -1353,7 +1481,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   };
   let plan: ServicePlan;
   try {
-    plan = manager.plan(home, fullProgram);
+    plan = manager.plan(targetHome, fullProgram);
   } catch (error) {
     // The plan names the retained copy the unit would run, and a program that cannot be read
     // whole is refused before anything is written — by a dry run too, which must not promise a
@@ -1365,7 +1493,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     });
   }
   if (parsed.dryRun) {
-    const migration = runRuntimeMigrationStep(home, named.roots, true, manager, sources);
+    const migration = runRuntimeMigrationStep(targetHome, named.roots, true, manager, sources);
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
         format: 1,
@@ -1387,9 +1515,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.dry-run
     return 0;
   }
-  const installed = manager.install(home, fullProgram);
+  const installed = manager.install(targetHome, fullProgram);
   if (!installed.ok) {
-    return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, home, sources, manager);
+    return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, targetHome, sources, manager);
   }
   // A load the manager accepted is registration, not proof that a program runs. The install is
   // reported only after the daemon it started answers the machine socket. The wait is the
@@ -1397,9 +1525,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // starting, so saying no daemon is running — or taking the unit back out — would be false and
   // would stop a daemon that is coming up. Only a daemon no process stands behind is taken back
   // out through the adapter's own undo, so a success line never stands for an empty machine.
-  const answer = await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS, manager });
+  const answer = await daemonAnswers(targetHome, sources, { waits: COLD_START_WAIT_MS, manager });
   if (!answer.answered && answer.starting) {
-    appendDaemonLog(home, 'install: the new daemon is still starting and has not answered the health probe', sources.now?.() ?? new Date());
+    appendDaemonLog(targetHome, 'install: the new daemon is still starting and has not answered the health probe', sources.now?.() ?? new Date());
     return installFailed(io, parsed, {
       id: 'daemon.install-failed',
       message: 'the daemon the new unit started has not answered the health probe yet; its process is alive and it may still be starting',
@@ -1417,32 +1545,35 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         kept: false,
       }
       : installed.undo();
-    return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, home, sources, manager);
+    return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, targetHome, sources, manager);
   }
   // The installed CLI this copy was made from, beside the copies: the restore pass runs `up` in
   // this process, and every hook settings file it installs must name a program that outlives the
   // retained copy the unit runs. Best effort — a record that cannot be written only means those
   // hooks omit the CLI command rather than naming a path a refresh may delete.
-  recordInstalledProgram(home, {
+  recordInstalledProgram(targetHome, {
     entry: fullProgram.entry,
     root: fullProgram.runtime?.root ?? dirname(fullProgram.entry),
   });
   // The shuttle units come out only after the router has answered. A daemon that has not
   // reported that heartbeat keeps them, and a unit that stays is named. The child is left up.
-  if (mailboxHeartbeatFresh(home)) {
+  // A non-account home install skips shuttle retirement so it never touches the live user domain's
+  // shuttle jobs.
+  if (isAccountHome(targetHome, account) && mailboxHeartbeatFresh(targetHome)) {
     const retired = retireShuttles({
       heartbeatFresh: true,
-      retire: (label) => sources.retireShuttle?.(label) ?? retireShuttleUnit(manager, home, label),
+      retire: (label) => sources.retireShuttle?.(label) ?? retireShuttleUnit(manager, targetHome, label),
     });
     for (const one of retired.failed) {
-      appendDaemonLog(home, `install: ${one.label} was not retired: ${one.why}`, sources.now?.() ?? new Date());
+      appendDaemonLog(targetHome, `install: ${one.label} was not retired: ${one.why}`, sources.now?.() ?? new Date());
       io.stderr(`team daemon: ${one.label} was not retired: ${one.why}\n`);
     }
   }
-  // Only now, with the new daemon answering, do the lobby's kit folders move into the
-  // runtime home. A failed or rolled-back install above never reaches this line, so the
-  // old daemon and the old folders stay a consistent pair.
-  const migration = runRuntimeMigrationStep(home, named.roots, false, manager, sources);
+  // Only now, with the new daemon answering and the shuttles it replaces retired, do the
+  // lobby's kit folders move into the runtime home: a folder a unit that just came out
+  // named is no longer held. A failed or rolled-back install above never reaches this
+  // line, so the old daemon and the old folders stay a consistent pair.
+  const migration = runRuntimeMigrationStep(targetHome, named.roots, false, manager, sources);
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,

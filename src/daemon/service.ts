@@ -215,6 +215,8 @@ export type LoadedServiceProgram = { label: string; program: readonly string[] }
 
 export type ServiceManager = {
   readonly kind: 'system-service-manager';
+  /** The login account home directory read by the adapter, or null when it cannot be read. */
+  accountHome?(): string | null;
   unitPath(home: string): string;
   /**
    * Every loaded unit's label and program words, when the adapter can read them. Used only
@@ -267,6 +269,8 @@ export type ServiceManagerOptions = {
   runner?: ServiceRunner;
   /** The user the unit starts for; defaults to this process's uid. */
   uid?: number;
+  /** Injected for a synthetic-home test so the derivation treats that home as the account home. */
+  accountHome?: string;
   platform?: NodeJS.Platform;
   /** Injected clock for the adapter's own log lines, when it writes any. */
   now?: () => Date;

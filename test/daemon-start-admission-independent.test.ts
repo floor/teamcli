@@ -79,7 +79,7 @@ async function runStart(w: World, service: ServiceManager | null, caller: Caller
   const tap = spyOn(output, 'refuse').mockImplementation((...args: Parameters<typeof output.refuse>) => { ids.push(args[3].id); return original(...args); });
   let code: number;
   try { code = await runDaemon(['run', '--root', w.root, ...(serviceFlag ? ['--started-by', 'service-manager'] : []), ...extra], io,
-    { home: w.home, service, start: async input => { started.push(input); return { kind: 'already-running', pid: 9999 }; } }); }
+    { home: w.home, accountHome: w.home, service, start: async input => { started.push(input); return { kind: 'already-running', pid: 9999 }; } }); }
   finally { tap.mockRestore(); }
   return { code, io, started, ids };
 }
@@ -191,7 +191,7 @@ for (const scene of installScenes) for (const json of [false, true]) {
     const w = world(); const adapter = installer(w, scene.prior, scene.restored); const sleeps: number[] = []; let newProbes = 0; let restoredProbes = 0;
     const io = testIo(w.root, { kind: 'owner' }); io.env = { HOME: w.home, PATH: '/synthetic/path' };
     const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
-      home: w.home, service: adapter.manager, program: { execPath: process.execPath, entry: w.entry }, now: () => NOW, sleep: async ms => { sleeps.push(ms); },
+      home: w.home, accountHome: w.home, service: adapter.manager, program: { execPath: process.execPath, entry: w.entry }, now: () => NOW, sleep: async ms => { sleeps.push(ms); },
       health: async home => { expect(home).toBe(w.home); if (adapter.undone()) { restoredProbes++; adapter.trace.push('health-restored');
         expect(fs.readFileSync(w.unitPath, 'utf8')).toBe(adapter.previous); return health(w, scene.restored ? 'answer' : 'silent'); }
         newProbes++; adapter.trace.push('health-new'); return health(w, scene.delayed && newProbes >= 3 ? 'answer' : scene.reading); },
@@ -232,7 +232,7 @@ for (const scene of installScenes) for (const json of [false, true]) {
 }
 test('a dry install plans without calling the fake install or health functions', async () => {
   const w = world(); const adapter = installer(w, false, false); const io = testIo(w.root, { kind: 'owner' });
-  expect(await runDaemon(['install', '--root', w.root, '--dry-run', '--json'], io, { home: w.home, service: adapter.manager,
+  expect(await runDaemon(['install', '--root', w.root, '--dry-run', '--json'], io, { home: w.home, accountHome: w.home, service: adapter.manager,
     program: { execPath: process.execPath, entry: w.entry }, health: async () => { throw new Error('dry run probed health'); } })).toBe(0);
   expect(adapter.trace).toEqual([]); expect(fs.existsSync(w.unitPath)).toBe(false); expect(JSON.parse(io.out).dry_run).toBe(true);
 });
@@ -266,7 +266,7 @@ async function runtimeInstall(w: World, adapter: ReturnType<typeof inertRuntimeM
   const io = testIo(w.root, { kind: 'owner' }); io.env = { HOME: w.home };
   const probes: { entry: string | null; ok: boolean; text: string }[] = [];
   const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
-    home: w.home, service: adapter.manager, program, now: () => NOW, sleep: async () => {},
+    home: w.home, accountHome: w.home, service: adapter.manager, program, now: () => NOW, sleep: async () => {},
     health: async () => { const result = runFixture(w, adapter.active()); probes.push({ entry: adapter.active()?.[1] ?? null, ...result }); return health(w, result.ok ? 'answer' : 'silent'); },
   });
   return { code, io, probes };
@@ -366,7 +366,7 @@ for (const json of [false, true]) test('runtime delta: health undo retains a cop
   const path = adapter.manager.unitPath(w.home), text = fs.readFileSync(path, 'utf8'), words = runtimeWords(text), folder = retainedFolder(w, words[1]!);
   let probes = 0; const io = testIo(w.root, { kind: 'owner' });
   const code = await runDaemon(['install', '--root', w.root, ...(json ? ['--json'] : [])], io, {
-    home: w.home, service: adapter.manager, program: pkg.program, sleep: async () => {}, now: () => NOW,
+    home: w.home, accountHome: w.home, service: adapter.manager, program: pkg.program, sleep: async () => {}, now: () => NOW,
     health: async () => { probes++; expect(fs.existsSync(folder)).toBe(true); return health(w, probes <= 16 ? 'silent' : runFixture(w, adapter.active()).ok ? 'answer' : 'silent'); },
   });
   expect(code, io.out + io.err).toBe(1); expect(probes).toBe(17);
