@@ -168,9 +168,11 @@ block from the labs it already shows, so a lab or account this view hides can ne
 
 A window line prints the used and left percentages, the reset (a countdown, `resets not printed`
 when the source gave no reset moment, or the words a wall screen showed), the pace in plain words,
-and the source with the reading's age. Observations are stamped when
+and where the figure was read — the one plain-words vocabulary `sourceText` gives every face:
+`read from a seat’s status bar` for a screen's own row, `read from the CLI` for a usage print,
+`estimated` for a stored reading — with its age. Observations are stamped when
 read, and the newest observation per account, pool and window wins. Two sources print no
-percentage: the watch's machine cache (`source: machine reading`) and the live readers.
+percentage: the watch's machine cache (`source: machine reading` in the model) and the live readers.
 
 The margin is `expected minus used`, in percentage points: the share of the window that has
 already elapsed minus the share spent. The session window is five hours (the length the
@@ -252,9 +254,12 @@ record's own path), `team-file` when the team file was.
 
 With `--tree`, each team's seat table is followed by the seats' own figures, built by `reportOf`
 into `teams[].seats` (`information/usage.ts`): one line per window per seat, and one spend line
-per seat. A window this run read from the seat's own pane is `measured`, with the status row's
-source; a window only the watch's per-seat record answers is `estimated`, source `state record`,
-with its age and staleness. The record fills only the windows the live read did not answer, and
+per seat. A window this run read from the seat's own pane is `measured` in the model, with the
+status row's source; a window only the watch's per-seat record answers is `estimated`, source
+`state record`, with its age and staleness. The human text prints neither model word: every face
+spells a source through `sourceText` (`budgets/table.ts`), so the line says `read from a seat’s
+status bar`, `read from the CLI` or `estimated`, with the reading's age beside it. The record fills
+only the windows the live read did not answer, and
 stored readings pass the same bound-account filter the report's rows use, so a reading for an
 account this team's file does not bind never becomes a seat figure. A seat with no figure in
 either source prints `unknown  no reading for this seat`; no percentage is invented.
@@ -272,7 +277,8 @@ The report's cost `source` is the session registry's own word for how an amount 
 (`measured` or `estimated` on a recorded session's `cost`; the registry omits a cost it did not
 measure and prints that as `unknown`, never zero). A figure both commands carry therefore prints
 the same mark in `team sessions` and `team usage`; the report keeps the surface it read in
-`readFrom` (`status line`), beside `readAt` and `age`. The registry does not write this figure
+`readFrom` (`status line`), beside `readAt` and `age`, and the human text spells it with
+`sourceText` (`read from a seat’s status bar`). The registry does not write this figure
 yet — the spend is read from the screen, not from a record — so the two agree on the vocabulary,
 not on storage.
 

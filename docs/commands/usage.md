@@ -198,10 +198,10 @@ it all the same. Run from the seat's own pane, the report is the restricted view
 
 ```console
 $ team usage ; echo "exit $?"
-ACCOUNT    WINDOW   LEFT  USED  RESETS  READ            SOURCE  STATE
-anthropic  -        -     -     -       -               -       unknown
-openai     session  40%   60%   in 44m  -  read 2m ago  check   ok  pace not known
-  openai  beacon  session  left 40%  used 60%  resets in 44m  -  read 2m ago  check  fresh  pace not known
+ACCOUNT    WINDOW   LEFT  USED  RESETS  READ            SOURCE     STATE
+anthropic  -        -     -     -       -               -          unknown
+openai     session  40%   60%   in 44m  -  read 2m ago  estimated  ok  pace not known
+  openai  beacon  session  left 40%  used 60%  resets in 44m  -  read 2m ago  estimated  fresh  pace not known
 advice: no readings yet: no seat status line and no CLI usage command has answered
 
 beacon
@@ -228,15 +228,17 @@ block per lab and per account, and one advice line.
     quota
       anthropic  ok
         anthropic  ok  seats: lead, coda
-          session  used 20%  left 80%  resets in 2h6m  ahead of pace by 38%  (status line, read 1m ago)
-          weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (status line, read 1m ago)
+          session  used 20%  left 80%  resets in 2h6m  ahead of pace by 38%  (read from a seat’s status bar, 1m ago)
+          weekly  used 12%  left 88%  resets in 125h26m  ahead of pace by 13.3%  (read from a seat’s status bar, 1m ago)
       xai  walled
         xai  walled  resets at 3pm  seats: scout
-          weekly  used 100%  left 0%  resets not printed  pace not known  (machine reading, read 1m ago)
+          weekly  used 100%  left 0%  resets not printed  pace not known  (estimated, 1m ago)
     advice: swap scout off xai (walled) to anthropic (weekly used 12%, ahead of pace by 13.3%)
 
 Each window line carries the percentage used and left, when it resets, the pace in plain words, and
-where the figure came from. The reset is a countdown, `resets not printed` when the source gave no
+where the figure came from — `read from a seat’s status bar` for a seat’s own screen, `read from
+the CLI` for the CLI’s own usage print, `estimated` for a reading the watch stored — with the
+reading’s age beside it. The reset is a countdown, `resets not printed` when the source gave no
 reset moment, or the words a wall screen printed. The pace compares the spend with the window's own
 clock — the share of the window already gone minus the share used: 125h26m to reset leaves 42h34m
 of a seven-day window gone, 25.3%, so 12% used leaves 13.3 points of room ahead of the clock and
@@ -318,19 +320,21 @@ Under each team’s `SEAT  CLI  ACCOUNT` table, `--tree` prints that team’s se
     beacon
       SEAT           CLI          ACCOUNT
       claude-keeper  claude-code  anthropic
-      claude-keeper  claude-code  anthropic  session  left 80%  used 20%  resets in 2h6m  ahead of pace by 38%  measured  status line  read 1m ago
-      claude-keeper  claude-code  anthropic  weekly  left 88%  used 12%  resets in 125h26m  ahead of pace by 13.3%  measured  status line  read 1m ago
-      claude-keeper  claude-code  anthropic  cost  $5.8  measured  status line  read 1m ago
+      claude-keeper  claude-code  anthropic  session  left 80%  used 20%  resets in 2h6m  ahead of pace by 38%  read from a seat’s status bar, 1m ago
+      claude-keeper  claude-code  anthropic  weekly  left 88%  used 12%  resets in 125h26m  ahead of pace by 13.3%  read from a seat’s status bar, 1m ago
+      claude-keeper  claude-code  anthropic  cost  $5.8  read from a seat’s status bar, 1m ago
 
 A window line carries the account the figure measures, the window, the same percentages, reset
-and pace words the quota block prints, and the source with the reading’s age and its mark. `measured`
-is a figure this run read from the seat’s own screen; `estimated` is the watch’s per-seat record
-in the project state (source `state record`), which fills only the windows the live read did not
-answer. A seat with neither prints `unknown  no reading for this seat`.
+and pace words the quota block prints, and where the figure was read, in plain words with its age:
+`read from a seat’s status bar` for a figure this run read from the seat’s own screen, `read from
+the CLI` for one the CLI’s own usage print gave, and `estimated` for the watch’s per-seat record
+in the project state, which fills only the windows the live read did not answer. A seat with
+neither prints `unknown  no reading for this seat`.
 
 The spend line is the seat’s own money figure: the amount a Claude Code status row prints in its
 `S:` field (`S: $5.8` on a real 2.1.299 screen), read only from the row the profile’s status
-patterns recognize, and marked `measured` with its source and reading age. A seat whose screen
+patterns recognize, and printed with where it was read — `read from a seat’s status bar` — and its
+reading age. A seat whose screen
 printed no amount — any other CLI, an unread pane, or a row without the field — prints
 `cost  unknown` with one sentence, never `0`. The figure is per seat and per run: a seat’s
 figures and spend are attributed to the run (herdr session) its pane was read in, so two teams’
@@ -341,6 +345,6 @@ the seat, its CLI and paying account, its `run`, its `windows` (each with `mark`
 the machine file gives a plan. The cost’s `source` carries the session registry’s own word
 for how the amount was obtained — `measured`, `estimated`, or `unknown` for a seat whose screen
 printed no amount — so `team sessions` and `team usage` print the same mark for the same figure;
-`readFrom` names the screen it was read from (`status line`).
+`readFrom` keeps the model’s spelling of the screen it was read from (`status line`) for scripts.
 
 Rationale, behaviour, refusals and known limits: [docs/internal/usage.md](../internal/usage.md).
