@@ -15,6 +15,7 @@ import { readStoredTeamConfig, TeamConfigStoreError, teamConfigRecordPath } from
 import { teamIdOf } from '../registry/teams.ts';
 import { listedTeam, withRecordedSession } from './recorded-session.ts';
 import { noteRegistryRead, resolveTeamConfigSource } from './team-config.ts';
+import { currentRunMemo } from '../run-memo.ts';
 
 export const TEAM_FILE = '.agents/team.yaml';
 
@@ -98,14 +99,29 @@ function realOrResolved(path: string): string {
 }
 
 export function findRoot(cwd: string): string | null {
+  const memo = currentRunMemo();
+  const key = resolve(cwd);
+  if (memo !== null) {
+    const cached = memo.gitRoots.get(key);
+    if (cached !== undefined) return cached === '' ? null : cached;
+  }
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    return common ? dirname(common) : null;
+    const root = common ? dirname(common) : null;
+    if (memo !== null) {
+      memo.gitRoots.set(key, root ?? '');
+      if (root !== null) {
+        memo.gitRoots.set(root, root);
+        memo.gitRoots.set(resolve(root), root);
+      }
+    }
+    return root;
   } catch {
+    memo?.gitRoots.set(key, '');
     return null;
   }
 }

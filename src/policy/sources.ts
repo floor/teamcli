@@ -28,6 +28,7 @@ import {
 } from './resolve.ts';
 import { POLICY_DOMAIN, POLICY_LEVELS, getPolicySpec, namesRetiredOrderWord, normalizePolicyName, type Policy, type PolicyKind, type PolicyLevel, type PolicyValue } from './types.ts';
 import { readTeamText, readTeamTextTarget, teamTextTarget, writeTeamText } from '../file/team-text.ts';
+import { currentRunMemo } from '../run-memo.ts';
 
 /** True only for the error that says a policy file is not there. A file that cannot be read is
  *  not an empty declaration: its policies may include the one that tightens this run, so every
@@ -393,24 +394,34 @@ export function readEntityPolicySource(home: string = homedir(), entity: string 
  */
 export function readProjectPolicySource(home: string = homedir(), projectId: string | null = null): PolicySourceRead {
   const path = projectsFile(home);
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    if (isAbsent(error)) {
+  const memo = currentRunMemo();
+  let root: YamlValue;
+  if (memo !== null && memo.projectsRaw.has(home)) {
+    const cached = memo.projectsRaw.get(home) ?? null;
+    if (cached === null) return { ok: true, level: 'project', target: projectId, policies: [] };
+    root = cached;
+  } else {
+    let text: string;
+    try {
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      if (isAbsent(error)) {
+        memo?.projectsRaw.set(home, null);
+        return { ok: true, level: 'project', target: projectId, policies: [] };
+      }
+      return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: ${(error as Error).message}` };
+    }
+    if (!text.trim()) {
+      memo?.projectsRaw.set(home, null);
       return { ok: true, level: 'project', target: projectId, policies: [] };
     }
-    return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: ${(error as Error).message}` };
-  }
-  if (!text.trim()) {
-    return { ok: true, level: 'project', target: projectId, policies: [] };
-  }
-  let root: YamlValue;
-  try {
-    root = toValue(parseYaml(text));
-  } catch (error) {
-    const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
-    return { ok: false, level: 'project', target: projectId, source: path, why };
+    try {
+      root = toValue(parseYaml(text));
+    } catch (error) {
+      const why = error instanceof YamlError ? `${path}: line ${error.line}: ${error.message}` : `${path}: ${(error as Error).message}`;
+      return { ok: false, level: 'project', target: projectId, source: path, why };
+    }
+    memo?.projectsRaw.set(home, root);
   }
   if (!isMap(root)) {
     return { ok: false, level: 'project', target: projectId, source: path, why: `${path}: expected a map` };
