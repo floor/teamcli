@@ -63,18 +63,18 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { isSocketFile, launchCodexEndpoint, processStartOf, recordedEndpointState, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
-import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
+import { inspectRecordedCodexEndpoint, readRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsOnlyShell, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { restoreProof, relaunchWithOwnLine } from '../launch/restore-proof.ts';
-import { launchLineFinding } from '../launch/line.ts';
+import { launchLineFinding, launchedCliBinary } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -89,6 +89,7 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
@@ -169,6 +170,16 @@ export type UpSources = {
   // name no conversation to the one thread its endpoint proves. Absent in a world that binds
   // nothing: the launch's summary then names no pull-only reason.
   codexThreads?(endpoint: string): Promise<CodexLoadedThreadsRead>;
+  // The readings a restored Codex seat's recorded managed endpoint is judged by — the record for
+  // its current binding, the socket's liveness and the recorded pid's start, exactly as `team
+  // check` judges them. Absent in a world that does not judge endpoints: no restored seat is
+  // relaunched for one.
+  codexEndpoint?: {
+    alive(pid: number): boolean;
+    startOf(pid: number): number | null;
+    isSocket(path: string): boolean;
+    runtimeRoot?: string;
+  };
 };
 
 export type Launch = {
@@ -371,6 +382,8 @@ export const realSources: UpSources = {
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
   codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
+  // The same three readings `team check` wires for the seat's managed server.
+  codexEndpoint: { alive: pidAlive, startOf: processStartOf, isSocket: isSocketFile },
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
   superviseBus: true,
 };
@@ -634,6 +647,10 @@ function seatPlan(
   retained?: RetainedSeat,
   /** The recorded pane's foreground argv0 names, read for the restore proof; null when unread. */
   foregroundOf: (pane: string) => string[] | null = () => null,
+  /** Whether a restored seat's recorded managed Codex endpoint is provably gone and the seat's
+   *  own launch line would start one now: the pane must be relaunched in place for it, never
+   *  adopted on the endpoint it lost. */
+  endpointRelaunch: (seat: Seat, recorded: SeatState, launch: string) => boolean = () => false,
 ): UpSeat {
   // After `team down` the seat has no state record, only what down retained. That is still the
   // state's half of the resume binding: without it the registry's recorded conversation was
@@ -907,6 +924,38 @@ function seatPlan(
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      // The recorded managed endpoint died with the host (or with the process): the pane's CLI
+      // is not the seat's running form any more. It is exited in place and the seat is launched
+      // again there through its own line — the launch starts a fresh endpoint and attaches to
+      // it — carrying the conversation this proof names where the line can. A live endpoint,
+      // an absent or invalid record, or a reading this build cannot take leaves the pane
+      // adopted as it is: the repair is never made on a guess.
+      if (endpointRelaunch(seat, recorded, planned.launch)) {
+        const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+        if (held) {
+          return {
+            ...planned,
+            stage: 'ready',
+            sessionDoubt: held.why,
+            ...(held.working ? { doubtWorking: true } : {}),
+          };
+        }
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: recorded.launched,
+            cli: seat.cli,
+            ownLine: { session: restoredSession, endpoint: true },
+          },
+          resume: restoredSession,
+        };
+      }
       return {
         ...planned,
         stage: 'ready',
@@ -973,6 +1022,38 @@ function seatPlan(
           ownLine: { session: continuitySession },
         },
         resume: continuitySession,
+      };
+    } else if ((proof.kind === 'session' || proof.kind === 'cli') && endpointRelaunch(seat, recorded, planned.launch)) {
+      // A Codex seat whose recorded managed endpoint died with the host is not adopted on the
+      // endpoint it lost: the CLI is exited in place and the seat's own launch line runs there,
+      // starting a fresh endpoint and attaching to it. The weak (`cli`) proof is enough — the
+      // exit is for the endpoint, not for a conversation — and the strong one carries its
+      // conversation. The pane guards are item 7's own: a working or unsent pane is held before
+      // any key is typed, and a line that cannot carry a proven conversation stops here.
+      const held = replacedScreenRefusal(seat, recorded.pane, screenOf, known.find((agent) => agent.pane === recorded.pane)?.status);
+      if (held) {
+        return {
+          ...planned,
+          stage: 'ready',
+          sessionDoubt: held.why,
+          ...(held.working ? { doubtWorking: true } : {}),
+        };
+      }
+      const proven = proof.kind === 'session' && continuitySession !== null ? continuitySession : null;
+      const resumeHold = proven === null ? undefined : uncarryableResume(planned, proven);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      return {
+        ...planned,
+        pane: recorded.pane,
+        workspace: recorded.workspace,
+        repair: {
+          pane: recorded.pane,
+          workspace: recorded.workspace,
+          launched: recorded.launched,
+          cli: seat.cli,
+          ownLine: { ...(proven === null ? {} : { session: proven }), endpoint: true },
+        },
+        ...(proven === null ? {} : { resume: proven }),
       };
     } else {
       const next = launchedIdentity(processes[seat.name] ?? null);
@@ -2280,6 +2361,40 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
+  // Whether a restored seat's managed Codex endpoint is provably gone. The record must be one a
+  // launch wrote for the seat's current binding, its socket must be missing, its pid dead or
+  // handed to another process since (the same chain `team check` reports), and the seat's own
+  // launch line must be one that would start a managed endpoint now. Only a proven loss
+  // relaunches the seat; an absent record, a policy that plans no endpoint, or a reading this
+  // build cannot take keeps the pane adopted.
+  const endpointRelaunch = (seat: Seat, held: SeatState, launch: string): boolean => {
+    const liveness = sources.codexEndpoint;
+    if (liveness === undefined || sources.launch?.codexEndpoint === undefined) return false;
+    const profile = profileFor(seat.cli);
+    if (profile === null) return false;
+    const record = readRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+    if (record === null) return false;
+    const daemon = codexDaemonForSeat({ home: sources.home, root, team, seat: seat.name, session });
+    if (!managedCodexLaunch({
+      cli: profile.cli,
+      binary: profile.binary,
+      codexDaemon: daemon,
+      stateDir: dir,
+      launch,
+      command: launch,
+    })) return false;
+    const read = recordedEndpointState({
+      dir,
+      session,
+      seat: seat.name,
+      record,
+      ...(liveness.runtimeRoot === undefined ? {} : { runtimeRoot: liveness.runtimeRoot }),
+      alive: liveness.alive,
+      startOf: liveness.startOf,
+      isSocket: liveness.isSocket,
+    });
+    return read.kind === 'dead';
+  };
   // The entity model rule, read at the first seat this run would launch and kept for the rest:
   // a run with nothing to start reads no policy.
   let launchRule: EntityModelRule | null = null;
@@ -2309,6 +2424,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       rulesOriginOf(loaded.source),
       recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
       (pane) => sources.launch?.foreground(session, pane) ?? null,
+      endpointRelaunch,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.
