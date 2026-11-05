@@ -24,9 +24,11 @@ import { processStartOf } from '../watch/pane.ts';
  * process at its pid started when the token says, and is stale when that process started
  * at any other time. A token that records no start has nothing to compare, so a live pid
  * at it keeps it held and only a dead pid shows it is not its writer's: such a token was
- * written before locks recorded a start, and every lock written now records its start, so
- * the boot after that build is judged by the start rule. A live pid whose start cannot be
- * read is held too: it cannot be shown to be another process.
+ * written before locks recorded a start. Every token written now records one, because the
+ * taker's own start is taken from the process itself and never from a process-table read,
+ * so writing a token cannot fail to record it; the boot after that build is judged by the
+ * start rule alone. A live pid whose start cannot be read is held: it cannot be shown to
+ * be another process.
  *
  * A stale lock is taken over by the taker that wins a second, exclusive `link` on
  * `<path>.steal`. The claim serialises the takeover's read-check-unlink-publish sequence:
@@ -61,14 +63,16 @@ export type LockSteps = {
   drop(path: string): void;
   /** Whether a pid names a live process; `EPERM` counts as live. */
   alive(pid: number): boolean;
-  /** The instant the process at `pid` started, in epoch milliseconds; null when it can't be read. */
+  /** The instant the process at `pid` started, in epoch milliseconds, as the process table
+   *  records it; null when it can't be read. Never asked for the taker's own pid: that start
+   *  is a fact of this process, which `ownStart` gives. */
   startOf(pid: number): number | null;
+  /** The taker's own start instant, in epoch milliseconds, from the process itself: always
+   *  known, because it never depends on a process-table read that could fail. */
+  ownStart(): number;
   pid(): number;
   nonce(): string;
 };
-
-/** This process's own start, read once; undefined until the first lock asks for it. */
-let ownStart: number | null | undefined;
 
 export const lockSteps: LockSteps = {
   prepare: (folder) => {
@@ -112,13 +116,12 @@ export const lockSteps: LockSteps = {
       return (error as NodeJS.ErrnoException).code === 'EPERM';
     }
   },
-  startOf: (pid) => {
-    if (pid !== process.pid) return processStartOf(pid);
-    // A process's own start instant never changes, so it is read once per process: the lock is
-    // taken and released many times in one run, and the reading is a command away.
-    if (ownStart === undefined) ownStart = processStartOf(pid);
-    return ownStart;
-  },
+  startOf: (pid) => processStartOf(pid),
+  // The runtime fixed this instant before any of this code ran: the origin of the process's own
+  // monotonic clock, in epoch milliseconds. It is not read from the process table, so it cannot
+  // fail; `Date.now() - process.uptime()` names the same instant but its wall-clock half moves
+  // if the clock steps, while the time origin is fixed once.
+  ownStart: () => Math.round(performance.timeOrigin),
   pid: () => process.pid,
   nonce: () => randomBytes(6).toString('hex'),
 };
@@ -148,7 +151,9 @@ function parseToken(text: string | null): Owner | null {
 function stillHeld(owner: Owner, steps: LockSteps): boolean {
   if (!steps.alive(owner.pid)) return false;
   if (owner.startedAt === null) return true;
-  const live = steps.startOf(owner.pid);
+  // A token naming this very process is judged by the start this process knows of itself: the
+  // table has nothing to say about it that its own fact does not say better.
+  const live = owner.pid === steps.pid() ? steps.ownStart() : steps.startOf(owner.pid);
   return live === null || Math.abs(live - owner.startedAt) <= START_TOLERANCE_MS;
 }
 
@@ -167,8 +172,8 @@ export function acquireSeatLock(dir: string, session: string, seat: string, over
   const claimPath = `${path}.steal`;
   steps.prepare(join(dir, 'seat-locks', session));
   const pid = steps.pid();
-  const startedAt = steps.startOf(pid);
-  const token = startedAt === null ? `${pid} ${steps.nonce()}` : `${pid} ${steps.nonce()} ${String(Math.round(startedAt))}`;
+  const startedAt = Math.round(steps.ownStart());
+  const token = `${pid} ${steps.nonce()} ${String(startedAt)}`;
   const mine = steps.stage(path, token);
 
   const done = (): SeatLock => ({
