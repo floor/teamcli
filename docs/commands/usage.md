@@ -91,13 +91,13 @@ the overage:
 ```
 
 Overage is expected when the account's own state is `walled` or `near cap` — the window has hit
-its limit or is on course to empty before it resets — and the line answers with the limit the
-credit is spent to: the whole cap when the credit reaches it, else how far short of the cap the
-credit stops. A window on pace prints `no overage is expected before the reset`, and an account
-with no fresh reading prints `no fresh reading, so overage cannot be expected or ruled out`,
-rather than claiming either. The expected overage in money is a figure no CLI prints and no plan
-price gives, so the line never invents one. A currency this tool has no sign for keeps its code
-(`260.50 CHF`).
+its limit, is on course to empty before it resets, or its used figure is already 90% or above —
+and the line answers with the limit the credit is spent to: the whole cap when the credit reaches
+it, else how far short of the cap the credit stops. A window below that used floor that is on
+pace prints `no overage is expected before the reset`, and an account with no fresh reading
+prints `no fresh reading, so overage cannot be expected or ruled out`, rather than claiming
+either. The expected overage in money is a figure no CLI prints and no plan price gives, so the
+line never invents one. A currency this tool has no sign for keeps its code (`260.50 CHF`).
 
 These accounts appear even outside a project, with no teams or budgets configured. The file is
 optional: a lab no entry here declares is one account named after the lab, read from the status
@@ -264,13 +264,18 @@ the account's only reading — keeps its row instead of the one-line seat summar
 answers on prints, and the `STATE` cell says `walled  limit reached, resets <time>  read <age>
 ago`: the screen's own reset words and when this run read them.
 
-An account's state is `walled` at 100% used or on a live wall, `near cap` when its fresh pace is a
-band of ten points or more behind its clock — the window is on course to empty before it resets —
-`ok` otherwise, whatever the used percentage: a window at 96% used and on pace is ok. A window
-with no reset moment to read — its source printed none — has no pace word, so it falls back to the
-used figure, 90% or above reading `near cap`. Nothing fresh reads `unknown`. The same words print in the default account table's
-`STATE` column, so `near cap` is never hidden behind `--tree`; the table marks a stale reading
-`stale` beside its state, and `fresh`/`stale` stay the team rows' own pace words. The one `advice:`
+An account's state is `walled` at 100% used or on a live wall, `near cap` when its fresh window is
+at 90% used or above — the figure is nearly spent, so the credits and the advice must answer for
+it whatever the clock says — or, below that floor, when its fresh pace is a band of ten points or
+more behind its clock: the window is on course to empty before it resets. Below the floor the
+pace decides everything: a window at 87% used and on pace is ok. A window with no reset moment to
+read — its source printed none — has no pace word, so it falls back to the same used floor, 90%
+or above reading `near cap`. Nothing fresh reads `unknown`. When the used floor made the state
+and the clock still says the spend is on pace, the `STATE` cell says both facts — `near cap  on
+pace, 4% left, resets in 9h` — because both are true and both matter. The same words print in the
+default account table's `STATE` column, so `near cap` is never hidden behind `--tree`; the table
+marks a stale reading `stale` beside its state, and `fresh`/`stale` stay the team rows' own pace
+words. The one `advice:`
 line — printed with or without `--tree` — names the accounts with headroom (a fresh reading a band
 or more ahead of its clock), or the walled seats and the healthiest account to move them to; a
 near-cap account is an action, worst first: the window that made it near cap with its used figure

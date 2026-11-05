@@ -185,17 +185,20 @@ status row that prints its own margin — Claude Code's `W: 12% (+13.3%)` — is
 otherwise the figure is computed from the reset when it is known and still ahead. A reading older
 than five minutes, or one whose reset has passed, prints marked `stale`, carries no pace word, and
 its state is `unknown`. States are `walled` (a live wall screen, or 100% used), `near cap` (a
-fresh margin at or below −10% — the window is on course to empty before it resets — or, when the
-source printed no reset moment so no margin can be read, 90% used or above), `ok` below both, and
-`unknown` when nothing fresh is observed. A figure whose source printed no reset says `resets not
-printed` in place of a countdown: the source answered the percentage and gave no clock — the Codex
-status cell is one, and the reset there lives in the CLI's own status view, which this tool does
-not press keys to read. A wall keeps `resets unknown` when its rejection named no lift time,
-because that word is about a limit whose end nothing on the screen states. The account table's
-`STATE` column prints the same words — the quota view is where the figures come from, not where
-the state first appears — and marks a stale reading `stale`. The margin test matters as much as
-the used figure: an account 89% used with a −71.6% margin is spending far ahead of its window and
-prints `near cap`, not `ok`.
+fresh window at 90% used or above — the figure is nearly spent whatever the clock says — or,
+below that floor, a fresh margin at or below −10%: the window is on course to empty before it
+resets), `ok` below both, and `unknown` when nothing fresh is observed. The 90% floor is the same
+figure a window with no margin falls back to; it decides in every case, so a window at 96% used
+and on pace is `near cap`, and the account table's `STATE` cell says both facts — `near cap  on
+pace, 4% left, resets in 9h` — while the credits line and the advice answer for the account. A
+figure whose source printed no reset says `resets not printed` in place of a countdown: the
+source answered the percentage and gave no clock — the Codex status cell is one, and the reset
+there lives in the CLI's own status view, which this tool does not press keys to read. A wall
+keeps `resets unknown` when its rejection named no lift time, because that word is about a limit
+whose end nothing on the screen states. The account table's `STATE` column prints the same words —
+the quota view is where the figures come from, not where the state first appears — and marks a
+stale reading `stale`. The margin test matters as much as the used figure: an account 89% used
+with a −71.6% margin is spending far ahead of its window and prints `near cap`, not `ok`.
 
 The advice line is built only from what the block already shows. With walls, it names the seats
 on each walled account (up to two) and the account with the best fresh margin at or above +10% as
