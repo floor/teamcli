@@ -98,11 +98,11 @@ function xml(text: string): string {
 
 /** `launchctl print`'s answer as captured: the job block, the arguments block, the environment
  *  blocks, the job's counters, and the coalition blocks that follow them. */
-function printText(captured: Captured): string {
+function printText(captured: Captured, unit: string): string {
   const words = captured.words.map((word) => `\t\t${word}`).join('\n');
   return `gui/501/${DAEMON_LABEL} = {
 	active count = 1
-	path = /synthetic/home/Library/LaunchAgents/${DAEMON_LABEL}.plist
+	path = ${unit}
 	type = LaunchAgent
 	state = running
 
@@ -232,7 +232,7 @@ async function startWith(
   unitWords: readonly string[] = OWN_WORDS,
 ): Promise<Run> {
   const { root, home } = scratch();
-  writeUnit(home, unitWords);
+  const unit = writeUnit(home, unitWords);
   const asked: string[] = [];
   const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
   const runner = (command: string, args: string[]): { status: number; stdout: string; stderr: string } => {
@@ -240,7 +240,7 @@ async function startWith(
     if (command !== 'launchctl') return { status: 0, stdout: '', stderr: '' };
     if (args[0] === 'print') {
       return kind === 'print'
-        ? { status: 0, stdout: printText(captured), stderr: '' }
+        ? { status: 0, stdout: printText(captured, unit), stderr: '' }
         : { status: 113, stdout: '', stderr: 'synthetic: no such service' };
     }
     if (args[0] === 'list') {
@@ -278,11 +278,13 @@ describe('the admission parser reads the manager\'s captured answer', () => {
     expect(ran.asked[0]).toBe(`launchctl print gui/${String(uid)}/${DAEMON_LABEL}`);
   });
 
-  test('the list form admits the start when the printed record cannot be read', async () => {
+  test('the list form refuses when the printed record cannot be read', async () => {
+    // The list form names the job's program but not the unit it was loaded from, so the
+    // adapter cannot bind the record to the unit this home owns and refuses closed.
     const ran = await startWith('list', thisProcess);
-    expect(ran.code, ran.err + ran.out).toBe(0);
-    expect(ran.started.length).toBe(1);
-    expect(ran.started[0]?.startedBy).toBe('service-manager');
+    expect(ran.code).toBe(1);
+    expect(ran.err).toContain(`${CHECK_PREFIX}the record of the job does not name this process`);
+    expect(ran.started.length).toBe(0);
     expect(ran.asked.some((one) => one === `launchctl list ${DAEMON_LABEL}`)).toBe(true);
   });
 
