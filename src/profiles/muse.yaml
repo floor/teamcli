@@ -42,6 +42,10 @@ delivery: none
 # reads back: `idle` is the empty box, `working` is the acknowledgement. See
 # src/send/typed-wake.ts.
 typed_wake: screen
+# The space between the wake's two opening reads, at the floor and shipped at the measured value:
+# one host read on a loaded host measured ~52.7 ms, so 150 ms is nearly three host reads and leaves
+# the CLI room to draw between them. The native 1000 ms SETTLE_MS was never measured for this path.
+typed_wake_settle_ms: 150
 # herdr 0.7.1 reports a muse pane as no agent, or `unknown`, while the CLI runs: `agent list`
 # carried the 1.4.11 pane with no `agent` type and `agent_status: "unknown"` while Muse sat at
 # its ready box. The profile's own screen reading is the seat's state there: a recognised idle

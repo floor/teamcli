@@ -862,8 +862,12 @@ run, and a seat mid-turn is not interrupted), and the sender sends again.
 
 Unsent text is the seat's own, and no send touches it. The typed wake is the only leg that types,
 and it types only into a box it read twice as the empty idle prompt: a box holding unsent text
-gets no line and no Enter, and nothing is copied off, cleared or pasted into. The message waits
-in the record, and the seat reads it on its own turn.
+gets no line and no Enter, and nothing is copied off, cleared or pasted into. The two reads are
+spaced by the wake's own measured settle — one host read on a loaded host plus room for the CLI to
+draw, 150 ms as the shipped default — which a profile may widen (`typed_wake_settle_ms`) and may
+not narrow below that floor; the native delivery's one-second settle was never measured for this
+path and no longer applies to it. The message waits in the record, and the seat reads it on its
+own turn.
 
 `not-submitted` is a line typed and never taken. No send ends here in this build: the shipped
 profiles walk no compose screen, and a typed wake that typed without confirming leaves the

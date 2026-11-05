@@ -185,6 +185,11 @@ export interface Profile {
    *  two reads, and `delivered` only when the profile's own working screen shows — see
    *  src/send/typed-wake.ts. */
   typedWake: TypedWake | null;
+  /** The space between the typed wake's two opening reads, in milliseconds, when the profile
+   *  names one (`typed_wake_settle_ms`); null, the default, is the measured
+   *  `WAKE_IDLE_SETTLE_MS`. A declared value is never under `WAKE_IDLE_SETTLE_FLOOR_MS`: two
+   *  reads closer than one host read cannot catch a screen that changed between them. */
+  typedWakeSettleMs: number | null;
   /** The words a typed wake appends after the message's header, so the woken seat takes its
    *  fastest read path: a profile whose seats carry an MCP inbox names the inbox tool, and one
    *  without keeps the shipped sentence. Null, the default, is the shipped
@@ -290,6 +295,16 @@ export const MAX_WATCH_WAKE_TRIES = 10;
 
 /** The attempts one message gets when a profile names no `watch_wake_tries`. */
 export const DEFAULT_WATCH_WAKE_TRIES = 3;
+
+/** The floor under `typed_wake_settle_ms`: the wake's two opening reads are the guard, and two
+ *  reads less than one host read on a loaded host apart (~52.7 ms measured) cannot catch a screen
+ *  that changed between them. The loader refuses a profile under it, and the walk clamps at it. */
+export const WAKE_IDLE_SETTLE_FLOOR_MS = 150;
+
+/** How long the typed wake waits between its two opening reads when a profile names no
+ *  `typed_wake_settle_ms`: the measured floor, one host read plus the room the CLI needs to draw.
+ *  The native `SETTLE_MS` (1000) was never measured for this path. */
+export const WAKE_IDLE_SETTLE_MS = 150;
 
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
@@ -1322,7 +1337,7 @@ const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules',
 // (the delivery CLI a session runs and the public-only declaration the send path proves),
 // `features` (the pinned feature set the launch and the recorded line carry) and the watch
 // retry (`watch_wake`, `watch_wake_tries`).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1445,6 +1460,19 @@ function typedWakeOf(entry: YamlEntry): TypedWake {
     fail(entry.line, `"typed_wake" must be one of: ${TYPED_WAKES.join(', ')}`);
   }
   return value as TypedWake;
+}
+
+/** The value of `typed_wake_settle_ms`: a whole number of milliseconds between the wake's two
+ *  opening reads, never below `WAKE_IDLE_SETTLE_FLOOR_MS`. The floor is one host read on a loaded
+ *  host: a shorter space cannot catch a screen that changed between the reads, so the guard the
+ *  two reads stand for would be gone. A profile may widen it, never narrow it. */
+function typedWakeSettleMsOf(entry: YamlEntry): number {
+  const node = entry.value;
+  if (node.kind !== 'scalar' || typeof node.value !== 'number' || !Number.isInteger(node.value)
+    || node.value < WAKE_IDLE_SETTLE_FLOOR_MS) {
+    fail(entry.line, `"typed_wake_settle_ms" must be a whole number of milliseconds from ${String(WAKE_IDLE_SETTLE_FLOOR_MS)}`);
+  }
+  return node.value;
 }
 
 /** The value of `read_hint`: the one sentence a typed wake appends after the message's header.
@@ -1733,6 +1761,14 @@ export function typedWakeKey(text: string): TypedWake | null {
   return entry === undefined ? null : typedWakeOf(entry);
 }
 
+/** The `typed_wake_settle_ms` a profile snippet names, by the loader's own rule: for tests. A
+ *  value under the floor, or not a whole number, throws; an absent key reads as null, as an
+ *  absent optional key does. */
+export function typedWakeSettleMsKey(text: string): number | null {
+  const entry = optional(mapping(parseYaml(text), 'a profile'), 'typed_wake_settle_ms');
+  return entry === undefined ? null : typedWakeSettleMsOf(entry);
+}
+
 /** The `read_hint` a profile snippet names, by the loader's own rule: for tests. A value that is
  *  not one printable line inside the bound throws; an absent key reads as null, as an absent
  *  optional key does. */
@@ -1828,6 +1864,7 @@ function launchOf(root: YamlNode): Shipped {
   const mcpInboxEntry = optional(entries, 'mcp_inbox');
   const settingsEntry = optional(entries, 'settings');
   const typedWakeEntry = optional(entries, 'typed_wake');
+  const typedWakeSettleMsEntry = optional(entries, 'typed_wake_settle_ms');
   const readHintEntry = optional(entries, 'read_hint');
   const watchWakeEntry = optional(entries, 'watch_wake');
   const watchWakeTriesEntry = optional(entries, 'watch_wake_tries');
@@ -1862,6 +1899,10 @@ function launchOf(root: YamlNode): Shipped {
   }
   const rules = rulesOf(required(entries, 'rules', root.line).value);
   const typedWake = typedWakeEntry ? typedWakeOf(typedWakeEntry) : null;
+  if (typedWakeSettleMsEntry !== undefined && typedWake === null) {
+    fail(typedWakeSettleMsEntry.line, '"typed_wake_settle_ms" needs "typed_wake": it spaces the wake\'s two reads');
+  }
+  const typedWakeSettleMs = typedWakeSettleMsEntry ? typedWakeSettleMsOf(typedWakeSettleMsEntry) : null;
   const watchWake = watchWakeEntry ? watchWakeOf(watchWakeEntry) : typedWake !== null;
   if (watchWakeEntry !== undefined && watchWake && typedWake === null) {
     fail(watchWakeEntry.line, '"watch_wake: on" needs "typed_wake": the watch retries the same wake a send types');
@@ -1901,6 +1942,7 @@ function launchOf(root: YamlNode): Shipped {
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
       settings: settingsEntry ? settingsOf(settingsEntry.value) : null,
       typedWake,
+      typedWakeSettleMs,
       readHint: readHintEntry ? readHintOf(readHintEntry) : null,
       watchWake,
       watchWakeTries,

@@ -11,9 +11,12 @@ import { boxHoldsText } from '../src/launch/deliver.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
 import {
   DEFAULT_WATCH_WAKE_TRIES,
+  WAKE_IDLE_SETTLE_FLOOR_MS,
+  WAKE_IDLE_SETTLE_MS,
   profileFor,
   readHintKey,
   typedWakeKey,
+  typedWakeSettleMsKey,
   watchWakeKey,
   watchWakeTriesKey,
 } from '../src/profiles/index.ts';
@@ -769,6 +772,30 @@ describe('the typed wake marks its two times from the reads it takes', () => {
   });
 });
 
+describe('the typed wake spaces its two opening reads by its own measured settle', () => {
+  // Design §2: the two idle reads are the safety, the 1000 ms native SETTLE_MS was never measured
+  // for this path. The wake settles by one host read on a loaded host (~52.7 ms measured) plus the
+  // room the CLI needs to draw, shipped at 150 ms; a profile may widen it and never narrow it.
+
+  test('the default walk waits the wake settle between the two idle reads', async () => {
+    const pane = stepFake((read, enters) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(LINE)));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', { enterSettleMs: 1, pollMs: 1, ackSettleMs: 1, verifyMs: 1 });
+    expect(out.delivered).toBe(true);
+    // The settle sits between the two reads and before any key: read, settle, read, type.
+    expect(pane.steps.slice(0, 4)).toEqual([{ op: 'read' }, { op: 'wait', ms: 150 }, { op: 'read' }, { op: 'type' }]);
+  });
+
+  test('a draft that appears between the two idle reads stops the wake before any key', async () => {
+    // The screen changes between the reads, not to working but to an unsent draft — the one thing
+    // a wake must never type into. Same refusal the working screen gets, on the shipped defaults.
+    const pane = stepFake((read) => (read === 0 ? IDLE : UNSENT));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse');
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the second read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+});
+
 describe('the typed wake is a profile word', () => {
   test('the word is closed, and only Muse, Cursor, Antigravity, Grok and Codex declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
@@ -802,6 +829,27 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.watchWakeTries).toBe(3);
     expect(profileFor('grok')?.watchWakeTries).toBe(3);
     expect(profileFor('codex')?.watchWakeTries).toBe(3);
+  });
+
+  test('the wake settle is a profile setting with a floor', () => {
+    // The floor and the shipped default are the same measured value today; they are two names
+    // because they are two things — the loader's lower bound, and what an undeclared profile gets.
+    expect(WAKE_IDLE_SETTLE_FLOOR_MS).toBe(150);
+    expect(WAKE_IDLE_SETTLE_MS).toBe(150);
+    expect(typedWakeSettleMsKey('typed_wake_settle_ms: 150')).toBe(150);
+    expect(typedWakeSettleMsKey('typed_wake_settle_ms: 250')).toBe(250);
+    expect(typedWakeSettleMsKey('cli: muse')).toBeNull();
+    // Under the floor is refused, and the refusal names the floor.
+    expect(() => typedWakeSettleMsKey('typed_wake_settle_ms: 149')).toThrow(/150/);
+    for (const bad of ['0', '1.5', '"150"', 'fast']) {
+      expect(() => typedWakeSettleMsKey(`typed_wake_settle_ms: ${bad}`), bad).toThrow(/typed_wake_settle_ms/);
+    }
+    // Muse ships the measured value; the other wake profiles name none and take the measured
+    // default, which is the same 150.
+    expect(profileFor('muse')?.typedWakeSettleMs).toBe(150);
+    for (const cli of ['cursor', 'antigravity', 'grok', 'codex']) {
+      expect(profileFor(cli)?.typedWakeSettleMs, cli).toBeNull();
+    }
   });
 
   test('the read hint is declared where a seat has an inbox tool to name', () => {

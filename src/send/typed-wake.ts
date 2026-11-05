@@ -14,9 +14,10 @@
 // line, and the profile's `working` rule is the acknowledgement.
 import { paneReadAsync, pressEnterAsync, sendKeyAsync, typeTextAsync } from '../herdr.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
+import { profileFor, WAKE_IDLE_SETTLE_FLOOR_MS, WAKE_IDLE_SETTLE_MS } from '../profiles/profile.ts';
 import { MESSAGE_LINE_MAX } from '../settings/message-display.ts';
 import { readScreen, screenData } from '../watch/screen.ts';
-import { POLL_MS, SETTLE_MS } from './native.ts';
+import { POLL_MS } from './native.ts';
 
 /** How long after the line is typed the box is read before the first Enter, and between the two
  *  reads that have to agree before that Enter: the CLI has to have drawn the line and stopped
@@ -89,7 +90,9 @@ export type TypedWakeResult = {
 };
 
 export type TypedWakeOptions = {
-  /** The gap between the two idle reads. */
+  /** The gap between the two idle reads. Defaults to the profile's own `typed_wake_settle_ms`,
+   *  clamped at `WAKE_IDLE_SETTLE_FLOOR_MS`, and to the measured `WAKE_IDLE_SETTLE_MS` when the
+   *  profile names none: the native `SETTLE_MS` was never measured for this path. */
   settleMs?: number;
   /** The gap between typing the line and reading the box before Enter. */
   enterSettleMs?: number;
@@ -159,16 +162,17 @@ async function pollSubmitted(
 
 /**
  * Types one trigger line into the profile's idle composer and presses Enter, then waits for the
- * profile's working screen. Both idle reads happen before any key goes out, spaced by a settle:
- * a pane that is working, holds unsent text, shows a dialog or cannot be read is refused with
- * nothing typed. A pane scrolled back over its transcript — the profile's own bottom rows: a
- * footer in the composer's place, or a marker above a drawn composer with a status footer under
- * it — is returned to the prompt first, with the one key its row names,
- * and the two idle reads are taken after that key: the return is the only key this module sends
- * into a screen it read as scrolled back, and it is sent once. A box that already holds exactly
- * the line is not typed again: Enter is pressed into it. After the line is typed, Enter is
- * pressed only into a box that reads back as exactly that line; a box that is empty, holds other
- * text or cannot be read gets no Enter.
+ * profile's working screen. Both idle reads happen before any key goes out, spaced by the wake's
+ * own measured settle — the profile's `typed_wake_settle_ms`, never under the floor, and
+ * `WAKE_IDLE_SETTLE_MS` when the profile names none: a pane that is working, holds unsent text,
+ * shows a dialog or cannot be read is refused with nothing typed. A pane scrolled back over its
+ * transcript — the profile's own bottom rows: a footer in the composer's place, or a marker above
+ * a drawn composer with a status footer under it — is returned to the prompt first, with the one
+ * key its row names, and the two idle reads are taken after that key: the return is the only key
+ * this module sends into a screen it read as scrolled back, and it is sent once. A box that
+ * already holds exactly the line is not typed again: Enter is pressed into it. After the line is
+ * typed, Enter is pressed only into a box that reads back as exactly that line; a box that is
+ * empty, holds other text or cannot be read gets no Enter.
  * The host's Enter is the submit key, not a Return on the text, and the first one waits
  * until two reads show that same drawn line. A line longer than the composer cap, or a line
  * with a newline, is not typed. After an Enter, a box that still holds exactly the line
@@ -203,7 +207,8 @@ async function walkTypedWake(
   options: TypedWakeOptions,
   marks: WakeMarks,
 ): Promise<TypedWakeResult> {
-  const settleMs = options.settleMs ?? SETTLE_MS;
+  const settleMs = options.settleMs
+    ?? Math.max(WAKE_IDLE_SETTLE_FLOOR_MS, profileFor(cli)?.typedWakeSettleMs ?? WAKE_IDLE_SETTLE_MS);
   const enterSettleMs = options.enterSettleMs ?? WAKE_ENTER_SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
   const ackSettleMs = options.ackSettleMs ?? pollMs;
