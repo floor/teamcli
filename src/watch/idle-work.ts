@@ -243,6 +243,48 @@ export function presenceWorkingSince(input: {
   return working;
 }
 
+/** What the watch measured about a native presence it could not prove: the reason in its own
+ *  words, and the projection the seat last showed. Display detail for the stuck report, never a
+ *  verdict. */
+export type PresenceUnproven = { word: string; state: string; since: string };
+
+/** The seats whose native presence this pass could not prove, with the words the lead's notice
+ *  uses. Only a reading the proof refuses is carried here: a proven working word is aged by
+ *  `presenceWorkingSince`, and a proven state that is not working needs no presence detail. */
+export function presenceUnproven(input: {
+  team: IdleWorkInput['team'];
+  state: IdleWorkInput['state'];
+  presence: ReadonlyMap<string, PresenceRead>;
+  channelHealthy?: (seat: string) => boolean;
+  /** The owning daemon's measured reason when the channel is unhealthy, when it hosts presence. */
+  channelReason?: (seat: string) => string | null;
+  now: Date;
+}): ReadonlyMap<string, PresenceUnproven> {
+  const unproven = new Map<string, PresenceUnproven>();
+  for (const seat of input.team.seats) {
+    if (seat.human === true) continue;
+    const read = input.presence.get(seat.name);
+    if (read === undefined || read.kind !== 'native') continue;
+    const verdict = presenceVerdict(
+      read,
+      presenceSeatOf(input.state, seat.name, input.channelHealthy),
+      { now: input.now, thresholdSeconds: 0 },
+    );
+    if (verdict.idle || verdict.reason !== 'invalid') continue;
+    const measured = input.channelHealthy?.(seat.name) === false
+      ? input.channelReason?.(seat.name) ?? null
+      : null;
+    unproven.set(seat.name, {
+      word: measured === null
+        ? `presence not proven (${verdict.why})`
+        : `presence channel unhealthy (${measured})`,
+      state: read.reading.state,
+      since: read.reading.since,
+    });
+  }
+  return unproven;
+}
+
 /** The persisted idle clock, or null when the state records no stamp the reader can parse: a
  *  seat with no provable clock is not counted idle by this snapshot. */
 function sinceOf(stamp: string | undefined): string | null {

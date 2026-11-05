@@ -1462,7 +1462,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         ? null
         : choresFleet.watchFor(route.root, () => (presence === undefined
             ? null
-            : route.seats.map((seat) => ({ seat, healthy: seatQualified(presence, seat, now()) }))));
+            : route.seats.map((seat) => {
+                const verdict = seatVerdict(presence, seat, now());
+                return {
+                  seat,
+                  healthy: verdict.why === null,
+                  ...(verdict.why === null ? {} : { reason: verdict.why }),
+                };
+              })));
       if (remote !== null) {
         hostedWatches.push({ status, watch: remote });
         continue;
@@ -1488,6 +1495,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 // its own current sample, and a missing or false answer holds the projection.
                 presenceChannelHealthy: (seat: string) =>
                   seatQualified(presence, seat, now()),
+                // The measured detail behind a false answer, for the stuck report's notice only.
+                presenceChannelReason: (seat: string) =>
+                  seatVerdict(presence, seat, now()).why,
               }),
           ...(brokerWork === undefined ? {} : { brokerWork }),
           // The shared verifier judges the captured identity against the record under its own

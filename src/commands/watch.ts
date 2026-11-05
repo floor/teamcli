@@ -45,7 +45,7 @@ import { reportStuckSeats, reportUnreadDrops, wakeUnreadDrops } from '../watch/u
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
-import { nativeHeldSeats, presenceWorkingSince } from '../watch/idle-work.ts';
+import { nativeHeldSeats, presenceUnproven, presenceWorkingSince, type PresenceUnproven } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
 import { actingWatchHandover, readWatchHandover } from '../watch/handover.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
@@ -248,6 +248,13 @@ export type WatchSources = {
    * holds a native projection instead of believing it. Never settable from a command line.
    */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /**
+   * The owning daemon's measured reason for an unhealthy seat channel, when it hosts presence.
+   * Display detail for the stuck report's notice; a watch that cannot answer leaves it out and
+   * the notice names the unproven channel in the proof's own words. Never settable from a
+   * command line.
+   */
+  presenceChannelReason?: (seat: string) => string | null;
   /**
    * The broker reading for a tracker team, prefetched once in the pass before the dispatcher
    * reads it. Absent (a hand-started watch, and every daemon that does not host the broker), the
@@ -771,6 +778,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   /** The seats whose proven presence says a turn is running, and since when. Replaced with the
    *  hold before every pass that could report a stuck seat. */
   let workingSinceNow: ReadonlyMap<string, string> = new Map();
+  /** The seats whose native presence this pass could not prove, with the words the stuck report's
+   *  notice uses. Replaced beside the working word before every pass that could report one. */
+  let unprovenPresenceNow: ReadonlyMap<string, PresenceUnproven> = new Map();
   let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
   let statusWaitersKey = '';
   try {
@@ -979,6 +989,17 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           state,
           presence,
           ...(sources.presenceChannelHealthy === undefined ? {} : { channelHealthy: sources.presenceChannelHealthy }),
+          now: sources.now(),
+        });
+        // The seats the proof refused, in the same reading: the stuck report names an unhealthy
+        // channel and the projection it last showed, where a recognised screen alone would say
+        // nothing about why the wake never reached the seat.
+        unprovenPresenceNow = presenceUnproven({
+          team,
+          state,
+          presence,
+          ...(sources.presenceChannelHealthy === undefined ? {} : { channelHealthy: sources.presenceChannelHealthy }),
+          ...(sources.presenceChannelReason === undefined ? {} : { channelReason: sources.presenceChannelReason }),
           now: sources.now(),
         });
         if (!foreign && sources.statusSource !== undefined) {
@@ -1453,13 +1474,18 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             unreadWindows.set(seat.name, seconds);
             return seconds;
           };
-          // The stuck report runs before the wake: it names a seat the wake cannot reach — held by
-          // its native presence, or carrying a sender's pending marker — and its episode marker
-          // is what keeps the wake path's own blocked notice from saying the same thing twice.
+          // The stuck report runs before the wake: it names every seat whose oldest unread has
+          // waited past twice its window without a fresh proven working word, whatever the screen
+          // says — and its episode marker is what keeps the wake path's own blocked notice from
+          // saying the same thing twice.
           reportStuckSeats(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, ...(mail === undefined ? {} : { mail }) },
             { unreadAfter: inForce.unreadAfter, seatWindow: unreadWindowOf },
-            { workingSince: workingSinceNow, stuckAfterSeconds: inForce.stuckAfter },
+            {
+              workingSince: workingSinceNow,
+              stuckAfterSeconds: inForce.stuckAfter,
+              stalePresence: unprovenPresenceNow,
+            },
           );
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow, ...(mail === undefined ? {} : { mail }) },

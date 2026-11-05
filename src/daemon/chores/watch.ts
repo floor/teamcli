@@ -97,6 +97,10 @@ function startRoute(input: ChoresWatchInput, route: ChoresChildRoute, now: () =>
       ? {
           presenceChannelHealthy: (seat: string): boolean =>
             reading.current?.some((row) => row.seat === seat && row.healthy) === true,
+          // The daemon's measured reason crosses the beat with the boolean: the stuck report
+          // names the unhealthy channel in the daemon's own words, never a re-derived guess.
+          presenceChannelReason: (seat: string): string | null =>
+            reading.current?.find((row) => row.seat === seat)?.reason ?? null,
         }
       : {}),
     // The shared verifier judges the captured identity against the record under its own lock
