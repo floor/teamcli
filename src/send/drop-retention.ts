@@ -97,6 +97,8 @@ const PRE_RECEIPT_SUFFIXES: readonly string[] = [
   '.draft',
   '.closed.json',
   '.channel-push.json',
+  '.channel-abort',
+  '.channel-emitted',
   '.held.json',
   '.delivered.json',
   '.held',
