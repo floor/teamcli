@@ -280,6 +280,14 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
   return { base, root, home, file, dir, yaml };
 }
 
+/** The team before its implementer seats were added: the file a session launched earlier still
+ *  points at. `worker` is undeclared there, as today's seats are in a retired file. */
+function olderTeamYaml(yaml: string): string {
+  const cut = yaml.indexOf('\n  - role: implementer');
+  if (cut < 0) throw new Error('the fixture team names no implementer to leave out');
+  return yaml.slice(0, cut);
+}
+
 /** The entity's head team beside a target fixture: its own checkout, its live file, and the
  *  folder its state is written to — the three records a main-orchestrator proof reads. */
 function makeHeadTeam(base: string, project: string, entity: string, lead: 'coordinator' | 'leads' = 'coordinator'): { root: string; dir: string; session: string } {
@@ -774,6 +782,88 @@ describe('team restart <seat>', () => {
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(0);
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
+  });
+
+  test('a launched pointer to an older team file does not make the registry\'s seat undeclared', async () => {
+    // The shape the power-loss note measured: the session's launched pointer names a team file
+    // that no longer holds today's seats, while the registry's roster still places the seat on
+    // this team. The pointer is a place, not a frozen definition: the seat is declared, so the
+    // restart proceeds, and the fallback is spoken aloud.
+    const fixture = makeFixture();
+    const lobby = join(fixture.home, '.config', 'team', 'lobby');
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    mkdirSync(lobby, { mode: 0o700 });
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const id = teamIdOf(fixture.root);
+    upsertTeam(fixture.home, id, { project: 'acme', session: 'acme', root: fixture.root, at: NOW.toISOString() });
+    setRoster(fixture.home, id, [
+      { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+      { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      { agent: 'agt_222222222222', seat: 'worker', role: 'implementer' },
+    ]);
+
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(lobby, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.created).toBe(1);
+    expect(io.err).toContain('reading the team registered for session acme');
+  });
+
+  test('a launched pointer to an older team file falls back to the team the folder holds', async () => {
+    // The same stale pointer, run from the checkout: the folder's own team is the second
+    // authority that declares the seat, and the restart proceeds there.
+    const fixture = makeFixture();
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.ops = { stage: 'ready', pane: 'pane-ops', workspace: 'ws-ops' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const { sources, did } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.root, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
+    expect(did.created).toBe(1);
+    expect(io.err).toContain('reading the team this folder holds');
+  });
+
+  test('a launched pointer to an older team file keeps refusing a seat nothing declares', async () => {
+    // The fallback never invents a declaration: a seat in neither the pointer's team, the
+    // folder's team nor the registry's roster gets the same refusal as today.
+    const fixture = makeFixture();
+    const olderFile = join(fixture.dir, 'team-old.yaml');
+    writeFileSync(olderFile, olderTeamYaml(fixture.yaml));
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.launched_file = olderFile;
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+    });
+    noteLaunchedPane(fixture.home, olderFile, 'pane-lead', 'acme');
+    const { sources } = makeHarness(fixture, { initialRunning: false });
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.root, leadCaller);
+
+    const code = await runRestart(['ghost'], io, sources);
+    expect(code).toBe(1);
+    expect(io.err).toBe('team restart: ghost is not a signed declared seat\n');
   });
 
   test('the lead can start a seat the file lists and no pane holds', async () => {
