@@ -108,6 +108,12 @@ export type HostedWatchAuthorityInput = {
    */
   presenceChannelHealthy?: (seat: string) => boolean;
   /**
+   * The owning daemon's measured reason for a seat channel it answered unhealthy, when it hosts
+   * presence. Display detail for the stuck report's notice; absent, the notice names the channel
+   * in the proof's own words.
+   */
+  presenceChannelReason?: (seat: string) => string | null;
+  /**
    * The owning daemon's broker reader, when it hosts the broker. The watch counts a tracker
    * team's takeable work from the snapshot it returns; absent (broker hosting off, the default),
    * the reading stays explicitly unknown and no socket is opened.
@@ -573,6 +579,9 @@ async function runAuthoritativeHost(
       ...(input.presenceChannelHealthy === undefined
         ? {}
         : { presenceChannelHealthy: input.presenceChannelHealthy }),
+      ...(input.presenceChannelReason === undefined
+        ? {}
+        : { presenceChannelReason: input.presenceChannelReason }),
       ...(input.brokerWork === undefined ? {} : { brokerWork: input.brokerWork }),
       // The record carries this runtime's pid; the shared loop must read it as its own.
       pid: process.pid,

@@ -43,8 +43,10 @@ export type ChoresChildRoute = {
 };
 
 /** One declared seat's presence health as the daemon measured it at the beat it carries. The
- *  child answers its watch's dispatcher from the latest snapshot; no proof or badge crosses. */
-export type ChoresWatchSeatHealth = { seat: string; healthy: boolean };
+ *  child answers its watch's dispatcher from the latest snapshot; no proof or badge crosses.
+ *  `reason` is the daemon's measured detail when it answered unhealthy: display only, carried so
+ *  the stuck report can name the channel in the daemon's own words. */
+export type ChoresWatchSeatHealth = { seat: string; healthy: boolean; reason?: string | null };
 
 /** One seat's runtime reading as the daemon measured it, or the reason it could not be taken.
  *  The child reconciles it against the canonical projection; the daemon keeps the source, its
@@ -211,7 +213,11 @@ function readSeatHealth(raw: unknown): ChoresWatchSeatHealth | null {
   const entry = raw as Record<string, unknown>;
   if (typeof entry.seat !== 'string' || entry.seat === '') return null;
   if (typeof entry.healthy !== 'boolean') return null;
-  return { seat: entry.seat, healthy: entry.healthy };
+  return {
+    seat: entry.seat,
+    healthy: entry.healthy,
+    ...(typeof entry.reason === 'string' && entry.reason !== '' ? { reason: entry.reason } : {}),
+  };
 }
 
 /** Reads one marker-cache reading a child reported, or null for one a reader must not trust.

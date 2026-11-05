@@ -41,7 +41,7 @@ import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
-import { reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -1117,6 +1117,57 @@ describe('reportUnreadDrops', () => {
     expect(again).toEqual([]);
   });
 
+  test('inside an open stuck episode the sender is still told, and the lead is not told twice', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 21 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    // The production order: the stuck report speaks first and opens the episode for the seat.
+    reportStuckSeats(sceneOf(made, team, one, said), { unreadAfter: N }, {
+      workingSince: new Map(),
+      stuckAfterSeconds: 900,
+    });
+    expect(said).toHaveLength(1);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const standing = readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name));
+    expect(standing).toHaveLength(1);
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+
+    // The sender's word is not the episode's to withhold: its own mailbox record still lands.
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain('helper: a message from owner is queued, not woken - unread for 21 min');
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    // The lead's queue stands at the stuck notice alone: one episode, one word, no second report.
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toEqual(standing);
+    expect(said.join('\n')).toContain('reported to owner');
+    expect(said.join('\n')).not.toContain('reported to owner and lead');
+  });
+
+  test('a proven working turn younger than the bound tells the sender and leaves the lead out', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 21 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const since = new Date(NOW.getTime() - 5 * MIN).toISOString();
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N }, {
+      workingSince: new Map([['helper', since]]),
+      stuckAfterSeconds: 900,
+    });
+
+    // A live turn may yet read the message: the sender is told at 2N as always, and the lead
+    // hears nothing while the turn is young.
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain('helper: a message from owner is queued, not woken - unread for 21 min');
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const leadNames = existsSync(leadDir) ? readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name)) : [];
+    expect(leadNames).toEqual([]);
+    expect(said).toEqual(['helper: a message from owner was still unread after 21 min; reported to owner']);
+  });
+
   test('a message read after the pass listed the folder is not reported as queued, not woken', () => {
     // The report reads the list the pass took before the seat's lock was ever asked for. A
     // receipt that landed since is the read itself: reporting the message as still unread would
@@ -1843,10 +1894,13 @@ describe('team watch wakes an unread seat', () => {
     expect(code).toBe(0);
     expect(typed).toEqual([]);
     expect(one.enters).toBe(0);
+    // The sender is told at twice the window, whatever the seat's state; the lead's one word for
+    // this seat is the stuck notice the same pass wrote, never a second generic report.
     const owner = mailboxBody(directory, 'owner', `unread-${UNREAD_B}`);
     expect(owner.body).toContain('no wake line was typed');
-    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toContain(owner.body);
-    expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner and claude-coordinator-acme');
+    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toContain('screen idle, no wake reached it');
+    expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner');
+    expect(io.out).not.toContain('reported to owner and claude-coordinator-acme');
   });
 });
 
