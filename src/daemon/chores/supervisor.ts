@@ -14,6 +14,7 @@
 // word is `shared`, so their work is one process's cost instead of one process each; the group's
 // limits are the tightest of its roots', and the child serves the roots round-robin, a slice per
 // turn, so one root's backlog delays another root's chores by a slice.
+import { loadavg } from 'node:os';
 import type { TeamFile } from '../../file/types.ts';
 import type { HostedWatchState } from '../../watch/hosted.ts';
 import {
@@ -76,6 +77,9 @@ export type ChoresFleetInput = {
    *  per-root/shared fleet it always was. */
   machine?: ChoresMachineInput;
   log: (text: string) => void;
+  /** The machine's 1-minute load average, read when a stall is recorded so the log line can
+   *  carry it. The default reads the host's own load; a test injects a fixed reading. */
+  loadAverage?: () => number;
   /** Starts one child. The default writes a one-use token and spawns this program's own hidden
    *  verb; a test injects a fixture child to observe the protocol. */
   factory?: (input: SpawnChoresInput) => ChoresChild;
@@ -363,6 +367,13 @@ function resetWatchMirror(
   }
 }
 
+/** The load clause every recorded stall carries, so a stall the machine caused is told
+ *  apart from one the daemon's own work caused by the log alone. */
+function loadNote(input: ChoresFleetInput): string {
+  const load = (input.loadAverage ?? (() => loadavg()[0] ?? 0))();
+  return `machine load (1 min) ${Number.isFinite(load) ? load.toFixed(1) : 'unknown'}`;
+}
+
 function tickGroup(input: ChoresFleetInput, group: Group, at: Date, stalled: boolean): void {
   if (group.stopping) return;
   const ms = at.getTime();
@@ -565,7 +576,7 @@ function applyJudgement(
   group.killing = true;
   group.why = situation.end;
   if (wasSpared) input.log(`chores ${rootList(group)}: the child's CPU stopped advancing; ending it`);
-  input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement`);
+  input.log(`chores ${rootList(group)}: ${group.why}; ending it and starting a replacement; ${loadNote(input)}`);
   child.kill(group.why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
 }
 
@@ -1013,6 +1024,11 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
     tick(at: Date): void {
       const ms = at.getTime();
       const stalled = lastTickMs !== null && ms - lastTickMs > input.beatMs * 2;
+      if (stalled) {
+        // The beat itself is the stall record for the main loop: it is logged once, with the
+        // load, and no child is judged on the silence this daemon could not hear.
+        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}`);
+      }
       lastTickMs = ms;
       for (const group of groups) tickGroup(input, group, at, stalled);
     },
