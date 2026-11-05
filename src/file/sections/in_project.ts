@@ -4,7 +4,7 @@ import type { Section } from './section.ts';
 // and as an entity name, so the three levels of entity → project → team read alike and a name is
 // never "". 128 characters at most, the same bound as an entity name: the name becomes a
 // `config.changed` record id's target too, and that id is refused past 200 characters.
-const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+export const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /**
  * The project this team sits in, by name, or null when the file names none. `project:` above

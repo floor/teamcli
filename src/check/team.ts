@@ -101,7 +101,7 @@ import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf, recordedSeatContinuity } from '../registry/resume.ts';
-import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
+import { byName, ofTeam, projectIdOf, ProjectsError, readProjects } from '../registry/projects.ts';
 import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
@@ -2300,7 +2300,7 @@ function registryDifferences(team: TeamFile, root: string, home: string | undefi
     // own error and reports no roster, which reads as no gap — so the unreadable registry is
     // named here, once, wherever the check runs.
     readTeams(home);
-    ofTeam(home, teamIdOf(root));
+    readProjects(home);
     if (!team.projectLead || team.inProject === null) return [];
     const project = byName(home, team.inProject);
     if (project === null) return [];

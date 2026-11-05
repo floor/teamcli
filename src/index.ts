@@ -1,6 +1,7 @@
 export { parseYaml, toValue, YamlError } from './yaml.ts';
 export type { YamlEntry, YamlNode, YamlScalar, YamlValue } from './yaml.ts';
 export { validateTeamFile } from './file/validate.ts';
+export { membershipsOfFile } from './file/memberships.ts';
 export { findRoot, loadTeamFile, TEAM_FILE } from './file/load.ts';
 export { DEFAULT_COMMIT_TEMPLATE, DEFAULT_FORBIDDEN, DEFAULT_PR_TEMPLATE, renderSignature } from './file/signature.ts';
 export type { LoadResult, Mode, Position, Problem, Seat, TeamFile, ValidateResult } from './file/types.ts';

@@ -121,6 +121,21 @@ function check(root: string, home: string | undefined): { code: number; out: str
 }
 
 describe('a team and its projects', () => {
+  for (const [extra, message] of [
+    ['also_in: [project-y]\n', 'also_in needs in_project'],
+    ['in_project: project-x\nalso_in: [project-x]\n', 'also_in repeats the home project'],
+    ['also_in: [project-y]\nproject_lead: true\n', 'project_lead needs in_project'],
+  ] as const) {
+    test(`team check refuses ${message}`, () => {
+      const { base, root, home } = place();
+      writeFileSync(join(root, '.agents', 'team.yaml'), TEXT + extra);
+      const { code, out } = check(root, home);
+      expect(code).toBe(2);
+      expect(out).toContain(message);
+      rmSync(base, { recursive: true, force: true });
+    });
+  }
+
   test('a machine with no registry has no projects to answer with', () => {
     const { base, root, home } = place();
     const { code, out } = check(root, home);
@@ -214,6 +229,35 @@ describe('a team and its projects', () => {
 });
 
 describe('a project and its lead teams', () => {
+  test('a home lead may serve another project whose lead is not counted against the home', () => {
+    const { base, root, home } = place(`${LEAD}also_in: [Other]\n`);
+    const other = sibling(base, SIBLING.replace('in_project: TeamCLI', 'in_project: Other'));
+    upsertTeam(home, other.id, {
+      project: 'site',
+      session: 'site',
+      root: other.root,
+      projectId: 'other',
+      projects: ['other', 'teamcli'],
+      at: NOW.toISOString(),
+    });
+    upsertTeam(home, teamIdOf(root), {
+      project: 'teamcli',
+      session: 'teamcli',
+      root,
+      projectId: 'teamcli',
+      projects: ['teamcli', 'other'],
+      roster: [{ agent: 'agt_0123456789ab', seat: 'lead', role: 'coordinator', leads: true }],
+      at: NOW.toISOString(),
+    });
+    upsertProject(home, 'teamcli', { name: 'TeamCLI', at: NOW.toISOString() });
+    upsertProject(home, 'other', { name: 'Other', at: NOW.toISOString() });
+    const { code, out } = check(root, home);
+    expect(out).not.toContain('lead teams');
+    expect(out).not.toContain('is named in 2 projects');
+    expect(code, out).toBe(0);
+    rmSync(base, { recursive: true, force: true });
+  });
+
   test('a lead team whose project is not registered has nothing to compare', () => {
     const { base, root, home } = place(LEAD);
     const { code, out } = check(root, home);
