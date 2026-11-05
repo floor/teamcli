@@ -622,7 +622,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
     // idle prompt at both reads lets it type. A box that already holds exactly this wake's line
     // is submitted below; any other draft is left, so a draft is still never typed over.
-    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done') continue;
+    //
+    // A scrolled-back pane is the same trust one step narrower: herdr does not read the CLI's
+    // scroll-back footer as an idle prompt, so its word can be `unknown` for a pane sitting at
+    // its own prompt behind the scroll. Only the typed retry may act on that reading (it sends
+    // the return key and reads the box again); a word of working or blocked still refuses it,
+    // and every other screen keeps the plain status rule.
+    const scrolledWake = retry !== null && kind === 'scroll back' && status !== 'working' && status !== 'blocked';
+    if ((retry === null || !herdrUnreliable(seat.cli)) && status !== 'idle' && status !== 'done' && !scrolledWake) continue;
     // A pane scrolled back over its transcript is at its prompt behind the scroll, but only the
     // typed retry may act on it: that wake sends the profile's return key and reads the box
     // again. The drop-file leg types into no screen but the visible composer.

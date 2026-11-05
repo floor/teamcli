@@ -384,6 +384,35 @@ describe('an unrecognised screen for a due message tells the lead', () => {
     expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
   });
 
+  test('a scrolled-back seat whose host word is unknown is woken, not dropped', async () => {
+    // herdr does not read the scroll-back footer as an idle prompt, so a pane sitting at its own
+    // prompt behind the scroll can carry `unknown`. The screen reading decides for the typed
+    // retry: the wake sends the return key itself and reads the box again before typing.
+    const { made, team } = world();
+    const dropDir = seed(made, 11);
+    const one = pane(SCROLL_BACK, 'unknown');
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'unknown'), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('typed wake');
+    expect(leadDrops(made.dir)).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD))).toBe(true);
+  });
+
+  test('a scrolled-back screen under a working host word is not woken', async () => {
+    // A word of working keeps its veto: the typing waits rather than pressing into a turn.
+    const { made, team } = world();
+    seed(made, 11);
+    const one = pane(SCROLL_BACK, 'working');
+    const calls: { pane: string; line: string }[] = [];
+    const said: string[] = [];
+    await wakeUnreadDrops(scene(made, team, said, typedSources(one, calls), NOW, 'working'), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(said).toEqual([]);
+  });
+
   test('with the typed retry off, a scrolled-back pane types nothing and reports no dialog', async () => {
     const { made, team } = world('    watch_wake: off\n');
     seed(made, 11);
