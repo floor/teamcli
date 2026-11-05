@@ -35,6 +35,11 @@ function withEntity(text: string, project: string, entity: string): string {
   return text.replace(`project: ${project}\n`, `project: ${project}\nentity: ${entity}\n`);
 }
 
+/** The file with an `in_project` line beside the entity, for the project-level default. */
+function withInProject(text: string, project: string, entity: string, inProject: string): string {
+  return text.replace(`project: ${project}\n`, `project: ${project}\nentity: ${entity}\nin_project: ${inProject}\n`);
+}
+
 function writeTeam(dir: string, text: string): void {
   mkdirSync(join(dir, '.agents'), { recursive: true });
   writeFileSync(join(dir, '.agents', 'team.yaml'), text);
@@ -117,6 +122,22 @@ test('a renamed project moves the default session with it: the new name claims t
     const after = sessionAt(base, 'after', [{ identity_cwd: proj }]);
     expect(findTeam('floor-renamed', after, base)).toEqual(found('renamed', proj));
     expect(findTeam('floor-acme', after, base)).toBeNull();
+  });
+});
+
+test('a team in a project derives <entity>-<project>-<team>, collapsed for the namesake, and the old default steps past', () => {
+  withFixture((base) => {
+    const web = join(base, 'web');
+    writeTeam(web, withInProject(teamYaml('web', null), 'web', 'floor', 'TeamCLI'));
+    const reg = sessionAt(base, 'reg', [{ identity_cwd: web }]);
+    expect(findTeam('floor-teamcli-web', reg, base)).toEqual(found('web', web));
+    expect(findTeam('floor-web', reg, base)).toBeNull();
+
+    const cli = join(base, 'cli');
+    writeTeam(cli, withInProject(teamYaml('teamcli', null), 'teamcli', 'floor', 'TeamCLI'));
+    const reg2 = sessionAt(base, 'reg2', [{ identity_cwd: cli }]);
+    expect(findTeam('floor-teamcli', reg2, base)).toEqual(found('teamcli', cli));
+    expect(findTeam('floor-teamcli-teamcli', reg2, base)).toBeNull();
   });
 });
 

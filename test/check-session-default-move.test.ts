@@ -39,7 +39,7 @@ seats:
 const MOVED = team('entity: lab\n');
 
 const NOTE =
-  'note: `session` changed: "acme" -> "lab-acme", the new default session (<entity>-<project>); set `session: acme` to keep the old one';
+  'note: `session` changed: "acme" -> "lab-acme", the new default session (<entity>-<project>[-<team>]); set `session: acme` to keep the old one';
 
 const made: string[] = [];
 afterEach(() => {
@@ -141,5 +141,32 @@ describe('team check names the default-session move', () => {
   test('any other session change is not the move, and draws no note', () => {
     const root = place(MOVED);
     expect(check(root, approvedUnder(team('entity: lab\nsession: other\n'), root)).out).not.toContain('new default session');
+  });
+});
+
+describe('team check names the move into a project', () => {
+  // The team joins project `platform`: the default session gains the project, and a team
+  // approved under the pre-project default reads old -> new and how to keep the old one.
+  const JOINED = team('entity: floor\nin_project: platform\n');
+  const JOINED_NOTE =
+    'note: `session` changed: "floor-acme" -> "floor-platform-acme", the new default session (<entity>-<project>[-<team>]); set `session: floor-acme` to keep the old one';
+
+  test('a team approved under <entity>-<team> reads old -> new and how to keep the old one', () => {
+    const root = place(JOINED);
+    const { code, out } = check(root, approvedUnder(team('entity: floor\nsession: floor-acme\n'), root));
+    expect(out).toContain(JOINED_NOTE);
+    expect(out).not.toContain('difference:');
+    expect(code).toBe(0);
+  });
+
+  test('a team approved under the new default, or never approved, draws no note', () => {
+    const root = place(JOINED);
+    expect(check(root, approvedUnder(JOINED, root)).out).not.toContain('new default session');
+    expect(check(root, { kind: 'none' }).out).not.toContain('new default session');
+  });
+
+  test('a namesake team whose default does not move draws no note', () => {
+    const root = place(team('entity: floor\nin_project: acme\n'));
+    expect(check(root, approvedUnder(team('entity: floor\nsession: floor-acme\n'), root)).out).not.toContain('new default session');
   });
 });
