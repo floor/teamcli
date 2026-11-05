@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller, SeatStanding } from '../src/caller.ts';
@@ -73,12 +74,24 @@ test('the send command admits a project lead reaching a team lead using team-rec
 
 test('project membership never bypasses the existing sender session and pane proof', () => {
   const fx = fixture();
-  for (const from of [
-    { kind: 'seat', name: 'seat-a', pane: 'pane-lead' },
-    { ...fx.caller, pane: 'pane-impostor' },
-    { ...fx.caller, session: 'session-c' },
-  ] as Caller[]) expect(fx.judge(from).ok).toBe(false);
-  expect(fx.judge(fx.caller, { ...fx.standing, recordedPane: 'pane-other' }).ok).toBe(false);
+  const read = fs.readFileSync;
+  const paths: string[] = [];
+  const reads = spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+    paths.push(String(args[0]));
+    return Reflect.apply(read, fs, args);
+  });
+  try {
+    for (const from of [
+      { kind: 'seat', name: 'seat-a', pane: 'pane-lead' },
+      { ...fx.caller, pane: 'pane-impostor' },
+      { ...fx.caller, session: 'session-c' },
+    ] as Caller[]) expect(fx.judge(from).ok).toBe(false);
+    expect(fx.judge(fx.caller, { ...fx.standing, recordedPane: 'pane-other' }).ok).toBe(false);
+  } finally {
+    reads.mockRestore();
+  }
+  expect(paths.length).toBeGreaterThan(0);
+  expect(paths.some(path => path.includes('/.agents/') || path.endsWith('/.agents'))).toBe(false);
 });
 
 test('stale project-side lists cannot admit a team that left the project', () => {
