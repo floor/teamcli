@@ -34,6 +34,7 @@ const APP_URL = 'unix:///tmp/fixture-app.sock';
 const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
   .replace('gpt-5.6-terra', 'gpt-6.1-sol')
   .replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
+const UNSENT = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt', import.meta.url), 'utf8');
 
 let base: string;
 let root: string;
@@ -155,6 +156,7 @@ type Scene = {
   session?: string | null;
   status?: string;
   process?: PaneProcesses;
+  screen?: string;
   socket?: boolean;
   alive?: boolean;
   startOf?: number | null;
@@ -204,7 +206,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     agentPanes: () => [PANE],
     agents,
     workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
-    paneText: () => IDLE,
+    paneText: () => scene.screen ?? IDLE,
     foreground: () => (exited ? ['zsh'] : ['codex']),
     processInfo: (_session, pane) => {
       if (pane === PANE && scene.process !== undefined) return scene.process;
@@ -293,6 +295,24 @@ test('a dead endpoint relaunches the seat in place on a freshly ensured endpoint
   expect(seatState()?.workspace).toBe(SPACE);
 });
 
+test('a name-cleared seat whose endpoint died is relaunched in place without a resume', async () => {
+  setup();
+  record({ session: null });
+  const made = sources({ name: null, session: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+  expect(firstWord(seatRuns(made.trace)[0]?.command ?? '')).toBe('codex');
+  expect(seatRuns(made.trace)[0]?.command).not.toContain('resume');
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+});
+
 test('an endpoint that will not start launches the seat with --no-daemon', async () => {
   setup();
   record();
@@ -364,6 +384,21 @@ test('a working pane with a dead endpoint is left untouched', async () => {
   expect(made.trace.closed).toEqual([]);
   expect(made.trace.managed).toEqual([]);
   expect(said(io)).toContain('the process in its pane is working; nothing closed');
+  expect(seatState()?.pane).toBe(PANE);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('unsent text with a dead endpoint is left untouched', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, screen: UNSENT });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(1);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(said(io)).toContain(`the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${SEAT})`);
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.launched).toEqual(RECORDED);
 });
