@@ -13,6 +13,7 @@ import { approvalOf } from '../src/approve/approval.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import type { HerdrAgent } from '../src/herdr.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -136,7 +137,7 @@ type Scene = {
   session?: string | null;
   foreground?: string[] | null;
   workspace?: string;
-  agents?: readonly unknown[] | null;
+  agents?: HerdrAgent[] | null;
 };
 
 /** The readings one run takes: the host's list with the seat's pane unnamed, and a pane whose
@@ -144,7 +145,7 @@ type Scene = {
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
   const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], reported: [] };
   const madePanes = new Map<string, string>();
-  const agents = () => scene.agents === null
+  const agents = (): HerdrAgent[] | null => scene.agents === null
     ? null
     : (scene.agents ?? [{
         name: scene.name === undefined ? null : scene.name,
@@ -208,7 +209,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sources: {
       sessionRunning: () => true,
       sessionState: () => 'running',
-      agents: agents as UpSources['agents'],
+      agents,
       workspaces: () => [{ id: WORKSPACE, label: SEAT }],
       home,
       doctor,
@@ -369,14 +370,18 @@ test('the weak proof refuses a workspace holding another pane', async () => {
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [], renamed: [] });
 });
 
-test('a seat still at named is not a launch record and is never adopted', async () => {
-  record({ ...RECORD, stage: 'named' });
+test('a seat whose record never reached ready is not a launch record and is never adopted', async () => {
+  // Rules were never delivered to this seat: the record it left is not the launch record the
+  // proof re-ties, and a pane the host cleared the name on proves nothing before ready. The run
+  // refuses the session rather than guess.
+  const incomplete = { stage: 'named' as const, pane: PANE, workspace: WORKSPACE };
+  record(incomplete);
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(1);
-  const why = 'its launch record never reached ready; team never adopts it';
-  expect(io.out).toContain(`${SEAT}: left out: ${why}\n`);
+  expect(io.err).toContain("this file's state doesn't record");
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [], renamed: [] });
+  expect(seatState()).toEqual(incomplete);
 });
 
 test('an unreadable agent list refuses the run and adopts nothing', async () => {

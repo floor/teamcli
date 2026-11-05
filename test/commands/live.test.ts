@@ -2328,6 +2328,7 @@ describe('team up, a session that was restored', () => {
         },
       }),
     );
+    const recorded = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     const made = world();
     made.session = 'running';
     // The readings as herdr gives them: pids only. w92 is the recorded process; w91's shell is in
@@ -2391,10 +2392,11 @@ describe('team up, a session that was restored', () => {
       ),
     );
 
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     // The shell is closed before its fresh launch. The pane that holds another program, with no
-    // stored session, is not closed and is never typed or run into. The coordinator's name is
-    // still in the agent list; that does not keep a shell.
+    // stored session, is not closed and is never typed or run into: its declared CLI is in the
+    // pane, alone in its workspace and idle, so the seat is re-tied to it. The coordinator's
+    // name is still in the agent list; that does not keep a shell.
     expect(made.closes).toEqual(['w91']);
     const before = (at: string, n: number) => calls.slice(0, calls.indexOf(at)).slice(-n);
     expect(before('close w91', 2)).toEqual(['agents', 'process w91:p1']);
@@ -2408,15 +2410,20 @@ describe('team up, a session that was restored', () => {
     expect(io.err).toContain('  already ready; left as it is\n');
     expect(io.out).toContain('claude-coordinator-acme: ready\n');
     expect(io.err).toContain('  its pane held no CLI; closed without input and launched again\n');
-    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
-    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
-    expect(io.err).toContain('1 seat repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
+    expect(io.out).toContain('deepseek-acme: ready\n');
+    expect(io.err).toContain('restored and re-tied: its pane runs claude-code alone in its workspace, at an idle prompt');
+    expect(io.err).toContain('1 seat repaired, 0 skipped (working), 0 refused\n');
     expect(io.err).not.toContain('its pane held a process team did not launch');
     expect(io.out).toContain('deepseek-acme-2: ready\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 410, cli: [411] } });
     expect(seats['claude-coordinator-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1', launched: { shell: 700, cli: [701] } });
-    expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    // The re-tie keeps the record's own pane, takes the pids the pane holds now, and writes no
+    // conversation it did not see.
+    const tied = seats['deepseek-acme'];
+    expect(tied).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [500] } });
+    expect(tied?.pane).toBe(recorded['deepseek-acme']?.pane);
+    expect(tied?.agent_session).toBeUndefined();
     expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
   });
 
@@ -2572,9 +2579,9 @@ describe('team up, a session that was restored', () => {
     );
     expect(code).toBe(1);
     expect(made.closes).toEqual([]);
-    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
-    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
-    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds another conversation (other; the record\'s launch ran kept)\n');
+    expect(io.err).toContain('  its pane holds another conversation (other; the record\'s launch ran kept)\n');
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds another conversation (other; the record\'s launch ran kept))\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
     expect(seats['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
