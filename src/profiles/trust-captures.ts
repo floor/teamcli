@@ -41,6 +41,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "antigravity antigravity/1.4.1/unsent.txt",
   "antigravity antigravity/1.4.1/working.txt",
   "antigravity antigravity/1.4.12/exit-completion-unsent.txt",
+  "antigravity antigravity/1.4.12/feedback-survey.txt",
   "antigravity antigravity/1.4.12/idle-compacted.txt",
   "antigravity antigravity/1.4.12/idle.txt",
   "antigravity antigravity/1.4.2/exit.txt",

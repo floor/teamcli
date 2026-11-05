@@ -1730,6 +1730,13 @@
       "provenance": "constructed"
     },
     {
+      "file": "antigravity/1.4.12/feedback-survey.txt",
+      "cli": "antigravity",
+      "classify": "feedback survey",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.14/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
