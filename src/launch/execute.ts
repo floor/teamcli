@@ -31,7 +31,7 @@ import {
   type WaitingProblem,
   type WaitingReads,
 } from './pause.ts';
-import { plainPaneText } from './plain.ts';
+import { plainPaneText, plainText } from './plain.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
@@ -436,16 +436,22 @@ function lastDrawnRow(lines: readonly string[]): number {
 
 /** Whether the launch line still sits at its shell's prompt, typed and not executed: its echo
  *  is on the screen and nothing was drawn below it. A line that wraps fills row after row with
- *  its own text, so a last drawn row still holding the line's tail is the line itself; a prompt
- *  or output row below the echo is what the shell wrote after reading it. A screen with no echo
- *  of the line is not a box this can be said of, and is never treated as one. */
+ *  its own text, so the rows from the echo down are joined and the line's tail is looked for at
+ *  their end — a wrap can split the tail across two rows, or fall where the command holds a
+ *  space the tty did not draw. A prompt or output row below the echo is what the shell wrote
+ *  after reading it, and a screen with no echo of the line is not a box this can be said of:
+ *  neither is ever treated as the line sitting. The rows are the pane's own text, uncut: the
+ *  excerpt `plainPaneText` makes is for the report, and its cut would lose a long line's tail. */
 function lineAtPrompt(lines: readonly string[], command: string): boolean {
   const echo = echoIndex(lines, command);
   if (echo < 0) return false;
   const last = lastDrawnRow(lines);
+  if (last < echo) return false;
   if (last === echo) return true;
   const tail = command.trimEnd().slice(-24);
-  return tail.length >= 8 && (lines[last] ?? '').includes(tail);
+  if (tail.length < 8) return false;
+  if ((lines[last] ?? '').includes(tail)) return true;
+  return lines.slice(echo, last + 1).join('').replace(/\s+/g, '').endsWith(tail.replace(/\s+/g, ''));
 }
 
 /** How long a relaunch's line may sit at its shell's prompt before the Enter the host sent is
@@ -456,6 +462,17 @@ function lineAtPrompt(lines: readonly string[], command: string): boolean {
  *  an empty command after the line the shell finally reads) and is what submits a line whose
  *  first Enter was dropped. */
 const UNREAD_LAUNCH_MS = 12_000;
+
+/** Whether a relaunch's pane is still one to press Enter in: no other seat is named on it, the
+ *  agent list can be read (one that cannot be read cannot show the pane is free), and — when the
+ *  host reads processes — nothing but the pane's own shell is in front. The launch step's own
+ *  guard, read fresh for the one key the wait may press. */
+function launchPaneFree(host: Host, session: string, pane: string, seat: string): boolean {
+  const agents = host.agentList?.(session) ?? null;
+  if (agents === null) return false;
+  if (agents.some((agent) => agent.pane === pane && agent.name !== null && agent.name !== seat)) return false;
+  return host.processInfo === undefined || paneHoldsOnlyShell(host.processInfo(session, pane));
+}
 
 /** The pane's last lines for a report: at most six, the newest kept, empty lines dropped,
  *  control characters and styling gone (`plainPaneText`). The launch line's own echo comes
@@ -1705,14 +1722,15 @@ export async function executePlan(
           // The relaunch's line is confirmed submitted before its pane may say anything about
           // the launch: the echo left the prompt row (something was drawn below it, or the echo
           // itself moved off the screen), or the foreground left the shell. A line still sitting
-          // at the prompt past every captured unread echo is given one more Enter — the same
-          // guard the typed wake uses, read fresh this poll: the key goes only while the pane's
-          // own shell is in front and the line is exactly where it was. A screen with no echo of
-          // the line, an unreadable pane, and a herdr that cannot read the shell get no key.
+          // at the prompt past every captured unread echo is given one more Enter — under the
+          // launch step's own guard, read fresh this poll: the key goes only while the agent list
+          // can be read, no other seat is named on the pane, the pane's own shell alone is in
+          // front, and the line is exactly where it was. A screen with no echo of the line, an
+          // unreadable pane, and a herdr that cannot read the shell get no key.
           if (reusedPane) {
             const typedLine = launchedCommands.get(op.seat) ?? op.command;
             const read = host.paneText?.(session, here.pane) ?? null;
-            const lines = read === null ? null : plainPaneText(read).split('\n').map((line) => line.trimEnd());
+            const lines = read === null ? null : plainText(read).split('\n').map((line) => line.trimEnd());
             const echo = lines === null ? -1 : echoIndex(lines, typedLine);
             if (echo >= 0) launchEchoSeen = true;
             const atPrompt = lines !== null && lineAtPrompt(lines, typedLine);
@@ -1723,7 +1741,12 @@ export async function executePlan(
             }
             if (!launchSubmitted && back === true && atPrompt) {
               launchSittingSince ??= at;
-              if (!launchEnterAgain && host.pressEnter !== undefined && at - launchSittingSince >= UNREAD_LAUNCH_MS) {
+              if (
+                !launchEnterAgain &&
+                host.pressEnter !== undefined &&
+                at - launchSittingSince >= UNREAD_LAUNCH_MS &&
+                launchPaneFree(host, session, here.pane, op.seat)
+              ) {
                 launchEnterAgain = true;
                 if (await host.pressEnter(session, here.pane)) {
                   host.log(op.seat, 'its launch line had not been submitted; pressed Enter again');
@@ -1743,7 +1766,7 @@ export async function executePlan(
               shellBackAfterSubmit = launchSubmitted ? shellBackAfterSubmit + 1 : 0;
               if (shellBackAfterSubmit >= 3) {
                 const read = host.paneText?.(session, here.pane) ?? null;
-                if (read !== null && echoIndex(plainPaneText(read).split('\n'), launchedCommands.get(op.seat) ?? op.command) >= 0) {
+                if (read !== null && echoIndex(plainText(read).split('\n'), launchedCommands.get(op.seat) ?? op.command) >= 0) {
                   endedRead = read;
                   endedFor = Math.round((at - shellBackFirst) / 1000);
                   outcome = 'ended';
@@ -2397,6 +2420,11 @@ export async function executePlan(
         // there, never as one that ended with its pane still open. The identity the record holds
         // stays: a pane back at its shell alone gives no new process reading to record.
         recordSeat(op.seat, { stage: 'launched', pane: op.pane, workspace: op.workspace });
+        // The launch steps after this one run the seat's line in that same pane, with no
+        // `reuse` flag on the launch op: the shell is already at its prompt, so the idle wait
+        // that follows reads the line it typed for submission and takes its end from the
+        // foreground, exactly as for a launch that reuses a recorded pane.
+        reusedPanes.add(op.seat);
         relaunched.set(op.seat, op.endpoint === true ? 'endpoint' : 'own-line');
         break;
       }
