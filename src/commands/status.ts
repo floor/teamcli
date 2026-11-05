@@ -65,10 +65,11 @@ import {
 } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { findAgent } from '../registry/agents.ts';
 import { continuityIdsOf } from '../registry/resume.ts';
-import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
+import { activeSeatsOf, realListSources, type ActiveSeatsSummary, type ListSources, type RosterSeat } from './list.ts';
+import { realSources as realProjectSources, type ProjectSources, type ProjectView } from './projects.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
 import type { Comparison, Difference, Live, WatchDaemonReading } from '../status/compare.ts';
@@ -77,6 +78,12 @@ import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
 import { readBacklogDepth, readQueueDepths, type QueueDepths } from '../queues.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
+import { waitOrStop } from '../wait.ts';
+
+/** The machine-wide live reading `--project` takes: the sessions `team list --seats` lists, and
+ *  the roster it reads for a running one. It is a slice of that command's own `ListSources`, so
+ *  the project view reads live seats with the one reader and never a second one. */
+export type ProjectLiveSources = Pick<ListSources, 'sessions' | 'roster'>;
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -91,6 +98,12 @@ export type StatusSources = {
   home?: string;
   /** The project registry, for `--project`. The real one when absent; a test stands in for it. */
   projects?: ProjectSources;
+  /** The machine-wide live seat reading, for `--project`: the sessions `team list --seats` reads
+   *  and each running session's roster, the same reader `team list --seats` uses. Absent, no
+   *  session is read live and every one of them reads stopped. */
+  list?: ProjectLiveSources;
+  /** Waits between `--project --watch` passes; false ends the loop. Absent, the real wait. */
+  wait?(seconds: number): Promise<boolean>;
   /** Whether a recorded process id names something still running, for the `team proc` note.
    *  The real reading when absent; a test stands in for it so no fixture depends on a pid. */
   alive?(pid: number): boolean;
@@ -178,6 +191,8 @@ export const realSources: StatusSources = {
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
+  list: realListSources(homedir()),
+  wait: waitOrStop,
 };
 
 /** What one awaited whole-session read takes: the per-call kill, the loop's stop, the agent
@@ -368,6 +383,7 @@ export interface StatusJson {
 }
 
 export const USAGE = `Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+       team status --project <name> --watch
        team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 The --client form is for a client with no terminal that the owner signed a bundle grant carrying status for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle observer --request): it reads that one team, as signed, and nothing else. It changes nothing and never prompts.
@@ -382,8 +398,8 @@ function clientInvocationProblem(args: ReturnType<typeof readArgs>): string | nu
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
   if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team status --client <grant-file> --key <client-key-file>';
   if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team status --client <grant-file> --key <client-key-file> --team <team>';
-  if (client && (args.values.file !== undefined || args.values.session !== undefined || args.values.project !== undefined || args.flags.has('all'))) {
-    return '--client reads the one team its grant names: --file, --session, --project and --all are the owner\'s and take no --client';
+  if (client && (args.values.file !== undefined || args.values.session !== undefined || args.values.project !== undefined || args.flags.has('all') || args.flags.has('watch'))) {
+    return '--client reads the one team its grant names: --file, --session, --project, --all and --watch are the owner\'s and take no --client';
   }
   return null;
 }
@@ -394,17 +410,25 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // name one, else the caller's home. Resolved once, so the reach column and the other readings
   // cannot read different stores — an omitted home is the default store, never an empty one.
   const home = sources.home ?? homedir();
-  const args = readArgs(argv, ['session', 'file', 'project', 'client', 'key', 'team'], ['all', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'project', 'client', 'key', 'team'], ['all', 'json', 'watch']);
   const json = hasJsonFlag(argv);
+  const watching = args.flags.has('watch');
   // `--project` reads the project level instead of one team: the project's teams, from the
   // registry, wherever the run stands — no team file and no caller gate, the way `team projects`
   // reads. `--session` and `--file` name one team's readings and do not apply beside it.
   const beside = args.values.project !== undefined && (args.values.session !== undefined || args.values.file !== undefined);
   const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
-  if (args.error || args.rest.length || beside || clientProblem !== null) {
+  // `--watch` refreshes the project reading alone: it has no single team to redraw and no
+  // document to keep stable, so those two shapes are refused before anything outside is read.
+  const watchProblem = watching
+    ? args.values.project === undefined
+      ? '--watch needs --project <name>'
+      : json ? "--watch and --json can't be used together" : null
+    : null;
+  if (args.error || args.rest.length || beside || clientProblem !== null || watchProblem !== null) {
     const why = args.error ?? (args.rest.length
       ? `unexpected "${args.rest[0]}"`
-      : clientProblem ?? '--project reads the project; --session and --file name one team');
+      : clientProblem ?? watchProblem ?? '--project reads the project; --session and --file name one team');
     if (json) {
       writeJsonError(io, 'status.invocation', plainText(why), null);
     } else {
@@ -446,7 +470,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (!json) out.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   if (args.values.project !== undefined) {
-    return projectReport(args.values.project, out, io, sources, json);
+    return projectReport(args.values.project, out, io, sources, json, watching);
   }
   // `--file` and `--session` are the owner's. The walk decides that before any file or session
   // is read, the same gate `worktree` and `watch` use. A plain folder's own seats need no flag:
@@ -961,13 +985,145 @@ export function protectedCheckouts(team: TeamFile, root: string, sources: { bran
   return out;
 }
 
+/** One seat of a project's live reading: the team it belongs to, its seat name, the state the
+ *  live reader gives it and the model it runs. `state` is that reader's word — `working`,
+ *  `ready`, `idle`, `done`, `waiting`, `stopped` — or null when the seat could not be read;
+ *  `model` is null when no source names one. */
+export type ProjectSeatReading = {
+  team: string;
+  name: string | null;
+  state: string | null;
+  model: string | null;
+};
+
+/** One team's row in the project view: where it stands in the project (`home` or `serves`), its
+ *  recorded session and lifecycle, whether that session runs now, the count of its seats on
+ *  record, its seats as the live reader gives them, and their count by the four words the live
+ *  reader and `team list --seats` share (`active` is null when a running session's roster could
+ *  not be read, and for a team no record holds). */
+export type ProjectTeamReading = {
+  name: string;
+  membership: 'home' | 'serves';
+  session: string | null;
+  lifecycle: string | null;
+  seats: number | null;
+  running: boolean;
+  active: ActiveSeatsSummary | null;
+  roster: ProjectSeatReading[];
+};
+
+/**
+ * How each team the project lists stands in it: `home` when the team record's `project_id` names
+ * this project (or the record names none, which is what `projects.<id>.teams[]` means today), and
+ * `serves` when the record's home is another project. Item 0's many-to-many membership is what
+ * puts served teams in the project's list; this function is the one place the split is read, so
+ * the rest of the view changes with the model and nowhere else.
+ */
+function membershipsOf(project: ProjectView, records: Record<string, TeamRecord>): { home: string[]; serves: string[] } {
+  const home: string[] = [];
+  const serves: string[] = [];
+  for (const id of project.teams) {
+    const record = records[id];
+    const named = record !== undefined && typeof record.projectId === 'string' ? record.projectId : null;
+    if (project.id !== undefined && named !== null && named !== project.id) serves.push(id);
+    else home.push(id);
+  }
+  return { home, serves };
+}
+
+/** A stand-in read: a live source that throws reads as no reading, never as a failed command. */
+function liveRead<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+/** The project's teams as they stand now: the registry records for the team rows, and the live
+ *  reader `team list --seats` uses for a running session's seats. A session herdr does not list
+ *  as running — or does not list at all, because herdr is down — reads stopped, never an error. */
+function projectTeams(project: ProjectView, records: Record<string, TeamRecord>, sources: StatusSources): ProjectTeamReading[] {
+  const list = sources.list;
+  const sessions = list === undefined ? null : liveRead(() => list.sessions(), null);
+  const runningByName = new Map((sessions ?? []).map((session) => [session.name, session.running]));
+  const membership = membershipsOf(project, records);
+  const standing: Array<{ id: string; membership: 'home' | 'serves' }> = [
+    ...membership.home.map((id) => ({ id, membership: 'home' as const })),
+    ...membership.serves.map((id) => ({ id, membership: 'serves' as const })),
+  ];
+  const teams: ProjectTeamReading[] = [];
+  for (const { id, membership: place } of standing) {
+    const record = records[id];
+    const session = record?.session ?? null;
+    const running = session !== null && runningByName.get(session) === true;
+    const seats = record ? record.roster.length : null;
+    const live = running && list !== undefined && session !== null ? liveRead(() => list.roster(session), null) : null;
+    let active: ActiveSeatsSummary | null;
+    if (record === undefined) active = null;
+    else if (!running) active = { ready: 0, working: 0, waiting: 0, stopped: seats ?? 0 };
+    else active = activeSeatsOf(live, seats, true);
+    const roster: ProjectSeatReading[] = [];
+    if (running && live !== null) {
+      for (const seat of live) roster.push({ team: id, name: seat.name, state: seat.status, model: seat.model ?? null });
+    } else if (!running && record !== undefined) {
+      // A down session's seats are all stopped. The registry names them; it records no model.
+      for (const entry of record.roster) roster.push({ team: id, name: entry.seat, state: 'stopped', model: null });
+    }
+    teams.push({ name: id, membership: place, session, lifecycle: record?.lifecycle ?? null, seats, running, active, roster });
+  }
+  return teams;
+}
+
+/** The project's active agents: every seat the live reading says is ready, working or waiting.
+ *  Null when a registered team's live roster could not be read, so the total never claims a
+ *  complete count it does not have; a team no record holds adds nothing and keeps it a number. */
+function activeTotal(teams: ProjectTeamReading[]): number | null {
+  let total = 0;
+  for (const team of teams) {
+    if (team.active === null) {
+      if (team.lifecycle !== null) return null;
+      continue;
+    }
+    total += team.active.ready + team.active.working + team.active.waiting;
+  }
+  return total;
+}
+
+/** The project reading as the plain table: a line per team (its record, where it stands and
+ *  whether its session runs), then one row per seat with the team it belongs to, its state and
+ *  its model, then the project's count of active agents. */
+function renderProject(project: ProjectView, teams: ProjectTeamReading[], total: number | null): string {
+  const lines = [projectContextLine(project)];
+  for (const team of teams) {
+    if (team.session === null) {
+      lines.push(`  ${plainLine(team.name)}  not registered  ${team.membership}`);
+      continue;
+    }
+    lines.push(
+      `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  `
+      + `${team.seats === null ? '? seats' : pluralCount(team.seats, 'seat')}  ${team.membership}  ${team.running ? 'running' : 'stopped'}`,
+    );
+  }
+  if (teams.some((team) => team.roster.length > 0)) {
+    lines.push(...renderTable({
+      headers: ['TEAM', 'SEAT', 'STATE', 'MODEL'],
+      rows: teams.flatMap((team) => team.roster.map((seat) => [seat.team, seat.name, seat.state, seat.model])),
+    }));
+  }
+  lines.push(total === null ? '? active agents' : pluralCount(total, 'active agent'));
+  return `${lines.join('\n')}\n`;
+}
+
 /**
  * `team status --project <name>`: the project's teams, from the registry — the project itself
- * through the projects source, each team's record through the team registry. The reading covers
- * every team of the project the way the plain reading covers every seat of a team: a team the
- * registry does not know is said as such, never left out.
+ * through the projects source, each team's record through the team registry — and each team's
+ * seats through the live reading `team list --seats` uses, so the project view never writes a
+ * second reader. The reading covers every team the project lists, the way the plain reading
+ * covers every seat of a team: a team the registry does not know is said as such, never left out.
+ * `--watch` redraws it every two seconds until the wait is stopped.
  */
-function projectReport(name: string, out: Io, io: Io, sources: StatusSources, json: boolean): number {
+async function projectReport(name: string, out: Io, io: Io, sources: StatusSources, json: boolean, watching: boolean): Promise<number> {
   // An injected projects source answers for itself; with none, the registry the home holds is the
   // reading — the same file `team projects` reads, bound to the injected home, never another's.
   const project = sources.projects ? sources.projects.byName(name) : projectRegistry.byName(sources.home ?? homedir(), name);
@@ -980,26 +1136,27 @@ function projectReport(name: string, out: Io, io: Io, sources: StatusSources, js
     // exit: status.project-unknown
     return 1;
   }
-  const records = readTeams(sources.home ?? homedir());
-  const teams = project.teams.map((teamId) => {
-    const record = records[teamId] ?? null;
-    return {
-      name: teamId,
-      session: record?.session ?? null,
-      lifecycle: record?.lifecycle ?? null,
-      seats: record ? record.roster.length : null,
-    };
-  });
-  if (json) {
-    writeJson(io, 'team.status.project', { format: 1 as const, project, teams });
-  } else {
-    const lines = [projectContextLine(project)];
-    for (const team of teams) {
-      lines.push(team.session === null
-        ? `  ${plainLine(team.name)}  not registered`
-        : `  ${plainLine(team.name)}  session "${plainLine(team.session)}"  ${plainLine(team.lifecycle ?? '?')}  ${team.seats === null ? '? seats' : pluralCount(team.seats, 'seat')}`);
+  const wait = sources.wait ?? waitOrStop;
+  for (;;) {
+    const records = readTeams(sources.home ?? homedir());
+    const teams = projectTeams(project, records, sources);
+    const total = activeTotal(teams);
+    if (json) {
+      writeJson(io, 'team.status.project', { format: 1 as const, project, teams, active_agents: total });
+      break;
     }
-    out.stdout(`${lines.join('\n')}\n`);
+    const text = renderProject(project, teams, total);
+    if (!watching) {
+      out.stdout(text);
+      break;
+    }
+    if (io.stdoutIsTTY) {
+      io.stdout('\x1b[2J\x1b[H');
+      io.stdout(`Every 2s: team status --project ${plainLine(name)}  ${sources.now().toISOString()}\n\n${text}`);
+    } else {
+      io.stdout(text);
+    }
+    if (!(await wait(2))) break;
   }
   // exit: status.project-listed
   return 0;
