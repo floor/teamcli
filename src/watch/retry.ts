@@ -57,6 +57,7 @@ import { readScreen } from './screen.ts';
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
   screen(pane: string, session: string): string | null;
+  screenAsync?(pane: string, session: string): Promise<string | null>;
   status(pane: string, session: string): string | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
@@ -111,12 +112,35 @@ export function passPaneStatus(scene: RetryScene, pane: string, agentStatus?: st
   return scene.sources.status(pane, scene.session);
 }
 
+const fallbackScreens = new WeakMap<Live, Map<string, string | null>>();
+
 /** The pane's visible screen from the pass's live snapshot when present, falling back to
  *  `sources.screen` only for minimal test scenes whose `live` snapshot omits pane readings. */
 export function passPaneScreen(scene: RetryScene, pane: string): string | null {
   if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
-  if (scene.live.processes !== undefined) return null;
+  const cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.live.processes !== undefined || scene.sources.screenAsync !== undefined) return null;
   return scene.sources.screen(pane, scene.session);
+}
+
+/** The pane's visible screen from the pass's live snapshot when present, falling back to one
+ *  awaited `sources.screenAsync` read per pass when the snapshot screen map omits the pane. */
+export async function passPaneScreenAsync(scene: RetryScene, pane: string): Promise<string | null> {
+  if (pane in scene.live.screens) return scene.live.screens[pane] ?? null;
+  let cached = fallbackScreens.get(scene.live);
+  if (cached !== undefined && cached.has(pane)) return cached.get(pane) ?? null;
+  if (scene.sources.screenAsync !== undefined) {
+    const read = await scene.sources.screenAsync(pane, scene.session);
+    if (cached === undefined) {
+      cached = new Map();
+      fallbackScreens.set(scene.live, cached);
+    }
+    cached.set(pane, read);
+    if (read !== null) scene.live.screens[pane] = read;
+    return read;
+  }
+  return passPaneScreen(scene, pane);
 }
 
 /** The pane's process identity from the pass's snapshot when present, falling back to

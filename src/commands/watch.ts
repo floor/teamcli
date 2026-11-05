@@ -1456,7 +1456,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             { dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
             { noNudge: quiet },
           );
-          confirmTakenDrops({
+          await confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, processes, ownPane, sources, now: sources.now(), say,
           });
           await yieldBeat();

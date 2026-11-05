@@ -81,7 +81,7 @@ import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
 import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
-import { passPaneProcesses, passPaneScreen, passPaneStatus, type RetryScene } from './retry.ts';
+import { passPaneProcesses, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
 
 /** The marker beside a message whose one wake line was typed. */
@@ -604,7 +604,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const pane = found === scene.ownPane ? undefined : found;
     if (pane === undefined) continue;
     const status = passPaneStatus(scene, pane, agent?.status);
-    const screen = passPaneScreen(scene, pane);
+    const screen = await passPaneScreenAsync(scene, pane);
     // A box that cannot be read is not typed into. The delivery below reads it again; this is
     // only the pass's own look, so a dialog is never entered and a busy seat is not nudged.
     if (screen === null) continue;

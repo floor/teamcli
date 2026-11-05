@@ -714,4 +714,124 @@ describe('the unread pass of a daemon-hosted watch', () => {
       await host.stop('the test is done');
     }
   });
+
+  test('a pane missing from the pass screen snapshot never counts as a free seat when unreadable, and falls back to one async screen read when available', async () => {
+    const made = scratch();
+    world = made;
+    const dropDir = seedMessage(made, UNREAD, new Date(NOW - 75_000));
+    const takenId = 'dddddddd-0000-4000-8000-000000000303';
+    markTaken(dropDir, {
+      id: takenId,
+      from: 'owner',
+      to: 'worker-1',
+      body: 'from the owner\n\nnobody came',
+      ts: new Date(NOW - 75_000).toISOString(),
+      before: 'working',
+    });
+
+    const clock = { at: NOW };
+    let syncScreenCalls = 0;
+    let asyncScreenCalls = 0;
+    let asyncScreenReply: string | null = null;
+
+    const baseSources: WatchSources = {
+      live: () => ({
+        running: true,
+        agents: [
+          { name: 'crew-lead', agent: 'claude', pane: 'lead-pane', workspace: 'lead-work', status: 'idle', cwd: null },
+          { name: 'worker-1', agent: 'codex', pane: 'fixture-pane-1', workspace: 'fixture-work-1', status: 'idle', cwd: null },
+        ],
+        workspaces: [
+          { id: 'lead-work', label: 'crew-lead' },
+          { id: 'fixture-work-1', label: 'worker-1' },
+        ],
+        // `fixture-pane-1` is missing from the snapshot screen map even though `processes` exists.
+        screens: {
+          'lead-pane': idleScreen,
+        },
+        processes: {
+          'lead-pane': { shell: 10, foreground: [11] },
+          'fixture-pane-1': { shell: 20, foreground: [21] },
+        },
+        foreground: {
+          'lead-pane': ['claude'],
+          'fixture-pane-1': ['codex'],
+        },
+      }),
+      machine: () => fine,
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => {
+        syncScreenCalls += 1;
+        return CODEX_INTERRUPTED;
+      },
+      screenAsync: async () => {
+        asyncScreenCalls += 1;
+        return asyncScreenReply;
+      },
+      status: () => 'idle',
+      foreground: () => ['codex'],
+      processes: () => null,
+      typeText: () => false,
+      pressEnter: () => false,
+      sendKey: () => false,
+      sleep: async () => {},
+      notify: () => {},
+      now: () => new Date(clock.at),
+      wait: async () => false,
+      alive: () => true,
+      pid: 4244,
+      home: made.home,
+      statusSource: {
+        async waitStatus() {
+          return { outcome: 'timeout', at: clock.at };
+        },
+        promptKind: () => 'unknown',
+      },
+      typedWake: async () => TYPED_DELIVERED,
+    };
+
+    const route = routeOf(made.root, 'acme-web', 'crew', ['crew-lead', 'crew-op', 'worker-1']);
+    const host = createHostedWatch({
+      route,
+      now: () => new Date(clock.at),
+      effects: 'open',
+      run: async (loop) =>
+        runWatch(
+          [],
+          {
+            stdout: () => {},
+            stderr: () => {},
+            cwd: route.root,
+            env: {},
+            stdinIsTTY: false,
+            stdoutIsTTY: false,
+            stderrIsTTY: false,
+          },
+          hostedWatchSources(route, loop, baseSources, undefined, 4244),
+        ),
+    });
+
+    try {
+      // Cycle 1: `fixture-pane-1` is missing from `live.screens` and `screenAsync` returns null
+      // ("cannot tell"). The taken drop must be left alone, never judged a free seat past grace.
+      await waitUntil(() => host.state().cycles === 1);
+      expect(readTaken(dropDir)).toHaveLength(1);
+      expect(readTaken(dropDir)[0]?.id).toBe(takenId);
+      expect(asyncScreenCalls).toBe(1);
+      expect(syncScreenCalls).toBe(0);
+
+      // Cycle 2: `screenAsync` now returns the pane's screen showing a transcript row with the
+      // taken drop id. One async fallback read confirms the take and clears the `.taken` marker.
+      asyncScreenReply = `• Read ${takenId} from send-drops\n${CODEX_INTERRUPTED}`;
+      clock.at = NOW + 5 * MIN;
+      host.tick(new Date(clock.at));
+      await waitUntil(() => host.state().cycles === 2);
+      expect(readTaken(dropDir)).toEqual([]);
+      expect(asyncScreenCalls).toBe(2);
+      expect(syncScreenCalls).toBe(0);
+    } finally {
+      await host.stop('the test is done');
+    }
+  });
 });
