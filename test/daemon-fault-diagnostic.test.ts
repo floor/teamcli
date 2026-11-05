@@ -624,6 +624,11 @@ describe('the running daemon, end to end', () => {
       expect(after?.cycles).toBeGreaterThan(before.cycles);
       expect(after?.startedAt).toBe(pidBefore);
 
+      await waitUntil(() => {
+        const current = readDaemonState(home);
+        const watch = current.kind === 'ok' ? current.state.roots[0]?.watch : undefined;
+        return watch !== undefined && watch.failures === 1 && watch.phase === 'running';
+      });
       const recorded = readDaemonState(home);
       expect(recorded.kind).toBe('ok');
       if (recorded.kind === 'ok') {
