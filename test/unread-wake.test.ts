@@ -468,6 +468,29 @@ describe('wakeUnreadDrops', () => {
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
   });
 
+  test('a pass that listed nothing still wakes a message that lands before its wake step', async () => {
+    // The pass's scan found the folder empty, so the shared list for the seat is empty. A message
+    // lands before the pass reaches the seat's wake step and is due by then. The wake decides on
+    // the folder as it is now, not on the scan's empty list: the late message is woken in this
+    // pass rather than waiting for a sweep that an empty list never rings in.
+    const made = world();
+    const team = teamOf(typedTeamText(made.root, lobbyDir(made.home), 'muse'));
+    const mail = new MailPass({ dir: made.dir, root: made.root, session: 'acme', home: made.home });
+    // The pass's scan, before the folder holds anything: nothing waiting, in either list.
+    expect(mail.unread('helper')).toEqual([]);
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nlate', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+
+    await wakeUnreadDrops({ ...sceneOf(made, team, one, [], { sources, live }), mail }, { unreadAfter: N });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.line).toContain('team drops --read');
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
   test('a native hold types no wake line and takes no trigger; the unread message stays reportable', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

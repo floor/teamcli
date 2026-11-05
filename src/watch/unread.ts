@@ -526,13 +526,26 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
     const unread = mail.unread(seat.name);
-    if (unread.length === 0) continue;
+    // The folder as it is now, not only as the scan saw it. A message that landed after the
+    // scan is in none of the pass's lists, and a pass on a big tree can outlast the window, so
+    // it would wait a whole sweep. The look lists the folder's names and opens only the records
+    // this pass has not read yet (the pass's reader answers the others), and it runs for every
+    // seat: an empty list, or a list the webhook empties, is no reason not to see a late message.
+    const fresh = listUnread(dropDir, context, home, mail.recordAt);
+    if (unread.length === 0 && fresh.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
     const unreadAfter = windowForSeat(options, seat);
+    const scanned = new Set(unread.map((one) => one.id));
     const due = unread
       .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries));
-    if (due.length === 0) continue;
+    // A message the scan did not list is new here, and it is due now if its window has passed.
+    // One the cascade would take by webhook waits for the pass that reaches the webhook first:
+    // this pass types no line ahead of a leg it has not walked for the message.
+    const arrived = fresh.filter((one) => !scanned.has(one.id)
+      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+      && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
+    if (due.length === 0 && arrived.length === 0) continue;
     // The cascade's next leg below the one the send's walk took, per message: the adapter is
     // tried before any pane is looked for, because a post is no keystroke and needs none. A
     // message whose walk moves on stays due for the typed line below, with the failed leg kept
@@ -567,7 +580,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           typedDue.push(message);
         }
       }
-      if (typedDue.length === 0) continue;
+      // The messages the webhook did not take are typed; a late message that is already this
+      // pass's to type is typed even when the webhook took every message the scan listed.
+      if (typedDue.length === 0 && arrived.length === 0) continue;
     }
     // A typed line that follows a webhook the walk tried names the leg that did not take the
     // send, so the history line reads as the walk it was (ADR zeus-message-path, D2).
@@ -607,22 +622,18 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // woken again, and it does not stand in the way of the messages behind it.
       // A receipt that landed after the pass listed the folder is the read itself: the folder is
       // read again under the seat's lock, so an already-read message is not reminded. The same
-      // look finishes the pass's listing rather than only narrowing it: a message that landed
-      // after the scan is new here and is due now if its window has passed, so it is woken by
-      // this pass instead of waiting for the next one. The pass's reader already holds every
-      // record it read, so only the new names are opened.
-      const fresh = listUnread(dropDir, context, home, mail.recordAt);
-      const scanned = new Set(unread.map((one) => one.id));
-      const unreadNow = new Set(fresh.map((one) => one.id));
-      // A late message the cascade would take by webhook is that leg's, and this pass has
-      // already walked the webhook leg for the messages it listed: the late one waits for a
-      // pass that reaches the webhook first rather than being typed ahead of it.
-      const arrived = fresh.filter((one) => !scanned.has(one.id)
+      // look finishes the pass's listing rather than only narrowing it, with the webhook rule
+      // above: a message that landed even after the look at the wake step is new under the lock
+      // and is woken by this pass instead of waiting for the next one. The pass's reader already
+      // holds every record it read, so only the new names are opened.
+      const freshNow = listUnread(dropDir, context, home, mail.recordAt);
+      const unreadNow = new Set(freshNow.map((one) => one.id));
+      const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
         && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [
         ...typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id))),
-        ...arrived,
+        ...arrivedNow,
       ];
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
