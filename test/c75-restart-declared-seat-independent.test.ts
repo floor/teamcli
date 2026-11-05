@@ -1,4 +1,4 @@
-// Independent verification of fix/c75-restart-declared-seat (931e136f7).
+// Independent verification of fix/c75-restart-declared-seat (436b41955).
 //
 // Behaviour covered:
 // 1. A stale launched pointer to an older team file no longer refuses a seat the current team declares.
@@ -315,31 +315,29 @@ function makeHarness(fixture: Fixture, initialRunning = false): {
 
 function lobbyCallerSourcesIo(fixture: Fixture, sessionName = 'acme'): ReturnType<typeof testIo> {
   const baseIo = testIo(fixture.lobby);
-  return {
-    ...baseIo,
-    callerSources: (session?: string) => ({
-      ancestors: () => [
-        { pid: 200, name: 'claude' },
-        { pid: 100, name: 'herdr' },
-      ],
-      agents: () =>
-        session === undefined || session === sessionName
-          ? [
-              {
-                name: 'lead',
-                agent: 'claude-code',
-                pane: 'pane-lead',
-                workspace: 'ws-lead',
-                status: 'idle',
-                cwd: fixture.lobby,
-              },
-            ]
-          : [],
-      paneRootPid: (pane: string) => (pane === 'pane-lead' ? 200 : null),
-      env: { HERDR_PANE_ID: 'pane-lead' },
-      stdinIsTTY: false,
-    }),
-  };
+  baseIo.callerSources = (session?: string) => ({
+    ancestors: () => [
+      { pid: 200, name: 'claude' },
+      { pid: 100, name: 'herdr' },
+    ],
+    agents: () =>
+      session === undefined || session === sessionName
+        ? [
+            {
+              name: 'lead',
+              agent: 'claude-code',
+              pane: 'pane-lead',
+              workspace: 'ws-lead',
+              status: 'idle',
+              cwd: fixture.lobby,
+            },
+          ]
+        : [],
+    paneRootPid: (pane: string) => (pane === 'pane-lead' ? 200 : null),
+    env: { HERDR_PANE_ID: 'pane-lead' },
+    stdinIsTTY: false,
+  });
+  return baseIo;
 }
 
 describe('1. a stale launched pointer to an older team file no longer refuses a seat the current team declares', () => {
@@ -359,7 +357,7 @@ describe('1. a stale launched pointer to an older team file no longer refuses a 
     expect(io.err).not.toContain('not a signed declared seat');
   });
 
-  test('a seat placed through real callerSources (process walk under herdr from a lobby, no io.caller override) restarts via the registry fallback', async () => {
+  test('a seat placed through real callerSources (process walk under the terminal host from a lobby, no io.caller override) restarts via the registry fallback', async () => {
     const fixture = makeFixture();
     seedStalePointer(fixture);
     seedRegistryTeam(fixture);
@@ -515,6 +513,26 @@ describe('3. a registry team whose record lacks the run session is refused', () 
     expect(did.created).toBe(0);
     expect(io.err).toBe('team restart: worker is not a signed declared seat\n');
   });
+
+  test('when two registry candidates both name the session and one has an unreadable team file, the ambiguity does not collapse to the other candidate', async () => {
+    const fixture = makeFixture();
+    seedStalePointer(fixture, 'acme');
+    seedRegistryTeam(fixture, { session: 'acme' });
+
+    const brokenRoot = join(fixture.base, 'broken-beta');
+    mkdirSync(join(brokenRoot, '.agents'), { recursive: true });
+    // No team.yaml written in brokenRoot, so readTeamConfig fails on that candidate.
+    seedRegistryTeam(fixture, { root: brokenRoot, project: 'beta', session: 'acme' });
+
+    const { sources, did } = makeHarness(fixture, false);
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.lobby, leadCaller);
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code).toBe(1);
+    expect(did.created).toBe(0);
+    expect(io.err).toBe('team restart: worker is not a signed declared seat\n');
+  });
 });
 
 describe('4. a team file failing validation refuses with the configuration exit', () => {
@@ -527,6 +545,22 @@ describe('4. a team file failing validation refuses with the configuration exit'
     const { sources, did } = makeHarness(fixture, false);
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(fixture.root, leadCaller);
+
+    const code = await runRestart(['worker', '--json'], io, sources);
+    expect(code).toBe(2);
+    expect(did.created).toBe(0);
+    assertJsonErrorShape(io.out, { id: 'restart.configuration' });
+  });
+
+  test('when the lone registry candidate naming the session has an invalid team file, restart keeps configuration exit 2 instead of falling back to the pointer', async () => {
+    const fixture = makeFixture();
+    seedStalePointer(fixture, 'acme');
+    seedRegistryTeam(fixture, { session: 'acme' });
+    writeFileSync(fixture.file, 'format: 99\nproject: acme\n');
+
+    const { sources, did } = makeHarness(fixture, false);
+    const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
+    const io = testIo(fixture.lobby, leadCaller);
 
     const code = await runRestart(['worker', '--json'], io, sources);
     expect(code).toBe(2);
