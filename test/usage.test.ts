@@ -36,6 +36,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import { generationsFolder } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
+import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
 import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
@@ -2396,6 +2397,23 @@ describe('team usage', () => {
     // record the note is built from, and the team is named by the file that cannot be read.
     const seat = await usageAt(root, SEAT);
     expect(seat.out).toContain('note: the team "team" (~/Code/floor/team): its file could not be read.\n');
+  });
+
+  test('a registry-backed team is read from the registry, not reported as a missing file', async () => {
+    // Item 1: the team's definition has moved into the registry, so its `.agents` holds no team
+    // file at all. The report must read the registry's record — budgets and seats with it — and
+    // show the readings the state still holds, instead of the unreadable-file sentence.
+    withState();
+    intoRegistry(root, home);
+    rmSync(file);
+    // A machine reads the registry by default; the suite's preload pins the file source, so this
+    // scene names the registry the way the owner's own run does.
+    const out = await underRegistry(() => usageAt(root, OWNER));
+    expect(out.code).toBe(0);
+    expect(out.out).not.toContain('its file could not be read');
+    expect(out.out).not.toContain('no figures (the file could not be read)');
+    expect(out.out).toContain('  openai  acme  weekly  left 5%');
+    expect(out.out).toContain('usage on this machine, 1 team, 2 labs, 2 accounts');
   });
 
   test('the RESERVE column prints only when a row has something in it, headers and cells together', async () => {

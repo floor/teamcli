@@ -4,7 +4,7 @@
 // no `last_valid` copy, no log line, no lock, no state. It runs nothing, reads no pane, no vendor file, no vendor key.
 // The live quota sources (a seat's status line, a CLI's usage command, a quota screen) live in
 // `quota-observe.ts` and are handed in as observations; nothing here reaches a pane itself.
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { describe } from '../approve/fingerprint.ts';
@@ -12,9 +12,9 @@ import { checkOf, countedFor, paceFrom, recall, recallSpend, screenOf, type Read
 import { budgetTable, budgetLine, reserveOf, sourcesOf, span, whenWord, WINDOWS, type BudgetRow, type BudgetState } from '../budgets/table.ts';
 import { money } from '../budgets/gate.ts';
 import { walkCaller } from '../caller.ts';
-import { TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { BudgetAccount, Seat, TeamFile } from '../file/types.ts';
-import { validateTeamFile, defaultBudgets } from '../file/validate.ts';
+import { defaultBudgets } from '../file/validate.ts';
 import type { Io } from '../io.ts';
 import { collapseNotes, renderTable } from '../output/index.ts';
 import { labOfSeat, machineAccountsByEntityOf, machineAccountsOf, ownerEntityOf, payingAccountOf, payingPoolOf } from './machine-accounts.ts';
@@ -204,9 +204,9 @@ export type ProjectUsageOptions = {
 
 /**
  * One project's block: the accounts its budgets in force name, and any reading its state still
- * holds, each row exactly as `status` builds it. The team file is read through
- * `validateTeamFile`; when it cannot be read, `project` is null and there are no rows
- * (`NO_FIGURES`). The state is read
+ * holds, each row exactly as `status` builds it. The team is read through the one seam
+ * (`readTeamConfig`), so a definition the registry holds reads exactly as one still in its file;
+ * when it cannot be read, `project` is null and there are no rows (`NO_FIGURES`). The state is read
  * once and never written, and nothing here opens a lock, a pane or a vendor file; it never opens a
  * CLI's session file or a lab's credential; it reads TeamCLI's own key only to verify the
  * agreement, as `status` does. The key read is `approvalStanding`'s, and it was promised away in
@@ -471,20 +471,16 @@ function whyNotCountedOf(standing: Standing, team: TeamFile, budgets: TeamFile['
   return null;
 }
 
-/** Validate the live team file; an unreadable or invalid file has no fallback. */
+/** The team's definition, read through the one seam: a definition the registry holds reads the
+ *  same as one still in its file, and a store root that is not a repository falls through to the
+ *  file exactly as before. An unreadable or invalid definition has no fallback. */
 function teamOf(root: string, home: string): TeamFile | null {
-  const live = readText(join(root, TEAM_FILE));
-  if (live !== null) {
-    const checked = validateTeamFile(live, { home, root });
-    if (checked.ok) return checked.team;
-  }
-  return null;
-}
-
-function readText(path: string): string | null {
   try {
-    return readFileSync(path, 'utf8');
+    const loaded = readTeamConfig(root, { home });
+    return loaded.ok ? loaded.team : null;
   } catch {
+    // A record this reader cannot open is this team's unreadable definition, not the machine
+    // report's failure: the other teams' blocks still print.
     return null;
   }
 }
