@@ -198,6 +198,12 @@ function recordsCallerAt(dir: string, session: string, caller: Caller): boolean 
   return at.recordedPane !== undefined && at.recordedPane === caller.pane;
 }
 
+/** What the registry's records say about `name`: a team that declares it, a record that names the
+ *  session but whose own team cannot be read, or nothing proven. */
+type RegistryDeclaration =
+  | { kind: 'declared'; loaded: LoadResult & { ok: true }; session: string }
+  | { kind: 'unreadable'; loaded: LoadResult & { ok: false } };
+
 /** The team the registry records for this run's session, when its roster holds `name`.
  *
  *  `registeredRootOf` is not used: it falls back to every holder when the session matches none,
@@ -206,14 +212,19 @@ function recordsCallerAt(dir: string, session: string, caller: Caller): boolean 
  *  caller is placed in each candidate's own session (`callerOf`, the same session-aware walk
  *  every command uses) and only a candidate whose state records the caller's own pane survives
  *  the narrowing. Only after that narrowing must exactly one candidate remain: two teams on
- *  different sessions may share a seat name, and the placement is what tells them apart. */
+ *  different sessions may share a seat name, and the placement is what tells them apart.
+ *
+ *  A named session is counted before anything is read. Two records that both name it are
+ *  unproven — an unreadable one cannot be dropped to leave the other as the answer — and the
+ *  single record that names it is read for real: a file that does not load keeps its
+ *  configuration refusal instead of being skipped back to the pointer's team. */
 function registryDeclaredTeam(
   io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>,
   home: string,
   name: string,
   session: string | undefined,
   readOptions: ReadTeamConfigOptions,
-): { loaded: LoadResult & { ok: true }; session: string } | undefined {
+): RegistryDeclaration | undefined {
   let records: Record<string, TeamRecord>;
   try {
     records = readTeams(home);
@@ -221,22 +232,33 @@ function registryDeclaredTeam(
     return undefined;
   }
   const holders = Object.values(records).filter((record) => record.roster.some((line) => line.seat === name));
-  const candidates: { loaded: LoadResult & { ok: true }; session: string }[] = [];
+  // A named session is the narrowing itself: the record must carry that session, and two records
+  // carrying it stay unproven without reading either — the seat is refused as today rather than
+  // one file being picked over the other.
+  if (session !== undefined) {
+    const narrowed = holders.filter((record) => record.session === session || record.lobbies[session] !== undefined);
+    if (narrowed.length !== 1) return undefined;
+    const record = narrowed[0]!;
+    const loaded = readTeamConfig(record.root, readOptions);
+    if (!loaded.ok) return { kind: 'unreadable', loaded };
+    if (!loaded.team.seats.some((seat) => seat.name === name)) return undefined;
+    return { kind: 'declared', loaded, session };
+  }
+  // No session to name: the placement narrows first, and only then must exactly one candidate
+  // remain. A team the caller does not stand in is dropped, not counted, so a record left behind
+  // by another session's fleet never blocks this one; an unreadable candidate can prove nothing
+  // and is dropped the same way.
+  const proven: { loaded: LoadResult & { ok: true }; session: string }[] = [];
   for (const record of holders) {
-    if (session !== undefined && record.session !== session && record.lobbies[session] === undefined) continue;
     const loaded = readTeamConfig(record.root, readOptions);
     if (!loaded.ok || !loaded.team.seats.some((seat) => seat.name === name)) continue;
-    if (session !== undefined) {
-      candidates.push({ loaded, session });
-      continue;
-    }
     const placed = callerOf(io, record.session);
     if (recordsCallerAt(dirname(loaded.path), record.session, placed)) {
-      candidates.push({ loaded, session: record.session });
+      proven.push({ loaded, session: record.session });
     }
   }
-  if (candidates.length !== 1) return undefined;
-  return candidates[0];
+  if (proven.length !== 1) return undefined;
+  return { kind: 'declared', loaded: proven[0]!.loaded, session: proven[0]!.session };
 }
 
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
@@ -330,9 +352,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     } else {
       const walkedSession = walked.kind === 'seat' || walked.kind === 'pane' ? walked.session : undefined;
       const registered = registryDeclaredTeam(io, home, name, args.values.session ?? walkedSession, readOptions);
-      if (registered !== undefined) {
+      if (registered?.kind === 'declared') {
         loaded = registered.loaded;
         declaredBy = { where: 'registry', session: registered.session };
+      } else if (registered?.kind === 'unreadable') {
+        loaded = registered.loaded;
       }
     }
   }
