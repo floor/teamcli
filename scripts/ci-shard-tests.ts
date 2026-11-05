@@ -220,6 +220,31 @@ function writeAssignment(assignment: Assignment): void {
   writeFileSync(ASSIGNMENT, `${JSON.stringify({ shards: assignment.shards, units: sortedUnits(assignment.units) }, null, 2)}\n`);
 }
 
+export type ShardQuery = {
+  /** Files named on the command line, after the flags. */
+  named: readonly string[];
+  /** `$TESTS`, already split. Used only when `named` is empty. */
+  fromEnv: readonly string[];
+  modeFull: boolean;
+  shards: number;
+  assignment: Assignment;
+  /** Every tracked test. Used when a full suite still packs at run time. */
+  allTracked: readonly string[];
+  timings: Record<string, number>;
+  size?: (file: string) => number;
+};
+
+/**
+ * The plan for every shard. A full suite and a selected list both pack at run time from
+ * recorded weights, with an untimed file weighed by its size.
+ */
+export function shardPlan(q: ShardQuery): Plan {
+  let tests: readonly string[] = q.named.length ? q.named : q.fromEnv;
+  if (q.modeFull || (tests.length === 1 && tests[0] === 'full')) tests = q.allTracked;
+  const all = units([...tests]);
+  return plan(all, q.shards, weights(all, q.timings, q.size));
+}
+
 /** Shard i's units, sorted, from the checked-in assignment. */
 export function shardUnits(assignment: Assignment, shard: number): string[] {
   return Object.entries(assignment.units)
@@ -456,10 +481,16 @@ if (import.meta.main) {
   const shards = Number(get('--shards') ?? 4);
   const shard = get('--shard');
   const rest = a.filter((x, i) => !x.startsWith('--') && !['--shards', '--shard', '--record'].includes(a[i - 1] ?? ''));
-  let tests = rest.length ? rest : (process.env.TESTS ?? '').split(/\s+/).filter(Boolean);
-  if (process.env.MODE === 'full' || (tests.length === 1 && tests[0] === 'full')) tests = allTests();
-  const all = units(tests);
-  const bins = plan(all, shards, weights(all, readTimings()));
+  const fromEnv = (process.env.TESTS ?? '').split(/\s+/).filter(Boolean);
+  const bins = shardPlan({
+    named: rest,
+    fromEnv,
+    modeFull: process.env.MODE === 'full',
+    shards,
+    assignment: { shards, units: {} },
+    allTracked: allTests(),
+    timings: readTimings(),
+  });
   if (a.includes('--plan') || shard === undefined) {
     bins.forEach((b, i) => console.error(`shard ${i}: ${b.files.length} files, ~${(b.ms / 1000).toFixed(1)}s`));
   }
