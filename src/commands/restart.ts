@@ -29,14 +29,14 @@ import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
 import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { teamTextTarget } from '../file/team-text.ts';
-import { readTeamConfig } from '../file/team-config.ts';
+import { readTeamConfig, type ReadTeamConfigOptions } from '../file/team-config.ts';
 import { readLaunchedTeam, readTeamText, readTeamTextTarget, teamPlace, writeTeamText } from '../file/team-text.ts';
 import { clearStopped, hasSeat, markStopped } from '../file/lines.ts';
 import { setSeatStopped } from '../file/stopped-mark.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
-import type { Problem, Seat, TeamFile } from '../file/types.ts';
+import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import {
   agentList,
   agentRename,
@@ -93,7 +93,7 @@ import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
@@ -187,6 +187,56 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   exited: 'its CLI had exited; closed without typing',
 };
 
+/** The session this team's state records for the caller's own seat and pane: the proof that a
+ *  registry candidate read without a session is this run's team and not a stranger's. */
+function sessionHoldingCaller(dir: string, caller: Caller): string | undefined {
+  if (caller.kind !== 'seat') return undefined;
+  let sessions: string[];
+  try {
+    sessions = Object.keys(readState(dir).sessions);
+  } catch {
+    return undefined;
+  }
+  for (const session of sessions) {
+    const at = standingOf(dir, session, caller);
+    if (at.recordedPane !== undefined && at.recordedPane === caller.pane) return session;
+  }
+  return undefined;
+}
+
+/** The team the registry records for this run's session, when its roster holds `name`.
+ *
+ *  `registeredRootOf` is not used: it falls back to every holder when the session matches none,
+ *  and a team chosen by a shared seat name alone is not a declaration. A named session must be
+ *  the record's own (`session`) or one of its recorded lobbies; with no session to name, the
+ *  caller's own placement in that team's state is the proof, and the registry record alone never
+ *  picks a foreign team. Several candidates stay unproven: the seat is then refused as today. */
+function registryDeclaredTeam(
+  home: string,
+  name: string,
+  session: string | undefined,
+  caller: Caller,
+  readOptions: ReadTeamConfigOptions,
+): { loaded: LoadResult & { ok: true }; session: string } | undefined {
+  let records: Record<string, TeamRecord>;
+  try {
+    records = readTeams(home);
+  } catch {
+    return undefined;
+  }
+  const holders = Object.values(records).filter((record) => record.roster.some((line) => line.seat === name));
+  const candidates = session === undefined
+    ? holders
+    : holders.filter((record) => record.session === session || record.lobbies[session] !== undefined);
+  if (candidates.length !== 1) return undefined;
+  const candidate = candidates[0]!;
+  const loaded = readTeamConfig(candidate.root, readOptions);
+  if (!loaded.ok || !loaded.team.seats.some((seat) => seat.name === name)) return undefined;
+  if (session !== undefined) return { loaded, session };
+  const placed = sessionHoldingCaller(dirname(loaded.path), caller);
+  return placed === undefined ? undefined : { loaded, session: placed };
+}
+
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
 export default restart;
 
@@ -245,6 +295,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ?? (args.values.session !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
+  const home = sources.home ?? homedir();
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
@@ -254,16 +305,50 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A launched pointer names where this session was launched from, not a copy to read: a team
   // the registry holds is read there, so a sign-off an edit wrote is never missed over the file
   // `up` launched from. A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
+  const namedFile = args.values.file === undefined
+    ? launched !== undefined
       ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+      : readTeamConfig(io.cwd, readOptions)
+    : readTeamConfig(io.cwd, { ...readOptions, file: args.values.file });
+  // The pointer names a place, not a frozen definition: a file retired when the team moved on
+  // (or an older copy left behind) must not undeclare a seat the team's current record holds. A
+  // declaration is proven by any of three authorities, in order — the team this run named, the
+  // team this folder holds, the team the registry records for this session — and only when none
+  // declares the seat is it refused. A `--file` names one file and never falls back, and a team
+  // that fails to load keeps the configuration refusal it was: neither reaches a lower authority.
+  const declares = (read: LoadResult): read is LoadResult & { ok: true } =>
+    read.ok && read.team.seats.some((seat) => seat.name === name);
+  let loaded = namedFile;
+  let declaredBy: { where: 'folder' | 'registry'; session?: string } | undefined;
+  if (args.values.file === undefined && launched !== undefined && namedFile.ok && !declares(namedFile)) {
+    const folder = readTeamConfig(io.cwd, readOptions);
+    if (declares(folder)) {
+      loaded = folder;
+      declaredBy = { where: 'folder' };
+    } else {
+      const walkedSession = walked.kind === 'seat' || walked.kind === 'pane' ? walked.session : undefined;
+      const registered = registryDeclaredTeam(home, name, args.values.session ?? walkedSession, walked, readOptions);
+      if (registered !== undefined) {
+        loaded = registered.loaded;
+        declaredBy = { where: 'registry', session: registered.session };
+      }
+    }
+  }
   if (!loaded.ok) {
     return configuration(out, json, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
   }
   const { team, root, path } = loaded;
   const dir = dirname(path);
+  // The fallback is spoken once, where the answer is read: the reader knows which team answered
+  // and can find the pointer's file if it wants that one back.
+  if (declaredBy !== undefined) {
+    const notice = declaredBy.where === 'folder'
+      ? `note: ${name} is not in the team this session was launched from; reading the team this folder holds (${path})`
+      : `note: ${name} is not in the team this session was launched from; reading the team registered for session ${declaredBy.session ?? ''} (${root})`;
+    if (json) notes.push(notice);
+    else if (dry) out.stdout(`! ${notice}\n`);
+    else out.stderr(`${notice}\n`);
+  }
 
   // The team's text is the registry's record whenever the registry holds this team, whatever
   // file the caller named: a record that cannot be read is the refusal the plain read already
@@ -274,7 +359,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
 
   // The gate is the map's (`gateVerdict`), read in the verdict shape the branches below already
   // speak: owner or `leads` for this team, decided from records.
-  const home = sources.home ?? homedir();
   const verdictOf = (who: Caller, at: SeatStanding): ReturnType<typeof gateVerdict> =>
     gateVerdict(who, team, root, home, 'restart', at, sources.now);
   const judged = args.values.session !== undefined
