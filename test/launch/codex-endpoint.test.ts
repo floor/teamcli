@@ -405,7 +405,7 @@ describe('ensuring the endpoint', () => {
         deps: {
           spawn: () => { spawned++; return { pid: 9002 }; },
           alive: () => true,
-          commandOf: () => `codex app-server --listen ${prior.url}`,
+          commandOf: () => `codex app-server --listen ${prior.url} ${config.join(' ')}`,
           startOf: () => T0_MS + 500,
           isPlainDir: () => true,
           isSocket: () => true,

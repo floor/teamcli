@@ -7,6 +7,7 @@ import { cliWordList, launchCommandOrRefusal, pinnedRecordLine, resumeCarry, she
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { shellScriptWordOf } from './cli-scope.ts';
 import { grokSandboxOf, type GrokSandbox } from './grok-sandbox.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
@@ -557,6 +558,60 @@ function unquoteWord(word: string): string {
   return out;
 }
 
+function unwrapCodexCommand(command: string): string {
+  let current = command;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const found = shellScriptWordOf(current);
+    if (found === null) break;
+    current = found.word.text;
+  }
+  return current;
+}
+
+export function codexCommandHasFlag(command: string, flag: string): boolean {
+  const words = cliWordList('codex', command);
+  if (words !== null) {
+    let positional = false;
+    for (const word of words) {
+      if (word === '--') {
+        positional = true;
+        continue;
+      }
+      if (positional) continue;
+      if (word === flag || word.startsWith(`${flag}=`)) return true;
+    }
+    return false;
+  }
+  const unwrapped = unwrapCodexCommand(command);
+  const rawWords: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  for (const raw of rawWords) {
+    const word = unquoteWord(raw);
+    if (word === '--') break;
+    if (word === flag || word.startsWith(`${flag}=`)) return true;
+  }
+  return new RegExp(`(^|\\s)${flag}(=|\\s|$)`).test(unwrapped);
+}
+
+export function codexCommandRemoteUrl(command: string): string | null {
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  let found: string | null = null;
+  for (let i = 0; i < words.length; i++) {
+    const word = unquoteWord(words[i]!);
+    if (word === '--') break;
+    if (word === '--remote') {
+      const next = words[i + 1];
+      if (next !== undefined) {
+        found = unquoteWord(next);
+        i++;
+      }
+    } else if (word.startsWith('--remote=')) {
+      found = unquoteWord(word.slice('--remote='.length));
+    }
+  }
+  return found;
+}
+
 /**
  * The configuration a managed Codex endpoint is started with, from the seat's own line.
  * Measured on codex-cli 0.161.0: a TUI attached with `--remote` runs its turns under the
@@ -570,7 +625,8 @@ function unquoteWord(word: string): string {
  * prompt word shaped like an option never becomes an endpoint permission.
  */
 export function codexEndpointConfig(command: string): string[] {
-  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const unwrapped = unwrapCodexCommand(command);
+  const words: string[] = unwrapped.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const config: string[] = [];
   const toml = (value: string): string => JSON.stringify(value);
   // A joined value is part of its flag's own word: `--flag=value`, and a short option's
@@ -631,6 +687,22 @@ export function codexEndpointConfig(command: string): string[] {
  * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
+  const trimmed = command.trimEnd();
+  const script = shellScriptWordOf(trimmed);
+  if (script !== null && script.trailing.length === 0) {
+    const inner = remoteCodexCommand(script.word.text);
+    if (inner === script.word.text) return command;
+    const open = trimmed[script.word.start];
+    const close = trimmed[script.word.end - 1];
+    if (open === "'" && close === "'") {
+      const encoded = `'${inner.replaceAll("'", "'\\''")}'`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+    if (open === '"' && close === '"') {
+      const encoded = `"${inner.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')}"`;
+      return `${trimmed.slice(0, script.word.start)}${encoded}${trimmed.slice(script.word.end)}${command.slice(trimmed.length)}`;
+    }
+  }
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
   // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
   const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
