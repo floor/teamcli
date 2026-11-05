@@ -1689,6 +1689,9 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture);
     const held = acquireRunLock(fixture.dir, 'acme');
     if ('held' in held) throw new Error('the scene could not take the session lock');
+    // The refusal names the holder the token records: this process's pid and the start the
+    // acquisition wrote beside its nonce.
+    const recordedStart = Number(readFileSync(seatLockPath(fixture.dir, 'acme', '.run'), 'utf8').trim().split(' ')[2]);
     try {
       let steps = 0;
       sources.upLaunch.sleep = async () => {
@@ -1701,7 +1704,7 @@ describe('team restart <seat>', () => {
       // It stood aside first: the refusal is not the first reading's.
       expect(steps).toBeGreaterThan(0);
       expect(io.err).toBe(
-        `team restart: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+        `team restart: another session-mutating run is holding session acme (pid ${process.pid}, started ${new Date(recordedStart).toISOString()}); try again when it is done\n`,
       );
       // Nothing was stopped, closed, typed into or launched, and the state is untouched.
       expect(did.typed).toEqual([]);

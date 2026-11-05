@@ -1642,7 +1642,7 @@ describe('team remove, the session mutator lock', () => {
     const io = testIo(dir, owner);
     expect(await runRemove(['worker', '--file', file], io, made.sources)).toBe(1);
     expect(io.err).toBe(
-      `team remove: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      `team remove: another session-mutating run is holding session acme (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.typed).toEqual([]);

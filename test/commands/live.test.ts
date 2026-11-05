@@ -2117,7 +2117,7 @@ describe('team up, one run at a time', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({}, made))).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(made.starts).toBe(0);
@@ -2146,7 +2146,7 @@ describe('team up, one run at a time', () => {
     const realIo = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, realIo, sources({}, real))).toBe(1);
     expect(realIo.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(real.starts).toBe(0);
     const dryMade = world();
@@ -2226,7 +2226,7 @@ describe('team up, one run at a time', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runUp(FILE, io, sources({ fs }, made))).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.err).not.toContain('failed to create');
     // The refused run made nothing: the lock's refusal came before the run's first write.
@@ -2262,8 +2262,12 @@ describe('team up, one run at a time', () => {
     const made = world();
     const during: Promise<number>[] = [];
     let seen = '';
+    // The token `up` published under its own pid, read while the run holds it: the refusal
+    // `down` gives is expected to name exactly this holder.
+    let published = '';
     const create = made.launch.createWorkspace;
     made.launch.createWorkspace = (session, cwd, label) => {
+      published = readFileSync(seatLockPath(join(root, '.agents'), 'acme-web', '.run'), 'utf8').trim();
       // `up` is inside its effects here, its lock on disk under its own pid — so a `down` started
       // now is refused by the same file this run took, naming this process. `down`'s refusal is
       // reached before its first await, so it has already happened when it is awaited below. The
@@ -2292,8 +2296,9 @@ describe('team up, one run at a time', () => {
     expect(await runUp(FILE, io, sources({}, made))).toBe(0);
     expect(during.length).toBeGreaterThan(0);
     expect(await during[0]).toBe(1);
+    const started = Number(published.split(' ')[2]);
     expect(seen).toBe(
-      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}, started ${new Date(started).toISOString()}); try again when it is done\n`,
     );
   });
 });
@@ -4860,7 +4865,7 @@ describe('team up, delegated', () => {
     const code = await runUp(FILE, io, sources({ ...passed, logDelegated }, made));
     expect(code).toBe(1);
     expect(io.err).toBe(
-      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team up: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     // The delegation is not on the record either: the run lock comes before the audit line.
     expect(made.starts).toBe(0);
@@ -6237,7 +6242,7 @@ describe('team down, live', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runDown(FILE, io, run.sourcesOf())).toBe(1);
     expect(io.err).toBe(
-      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}); try again when it is done\n`,
+      `team down: another session-mutating run is holding session acme-web (pid ${process.pid}, no start time recorded); try again when it is done\n`,
     );
     expect(io.out).toBe('');
     expect(run.typed).toEqual([]);

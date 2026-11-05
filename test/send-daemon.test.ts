@@ -507,8 +507,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
-    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+, started \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+, started \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
     const id1 = /id ([0-9a-f-]+)\); queued;/.exec(io1.out)?.[1] ?? '';
     const id2 = /id ([0-9a-f-]+)\); queued;/.exec(io2.out)?.[1] ?? '';
     expect(id1).not.toBe('');
@@ -821,7 +821,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
     // The held lock is the queue's word: the sender is answered now, and the delivery follows
     // once the other command lets go.
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+, started \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
     expect(host.typed).toEqual([]);
     externalLock.release();
     // 0.5.9: the release types nothing; the copy waits in the bus inbox.
@@ -844,7 +844,7 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io2 = ownerIo(w.root);
     try {
       expect(await runSend(['native', 'blocked by lock'], io2, host)).toBe(0);
-      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
+      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\); queued; the typed wake failed \(another command holds the seat \(pid \d+, started \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\); nothing was typed\); native reads it at its next turn, and nothing here gives it one \(pull-only\)\n$/);
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {

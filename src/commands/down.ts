@@ -1490,7 +1490,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   if ('held' in runLock) {
     refuse(io, json, 'down', {
       id: 'down.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: down.run-lock

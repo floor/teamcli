@@ -522,7 +522,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   if ('held' in runLock) {
     refuse(io, json, 'reload', {
       id: 'reload.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: reload.run-lock

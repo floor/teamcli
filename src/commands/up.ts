@@ -2176,7 +2176,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   if (runLock !== null && 'held' in runLock) {
     refuse(io, json, 'up', {
       id: 'up.run-lock',
-      message: plainText(runLockText(runLock.held, session, dir)),
+      message: plainText(runLockText(runLock.held, session, dir, runLock.startedAt)),
       repair: null,
     });
     // exit: up.run-lock

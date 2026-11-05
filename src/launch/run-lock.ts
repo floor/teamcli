@@ -1,4 +1,4 @@
-import { acquireSeatLock, seatLockPath, type SeatLock } from './seat-lock.ts';
+import { acquireSeatLock, holderText, seatLockPath, type SeatLock } from './seat-lock.ts';
 
 /**
  * The session mutator lock: one lock per session, under `<dir>/seat-locks/<session>/`, taken by
@@ -54,12 +54,13 @@ export async function acquireRunLockWithin(
 /**
  * What a run that meets the lock is told. `held` is the live pid that owns the lock, or -1 when
  * the lock cannot be read and its holder is unknown — the one case the owner has to clear by
- * hand. The sentence names no command for the holder: the lock is shared by every session
- * mutator, and the token records only a pid, so no honest text can say which command holds it.
+ * hand. `startedAt` is the start time the lock's token records, when it records one. The
+ * sentence names no command for the holder: the lock is shared by every session mutator, and the
+ * token records only a pid and a start time, so no honest text can say which command holds it.
  */
-export function runLockText(held: number, session: string, dir: string): string {
+export function runLockText(held: number, session: string, dir: string, startedAt: number | null = null): string {
   if (held > 0) {
-    return `another session-mutating run is holding session ${session} (pid ${held}); try again when it is done`;
+    return `another session-mutating run is holding session ${session} (${holderText({ held, startedAt })}); try again when it is done`;
   }
   return `another session-mutating run may be holding session ${session}, and its lock cannot be read; if no run is using it, delete ${seatLockPath(dir, session, RUN_LOCK)}`;
 }

@@ -37,7 +37,7 @@ import {
   type PaneProcesses,
 } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
-import { acquireSeatLock } from '../launch/seat-lock.ts';
+import { acquireSeatLock, holderText } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
 import { profileFor } from '../profiles/index.ts';
@@ -599,7 +599,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       // acquisition and released with it, which is the same takeover the delivery would make.
       lock.release();
     } else {
-      return `another command holds the seat (pid ${String(lock.held)})`;
+      return `another command holds the seat (${holderText(lock)})`;
     }
     const found = await findSeatAgent(host, input.team.session, seatName);
     if (!found.ok) return null; // the worker names the reason; a missing pane is not the queue's to judge
@@ -961,7 +961,7 @@ async function acquireSeatLockWithRetry(
   pollMs: number,
   sleep: (ms: number) => Promise<void>,
   alive: (pid: number) => boolean,
-): Promise<{ ok: true; release(): void } | { ok: false; held: number }> {
+): Promise<{ ok: true; release(): void } | { ok: false; held: number; startedAt: number | null }> {
   const deadline = Date.now() + waitMs;
   for (;;) {
     // Reclaim stale seat lock if holder PID is dead according to `alive`.
@@ -974,7 +974,7 @@ async function acquireSeatLockWithRetry(
       const retried = acquireSeatLock(dir, session, seatName);
       if ('release' in retried) return { ok: true, release: retried.release };
     }
-    if (Date.now() >= deadline) return { ok: false, held: lock.held };
+    if (Date.now() >= deadline) return { ok: false, held: lock.held, startedAt: lock.startedAt };
     await sleep(pollMs);
   }
 }
@@ -1306,7 +1306,7 @@ async function executeQueuedSend(
         if (!isQueued) {
           isQueued = true;
           deadline = Number.POSITIVE_INFINITY;
-          const busy = `another command holds the seat (pid ${String(acquired.held)})`;
+          const busy = `another command holds the seat (${holderText(acquired)})`;
           logLine(dir, 'send', from, `${seatName}: queued (receiver busy) (${busy}; id ${msgId})`, host.now());
           onQueuedAtDelivery?.({
             v: 1,
@@ -1696,7 +1696,7 @@ async function executeSocketSend(
     alive,
   );
   if (!lock.ok) {
-    const detail = `another command holds the seat (pid ${String(lock.held)})`;
+    const detail = `another command holds the seat (${holderText(lock)})`;
     appendHistory(team.project, root, host.home, {
       ts: host.now().toISOString(),
       from,

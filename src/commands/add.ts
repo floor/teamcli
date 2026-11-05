@@ -1062,7 +1062,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if ('held' in runLock) {
     refuse(io, json, 'add', {
       id: 'add.run-lock',
-      message: runLockText(runLock.held, session, dir),
+      message: runLockText(runLock.held, session, dir, runLock.startedAt),
       repair: null,
     });
     // exit: add.run-lock
