@@ -127,9 +127,15 @@ stops until the owner signs a fresh manager grant (a removed seat is no differen
 
 **Not wired yet.** These manager ops have no `--client` form in this build and admit nothing yet: `list`,
 `check`, `feed`, `messages`, `usage`, `drops`, `projects`, `issues`, `plan`, `next`, `brief`, `watch`, `doctor`,
-`commits`, `reply`, `ack`, `ask-show`. The owner's card says so ("Not usable yet in this build: …"). `reply`
-and `ack` are not wired because a client has no seat identity: `ack` would fake the owner's read and `reply`
-would speak in the owner's place. Wiring any of them later widens no grant and needs no new signature.
+`commits` and `ask-show`. The owner's card says so ("Not usable yet in this build: …").
+
+`reply` and `ack` have no `--client` form either, and for the same reason: a client has no seat identity, so
+`reply` would speak in a seat's place and `ack` would fake a seat's read. They are routed all the same,
+through the identity that does exist — the bundle's own client inbox. A seat answers a thread that client
+opened with its own `team reply`, or acknowledges that client's opening record with its own `team ack`, and
+the command reads the bundle as the thread's origin, for that client's own opening record only, when the
+bundle's signed op list carries `reply` (or `ack`). A bundle without the op is refused by those commands as
+before. Wiring either later widens no grant and needs no new signature.
 
 ## The developer bundle
 
