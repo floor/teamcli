@@ -120,6 +120,13 @@ rows changed, as a seat's own screen draws them.
   screen (it stands until the next keypress); the transcript above it is this file's own, in
   `scroll-back.txt`'s voice. Read `unknown` before the profile declared the hint as the one
   chrome row under the status line, and `idle` after.
+- `warning-row.txt`: the same seat's screen with a message line in the box: the shortcuts row is
+  hidden and the account's warning `⚠ 1 warning · f2 to view` stands alone on the pane's last
+  row, right-aligned under the status row. The bottom region was reported from that saved
+  screen; the transcript above it is this file's own, in `scroll-back.txt`'s voice. The same
+  bottom region over the empty prompt reads `idle` — the test draws it by putting the
+  placeholder back in the box. Read `unknown` before the profile declared the warning row as
+  the one chrome row under the status line, `unsent` (and `idle` over the empty box) after.
 
 The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
 `Context `, `% left`, `Context `, `% used` beside the status-surface ids
