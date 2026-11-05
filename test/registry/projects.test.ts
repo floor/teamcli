@@ -87,7 +87,7 @@ describe('the project registry file', () => {
     expect(readProjects(empty)).toEqual({});
   });
 
-  test('what the file holds reads back whole, the ID filled from the key', () => {
+  test('metadata reads back whole with derived membership instead of legacy lists', () => {
     writeProjects(twoProjects());
     expect(readProjects(home)).toEqual({
       site: {
@@ -95,7 +95,7 @@ describe('the project registry file', () => {
         name: 'TeamCLI.io',
         entity: null,
         lead: null,
-        teams: ['site-id'],
+        teams: [],
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
       },
       teamcli: {
@@ -103,7 +103,7 @@ describe('the project registry file', () => {
         name: 'TeamCLI',
         entity: 'TeamCLI',
         lead: 'agt_0123456789ab',
-        teams: ['cli-id', 'shared-id'],
+        teams: [],
         provenance: { registered_by: 'owner', registered_at: AT, updated_at: AT },
       },
     });

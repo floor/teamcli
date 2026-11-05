@@ -8,7 +8,7 @@ import type { Caller, SeatStanding } from '../src/caller.ts';
 import { admissionOf } from '../src/commands/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
-import { get as getProject, projectsFile, upsertProject } from '../src/registry/projects.ts';
+import { get as getProject, projectsFile, readProjects, upsertProject } from '../src/registry/projects.ts';
 import { getTeam, rekeyTeamRecord, upsertTeam } from '../src/registry/teams.ts';
 
 const NOW = new Date('2026-11-06T00:00:00Z');
@@ -100,6 +100,7 @@ test('stale project-side lists cannot admit a team that left the project', () =>
   const path = projectsFile(home);
   const raw = readFileSync(path, 'utf8').replace('    name: project-a\n', '    name: project-a\n    teams: [team-a, team-b]\n');
   writeFileSync(path, raw);
+  expect(readProjects(home)['project-a']?.teams).toEqual(['team-a']);
   expect(fx.judge().ok).toBe(false);
 });
 

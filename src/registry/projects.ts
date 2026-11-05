@@ -55,7 +55,7 @@ export type ProjectRecord = {
    * in this build, but a hand-written one reads, and an upsert keeps it.
    */
   leadSeat?: string;
-  /** Team IDs derived from team-record memberships in list/get/byName/ofTeam. */
+  /** Team IDs derived from team-record memberships on every public read. */
   teams: string[];
   /**
    * The project's word on the delivery order — the legs a send walks before the team file's own
@@ -140,12 +140,12 @@ function cloneProjects(records: Record<string, ProjectRecord>): Record<string, P
   return out;
 }
 
-/** Raw project metadata, including legacy stored team lists for diagnostics. Views derive membership.
+/** Stored project metadata for the writer; legacy team lists never supply membership.
  *  Every registered project, by project ID. A missing file is no projects; a file that cannot
  *  be read — a corrupt one, or one under a folder this user cannot search — throws
  *  `ProjectsError`, so no reader takes an unreadable registry as an empty one (a team no
  *  project names reads as its own project) and no writer replaces a file it could not read. */
-export function readProjects(home: string): Record<string, ProjectRecord> {
+function readStoredProjects(home: string): Record<string, ProjectRecord> {
   const memo = currentRunMemo();
   if (memo !== null) {
     const cached = memo.projects.get(home);
@@ -193,17 +193,23 @@ export function readProjects(home: string): Record<string, ProjectRecord> {
   return parsed;
 }
 
-/** The projects of the registry, ID order, so a view reads the same twice. */
-export function list(home: string): ProjectRecord[] {
-  const projects = readProjects(home);
+/** Every registered project by ID, with membership derived from team records alone. */
+export function readProjects(home: string): Record<string, ProjectRecord> {
+  const projects = readStoredProjects(home);
   let teams: ReturnType<typeof readTeams>;
   try { teams = readTeams(home); } catch (error) {
     if (error instanceof TeamsError) throw new ProjectsError(error.message);
     throw error;
   }
-  return Object.keys(projects)
+  return Object.fromEntries(Object.keys(projects)
     .sort()
-    .map(id => ({ ...projects[id]!, teams: Object.keys(teams).sort().filter(teamId => membershipsOf(teams[teamId]!).includes(id)) }));
+    .map(id => [id, { ...projects[id]!, teams: Object.keys(teams).sort().filter(teamId => membershipsOf(teams[teamId]!).includes(id)) }]));
+}
+
+/** The projects of the registry, ID order, so a view reads the same twice. */
+export function list(home: string): ProjectRecord[] {
+  const projects = readProjects(home);
+  return Object.keys(projects).sort().map(id => projects[id]!);
 }
 
 /** One project by ID, or null. */
@@ -260,7 +266,7 @@ export type ProjectPatch = Partial<Omit<ProjectRecord, 'id' | 'provenance'>> & {
  *  only the team record writes that link. */
 export function upsertProject(home: string, id: string, patch: ProjectPatch): ProjectRecord {
   return locked(home, () => {
-    const projects = readProjects(home);
+    const projects = readStoredProjects(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = projects[id];
     const { by, at: _at, settingsDelta, ...fields } = patch;
