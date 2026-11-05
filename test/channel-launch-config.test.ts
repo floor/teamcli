@@ -9,6 +9,7 @@ import { executePlan, type Host } from '../src/launch/execute.ts';
 import { upPlan, type Step, type UpSeat } from '../src/launch/plan.ts';
 import { lobbyPretrustLine } from '../src/launch/pretrust.ts';
 import { prepareChannelConfig } from '../src/mcp/launch-config.ts';
+import { readListener, writeListener } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { selfRunner } from '../src/mcp/register.ts';
 import { upsertTeam, teamIdOf } from '../src/registry/teams.ts';
@@ -285,6 +286,57 @@ describe('launch-scoped channel config', () => {
     expect(code).toBe(2);
     expect(io.err).toContain('not the seat\'s current launch epoch');
     expect(existsSync(join(w.root, '.agents/send-drops', SESSION, 'alpha/listener.json'))).toBe(false);
+  });
+});
+
+describe('read-only listener startup epoch', () => {
+  test('listener records the explicit startup epoch and never follows a newer claim', async () => {
+    const w = world();
+    const drop = join(w.root, '.agents/send-drops', SESSION, 'alpha');
+    let startup: string | undefined;
+    let after: string | undefined;
+    const io = testIo(join(w.lobby, 'alpha'), { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
+    const code = await runMcpServe({ seat: 'alpha', session: SESSION, epoch: FIRST }, io, {
+      lines: (async function* () {
+        startup = readListener(drop)?.epoch;
+        w.claim(NEXT);
+        after = readListener(drop)?.epoch;
+      })(), write: () => {},
+    }, { home: w.home });
+    expect(code).toBe(0);
+    expect(startup).toBe(FIRST);
+    expect(after).toBe(FIRST);
+  });
+
+  test('an unbound compatible server omits metadata when no claim exists', async () => {
+    const w = world();
+    w.claim(null);
+    const drop = join(w.root, '.agents/send-drops', SESSION, 'alpha');
+    let observed = false;
+    const io = testIo(w.root, { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
+    expect(await runMcpServe({ seat: 'alpha', session: SESSION }, io, {
+      lines: (async function* () {
+        const marker = readListener(drop);
+        expect(marker).not.toBeNull();
+        expect(marker?.epoch).toBeUndefined();
+        observed = true;
+      })(), write: () => {},
+    }, { home: w.home })).toBe(0);
+    expect(observed).toBe(true);
+  });
+
+  test('legacy listeners remain readable and malformed optional metadata confers no epoch', () => {
+    const w = world();
+    const drop = join(w.base, 'synthetic-inbox');
+    mkdirSync(drop, { mode: 0o700 });
+    const marker = { v: 1 as const, seat: 'alpha', session: SESSION, root: w.root,
+      cli: 'claude-code', pid: process.pid, ts: '2026-01-01T00:00:00Z' };
+    expect(writeListener(drop, marker)).toBe(true);
+    expect(readListener(drop)).toEqual(marker);
+    expect(writeListener(drop, { ...marker, epoch: FIRST })).toBe(true);
+    expect(readListener(drop)?.epoch).toBe(FIRST);
+    expect(writeListener(drop, { ...marker, epoch: 'synthetic-invalid' })).toBe(true);
+    expect(readListener(drop)).toEqual(marker);
   });
 });
 

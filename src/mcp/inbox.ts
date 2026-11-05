@@ -28,7 +28,7 @@ import {
   isGeneralBriefRecord,
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
-import type { BriefBinding } from '../launch/brief-id.ts';
+import { isBriefEpoch, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
@@ -121,6 +121,9 @@ export type InboxListener = {
    *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
    *  its next leg. */
   channel?: true;
+  /** Observational startup metadata, copied only from the explicit validated serve argument.
+   *  Absent on older/unbound listeners; never a replacement for the server's live guards. */
+  epoch?: string;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
@@ -218,6 +221,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ...(typeof parsed.build === 'string' || parsed.build === null ? { build: parsed.build } : {}),
       ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
       ...(parsed.channel === true ? { channel: true as const } : {}),
+      ...(isBriefEpoch(parsed.epoch) ? { epoch: parsed.epoch } : {}),
     };
   } catch {
     return null;

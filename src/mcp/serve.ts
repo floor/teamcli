@@ -956,6 +956,7 @@ export async function runMcpServe(
     build: build.build,
     ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
+    ...(options.epoch === undefined ? {} : { epoch: options.epoch }),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // A server keeps the code it started with, and an install neither reloads it nor ends it. The

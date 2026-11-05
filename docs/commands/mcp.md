@@ -30,6 +30,9 @@ the launching install's runner and entry script, `--seat`, `--session` and the e
 It resolves the team through the registry, without a shared lobby config or a team-file guess
 from its starting folder. A relaunch updates only the generated entry; an unowned entry with
 that name is refused. Starting an old config after a new claim still fails the epoch guard.
+The listener's optional `epoch` records only its validated explicit startup argument. It stays
+at that value if the claim later changes; older or unbound markers may omit it. This unsigned
+metadata supports read-only inspection and grants no permission or replacement launch binding.
 
 When the seat's own launch carries the development-channels flag naming this server
 (`--dangerously-load-development-channels server:team-inbox`), `serve` also declares the
