@@ -23,6 +23,10 @@ import { messageKeyState } from '../store/keys.ts';
  *  session whose drops are read, and the home whose message key verifies them. */
 export type MailPassInput = { dir: string; root: string; session: string; home: string };
 
+/** The stuck-episode marker beside a seat's drop folder. Dot-named, so no inbox scan takes it
+ *  for mail; its presence is read from the folder listing, its contents only when it is there. */
+export const STUCK_MARKER = '.stuck';
+
 /** One pass's mail: each drop folder listed once, each record read once, shared by every reader
  *  the pass runs. */
 export class MailPass {
@@ -32,6 +36,8 @@ export class MailPass {
   private readonly key: KeyObject | null;
   private readonly records = new Map<string, RecordPayload | null>();
   private readonly unreadBySeat = new Map<string, InboxMessage[]>();
+  /** The raw folder listing each seat's unread was taken from, kept for the pass's readers. */
+  private readonly listedBySeat = new Map<string, readonly string[]>();
   private unackedOnce: UnackedMessage[] | null = null;
 
   constructor(input: MailPassInput) {
@@ -64,9 +70,20 @@ export class MailPass {
       { to: seat, root: this.input.root, session: this.input.session },
       this.input.home,
       this.recordAt,
+      (names) => {
+        this.listedBySeat.set(seat, names);
+      },
     );
     this.unreadBySeat.set(seat, listed);
     return listed;
+  }
+
+  /** Whether this pass's listing of `seat`'s folder showed the stuck-episode marker. The folder
+   *  is the one `unread` already lists: a marker the listing does not show is never opened, and
+   *  a folder that could not be listed shows none. The caller reads the marker itself, once. */
+  hasStuckMarker(seat: string): boolean {
+    if (!this.unreadBySeat.has(seat)) this.unread(seat);
+    return this.listedBySeat.get(seat)?.includes(STUCK_MARKER) ?? false;
   }
 
   /** Every record in the session's drops with no verifying read receipt, listed once for the
