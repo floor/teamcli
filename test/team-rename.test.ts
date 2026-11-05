@@ -178,6 +178,10 @@ describe('team rename --team', () => {
     const productId = teamIdOf(productFx.root);
     const marketingId = teamIdOf(marketingFx.root);
     expect(productId).not.toBe(marketingId);
+    // Teams may share a display name, but a successful rename needs distinct lobby ownership.
+    const productLobby = join(home, '.config', 'team', 'lobbies', 'team-a');
+    mkdirSync(productLobby, { recursive: true });
+    upsertTeam(home, productId, { lobby: productLobby, lobbies: { 'project-x': productLobby } });
 
     // Before rename: `lead@project-x` is ambiguous across the two `project-x` teams
     const beforeTarget = resolveTarget(home, 'lead@project-x', testIo(productFx.root, owner), () => [
