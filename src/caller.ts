@@ -606,9 +606,12 @@ function walkAncestors(pid: number, read: ReadProcess): Process[] | null {
 // could hide the herdr server above it.
 export function readAncestors(pid: number = process.ppid, read: ReadProcess = processReader()): Process[] | null {
   const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedAncestorsSnapshotId) {
+    cachedAncestorsSnapshotId = snapId;
+    cachedDefaultAncestors = undefined;
+  }
   if (snapId !== null && pid === process.ppid && read === processReader()) {
-    if (cachedAncestorsSnapshotId !== snapId || cachedDefaultAncestors === undefined) {
-      cachedAncestorsSnapshotId = snapId;
+    if (cachedDefaultAncestors === undefined) {
       cachedDefaultAncestors = walkAncestors(pid, read);
     }
     return cachedDefaultAncestors;
@@ -616,17 +619,32 @@ export function readAncestors(pid: number = process.ppid, read: ReadProcess = pr
   return walkAncestors(pid, read);
 }
 
+let cachedCallerSnapshotId: number | null = null;
+let cachedCallerSourcesRef: Io['callerSources'] | undefined;
+const cachedCurrentCallers = new Map<string, Caller>();
+
 // The caller of a command: the one a test handed in, the one test sources place, or the one the
 // processes show. The sources are asked about the session the command asks about, so a test sees
-// the placement the command itself made.
+// the placement the command itself made. Memoized only within an active per-send snapshot.
 export function callerOf(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'callerSources'>, session?: string): Caller {
   if (io.caller !== undefined) return io.caller;
-  if (io.callerSources !== undefined) return placeCaller(io.callerSources(session), session);
-  return currentCaller(io, session);
+  const snapId = activeHerdrSnapshotId();
+  if (snapId !== cachedCallerSnapshotId || io.callerSources !== cachedCallerSourcesRef) {
+    cachedCallerSnapshotId = snapId;
+    cachedCallerSourcesRef = io.callerSources;
+    cachedCurrentCallers.clear();
+  }
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  if (snapId !== null) {
+    const hit = cachedCurrentCallers.get(key);
+    if (hit !== undefined) return hit;
+  }
+  const placed = io.callerSources !== undefined
+    ? placeCaller(io.callerSources(session), session)
+    : currentCaller(io, session);
+  if (snapId !== null) cachedCurrentCallers.set(key, placed);
+  return placed;
 }
-
-let cachedCallerSnapshotId: number | null = null;
-const cachedCurrentCallers = new Map<string, Caller>();
 
 export function currentCaller(io: { env: Record<string, string | undefined>; stdinIsTTY: boolean }, session?: string): Caller {
   const snapId = activeHerdrSnapshotId();

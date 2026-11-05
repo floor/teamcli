@@ -755,4 +755,65 @@ seats:
     expect(hostAgentsCalls).toBeLessThanOrEqual(1);
     expect(paneTextCalls).toBeLessThanOrEqual(1);
   });
+
+  test('two sends in one process with different callers each get their own verdict, and calls outside a send snapshot memoise nothing', async () => {
+    const { root, home, agentsDir, team } = setupTeam({
+      lead: { stage: 'ready', pane: 'pane1' },
+      worker: { stage: 'ready', pane: 'pane2' },
+    });
+
+    let activeChain: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'codex' }, { pid: 10, name: 'herdr' }];
+    let activeWorkerPane = 'pane2';
+    let ancestorsReads = 0;
+
+    const io = testIo(root);
+    delete io.caller;
+    io.callerSources = () => ({
+      ancestors: () => {
+        ancestorsReads += 1;
+        return activeChain;
+      },
+      agents: () => [agent('lead', 'pane1'), agent('worker', activeWorkerPane)],
+      paneRootPid: (pane) => ({ pane1: 100, [activeWorkerPane]: 200 })[pane] ?? null,
+      env: {},
+      stdinIsTTY: true,
+    });
+
+    // Outside any send snapshot: nothing is memoised across calls.
+    const firstOutside = judgeCallerIn(io, agentsDir, team);
+    expect(firstOutside.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane2', session: 'acme' });
+    expect(callerVerdict(firstOutside.caller, 'worker', standingOf(agentsDir, firstOutside.session, firstOutside.caller))).toEqual({ kind: 'ok' });
+    expect(ancestorsReads).toBe(1);
+
+    activeWorkerPane = 'pane99';
+    const secondOutside = judgeCallerIn(io, agentsDir, team);
+    expect(secondOutside.caller).toEqual({ kind: 'seat', name: 'worker', pane: 'pane99', session: 'acme' });
+    expect(callerVerdict(secondOutside.caller, 'worker', standingOf(agentsDir, secondOutside.session, secondOutside.caller))).toEqual({
+      kind: 'another-pane',
+      name: 'worker',
+      recordedPane: 'pane2',
+    });
+    expect(ancestorsReads).toBe(2);
+
+    // Send 1 in this process: worker on recorded pane2 is admitted.
+    activeWorkerPane = 'pane2';
+    const firstSendCode = await runSend(['lead', 'first send from worker pane2'], io, sendHost(home));
+    expect(firstSendCode).toBe(0);
+
+    // Send 2 in the same process: caller's pane changes to pane99 (unrecorded for worker); gets its own verdict and is refused.
+    activeWorkerPane = 'pane99';
+    io.out = '';
+    io.err = '';
+    const secondSendCode = await runSend(['lead', 'second send from worker on another pane'], io, sendHost(home));
+    expect(secondSendCode).toBe(1);
+    expect(io.err).toContain(anotherPaneRefusal('worker', 'pane2'));
+
+    // Send 3 in the same process: caller's ancestor chain changes to an agentless shell; gets its own verdict and is refused.
+    activeChain = [{ pid: 900, name: 'zsh' }, { pid: 10, name: 'herdr' }];
+    io.out = '';
+    io.err = '';
+    const thirdSendCode = await runSend(['lead', 'third send from agentless shell'], io, sendHost(home));
+    expect(thirdSendCode).toBe(1);
+    expect(io.err).toMatch(/pane without an agent/);
+  });
 });
